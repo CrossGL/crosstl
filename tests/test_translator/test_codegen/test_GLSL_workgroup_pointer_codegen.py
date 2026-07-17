@@ -342,3 +342,488 @@ def test_generic_workgroup_pointer_helper_specializes_without_pointer(tmp_path):
         tmp_path,
         "generic_workgroup_pointer_helper",
     )
+
+
+def test_nested_workgroup_pointer_helpers_preserve_bounded_backing_view(tmp_path):
+    shader = """
+    shader NestedWorkgroupPointerHelpers {
+        void leaf(threadgroup float* values) {
+            values[0] = values[1];
+        }
+
+        void middle(threadgroup float* values) {
+            leaf(values + 4u);
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lane @ gl_LocalInvocationIndex) {
+                threadgroup float sharedValues[64];
+                middle(sharedValues + lane * 8u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    backing = re.search(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*64\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    assert backing is not None, generated
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    leaf = re.search(
+        r"\bvoid\s+(?P<name>leaf[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert leaf is not None, generated
+    accesses = re.findall(
+        rf"\b{re.escape(backing.group(1))}\s*\[([^\]]+)\]",
+        leaf.group("body"),
+    )
+    assert len(accesses) == 2, generated
+    assert all("offset" in expression for expression in accesses), generated
+    assert any("1" in expression for expression in accesses), generated
+    assert "gl_LocalInvocationIndex" in generated, generated
+
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "nested_workgroup_pointer_helpers",
+    )
+
+
+def test_nested_workgroup_pointer_helper_rejects_out_of_bounds_view():
+    shader = """
+    shader OutOfBoundsWorkgroupPointerHelpers {
+        void leaf(threadgroup float* values) {
+            values[0] = values[1];
+        }
+
+        void middle(threadgroup float* values) {
+            leaf(values + 1u);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float sharedValues[8];
+                middle(sharedValues + 7u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "leaf"
+    assert error.parameter_name == "values"
+    assert error.backing_name is not None and error.backing_name.endswith(
+        "sharedValues"
+    )
+    assert "8" in error.offset_expression
+    assert error.materialization_name is not None
+    assert error.reason == "view-out-of-bounds"
+
+
+def test_workgroup_pointer_helper_rejects_unbounded_runtime_offset():
+    shader = """
+    shader UnboundedWorkgroupPointerOffset {
+        void write_value(threadgroup float* values) {
+            values[0] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 group @ gl_WorkGroupID) {
+                threadgroup float sharedValues[64];
+                write_value(sharedValues + group.x);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "write_value"
+    assert error.parameter_name == "values"
+    assert error.backing_name is not None and error.backing_name.endswith(
+        "sharedValues"
+    )
+    assert "group.x" in error.offset_expression
+    assert error.materialization_name is not None
+    assert error.reason == "unprovable-view-offset"
+
+
+def test_workgroup_pointer_helper_proves_bounded_loop_accesses(tmp_path):
+    shader = """
+    shader BoundedWorkgroupPointerLoop {
+        void fill_values(threadgroup int* values) {
+            for (int index = 0; index < 4; index++) {
+                values[index] = index;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup int sharedValues[8];
+                fill_values(sharedValues + 2);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bint\s*\*", generated) is None, generated
+    helper = re.search(
+        r"\bvoid\s+fill_values[A-Za-z0-9_]*\s*" r"\([^)]*\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert "main_sharedValues" in helper.group("body"), generated
+    assert "values_offset" in helper.group("body"), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "bounded_workgroup_pointer_loop",
+    )
+
+
+def test_workgroup_pointer_helper_proves_min_limited_accesses(tmp_path):
+    shader = """
+    shader MinLimitedWorkgroupPointerAccess {
+        void load_pair(
+            threadgroup float* values,
+            uint candidate,
+            uint max_index
+        ) {
+            uint index = candidate;
+            index = min(index, max_index);
+            values[index] = 1.0;
+            values[index + 1u] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lane @ gl_LocalInvocationIndex) {
+                threadgroup float sharedValues[8];
+                load_pair(sharedValues, lane, 6u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    backing = re.search(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*8\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    helper = re.search(
+        r"\bvoid\s+load_pair[A-Za-z0-9_]*\s*" r"\([^)]*\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert backing is not None, generated
+    assert helper is not None, generated
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert re.search(
+        r"\bindex\s*=\s*min\s*\(\s*index\s*,\s*max_index\s*\)",
+        helper.group("body"),
+    ), generated
+    accesses = re.findall(
+        rf"\b{re.escape(backing.group(1))}\s*\[([^\]]+)\]",
+        helper.group("body"),
+    )
+    assert len(accesses) == 2, generated
+    assert any("1u" in expression or "+ 1" in expression for expression in accesses)
+
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "min_limited_workgroup_pointer_access",
+    )
+
+
+def test_workgroup_pointer_helper_rejects_min_limited_out_of_bounds_access():
+    shader = """
+    shader OutOfBoundsMinLimitedWorkgroupPointerAccess {
+        void load_pair(
+            threadgroup float* values,
+            uint candidate,
+            uint max_index
+        ) {
+            uint index = candidate;
+            index = min(index, max_index);
+            values[index] = 1.0;
+            values[index + 1u] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lane @ gl_LocalInvocationIndex) {
+                threadgroup float sharedValues[8];
+                load_pair(sharedValues, lane, 7u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "load_pair"
+    assert error.parameter_name == "values"
+    assert error.backing_name is not None and error.backing_name.endswith(
+        "sharedValues"
+    )
+    assert error.reason == "view-out-of-bounds"
+
+
+def test_workgroup_pointer_helper_rejects_min_with_unprovable_operand():
+    shader = """
+    shader UnprovableMinLimitedWorkgroupPointerAccess {
+        void load_pair(
+            threadgroup float* values,
+            uint candidate,
+            uint max_index
+        ) {
+            uint index = candidate;
+            index = min(index, max_index);
+            values[index] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 group @ gl_WorkGroupID) {
+                threadgroup float sharedValues[8];
+                load_pair(sharedValues, group.x, 6u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "load_pair"
+    assert error.parameter_name == "values"
+    assert error.backing_name is not None and error.backing_name.endswith(
+        "sharedValues"
+    )
+    assert error.reason == "unprovable-view-access"
+
+
+def test_workgroup_pointer_helper_proves_max_limited_accesses(tmp_path):
+    shader = """
+    shader MaxLimitedWorkgroupPointerAccess {
+        void store_value(
+            threadgroup float* values,
+            int candidate,
+            int floor_index
+        ) {
+            int index = max(candidate, floor_index);
+            values[index] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lane @ gl_LocalInvocationIndex) {
+                threadgroup float sharedValues[4];
+                store_value(sharedValues, int(lane) - 4, 2);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    backing = re.search(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*4\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    helper = re.search(
+        r"\bvoid\s+store_value[A-Za-z0-9_]*\s*" r"\([^)]*\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert backing is not None, generated
+    assert helper is not None, generated
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert re.search(
+        r"\bindex\s*=\s*max\s*\(\s*candidate\s*,\s*floor_index\s*\)",
+        helper.group("body"),
+    ), generated
+    accesses = re.findall(
+        rf"\b{re.escape(backing.group(1))}\s*\[([^\]]+)\]",
+        helper.group("body"),
+    )
+    assert len(accesses) == 1, generated
+
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "max_limited_workgroup_pointer_access",
+    )
+
+
+def test_workgroup_pointer_helper_proves_clamped_accesses(tmp_path):
+    shader = """
+    shader ClampedWorkgroupPointerAccess {
+        void store_pair(
+            threadgroup float* values,
+            int candidate,
+            int lower_index,
+            int upper_index
+        ) {
+            int index = clamp(candidate, lower_index, upper_index);
+            values[index] = 1.0;
+            values[index + 1] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lane @ gl_LocalInvocationIndex) {
+                threadgroup float sharedValues[5];
+                store_pair(sharedValues, int(lane) - 2, 1, 3);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    backing = re.search(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*5\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    helper = re.search(
+        r"\bvoid\s+store_pair[A-Za-z0-9_]*\s*" r"\([^)]*\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert backing is not None, generated
+    assert helper is not None, generated
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert re.search(
+        r"\bindex\s*=\s*clamp\s*\(\s*candidate\s*,\s*lower_index\s*,\s*"
+        r"upper_index\s*\)",
+        helper.group("body"),
+    ), generated
+    accesses = re.findall(
+        rf"\b{re.escape(backing.group(1))}\s*\[([^\]]+)\]",
+        helper.group("body"),
+    )
+    assert len(accesses) == 2, generated
+    assert any("+ 1" in expression for expression in accesses)
+
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "clamped_workgroup_pointer_access",
+    )
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    ["5, 3", "int(group.x), 6"],
+    ids=["reversed-bounds", "runtime-lower-bound"],
+)
+def test_workgroup_pointer_helper_rejects_unprovable_clamp_bounds(bounds):
+    shader = """
+    shader UnprovableClampBounds {
+        void store_value(
+            threadgroup float* values,
+            int candidate,
+            int lower_index,
+            int upper_index
+        ) {
+            int index = clamp(candidate, lower_index, upper_index);
+            values[index] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                uint lane @ gl_LocalInvocationIndex,
+                uint3 group @ gl_WorkGroupID
+            ) {
+                threadgroup float sharedValues[8];
+                store_value(sharedValues, int(lane), CLAMP_BOUNDS);
+            }
+        }
+    }
+    """.replace("CLAMP_BOUNDS", bounds)
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "store_value"
+    assert error.parameter_name == "values"
+    assert error.backing_name is not None and error.backing_name.endswith(
+        "sharedValues"
+    )
+    assert error.reason == "unprovable-view-access"
+
+
+def test_workgroup_pointer_helper_does_not_assume_shadowed_min_semantics():
+    shader = """
+    shader ShadowedMinWorkgroupPointerAccess {
+        int min(int left, int right) {
+            return left + right;
+        }
+
+        void store_value(threadgroup float* values, int candidate) {
+            int index = min(candidate, 0);
+            values[index] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lane @ gl_LocalInvocationIndex) {
+                threadgroup float sharedValues[4];
+                store_value(sharedValues, int(lane));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "store_value"
+    assert error.parameter_name == "values"
+    assert error.backing_name is not None and error.backing_name.endswith(
+        "sharedValues"
+    )
+    assert error.reason == "unprovable-view-access"

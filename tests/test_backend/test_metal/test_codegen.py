@@ -8,6 +8,7 @@ import pytest
 import crosstl
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.Metal.MetalAst import CastNode as MetalCastNode
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalAddressProvenanceError,
     MetalAliasTemplateResolutionError,
@@ -3598,7 +3599,45 @@ def test_codegen_execution_only_threadgroup_barrier_reaches_native_targets():
         assert "workgroupExecutionBarrier" not in generated
 
 
-def test_codegen_preserves_standalone_void_cast_operand_evaluation():
+def test_codegen_elides_pure_standalone_void_casts():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void discard_values(
+        const device uint* values [[buffer(0)]],
+        uint3 position [[thread_position_in_grid]],
+        uint lid [[thread_index_in_threadgroup]]) {
+        (void)lid;
+        (void)values[lid];
+        (void)position.x;
+        (void)((uint)lid);
+    }
+    """
+    metal_ast = parse_code(tokenize_code(code))
+    kernel = next(
+        function
+        for function in metal_ast.functions
+        if function.name == "discard_values"
+    )
+
+    assert len(kernel.body) == 4
+    assert all(
+        isinstance(statement, MetalCastNode) and statement.target_type == "void"
+        for statement in kernel.body
+    )
+
+    crossgl = convert(code)
+
+    assert "(void)" not in crossgl
+    crossgl_ast = parse_crossgl(crossgl)
+    assert find_crossgl_function(crossgl_ast, "discard_values").body.statements == []
+
+    hlsl = TranslatorHLSLCodeGen().generate(crossgl_ast)
+    assert not re.search(r"(?m)^\s*(?:lid|position\.x);$", hlsl)
+
+
+def test_codegen_preserves_effectful_standalone_void_casts_once():
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -3607,28 +3646,34 @@ def test_codegen_preserves_standalone_void_cast_operand_evaluation():
         return value + 1u;
     }
 
-    kernel void discard_values(uint gid [[thread_position_in_grid]]) {
-        (void)gid;
-        (void)observe(gid);
+    kernel void discard_values(
+        const device uint* values [[buffer(0)]],
+        uint lid [[thread_index_in_threadgroup]]) {
+        uint counter = lid;
+        (void)observe(lid);
+        (void)values[observe(lid)];
+        (void)(counter = lid + 1u);
+        (void)++counter;
+        (void)counter--;
     }
     """
     crossgl = convert(code)
 
     assert "(void)" not in crossgl
-    assert "gid;" in crossgl
-    assert "observe(gid);" in crossgl
+    assert crossgl.count("observe(lid)") == 2
+    assert crossgl.count("observe(lid);") == 1
+    assert crossgl.count("counter = lid + 1u;") == 1
+    assert crossgl.count("++counter") == 1
+    assert crossgl.count("counter--;") == 1
 
     ast = parse_crossgl(crossgl)
-    generated_targets = (
-        TranslatorHLSLCodeGen().generate(ast),
-        GLSLCodeGen().generate(ast),
-        MetalCodeGen().generate(ast),
-        VulkanSPIRVCodeGen().generate(ast),
-    )
-    for generated in generated_targets:
-        assert "unknown function 'void'" not in generated
-        assert "void(gid)" not in generated
-    assert "OpFunctionCall" in generated_targets[-1]
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+
+    assert hlsl.count("observe(lid)") == 2
+    assert hlsl.count("observe(lid);") == 1
+    assert len(re.findall(r"counter\s*=\s*\(?lid \+ 1u\)?;", hlsl)) == 1
+    assert len(re.findall(r"(?:\+\+counter|counter\+\+)", hlsl)) == 1
+    assert len(re.findall(r"(?:--counter|counter--)", hlsl)) == 1
 
 
 def test_static_template_sibling_helper_reaches_native_targets(tmp_path):
@@ -8428,7 +8473,7 @@ def test_mlx_random_auto_local_overload_matches_direct_and_project_opengl(
     )
 
 
-def test_mlx_collapsed_float16_overloads_match_direct_and_project_hlsl(tmp_path):
+def test_mlx_distinct_float16_and_bfloat16_overloads_match_project_hlsl(tmp_path):
     # Reduced from MLX 4367c73b60541ddd5a266ce4644fd93d20223b6e,
     # mlx/backend/metal/kernels/binary_two.metal.
     source = """
@@ -8471,18 +8516,21 @@ def test_mlx_collapsed_float16_overloads_match_direct_and_project_hlsl(tmp_path)
     project_path = repo / artifact["path"]
     project = project_path.read_text(encoding="utf-8")
 
-    definition_pattern = (
-        r"half (Divide__operator_call_[A-Za-z0-9_]+)"
-        r"\(inout Divide self, half x, half y\) \{"
-    )
-    direct_helpers = re.findall(definition_pattern, direct)
-    project_helpers = re.findall(definition_pattern, project)
-    assert len(direct_helpers) == len(project_helpers) == 2
-    assert set(direct_helpers) == set(project_helpers)
-    assert len(set(direct_helpers)) == 2
-    for helper in direct_helpers:
+    helper_types = {
+        "Divide__operator_call__metal_overload_1": "half",
+        "Divide__operator_call__metal_overload_2": "uint",
+    }
+    for helper, scalar_type in helper_types.items():
+        definition_pattern = (
+            rf"{scalar_type} {helper}"
+            rf"\(inout Divide self, {scalar_type} x, {scalar_type} y\) \{{"
+        )
+        assert re.search(definition_pattern, direct) is not None
+        assert re.search(definition_pattern, project) is not None
         assert f"{helper}(operation," in direct
-    assert "half Divide__operator_call(inout Divide self, half x, half y)" not in direct
+    assert " Divide__operator_call(inout Divide self," not in direct
+    assert artifact["bfloat16Lowering"]["status"] == "exact"
+    assert artifact["bfloat16Lowering"]["approximationUsed"] is False
 
     HLSLParser(HLSLLexer(direct).tokenize()).parse()
     source_output = tmp_path / "mlx-collapsed-overloads.hlsl"
@@ -9174,31 +9222,40 @@ def test_mlx_materialized_collapsed_member_overloads_reach_project_targets(tmp_p
     assert payload["summary"]["failedCount"] == 0, payload
     artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
 
-    scalar_types = {"directx": "half", "opengl": "float"}
     for target, direct in direct_outputs.items():
         project = (repo / artifacts[target]["path"]).read_text(encoding="utf-8")
-        scalar_type = scalar_types[target]
         source_helpers = {half_helper, bfloat_helper}
         source_wrappers = {half_wrapper, bfloat_wrapper}
         if target == "directx":
             expected_helpers = source_helpers
             expected_wrappers = source_wrappers
-            unspecialized_helper = "FloorDivide__operator_call"
+            helper_types = {half_helper: "half", bfloat_helper: "uint"}
+            for helper, scalar_type in helper_types.items():
+                definition_pattern = (
+                    rf"{scalar_type} {helper}"
+                    rf"\(inout FloorDivide self, {scalar_type} x, "
+                    rf"{scalar_type} y\) \{{"
+                )
+                assert re.search(definition_pattern, direct) is not None
+                assert re.search(definition_pattern, project) is not None
+            assert " FloorDivide__operator_call(inout FloorDivide self," not in direct
         else:
             expected_helpers = {name.replace("__", "_") for name in source_helpers}
             expected_wrappers = {name.replace("__", "_") for name in source_wrappers}
             unspecialized_helper = "FloorDivide_operator_call"
-        helper_pattern = "|".join(re.escape(name) for name in sorted(expected_helpers))
-        definition_pattern = (
-            rf"{scalar_type} ({helper_pattern})"
-            rf"\(inout FloorDivide self, {scalar_type} x, {scalar_type} y\) \{{"
-        )
-        assert set(re.findall(definition_pattern, direct)) == expected_helpers
-        assert set(re.findall(definition_pattern, project)) == expected_helpers
+            helper_pattern = "|".join(
+                re.escape(name) for name in sorted(expected_helpers)
+            )
+            definition_pattern = (
+                rf"float ({helper_pattern})"
+                r"\(inout FloorDivide self, float x, float y\) \{"
+            )
+            assert set(re.findall(definition_pattern, direct)) == expected_helpers
+            assert set(re.findall(definition_pattern, project)) == expected_helpers
+            assert f"float {unspecialized_helper}(" not in direct
         for helper in (*expected_helpers, *expected_wrappers):
             assert f"{helper}(" in direct
             assert f"{helper}(" in project
-        assert f"{scalar_type} {unspecialized_helper}(" not in direct
 
     hlsl = direct_outputs["directx"]
     HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
@@ -9476,7 +9533,9 @@ def test_codegen_materializes_qualified_static_constant_initializers(tmp_path):
     spirv = VulkanSPIRVCodeGen().generate(ast)
 
     assert "asfloat(2139095040u)" in hlsl
-    assert "return half(asfloat(2139095040u));" in hlsl
+    assert "return __crossgl_bfloat16_from_float(float(asfloat(2139095040u)));" in hlsl
+    assert "return half(asfloat(2139095040u));" not in hlsl
+    assert "// CrossGL exact bfloat16 lowering:" in hlsl
     assert "bfloat16(" not in hlsl
     assert "uintBitsToFloat(2139095040u)" in glsl
     assert "OpConstant" in spirv and " 2139095040" in spirv

@@ -15,6 +15,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
+from crosstl.project.directx_toolchain import (
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+)
 from crosstl.translator.codegen import normalize_backend_name
 
 RUNTIME_VERIFICATION_FIXTURES_KIND = "crosstl-runtime-verification-fixtures"
@@ -1497,7 +1501,9 @@ class DirectXRuntimeParityAdapter(NativeRuntimeParityAdapter):
                 "DirectX native runtime validation requires an entry point.",
                 details={"target": self.target, "artifactPath": str(artifact_path)},
             )
-        profile = _native_hlsl_profile(state)
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+        profile = dxc_profile_for_source(_native_hlsl_profile(state), source)
+        compiler_arguments = dxc_compiler_arguments_for_source(source)
         output_path = temp_dir / f"{artifact_path.stem}.dxil"
         return (
             NativeRuntimeValidationCommand(
@@ -1505,6 +1511,7 @@ class DirectXRuntimeParityAdapter(NativeRuntimeParityAdapter):
                     self._tool_command("dxc"),
                     "-T",
                     profile,
+                    *compiler_arguments,
                     "-E",
                     entry_point,
                     "-Fo",
@@ -4876,6 +4883,16 @@ def _runtime_adapter_contract_with_diagnostics(
         selected_entry_point=selected_entry_point,
         selection_source=selection_source,
     )
+    workgroup_diagnostic = _runtime_workgroup_size_contract_diagnostic(
+        fixture,
+        artifact,
+        artifact_contract=artifact_contract,
+        requested_contract=explicit_contract,
+        selected_entry_point=selected_entry_point,
+        selection_source=selection_source,
+    )
+    if workgroup_diagnostic is not None:
+        diagnostics = (*diagnostics, workgroup_diagnostic)
     contract = (
         scoped_artifact
         if explicit_contract is None or replace_artifact_contract
@@ -4888,6 +4905,63 @@ def _runtime_adapter_contract_with_diagnostics(
             selection_source=selection_source,
         ),
         diagnostics,
+    )
+
+
+def _runtime_workgroup_size_contract_diagnostic(
+    fixture: RuntimeFixture,
+    artifact: Mapping[str, Any],
+    *,
+    artifact_contract: RuntimeAdapterContract,
+    requested_contract: RuntimeAdapterContract | None,
+    selected_entry_point: str,
+    selection_source: str | None,
+) -> dict[str, Any] | None:
+    if requested_contract is None or requested_contract.dispatch is None:
+        return None
+    requested_size = requested_contract.dispatch.workgroup_size
+    compiled_entry = next(
+        (
+            entry
+            for entry in artifact_contract.entry_points
+            if entry.name == selected_entry_point
+        ),
+        None,
+    )
+    if compiled_entry is None:
+        return None
+    compiled_size = compiled_entry.workgroup_size
+    if not _runtime_concrete_positive_workgroup_size(
+        requested_size
+    ) or not _runtime_concrete_positive_workgroup_size(compiled_size):
+        return None
+    if tuple(requested_size) == tuple(compiled_size):
+        return None
+    compiled_entry_payload = compiled_entry.to_json()
+    return _runtime_entry_point_scope_diagnostic(
+        "error",
+        "project.runtime-verification.workgroup-size-mismatch",
+        "Runtime dispatch workgroup size does not match the selected compiled artifact entry.",
+        fixture,
+        artifact,
+        selected_entry_point=selected_entry_point,
+        candidates=tuple(entry.name for entry in artifact_contract.entry_points),
+        reasonKind="workgroup-size-mismatch",
+        requestedWorkgroupSize=list(requested_size),
+        compiledWorkgroupSize=list(compiled_size),
+        entryPointSelectionSource=selection_source,
+        selectedEntryPointProvenance={
+            "source": selection_source,
+            "artifactEntry": compiled_entry_payload,
+        },
+    )
+
+
+def _runtime_concrete_positive_workgroup_size(
+    workgroup_size: Sequence[Any],
+) -> bool:
+    return bool(workgroup_size) and all(
+        _is_positive_int_like(value) for value in workgroup_size
     )
 
 

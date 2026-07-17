@@ -15,8 +15,10 @@ from .GLSL_codegen import (
     OpenGLArithmeticConversionError,
     OpenGLBooleanCompoundAssignmentError,
     OpenGLBooleanOrderedIntrinsicError,
+    OpenGLIndexTypeError,
     OpenGLStructConstructionError,
 )
+from .index_range_contracts import WEBGL_INDEX_PROFILE
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
@@ -52,6 +54,13 @@ class WebGLStructConstructionError(OpenGLStructConstructionError):
     missing_capabilities = ("webgl.struct-conversion-construction",)
 
 
+class WebGLIndexTypeError(OpenGLIndexTypeError):
+    """Raised when a source subscript has no legal GLSL ES index contract."""
+
+    project_diagnostic_code = "project.translate.webgl-index-type-unsupported"
+    missing_capabilities = ("webgl.index-width-normalization",)
+
+
 class WebGLCodeGen(GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
@@ -60,6 +69,8 @@ class WebGLCodeGen(GLSLCodeGen):
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = WebGLBooleanOrderedIntrinsicError
     GLSL_STRUCT_CONSTRUCTION_ERROR = WebGLStructConstructionError
+    GLSL_INDEX_RANGE_ERROR = WebGLIndexTypeError
+    GLSL_INDEX_TARGET_PROFILE = WEBGL_INDEX_PROFILE
     GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32})
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32})
     BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}

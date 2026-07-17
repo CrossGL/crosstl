@@ -50,9 +50,10 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXBooleanCompoundAssignmentError,
     DirectXBooleanOrderedIntrinsicError,
     DirectXCompileTimeGlobalError,
+    DirectXComplexCompoundAssignmentError,
     DirectXCooperativeMatrixUnsupportedError,
+    DirectXEntryPointSelectionError,
     DirectXForInIterableError,
-    DirectXMappedOverloadError,
     DirectXMinimumPrecisionIntegerArithmeticError,
     DirectXPrivatePointerParameterError,
     DirectXResourcePointerArrayError,
@@ -64,6 +65,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXUnionLayoutError,
     DirectXUnresolvedSourceTypeError,
     DirectXWorkgroupPointerError,
+    DirectXWorkgroupSizeError,
     HLSLCodeGen,
 )
 from crosstl.translator.lexer import Lexer
@@ -904,7 +906,7 @@ def test_hlsl_codegen_ignores_metal_address_space_struct_metadata():
 
     generated = generate_code(ast)
 
-    assert "half max;" in generated
+    assert "uint max;" in generated
     assert ": constant" not in generated
 
 
@@ -1000,10 +1002,12 @@ def test_hlsl_codegen_lowers_mlx_half_aliases_and_metal_as_type():
     assert "half bfloat16_t;" not in generated
     assert "half float16_t;" not in generated
     assert "thread_scope_system" not in generated
-    assert "half from_bits(min16uint bits)" in generated
-    assert "return half(bits);" in generated
-    assert "min16uint to_bits(half x)" in generated
-    assert "return min16uint(uint(x));" in generated
+    assert "uint from_bits(min16uint bits)" in generated
+    assert "__crossgl_bfloat16_from_uint16(min16uint(bits))" in generated
+    assert "min16uint to_bits(uint x)" in generated
+    assert "__crossgl_bfloat16_to_uint16(uint(x))" in generated
+    assert "half from_bits" not in generated
+    assert "to_bits(half" not in generated
 
 
 def test_hlsl_codegen_does_not_guess_unknown_limit_constants():
@@ -1076,8 +1080,11 @@ def test_hlsl_codegen_does_not_guess_unknown_limit_constants():
     assert "return Limits_u3cbfloat16_t_u3e_u3a_u3amax;" in generated
     assert "bfloat16_t(" not in generated
     assert "bfloat16(" not in generated
-    assert "return half(x);" in generated
-    assert "return half(asfloat(2139095040u));" in generated
+    assert "return __crossgl_bfloat16_from_float(float(x));" in generated
+    assert (
+        "return __crossgl_bfloat16_from_float(float(asfloat(2139095040u)));"
+        in generated
+    )
     assert "0x7f7fffff" not in generated
     assert "65504.0" not in generated
 
@@ -1888,6 +1895,136 @@ def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
     assert "return infinity();" not in generated
 
 
+def test_hlsl_complex_compound_and_subgroup_operations_validate(tmp_path):
+    source = """
+    shader ComplexSubgroupReduction {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        StructuredBuffer<complex64_t> bias @ binding(0);
+        RWStructuredBuffer<complex64_t> output @ binding(1);
+
+        complex64_t reduce(complex64_t value, complex64_t fill, uint lane) {
+            value += simd_broadcast(value, lane);
+            value -= simd_shuffle(value, lane);
+            value *= simd_shuffle_down(value, lane);
+            value /= simd_shuffle_up(value, lane);
+            value %= simd_shuffle_and_fill_up(value, fill, lane);
+            return value;
+        }
+
+        complex64_t scaled(complex64_t beta, uint index) {
+            return beta * buffer_load(bias, index);
+        }
+
+        compute {
+            @ numthreads(1, 1, 1)
+            void main(uvec3 tid @ gl_GlobalInvocationID) {
+                complex64_t values[2];
+                values[0].real = 1.0;
+                values[0].imag = 2.0;
+                values[1] = values[0];
+                uint index = tid.x & 1u;
+                values[index] += simd_shuffle_down(values[index], 1u);
+                complex64_t reduced = reduce(values[index], values[0], 1u);
+                buffer_store(output, tid.x, scaled(reduced, tid.x));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert (
+        "WaveReadLaneAt(value.real, sourceLane),\n"
+        "        WaveReadLaneAt(value.imag, sourceLane)" in generated
+    )
+    assert "WaveReadLaneAt(value, sourceLane)" not in generated
+    assert "__crossgl_complex64_wave_read_lane_at(value, lane)" in generated
+    assert (
+        "__crossgl_complex64_wave_read_lane_at("
+        "value, (WaveGetLaneIndex() + uint(lane)))" in generated
+    )
+    assert (
+        "__crossgl_complex64_wave_read_lane_at("
+        "value, (WaveGetLaneIndex() - uint(lane)))" in generated
+    )
+    assert (
+        "__crossgl_complex64_wave_shuffle_and_fill_up(value, fill, uint(lane))"
+        in generated
+    )
+    for helper_name in ("add", "sub", "mul", "div", "mod"):
+        assert f"value = __crossgl_complex64_{helper_name}(value," in generated
+    assert (
+        "values[index] = __crossgl_complex64_add("
+        "values[index], __crossgl_complex64_wave_read_lane_at(values[index],"
+        in generated
+    )
+    assert "return __crossgl_complex64_mul(beta, bias.Load(index));" in generated
+    assert "__crossgl_complex64_make(bias.Load(index), 0.0)" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (
+            "values[nextIndex(index)] += values[0];",
+            "side-effecting-assignment-target",
+        ),
+        (
+            "values[index] += nextValue(index, values[0]);",
+            "rhs-may-change-assignment-target",
+        ),
+        (
+            "values[index] += " "simd_shuffle_down(nextValue(index, values[0]), 1u);",
+            "rhs-may-change-assignment-target",
+        ),
+    ],
+    ids=[
+        "side-effecting-target",
+        "rhs-may-change-target",
+        "side-effecting-shuffle-argument",
+    ],
+)
+def test_hlsl_complex_compound_assignment_side_effects_fail_closed(body, reason):
+    source = f"""
+    shader ComplexCompoundSideEffects {{
+        struct complex64_t {{
+            float real;
+            float imag;
+        }};
+
+        int nextIndex(inout int index) {{
+            int result = index;
+            index += 1;
+            return result;
+        }}
+
+        complex64_t nextValue(inout int index, complex64_t value) {{
+            index += 1;
+            return value;
+        }}
+
+        void update() {{
+            complex64_t values[2];
+            int index = 0;
+            {body}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXComplexCompoundAssignmentError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert exc_info.value.reason == reason
+    assert exc_info.value.operator == "+="
+    assert exc_info.value.target_type == "complex64_t"
+
+
 def test_hlsl_codegen_lowers_generic_int64_vector_type_names():
     ast = ShaderNode(
         "MetalGenericVector",
@@ -2257,6 +2394,42 @@ def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op(tmp_path):
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_hlsl_codegen_widens_native_uint16_shuffle_and_fill_up_delta():
+    code = """
+    shader HLSLShuffleAndFillUpNativeUint16Delta {
+        StructuredBuffer<bfloat16_t> input;
+        RWStructuredBuffer<bfloat16_t> output;
+
+        uint shuffleWithDelta(uint value, uint fill, uint16_t delta) {
+            return WaveShuffleAndFillUp(value, fill, delta);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint16_t delta = uint16_t(1u);
+                uint shuffled = shuffleWithDelta(4u, 7u, delta);
+                output[0] = input[shuffled];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "StructuredBuffer<uint16_t> input : register(t0);" in generated
+    assert "RWStructuredBuffer<uint16_t> output : register(u0);" in generated
+    assert "uint shuffleWithDelta(uint value, uint fill, uint16_t delta)" in generated
+    assert "uint16_t delta = uint16_t(1u);" in generated
+    assert (
+        "return __crossgl_wave_shuffle_and_fill_up_uint("
+        "value, fill, uint(delta));" in generated
+    )
+    assert "min16uint" not in generated
 
 
 @pytest.mark.parametrize(
@@ -5170,6 +5343,142 @@ def test_hlsl_compute_workgroup_size_parameter_lowers_to_numthreads_constant():
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
+@pytest.mark.parametrize(
+    ("value_type", "value_expression", "expected_declaration"),
+    [
+        (
+            "uint",
+            "lsize",
+            "uint lsize = uint((uint3(32, 8, 4)).x);",
+        ),
+        (
+            "uint2",
+            "lsize.x + lsize.y",
+            "uint2 lsize = uint2((uint3(32, 8, 4)).xy);",
+        ),
+        (
+            "uint3",
+            "lsize.x + lsize.y + lsize.z",
+            "uint3 lsize = uint3(32, 8, 4);",
+        ),
+    ],
+    ids=["scalar", "vector2", "vector3"],
+)
+def test_hlsl_compute_workgroup_size_projects_declared_source_shape(
+    tmp_path,
+    value_type,
+    value_expression,
+    expected_declaration,
+):
+    shader = f"""
+    shader WorkgroupShape {{
+        compute {{
+            @ stage_entry
+            @ numthreads(32, 8, 4)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      {value_type} lsize @gl_WorkGroupSize) {{
+                output[0] = {value_expression};
+            }}
+        }}
+    }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "[numthreads(32, 8, 4)]" in generated_code
+    assert expected_declaration in generated_code
+    assert "gl_WorkGroupSize" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("size", "reason"),
+    [
+        ((0, 1, 1), "non-positive-dimension"),
+        ((1025, 1, 1), "dimension-limit-exceeded"),
+        ((1024, 2, 1), "thread-count-limit-exceeded"),
+    ],
+)
+def test_hlsl_compute_workgroup_size_rejects_invalid_target_dimensions(size, reason):
+    x, y, z = size
+    shader = f"""
+    shader InvalidWorkgroupSize {{
+        compute {{
+            @ stage_entry
+            @ numthreads({x}, {y}, {z})
+            void main() {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXWorkgroupSizeError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.workgroup-size-invalid"
+    )
+    assert exc_info.value.workgroup_size == size
+    assert exc_info.value.reason == reason
+
+
+DIRECTX_ENTRY_SCOPED_COMPUTE_SOURCE = """
+shader DirectXEntryScopedCompute {
+    uint selected_helper(uint value) {
+        return value + 1u;
+    }
+
+    uint unrelated_helper(uint value) {
+        return value * 9u;
+    }
+
+    compute first {
+        @ numthreads(8, 1, 1)
+        void main(RWStructuredBuffer<uint> output @buffer(0),
+                  uint group_size @gl_WorkGroupSize) {
+            output[0] = unrelated_helper(group_size);
+        }
+    }
+
+    compute second {
+        @ numthreads(32, 8, 4)
+        void main(RWStructuredBuffer<uint> output @buffer(0),
+                  uint group_size @gl_WorkGroupSize) {
+            output[0] = selected_helper(group_size);
+        }
+    }
+}
+"""
+
+
+def test_hlsl_entry_scoped_generation_keeps_selected_execution_contract(tmp_path):
+    ast = parse_code(tokenize_code(DIRECTX_ENTRY_SCOPED_COMPUTE_SOURCE))
+
+    generated = HLSLCodeGen().generate_entry(ast, "second")
+
+    assert generated.count("[numthreads(") == 1
+    assert "[numthreads(32, 8, 4)]" in generated
+    assert "uint group_size = uint((uint3(32, 8, 4)).x);" in generated
+    assert "selected_helper" in generated
+    assert "unrelated_helper" not in generated
+    assert generated.count("RWStructuredBuffer<uint>") == 1
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_entry_scoped_generation_reports_available_entries():
+    ast = parse_code(tokenize_code(DIRECTX_ENTRY_SCOPED_COMPUTE_SOURCE))
+
+    with pytest.raises(
+        DirectXEntryPointSelectionError,
+        match="source entry point 'missing' was not found",
+    ) as error:
+        HLSLCodeGen().generate_entry(ast, "missing")
+
+    assert error.value.reason == "not-found"
+    assert error.value.entry_point == "missing"
+    assert error.value.available_entry_points == ("first", "second")
+
+
 def test_hlsl_compute_unused_value_builtin_parameters_are_dropped():
     # A generated compute entry can carry unused [[threads_per_grid]] (gsize) and
     # [[threads_per_threadgroup]] (gl_WorkGroupSize, lsize) parameters alongside
@@ -5515,6 +5824,105 @@ def test_hlsl_metal_constant_array_helpers_preserve_resource_parameters(tmp_path
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_hlsl_metal_constant_pointer_helpers_forward_alias_offsets(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    int64_t add_pair(
+        const constant int64_t* left,
+        const constant int64_t* right) {
+      return left[1] + right[1];
+    }
+
+    int64_t add_pair(
+        const constant int64_t* left,
+        const constant int64_t* right,
+        const constant int64_t* third) {
+      return left[0] + right[0] + third[0];
+    }
+
+    kernel void forward_offsets(
+        const constant int64_t* values [[buffer(0)]],
+        device int64_t* output [[buffer(1)]]) {
+      const constant auto* left = values;
+      const constant auto* right = values + 2;
+      const constant auto* third = values + 4;
+      output[0] = add_pair(left, right);
+      output[1] = add_pair(left, right, third);
+    }
+    """
+    shader_path = tmp_path / "constant_pointer_offsets.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    two_pointer_overload = re.search(
+        r"int64_t (add_pair_[A-Za-z0-9_]+)\("
+        r"StructuredBuffer<int64_t> left, int64_t left_offset, "
+        r"StructuredBuffer<int64_t> right, int64_t right_offset\)",
+        generated,
+    )
+    three_pointer_overload = re.search(
+        r"int64_t (add_pair_[A-Za-z0-9_]+)\("
+        r"StructuredBuffer<int64_t> left, int64_t left_offset, "
+        r"StructuredBuffer<int64_t> right, int64_t right_offset, "
+        r"StructuredBuffer<int64_t> third, int64_t third_offset\)",
+        generated,
+    )
+    assert two_pointer_overload is not None
+    assert three_pointer_overload is not None
+    assert two_pointer_overload.group(1) != three_pointer_overload.group(1)
+    assert "left[uint((left_offset + 1))]" in generated
+    assert "right[uint((right_offset + 1))]" in generated
+    assert (
+        f"{two_pointer_overload.group(1)}(values, int64_t(left_offset), "
+        "values, int64_t(right_offset))" in generated
+    )
+    assert (
+        f"{three_pointer_overload.group(1)}(values, int64_t(left_offset), "
+        "values, int64_t(right_offset), values, int64_t(third_offset))" in generated
+    )
+    assert "int64_t* left" not in generated
+    assert "int64_t* right" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_constant_pointer_helper_rejects_unbacked_argument(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    int64_t read_one(const constant int64_t* value) {
+      return value[0];
+    }
+
+    kernel void unbacked(device int64_t* output [[buffer(0)]]) {
+      output[0] = read_one(nullptr);
+    }
+    """
+    shader_path = tmp_path / "constant_pointer_unbacked.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerParameterError) as exc_info:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert exc_info.value.reason == "call-backing-unresolved"
+    assert exc_info.value.address_space == "constant"
+    assert exc_info.value.parameter_name == "value"
 
 
 def test_hlsl_metal_scalar_constant_kernel_params_promote_to_cbuffers(tmp_path):
@@ -11621,7 +12029,7 @@ def test_hlsl_forward_declares_helper_overloads_before_definitions():
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
-def test_hlsl_renames_collapsed_bfloat_overloads_and_rewrites_nested_calls(
+def test_hlsl_preserves_distinct_bfloat_payload_overloads_and_rewrites_nested_calls(
     tmp_path,
 ):
     shader = """
@@ -11675,15 +12083,13 @@ def test_hlsl_renames_collapsed_bfloat_overloads_and_rewrites_nested_calls(
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "half adjust_float16(half value)" in generated_code
-    assert "half adjust_bfloat16_t(half value)" in generated_code
-    assert "return adjust_float16(adjust_float16(value));" in generated_code
-    assert "return adjust_bfloat16_t(adjust_bfloat16_t(value));" in generated_code
-    assert "return adjust_bfloat16_t(half(3.0));" in generated_code
-    assert "return adjust_bfloat16_t((left + right));" in generated_code
-    assert "return adjust_bfloat16_t(values[index]);" in generated_code
-    assert "return adjust_bfloat16_t(value);" in generated_code
-    assert "half adjust(half value)" not in generated_code
+    assert "half adjust(half value)" in generated_code
+    assert "uint adjust(uint value)" in generated_code
+    assert "return adjust(adjust(value));" in generated_code
+    assert "return adjust(__crossgl_bfloat16_from_float(float(3.0)));" in generated_code
+    assert "return adjust(values[index]);" in generated_code
+    assert "uint value = __crossgl_bfloat16_from_float(float(6.0));" in generated_code
+    assert "adjust_bfloat16_t" not in generated_code
     assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
 
@@ -11792,14 +12198,14 @@ def test_hlsl_mapped_overload_names_avoid_existing_declarations(tmp_path):
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "static const int adjust_bfloat16_t = 7;" in generated_code
-    assert "half adjust_float16(half value)" in generated_code
-    assert "half adjust_bfloat16_t_2(half value)" in generated_code
-    assert "half value = adjust_float16(half(1.0));" in generated_code
-    assert "half narrowValue = adjust_bfloat16_t_2(half(2.0));" in generated_code
+    assert "half adjust(half value)" in generated_code
+    assert "uint adjust(uint value)" in generated_code
+    assert "half value = adjust(half(1.0));" in generated_code
+    assert "half narrowValue = half(__crossgl_bfloat16_to_float" in generated_code
     assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
 
-def test_hlsl_reports_resource_overloads_with_collapsed_emitted_signatures():
+def test_hlsl_preserves_resource_overloads_with_distinct_bfloat_payloads():
     shader = """
     shader ResourceMappedOverloads {
         float16 readValue(StructuredBuffer<float16> values, float16 fallback) {
@@ -11815,20 +12221,15 @@ def test_hlsl_reports_resource_overloads_with_collapsed_emitted_signatures():
     }
     """
 
-    with pytest.raises(DirectXMappedOverloadError) as exc_info:
-        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    diagnostic = exc_info.value
-    assert diagnostic.function_name == "readValue"
-    assert diagnostic.reason == "resource-parameter-collision"
-    assert diagnostic.argument_types == ()
-    assert diagnostic.candidates == (
-        "readValue(StructuredBuffer<float16>, bfloat16_t) -> bfloat16_t",
-        "readValue(StructuredBuffer<float16>, float16) -> float16",
-    )
+    assert "half readValue(StructuredBuffer<half> values, half fallback)" in generated
+    assert "uint readValue(StructuredBuffer<half> values, uint fallback)" in generated
+    assert "__crossgl_bfloat16_from_float" in generated
+    assert "__crossgl_bfloat16_to_float" in generated
 
 
-def test_hlsl_reports_ambiguous_call_after_overload_type_mapping():
+def test_hlsl_resolves_call_after_bfloat_payload_types_remain_distinct():
     shader = """
     shader AmbiguousMappedOverloads {
         float16 select(float16 value) {
@@ -11845,23 +12246,14 @@ def test_hlsl_reports_ambiguous_call_after_overload_type_mapping():
     }
     """
 
-    with pytest.raises(DirectXMappedOverloadError) as exc_info:
-        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    diagnostic = exc_info.value
-    assert diagnostic.project_diagnostic_code == (
-        "project.translate.directx-mapped-overload-ambiguous"
-    )
-    assert diagnostic.function_name == "select"
-    assert diagnostic.argument_types == ("int",)
-    assert diagnostic.reason == "call-binding-ambiguous"
-    assert diagnostic.candidates == (
-        "select(float16) -> float16",
-        "select(bfloat16_t) -> bfloat16_t",
-    )
+    assert "half select(half value)" in generated
+    assert "uint select(uint value)" in generated
+    assert "return half(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
 
 
-def test_hlsl_mapped_overload_ambiguity_reaches_project_report(tmp_path):
+def test_hlsl_distinct_bfloat_payload_overload_reaches_project_artifact(tmp_path):
     from crosstl.project import translate_project
 
     source = """
@@ -11884,13 +12276,14 @@ def test_hlsl_mapped_overload_ambiguity_reaches_project_report(tmp_path):
 
     payload = translate_project(tmp_path, targets=["directx"]).to_json()
 
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 1
-    assert len(payload["diagnostics"]) == 1
-    diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == ("project.translate.directx-mapped-overload-ambiguous")
-    assert diagnostic["missingCapabilities"] == ["directx.mapped-overload-resolution"]
-    assert "select(int)" in diagnostic["message"]
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
+    assert "half select(half value)" in generated
+    assert "uint select(uint value)" in generated
+    assert "return half(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
 
 
 def test_hlsl_orders_late_array_helper_overloads_before_caller(tmp_path):
@@ -40200,23 +40593,152 @@ def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes(tmp_p
 
     assert "groupshared float2 main_storage[64];" in generated
     assert (
-        "void update(inout float2 values[64], int values_offset, uint index)"
-        in generated
+        "void update__crosstl_workgroup_values_main_storage_64("
+        "int values_offset, uint index)" in generated
     )
     assert (
-        "void forward(inout float2 values[64], int values_offset, uint index)"
-        in generated
+        "void forward__crosstl_workgroup_values_main_storage_64("
+        "int values_offset, uint index)" in generated
     )
-    assert "values[uint((values_offset + index))] =" in generated
-    assert "update(values, int((values_offset + 2)), index);" in generated
+    assert "main_storage[uint((values_offset + index))] =" in generated
+    assert (
+        "update__crosstl_workgroup_values_main_storage_64("
+        "int((values_offset + 2)), index);" in generated
+    )
     assert "int first_offset = int(lid);" in generated
     assert "int second_offset = int((first_offset + 5));" in generated
     assert "second_offset = int((first_offset + 7));" in generated
-    assert "forward(main_storage, int(second_offset), lid);" in generated
+    assert (
+        "forward__crosstl_workgroup_values_main_storage_64("
+        "int(second_offset), lid);" in generated
+    )
     assert "main_storage[uint((second_offset + 1))] = main_storage[0];" in generated
+    assert "inout float2 values" not in generated
     assert "groupshared float2*" not in generated
     assert "float2*" not in generated
     assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_workgroup_pointer_nested_helpers_specialize_by_backing_identity(
+    tmp_path,
+):
+    shader = """
+    shader WorkgroupPointerBackingIdentity {
+        void update(threadgroup float* values) {
+            values[0] += 1.0;
+        }
+
+        void forward(threadgroup float* values) {
+            update(values + 1);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float left[8];
+                threadgroup float right[8];
+                forward(left + 2);
+                forward(right + 3);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    for root, offset in (("main_left", 2), ("main_right", 3)):
+        update = f"update__crosstl_workgroup_values_{root}_8"
+        forward = f"forward__crosstl_workgroup_values_{root}_8"
+        assert f"void {update}(int values_offset)" in generated
+        assert f"void {forward}(int values_offset)" in generated
+        assert f"{root}[uint(values_offset)] += 1.0;" in generated
+        assert f"{update}(int((values_offset + 1)));" in generated
+        assert f"{forward}(int({offset}));" in generated
+
+    assert "inout float values" not in generated
+    assert "float*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_workgroup_pointer_static_nullable_calls_preserve_specialization(
+    tmp_path,
+):
+    shader = """
+    shader StaticNullableWorkgroupPointer {
+        void ignore(threadgroup float* values) {
+            if (false) {
+                values[0] = 1.0;
+            }
+        }
+
+        void write(threadgroup float* values) {
+            values[0] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                ignore((1 == 1) ? nullptr : storage);
+                write((1 == 1) ? storage : nullptr);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    ignore = "ignore__crosstl_workgroup_values_main_storage_1"
+    write = "write__crosstl_workgroup_values_main_storage_1"
+    assert f"void {ignore}(int values_offset)" in generated
+    assert f"void {write}(int values_offset)" in generated
+    assert f"{ignore}(int(0));" in generated
+    assert f"{write}(int(0));" in generated
+    assert "main_storage[uint(values_offset)] = 2.0;" in generated
+    assert "__crossgl_aggregate_conditional" not in generated
+    assert "nullptr" not in generated
+    assert "float*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "observation",
+    [
+        pytest.param("values[0] = 1.0;", id="indexed-access"),
+        pytest.param("bool is_null = values == nullptr;", id="pointer-comparison"),
+    ],
+)
+def test_hlsl_workgroup_pointer_static_null_selection_rejects_observation(
+    observation,
+):
+    shader = f"""
+    shader ObservedNullWorkgroupPointer {{
+        void observe(threadgroup float* values) {{
+            {observation}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                threadgroup float storage[1];
+                observe((1 == 1) ? nullptr : storage);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        DirectXWorkgroupPointerError,
+        match="statically selected null workgroup pointer.*parameter is observed",
+    ) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.function_name == "observe"
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "null-pointer-observed"
 
 
 def test_hlsl_workgroup_pointer_variants_preserve_lexical_shadowing(tmp_path):
@@ -40245,12 +40767,24 @@ def test_hlsl_workgroup_pointer_variants_preserve_lexical_shadowing(tmp_path):
 
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "void update(inout float values[8], int values_offset)" in generated
-    assert "void update(inout float values[16], int values_offset)" in generated
+    assert (
+        "void update__crosstl_workgroup_values_main_left_8(int values_offset)"
+        in generated
+    )
+    assert (
+        "void update__crosstl_workgroup_values_main_right_16(int values_offset)"
+        in generated
+    )
     assert "int selected_offset = int(1);" in generated
     assert "int selected_offset_ = int(2);" in generated
-    assert "update(main_right, int(selected_offset_));" in generated
-    assert "update(main_left, int(selected_offset));" in generated
+    assert (
+        "update__crosstl_workgroup_values_main_right_16(int(selected_offset_));"
+        in generated
+    )
+    assert (
+        "update__crosstl_workgroup_values_main_left_8(int(selected_offset));"
+        in generated
+    )
     assert "float*" not in generated
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
@@ -40359,8 +40893,11 @@ def test_hlsl_workgroup_pointer_keeps_helper_reachable_from_selected_stage(tmp_p
     )
 
     assert "groupshared float main_values[8];" in generated
-    assert "void update(inout float values[8], int values_offset)" in generated
-    assert "update(main_values, int(0));" in generated
+    assert (
+        "void update__crosstl_workgroup_values_main_values_8(int values_offset)"
+        in generated
+    )
+    assert "update__crosstl_workgroup_values_main_values_8(int(0));" in generated
     assert "float*" not in generated
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
@@ -40392,6 +40929,79 @@ def test_hlsl_workgroup_pointer_rejects_dynamic_backing_selection():
     assert diagnostic.missing_capabilities == ("directx.workgroup-pointer-lowering",)
     assert diagnostic.function_name == "main"
     assert diagnostic.reason == "conditional-backing-unresolved"
+
+
+def test_hlsl_workgroup_pointer_rejects_composed_out_of_bounds_view():
+    shader = """
+    shader OutOfBoundsWorkgroupPointerView {
+        void update(threadgroup float* values) {
+            values[1] = 1.0;
+        }
+
+        void forward(threadgroup float* values) {
+            update(values + 2);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[8];
+                forward(storage + 5);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXWorkgroupPointerError,
+        match=(
+            "workgroup pointer view 'forward.values' requires elements 8 "
+            "through 8, but backing array 'main_storage' has extent 8"
+        ),
+    ) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.function_name == "forward"
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "view-out-of-bounds"
+
+
+def test_hlsl_workgroup_pointer_rejects_unprovable_composed_offset():
+    shader = """
+    shader UnprovableWorkgroupPointerView {
+        uint select_offset(uint value) {
+            return value;
+        }
+
+        void update(threadgroup float* values) {
+            values[0] = 1.0;
+        }
+
+        void forward(threadgroup float* values) {
+            update(values + 1);
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float storage[16];
+                forward(storage + select_offset(lid));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXWorkgroupPointerError,
+        match="cannot prove the composed workgroup pointer offset",
+    ) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.function_name == "forward"
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "unprovable-view-offset"
 
 
 def test_hlsl_private_scalar_pointer_accepts_proven_zero_loop_index():
@@ -40806,8 +41416,8 @@ def test_hlsl_boolean_min_max_preserve_ordered_semantics(tmp_path):
 
     assert "return ((left) && (right));" in generated
     assert "return ((left) || (right));" in generated
-    assert "return and(left, right);" in generated
-    assert "return or(left, right);" in generated
+    assert "return ((left) & (right));" in generated
+    assert "return ((left) | (right));" in generated
     assert "return min(left, right);" in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)

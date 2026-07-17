@@ -22,6 +22,10 @@ from crosstl.project import (
     execute_project_test_runner_plan,
     native_runtime_parity_adapters,
 )
+from crosstl.project.directx_toolchain import (
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+)
 from crosstl.project.runtime_verification import (
     RuntimeParityAdapter,
     build_runtime_test_manifest,
@@ -36,7 +40,12 @@ MLX_ARG_REDUCE_SOURCE = "mlx/backend/metal/kernels/arg_reduce.metal"
 MLX_BINARY_TWO_SOURCE = "mlx/backend/metal/kernels/binary_two.metal"
 MLX_FENCE_SOURCE = "mlx/backend/metal/kernels/fence.metal"
 MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT = 3
+MLX_FFT_SOURCE = "mlx/backend/metal/kernels/fft.metal"
+MLX_FFT_SHA256 = "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825"
+MLX_FFT_SOURCE_SIZE_BYTES = 3278
 MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
+MLX_GEMV_SHA256 = "c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f"
+MLX_GEMV_SOURCE_SIZE_BYTES = 5383
 MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
 MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
@@ -55,7 +64,12 @@ REFERENCE_ACCESSOR_FIXTURE_PATH = (
 REFERENCE_ACCESSOR_TARGETS = ("directx", "opengl")
 REFERENCE_ACCESSOR_SENTINEL = "73.25"
 REFERENCE_ACCESSOR_DXC_ENTRY_POINT = "CSMain"
-MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
+TEMPLATE_MEMBER_POINTER_FIXTURE_NAME = "template_member_buffer_pointer.metal"
+TEMPLATE_MEMBER_POINTER_FIXTURE_PATH = (
+    Path(__file__).resolve().parent / "fixtures" / TEMPLATE_MEMBER_POINTER_FIXTURE_NAME
+)
+TEMPLATE_MEMBER_POINTER_TARGETS = ("directx", "opengl")
+MLX_OPENGL_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
     MLX_LOGSUMEXP_SOURCE,
@@ -78,11 +92,106 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     MLX_SOFTMAX_SOURCE,
     MLX_TERNARY_SOURCE,
 )
-MLX_CLEAN_REDUCED_FRONTIER_SOURCES = tuple(
+MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = (
+    MLX_ARG_REDUCE_SOURCE,
+    MLX_LAYER_NORM_SOURCE,
+    MLX_LOGSUMEXP_SOURCE,
+    MLX_RMS_NORM_SOURCE,
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+    MLX_SOFTMAX_SOURCE,
+)
+MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    if source not in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+)
+MLX_DIRECTX_NATIVE_BFLOAT16_STORAGE_SOURCES = (
+    MLX_ARANGE_SOURCE,
+    MLX_BINARY_TWO_SOURCE,
+    MLX_ROPE_SOURCE,
+    MLX_TERNARY_SOURCE,
+)
+MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE = {
+    source: {
+        "bfloat16Lowering": {
+            "status": "exact",
+            "approximationUsed": False,
+            "registerRepresentation": "uint-low-16-bits",
+            "storageRepresentation": (
+                "native-uint16"
+                if source in MLX_DIRECTX_NATIVE_BFLOAT16_STORAGE_SOURCES
+                else "not-required"
+            ),
+            "roundingMode": "round-to-nearest-ties-to-even",
+        },
+        "requiredCapabilities": (
+            ["directx.native-16bit-types"]
+            if source in MLX_DIRECTX_NATIVE_BFLOAT16_STORAGE_SOURCES
+            else []
+        ),
+    }
+    for source in MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+}
+MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_OPENGL_FRONTIER_SOURCES
+    if source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+)
+MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_OPENGL_FRONTIER_SOURCES
+    if source not in MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+)
+MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM = 0
+MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM = 2_147_483_647
+MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS = {
+    MLX_BINARY_TWO_SOURCE: (
+        "offset + i",
+        "a_idx",
+        "b_idx",
+        "out_idx",
+        "out_idx++",
+        "idx.x",
+        "idx.y",
+    ),
+    MLX_ROPE_SOURCE: (
+        "batch_idx * offset_stride",
+        "freq_stride * pos.x",
+        "in_index_1",
+        "in_index_2",
+        "out_index_1",
+        "out_index_2",
+    ),
+    MLX_TERNARY_SOURCE: (
+        "offset + i",
+        "a_idx",
+        "b_idx",
+        "c_idx",
+        "bidx",
+        "cidx",
+        "out_idx",
+        "out_idx++",
+        "idx.x",
+        "idx.y",
+        "idx.z",
+    ),
+}
+MLX_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
+    {
+        "source": source,
+        "expression": expression,
+        "minimum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+        "maximum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+    }
+    for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+    for expression in MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS[source]
+)
+MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES = tuple(
     dict.fromkeys(
         (
             *MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
-            *MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
+            *MLX_OPENGL_FRONTIER_SOURCES,
         )
     )
 )
@@ -91,29 +200,14 @@ MLX_REDUCED_FRONTIER_SOURCES = tuple(
     dict.fromkeys(
         sorted(
             (
-                *MLX_CLEAN_REDUCED_FRONTIER_SOURCES,
+                *MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES,
                 *MLX_BLOCKED_REDUCED_FRONTIER_SOURCES,
             )
         )
     )
 )
-# Full clean DirectX frontier gated by DXC on Windows. The separate blocked fence
-# source must fail before target emission under its atomic-fence diagnostic.
-MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = (
-    MLX_ARANGE_SOURCE,
-    MLX_ARG_REDUCE_SOURCE,
-    MLX_BINARY_TWO_SOURCE,
-    MLX_LAYER_NORM_SOURCE,
-    MLX_LOGSUMEXP_SOURCE,
-    MLX_RANDOM_SOURCE,
-    MLX_RMS_NORM_SOURCE,
-    MLX_ROPE_SOURCE,
-    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
-    MLX_SOFTMAX_SOURCE,
-    MLX_TERNARY_SOURCE,
-)
-# Pinned generated compute entries compiled by official DXC v1.9.2602.24.
-MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
+# Pinned generated compute entries in the complete DirectX source frontier.
+MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS = {
     MLX_ARANGE_SOURCE: 11,
     MLX_ARG_REDUCE_SOURCE: 24,
     MLX_BINARY_TWO_SOURCE: 225,
@@ -126,9 +220,135 @@ MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
     MLX_SOFTMAX_SOURCE: 10,
     MLX_TERNARY_SOURCE: 212,
 }
+# DXC compiles only sources whose pinned host dispatch does not require a runtime
+# workgroup-size variant. Dynamic sources remain explicit failed artifact records.
+MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
+    source: MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+    for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+}
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT = sum(
     MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
 )
+MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS = {
+    source: MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+    for source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+}
+MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE = (
+    "project.translate.workgroup-size-entry-ambiguous"
+)
+MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE = (
+    "A multi-entry compute artifact cannot apply one workgroup size when the "
+    "emitted entry points do not declare a shared source size. Select one entry "
+    "point or emit independently specialized artifacts."
+)
+MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues/1750"
+MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
+    MLX_ARG_REDUCE_SOURCE: {
+        "specializationCount": 51,
+        "hostSource": "mlx/backend/metal/primitives.cpp",
+        "hostLines": "117-132",
+        "dispatchFormulas": [
+            "[32 * ceil_div(min(ceil_div(axis_size, 4), "
+            "maxTotalThreadsPerThreadgroup), 32), 1, 1]"
+        ],
+        "dispatchSelection": ["single host dispatch path"],
+        "runtimeOperands": ["axis_size", "maxTotalThreadsPerThreadgroup"],
+        "materializationParameters": ["N_READS", "Op", "T"],
+    },
+    MLX_LAYER_NORM_SOURCE: {
+        "specializationCount": 16,
+        "hostSource": "mlx/backend/metal/normalization.cpp",
+        "hostLines": "248-297,346-422",
+        "dispatchFormulas": [
+            "forward block: [32 * ceil_div(ceil_div(axis_size, 8), 32), 1, 1]",
+            "forward looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+            "VJP block: [32 * ceil_div(ceil_div(axis_size, 8), 32), 1, 1]",
+            "VJP looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+        ],
+        "dispatchSelection": [
+            "forward block when axis_size <= 6656; looped when axis_size > 6656",
+            "VJP block when axis_size <= 8192; looped when axis_size > 8192",
+        ],
+        "runtimeOperands": [
+            "axis_size",
+            "forward_or_vjp_entry",
+            "maxTotalThreadsPerThreadgroup",
+        ],
+        "materializationParameters": ["N_READS", "T"],
+    },
+    MLX_LOGSUMEXP_SOURCE: {
+        "specializationCount": 7,
+        "hostSource": "mlx/backend/metal/logsumexp.cpp",
+        "hostLines": "58-91",
+        "dispatchFormulas": [
+            "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+            "looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+        ],
+        "dispatchSelection": [
+            "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": ["axis_size", "maxTotalThreadsPerThreadgroup"],
+        "materializationParameters": ["AccT", "N_READS", "T"],
+    },
+    MLX_RMS_NORM_SOURCE: {
+        "specializationCount": 12,
+        "hostSource": "mlx/backend/metal/normalization.cpp",
+        "hostLines": "52-91,137-197",
+        "dispatchFormulas": [
+            "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+            "looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+        ],
+        "dispatchSelection": [
+            "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": ["axis_size", "maxTotalThreadsPerThreadgroup"],
+        "materializationParameters": ["N_READS", "T"],
+    },
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: {
+        "specializationCount": 42,
+        "hostSource": "mlx/backend/metal/scaled_dot_product_attention.cpp",
+        "hostLines": (
+            "31-32,160-163,194-195,323-326,350-415,440-484,561-586," "613-640,685-753"
+        ),
+        "dispatchFormulas": [
+            "full attention (NAX and Metal): [32, 4, 1]",
+            "vector: [1024, 1, 1]",
+            "two-pass first pass: [32, q_heads / kv_heads, q_sequence_length]",
+            "two-pass final pass: [1024, 1, 1]",
+        ],
+        "dispatchSelection": [
+            "full attention when q_sequence_length > 8",
+            "vector mode when q_sequence_length <= 8",
+            "two-pass vector when ((device architecture is d or s) and "
+            "k_sequence_length >= 1024) or (kv_heads < q_heads and "
+            "k_sequence_length >= 4096); otherwise one-pass vector",
+        ],
+        "runtimeOperands": [
+            "selected_pass",
+            "device_architecture",
+            "q_heads",
+            "kv_heads",
+            "q_sequence_length",
+            "k_sequence_length",
+        ],
+        "materializationParameters": ["D", "T", "V"],
+    },
+    MLX_SOFTMAX_SOURCE: {
+        "specializationCount": 17,
+        "hostSource": "mlx/backend/metal/softmax.cpp",
+        "hostLines": "46-83",
+        "dispatchFormulas": [
+            "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+            "looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+        ],
+        "dispatchSelection": [
+            "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": ["axis_size", "maxTotalThreadsPerThreadgroup"],
+        "materializationParameters": ["AccT", "N_READS", "T"],
+    },
+}
 MLX_FRONTIER_SPECIALIZATION_CONSTANTS = {
     "1": False,
     "2": False,
@@ -192,6 +412,88 @@ GEMV_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
 GEMV_EXPECTED_SPECIALIZATION_COUNT = 225
 GEMV_EXPECTED_ENTRY_POINT_COUNT = 224
+GEMV_DIRECTX_TRANSLATION_TIMEOUT_SECONDS = 900
+GEMV_DIRECTX_ENTRY_PROFILE = "cs_6_0"
+GEMV_DIRECTX_LIBRARY_PROFILE = "lib_6_6"
+GEMV_DIRECTX_EXPECTED_ENTRY_POINTS = (
+    "CSMain",
+    *(f"CSMain_{index}" for index in range(2, GEMV_EXPECTED_ENTRY_POINT_COUNT + 1)),
+)
+GEMV_DIRECTX_COMPILER_ENTRY_POINTS = ("CSMain", "CSMain_85", "CSMain_113")
+GEMV_WORKGROUP_SIZE_RULE = (32, "BN", "BM")
+GEMV_REPORT_WORKGROUP_SIZE_RULE = tuple(
+    str(component) for component in GEMV_WORKGROUP_SIZE_RULE
+)
+GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES = (
+    (32, 1, 1),
+    (32, 1, 4),
+    (32, 1, 8),
+    (32, 2, 1),
+    (32, 4, 1),
+    (32, 8, 1),
+    (32, 16, 1),
+)
+GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE = (
+    "attribute 'numthreads' ignored without accompanying shader attribute "
+    "[-Wmisplaced-attributes]"
+)
+GEMV_DIRECTX_EXPECTED_LIBRARY_WARNING_COUNT = GEMV_EXPECTED_ENTRY_POINT_COUNT
+GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
+GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE = (
+    "project.translate.opengl-workgroup-pointer-unsupported"
+)
+GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY = "opengl.workgroup-pointer-lowering"
+GEMV_OPENGL_EXPECTED_MESSAGE = (
+    "OpenGL cannot prove the workgroup pointer access range for "
+    "'GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run.tgp_memory' into shared backing "
+    "'tgp_memory'"
+)
+GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE = {
+    "backingName": "tgp_memory",
+    "function": "GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run",
+    "materializationName": (
+        "GEMVKernel_bfloat16_t_1_8_1_32_1_4_0_run__glsl_tgp_memory_"
+        "gemv_bfloat16_bm1_bn8_sm1_sn32_tm1_tn4_nc0_axpby0_"
+        "tgp_memory_float_16"
+    ),
+    "offsetExpression": "0",
+    "parameter": "tgp_memory",
+    "reason": "unprovable-view-access",
+}
+GEMV_OPENGL_BACKING_RANGE_ISSUE = "https://github.com/CrossGL/crosstl/issues/1671"
+GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE = "https://github.com/CrossGL/crosstl/issues/1786"
+GEMV_OPENGL_EXECUTION_TRACKED_ISSUES = (GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,)
+GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES = GEMV_OPENGL_EXECUTION_TRACKED_ISSUES
+GEMV_OPENGL_FRONTIER_TRACKED_ISSUES = (
+    GEMV_OPENGL_BACKING_RANGE_ISSUE,
+    *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
+)
+FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS = 4096
+FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
+FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
+FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT = 117
+FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT = 22
+FFT_OPENGL_WORKGROUP_POINTER_ISSUE = "https://github.com/CrossGL/crosstl/issues/1671"
+FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE = (
+    "project.translate.opengl-workgroup-pointer-unsupported"
+)
+FFT_OPENGL_EXPECTED_MISSING_CAPABILITY = "opengl.workgroup-pointer-lowering"
+FFT_OPENGL_EXPECTED_MESSAGE = (
+    "OpenGL cannot prove the workgroup pointer access range for "
+    "'ReadWriter_float2_float2__load.crosstl_ptr_buf' into shared backing "
+    "'shared_in'"
+)
+FFT_OPENGL_EXPECTED_POINTER_EVIDENCE = {
+    "backingName": "shared_in",
+    "function": "ReadWriter_float2_float2__load",
+    "materializationName": (
+        "ReadWriter_float2_float2_load__glsl_crosstl_ptr_buf_"
+        "fft_mem_256_float2_float2_shared_in_vec2_256"
+    ),
+    "offsetExpression": "0",
+    "parameter": "crosstl_ptr_buf",
+    "reason": "unprovable-view-access",
+}
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
@@ -275,11 +577,13 @@ RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES = frozenset(
 )
 FULL_CORPUS_TRACKED_ISSUES = (
     *FRONTIER_VALIDATION_TRACKED_ISSUES,
+    MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1670",
     *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
     *OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES,
     *OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES,
+    *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
     *RUNTIME_READINESS_TRACKED_ISSUES,
     *FENCE_CONTRACT_TRACKED_ISSUES,
     *VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES,
@@ -651,6 +955,8 @@ def _write_project_config(
     metal_source_options: Mapping[str, int] | None = None,
     metal_target_options: Mapping[str, Mapping[str, int]] | None = None,
     entry_points: Mapping[str, str] | None = None,
+    workgroup_size_rules: Mapping[str, Sequence[str | int]] | None = None,
+    index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
 ) -> None:
     include_values = [include] if isinstance(include, str) else list(include)
     include_list = ", ".join(json.dumps(value) for value in include_values)
@@ -667,6 +973,12 @@ def _write_project_config(
         '"**/*.metal" = "metal"',
         "",
     ]
+    for assertion in index_range_assertions or ():
+        lines.append("[[project.index_range_assertions]]")
+        for field in ("source", "function", "expression", "minimum", "maximum"):
+            if field in assertion:
+                lines.append(f"{field} = {json.dumps(assertion[field])}")
+        lines.append("")
     if entry_points:
         lines.append("[project.entry_points]")
         for source, entry_point in entry_points.items():
@@ -676,6 +988,12 @@ def _write_project_config(
         lines.append("[project.specialization_constants]")
         for selector, value in specialization_constants.items():
             lines.append(f"{json.dumps(str(selector))} = {json.dumps(value)}")
+        lines.append("")
+    if workgroup_size_rules:
+        lines.append("[project.workgroup_size_rules]")
+        for source, components in workgroup_size_rules.items():
+            rule = ", ".join(json.dumps(component) for component in components)
+            lines.append(f"{json.dumps(source)} = [{rule}]")
         lines.append("")
     if metal_source_options or metal_target_options:
         lines.append("[project.source_options.metal]")
@@ -696,6 +1014,24 @@ def _write_reference_accessor_project_config(path: Path, output_dir: str) -> Non
         "[project]",
         'source_roots = ["."]',
         f'include = ["{REFERENCE_ACCESSOR_FIXTURE_NAME}"]',
+        f"targets = [{target_list}]",
+        f'output_dir = "{output_dir}"',
+        "",
+        "[project.sources]",
+        '"*.metal" = "metal"',
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_template_member_pointer_project_config(path: Path, output_dir: str) -> None:
+    target_list = ", ".join(
+        json.dumps(target) for target in TEMPLATE_MEMBER_POINTER_TARGETS
+    )
+    lines = [
+        "[project]",
+        'source_roots = ["."]',
+        f'include = ["{TEMPLATE_MEMBER_POINTER_FIXTURE_NAME}"]',
         f"targets = [{target_list}]",
         f'output_dir = "{output_dir}"',
         "",
@@ -1291,9 +1627,11 @@ def _strip_shader_comments(source: str) -> str:
 def _shader_function_definition(
     source: str,
     function_pattern: str,
+    *,
+    return_pattern: str = "void",
 ) -> tuple[re.Match[str], str] | None:
     header = re.search(
-        rf"\bvoid\s+(?P<helper>{function_pattern})\s*"
+        rf"\b(?:{return_pattern})\s+(?P<helper>{function_pattern})\s*"
         rf"\((?P<parameters>[^)]*)\)\s*\{{",
         source,
         flags=re.DOTALL,
@@ -1576,6 +1914,282 @@ def _reference_accessor_nested_const_alias_evidence(
     }
 
 
+def _template_member_pointer_evidence(
+    generated: str,
+    *,
+    target: str,
+) -> dict[str, Any]:
+    source = _strip_shader_comments(generated)
+    target_name = {"directx": "DirectX", "opengl": "OpenGL"}.get(target, target)
+    helper_patterns = {
+        "directx": r"ReducedMMAFrag__load__[A-Za-z_0-9]+",
+        "opengl": r"ReducedMMAFrag_+load[A-Za-z_0-9]+",
+    }
+    outer_helper_patterns = {
+        "directx": r"ReducedMMATile__load__[A-Za-z_0-9]+",
+        "opengl": r"ReducedMMATile_+load[A-Za-z_0-9]+",
+    }
+    _require(
+        target in helper_patterns,
+        f"unsupported template member pointer evidence target: {target}",
+    )
+
+    unresolved_call = re.search(
+        r"(?:\bReducedMMAFrag\s*::\s*(?:template\s+)?load\b|"
+        r"\b[A-Za-z_]\w*\s*(?:\.|->)\s*(?:template\s+)?load\b)",
+        source,
+    )
+    _require(
+        unresolved_call is None,
+        f"{target_name} template member pointer artifact retained an unresolved "
+        "source member call",
+    )
+
+    helper_definition = _shader_function_definition(
+        source,
+        helper_patterns[target],
+        return_pattern="float",
+    )
+    _require(
+        helper_definition is not None,
+        f"{target_name} template member pointer artifact is missing the "
+        "materialized fragment load helper",
+    )
+    helper_header, helper_body = helper_definition
+    helper_name = helper_header.group("helper")
+    helper_parameters = helper_header.group("parameters")
+    scalarized_parameter = re.search(
+        r"(?:^|,)\s*(?:(?:in|out|inout|const)\s+)*float\s+src\b",
+        helper_parameters,
+    )
+    _require(
+        scalarized_parameter is None,
+        f"{target_name} materialized fragment load helper has a scalarized "
+        "float src parameter instead of a pointer-backed source view",
+    )
+
+    return_statement = re.search(
+        r"\breturn\s+(?P<expression>[^;]+);",
+        helper_body,
+        flags=re.DOTALL,
+    )
+    _require(
+        return_statement is not None,
+        f"{target_name} materialized fragment load helper is missing its "
+        "source read return",
+    )
+    return_expression = return_statement.group("expression")
+    indexed_read = re.search(
+        r"(?P<read>\bsrc\s*\[\s*(?P<index>[^\]\n;]+)\s*\])",
+        return_expression,
+    )
+    if indexed_read is None:
+        indexed_read = re.search(
+            r"(?P<read>\bsrc\s*\.\s*Load\s*\(\s*(?P<index>[^)\n;]+)\s*\))",
+            return_expression,
+        )
+    _require(
+        indexed_read is not None,
+        f"{target_name} materialized fragment load helper does not perform "
+        "an indexed read from its source view",
+    )
+    read_index = re.sub(r"\s+", "", indexed_read.group("index"))
+    _require(
+        re.search(r"\bstride\b", indexed_read.group("index")) is not None,
+        f"{target_name} materialized fragment load helper lost the stride in "
+        "its indexed source read",
+    )
+
+    outer_definition = _shader_function_definition(
+        source,
+        outer_helper_patterns[target],
+    )
+    _require(
+        outer_definition is not None,
+        f"{target_name} template member pointer artifact is missing the "
+        "materialized outer tile load helper",
+    )
+    outer_header, outer_body = outer_definition
+    outer_name = outer_header.group("helper")
+    outer_parameters = outer_header.group("parameters")
+    helper_call = re.search(
+        rf"\bself\s*\.\s*value\s*=(?!=)\s*"
+        rf"(?P<call>{re.escape(helper_name)}\s*\((?P<arguments>[^;]+)\))\s*;",
+        outer_body,
+        flags=re.DOTALL,
+    )
+    _require(
+        helper_call is not None,
+        f"{target_name} outer tile helper does not assign the materialized "
+        "fragment load result to self.value",
+    )
+    helper_call_arguments = helper_call.group("arguments")
+
+    if target == "directx":
+        helper_resource = re.search(
+            r"(?P<type>StructuredBuffer\s*<\s*float\s*>)\s+src\b",
+            helper_parameters,
+        )
+        _require(
+            helper_resource is not None,
+            "DirectX materialized fragment load helper must retain src as a "
+            "StructuredBuffer<float> parameter",
+        )
+        outer_resource = re.search(
+            r"StructuredBuffer\s*<\s*float\s*>\s+src\b",
+            outer_parameters,
+        )
+        _require(
+            outer_resource is not None,
+            "DirectX outer tile helper must retain src as a "
+            "StructuredBuffer<float> parameter",
+        )
+        offset_type = r"u?int(?:32_t|64_t)?"
+        offset_parameter = re.search(
+            rf"\b{offset_type}\s+src_offset\b", helper_parameters
+        )
+        outer_offset_parameter = re.search(
+            rf"\b{offset_type}\s+src_offset\b", outer_parameters
+        )
+        addressed_argument = re.search(
+            r"(?P<index>&\s*\(?\s*src\s*\[\s*index\s*\]\s*\)?)",
+            helper_call_arguments,
+        )
+        expected_offset = (
+            r"src_offset\s*\+\s*index|index\s*\+\s*src_offset"
+            if outer_offset_parameter is not None
+            else r"index"
+        )
+        resource_offset_argument = re.search(
+            rf"\bsrc\s*,\s*(?:{offset_type}\s*\(\s*)?\(*\s*"
+            rf"(?P<offset>{expected_offset})\s*\)*",
+            helper_call_arguments,
+        )
+        _require(
+            addressed_argument is not None
+            or (offset_parameter is not None and resource_offset_argument is not None),
+            "DirectX materialized fragment call does not preserve the addressed "
+            "src[index] source position",
+        )
+        if offset_parameter is not None:
+            _require(
+                "src_offset" in read_index,
+                "DirectX offset-backed fragment helper does not apply "
+                "src_offset in its indexed source read",
+            )
+        source_view = {
+            "representation": (
+                "structured-buffer-plus-offset"
+                if offset_parameter is not None
+                else "structured-buffer-addressed-element"
+            ),
+            "resourceName": "src",
+            "parameterName": "src",
+            "parameterType": re.sub(r"\s+", "", helper_resource.group("type")),
+            "offsetParameter": "src_offset" if offset_parameter is not None else None,
+            "scalarizedPointerParameter": False,
+        }
+        source_index_expression = re.sub(
+            r"\s+",
+            "",
+            (
+                addressed_argument.group("index")
+                if addressed_argument is not None
+                else resource_offset_argument.group("offset")
+            ),
+        )
+    else:
+        global_source = re.search(
+            r"\blayout\s*\([^)]*\)\s*readonly\s+buffer\s+\w+\s*"
+            r"\{\s*float\s+src\s*\[\s*\]\s*;\s*\}\s*;",
+            source,
+            flags=re.DOTALL,
+        )
+        _require(
+            global_source is not None,
+            "OpenGL template member pointer artifact is missing the readonly "
+            "float src storage buffer",
+        )
+        _require(
+            re.search(r"\bint\s+src_offset\b", helper_parameters) is not None,
+            "OpenGL materialized fragment load helper must retain an int "
+            "src_offset buffer-view parameter",
+        )
+        _require(
+            re.search(r"\bint\s+src_offset\b", outer_parameters) is not None,
+            "OpenGL outer tile helper must retain an int src_offset "
+            "buffer-view parameter",
+        )
+        _require(
+            "src_offset" in read_index,
+            "OpenGL materialized fragment load helper does not apply "
+            "src_offset in its indexed source read",
+        )
+        source_index = re.search(
+            r"(?P<index>src_offset\s*\+\s*index|index\s*\+\s*src_offset)",
+            helper_call_arguments,
+        )
+        _require(
+            source_index is not None,
+            "OpenGL materialized fragment call does not preserve index in the "
+            "src_offset buffer view",
+        )
+        source_view = {
+            "representation": "global-storage-buffer-plus-offset",
+            "resourceName": "src",
+            "parameterName": "src_offset",
+            "parameterType": "int",
+            "offsetParameter": "src_offset",
+            "scalarizedPointerParameter": False,
+        }
+        source_index_expression = re.sub(r"\s+", "", source_index.group("index"))
+
+    kernel_call = re.search(
+        rf"\b{re.escape(outer_name)}\s*\(\s*tile\s*,"
+        rf"(?P<arguments>[^;]*\bgid\b[^;]*)\)\s*;",
+        source,
+        flags=re.DOTALL,
+    )
+    _require(
+        kernel_call is not None,
+        f"{target_name} kernel does not invoke the materialized outer tile "
+        "load path with gid",
+    )
+    if target == "directx":
+        _require(
+            re.search(r"\bsrc\b", kernel_call.group("arguments")) is not None,
+            "DirectX kernel does not pass the source buffer to the outer tile "
+            "load helper",
+        )
+    output_data_flow = re.search(
+        r"(?P<write>\bout_?\s*\[\s*gid\s*\]\s*=(?!=)\s*tile\s*\.\s*value\s*;)",
+        source,
+    )
+    _require(
+        output_data_flow is not None,
+        f"{target_name} kernel does not write the loaded tile value to out[gid]",
+    )
+
+    return {
+        "status": "verified-materialized-pointer-indexed-read",
+        "materializedHelper": helper_name,
+        "materializedOuterHelper": outer_name,
+        "helperParameters": re.sub(r"\s+", " ", helper_parameters).strip(),
+        "sourceView": source_view,
+        "sourceIndexExpression": source_index_expression,
+        "indexedReadExpression": re.sub(r"\s+", "", indexed_read.group("read")),
+        "indexedReadIndex": read_index,
+        "materializedHelperCall": re.sub(r"\s+", "", helper_call.group("call")),
+        "outputDataFlowExpression": re.sub(r"\s+", "", output_data_flow.group("write")),
+        "sourceIndexPreserved": True,
+        "sourceViewParameterRetained": True,
+        "indexedReadFromSourceView": True,
+        "scalarizedPointerParameter": False,
+        "unresolvedSourceCallRetained": False,
+        "kernelPathInvoked": True,
+    }
+
+
 def _validate_reference_accessor_directx(
     mlx_root: Path,
     work_dir: Path,
@@ -1593,6 +2207,9 @@ def _validate_reference_accessor_directx(
 
     dxc = shutil.which("dxc")
     _require(dxc is not None, "reference accessor DirectX validation requires dxc")
+    generated = artifact_path.read_text(encoding="utf-8")
+    profile = dxc_profile_for_source("cs_6_0", generated)
+    compiler_arguments = dxc_compiler_arguments_for_source(generated)
     output_path = work_dir / "validation" / "reference-accessor.dxil"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.unlink(missing_ok=True)
@@ -1601,7 +2218,8 @@ def _validate_reference_accessor_directx(
         [
             dxc,
             "-T",
-            "cs_6_0",
+            profile,
+            *compiler_arguments,
             "-E",
             REFERENCE_ACCESSOR_DXC_ENTRY_POINT,
             str(artifact_path),
@@ -1625,7 +2243,15 @@ def _validate_reference_accessor_directx(
         "required": True,
         "nativeCompiler": "dxc",
         "entryPoint": REFERENCE_ACCESSOR_DXC_ENTRY_POINT,
-        "profile": "cs_6_0",
+        "profile": profile,
+        **(
+            {
+                "compilerArguments": list(compiler_arguments),
+                "minimumShaderModel": "6.2",
+            }
+            if compiler_arguments
+            else {}
+        ),
         "compiledArtifact": _relpath(output_path, mlx_root),
         "stdout": _relpath(result.stdout_path, mlx_root),
         "stderr": _relpath(result.stderr_path, mlx_root),
@@ -1924,56 +2550,213 @@ def _check_reference_accessor_lvalue_identity(
     }
 
 
+def _check_template_member_buffer_pointer(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+) -> dict[str, Any]:
+    _require(
+        TEMPLATE_MEMBER_POINTER_FIXTURE_PATH.is_file(),
+        "template member pointer fixture is missing: "
+        f"{TEMPLATE_MEMBER_POINTER_FIXTURE_PATH}",
+    )
+    project_dir = work_dir / "template-member-pointer-project"
+    output_dir = project_dir / "generated"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    staged_source = project_dir / TEMPLATE_MEMBER_POINTER_FIXTURE_NAME
+    shutil.copyfile(TEMPLATE_MEMBER_POINTER_FIXTURE_PATH, staged_source)
+
+    config_path = config_dir / "template-member-pointer.toml"
+    report_path = report_dir / "template-member-pointer.json"
+    report_path.unlink(missing_ok=True)
+    _write_template_member_pointer_project_config(config_path, "generated")
+    result = _run_command(
+        "translate-template-member-pointer",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(project_dir),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        report_path.is_file(),
+        "template member pointer project translation did not produce a report",
+    )
+    payload = _load_json(report_path)
+    if result.returncode != 0:
+        messages = [
+            str(item.get("message"))
+            for item in payload.get("diagnostics", [])
+            if isinstance(item, Mapping) and isinstance(item.get("message"), str)
+        ]
+        detail = f": {messages[0]}" if messages else ""
+        raise PortingCheckError(f"template member pointer translation failed{detail}")
+
+    summary = payload.get("summary", {})
+    diagnostics = payload.get("diagnostics", [])
+    artifacts = payload.get("artifacts", [])
+    diagnostic_counts = (
+        summary.get("diagnosticCounts", {}) if isinstance(summary, Mapping) else {}
+    )
+    _require(
+        isinstance(summary, Mapping)
+        and isinstance(diagnostics, list)
+        and isinstance(artifacts, list)
+        and isinstance(diagnostic_counts, Mapping),
+        "template member pointer report must contain structured summary collections",
+    )
+    _require(
+        summary.get("unitCount") == 1
+        and summary.get("artifactCount") == len(TEMPLATE_MEMBER_POINTER_TARGETS)
+        and summary.get("translatedCount") == len(TEMPLATE_MEMBER_POINTER_TARGETS)
+        and summary.get("failedCount") == 0,
+        "template member pointer project translation did not emit both clean "
+        "artifacts",
+    )
+    _require(
+        len(artifacts) == len(TEMPLATE_MEMBER_POINTER_TARGETS)
+        and all(isinstance(artifact, Mapping) for artifact in artifacts),
+        "template member pointer report must contain exactly one artifact per "
+        "target",
+    )
+    _require(
+        not diagnostics
+        and all(
+            diagnostic_counts.get(severity) == 0
+            for severity in ("note", "warning", "error")
+        ),
+        "template member pointer project translation must have zero diagnostics",
+    )
+
+    artifacts_by_target = {
+        artifact.get("target"): artifact
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        and artifact.get("source") == TEMPLATE_MEMBER_POINTER_FIXTURE_NAME
+        and artifact.get("status") == "translated"
+        and artifact.get("target") in TEMPLATE_MEMBER_POINTER_TARGETS
+    }
+    _require(
+        set(artifacts_by_target) == set(TEMPLATE_MEMBER_POINTER_TARGETS),
+        "template member pointer report does not contain both DirectX and "
+        "OpenGL artifacts",
+    )
+
+    target_proofs: dict[str, Any] = {}
+    for target in TEMPLATE_MEMBER_POINTER_TARGETS:
+        artifact_path = artifacts_by_target[target].get("path")
+        _require(
+            isinstance(artifact_path, str) and bool(artifact_path),
+            f"template member pointer {target} artifact path is missing",
+        )
+        generated_path = (project_dir / artifact_path).resolve()
+        _require(
+            _is_relative_to(generated_path, output_dir.resolve()),
+            f"template member pointer {target} artifact escaped its output "
+            "directory",
+        )
+        _require(
+            generated_path.is_file(),
+            f"template member pointer {target} artifact is missing: {artifact_path}",
+        )
+        generated = generated_path.read_text(encoding="utf-8")
+        target_proofs[target] = {
+            "artifact": _relpath(generated_path, mlx_root),
+            "artifactSha256": _sha256(generated_path),
+            "structuralEvidence": _template_member_pointer_evidence(
+                generated,
+                target=target,
+            ),
+        }
+
+    return {
+        "name": "template-member-buffer-pointer",
+        "status": "passed",
+        "proofStatus": "verified-materialized-pointer-indexed-read",
+        "scope": "reduced-mlx-shaped-fixture",
+        "translationSurface": "crosstl translate-project",
+        "report": _relpath(report_path, mlx_root),
+        "sourceFixture": (
+            "demos/integrations/mlx/fixtures/" + TEMPLATE_MEMBER_POINTER_FIXTURE_NAME
+        ),
+        "stagedSource": _relpath(staged_source, mlx_root),
+        "sourceSha256": _sha256(staged_source),
+        "sourceContract": {
+            "outerType": "ReducedMMATile",
+            "outerMethod": "load",
+            "outerTemplateParameter": "U",
+            "sourcePointerType": "const device U*",
+            "fragmentType": "ReducedMMAFrag",
+            "fragmentMethod": "load",
+            "fragmentTemplateParameter": "SrcPtrType",
+            "pointerArgument": "&(src[index])",
+            "indexedReadExpression": "src[stride]",
+        },
+        "targets": list(TEMPLATE_MEMBER_POINTER_TARGETS),
+        "artifactCount": len(TEMPLATE_MEMBER_POINTER_TARGETS),
+        "projectDiagnosticCount": 0,
+        "targetProofs": target_proofs,
+        "generatedArtifactEvidenceOnly": True,
+        "nativeToolchainValidationIncluded": False,
+        "upstreamMlxRuntimeExecuted": False,
+        "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
+    }
+
+
 def _scaled_attention_local_alias_evidence(
     mlx_root: Path, payload: Mapping[str, Any]
 ) -> dict[str, Any]:
-    artifacts = {
-        artifact.get("target"): artifact
+    artifacts = [
+        artifact
         for artifact in payload.get("artifacts", [])
         if isinstance(artifact, Mapping)
         and artifact.get("source") == MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
-        and artifact.get("target") in {"directx", "vulkan"}
+        and artifact.get("target") == "vulkan"
         and artifact.get("status") == "translated"
-    }
+    ]
     _require(
-        set(artifacts) == {"directx", "vulkan"},
-        "scaled-attention local-alias evidence requires DirectX and Vulkan artifacts",
+        len(artifacts) == 1,
+        "scaled-attention local-alias evidence requires one Vulkan artifact",
     )
 
-    generated_by_target: dict[str, str] = {}
-    paths_by_target: dict[str, str] = {}
-    for target, artifact in artifacts.items():
-        artifact_path = artifact.get("path")
-        _require(
-            isinstance(artifact_path, str),
-            f"scaled-attention {target} artifact path is missing",
-        )
-        generated_path = mlx_root / artifact_path
-        _require(
-            generated_path.is_file(),
-            f"scaled-attention {target} artifact is missing: {artifact_path}",
-        )
-        generated_by_target[target] = generated_path.read_text(encoding="utf-8")
-        paths_by_target[target] = artifact_path
+    artifact_path = artifacts[0].get("path")
+    _require(
+        isinstance(artifact_path, str),
+        "scaled-attention Vulkan artifact path is missing",
+    )
+    generated_path = mlx_root / artifact_path
+    _require(
+        generated_path.is_file(),
+        f"scaled-attention Vulkan artifact is missing: {artifact_path}",
+    )
+    generated = generated_path.read_text(encoding="utf-8")
 
     forbidden_alias_residue = re.compile(
         r"\bLimits_u3cU_u3e\b|\bUnknown type U\b|unknown function ['\"]U['\"]"
     )
-    for target, generated in generated_by_target.items():
-        residue = forbidden_alias_residue.search(generated)
-        _require(
-            residue is None,
-            f"scaled-attention {target} retained local alias residue: "
-            f"{residue.group(0) if residue else ''}",
-        )
-    directx_alias = re.search(r"\bU\b", generated_by_target["directx"])
+    residue = forbidden_alias_residue.search(generated)
     _require(
-        directx_alias is None,
-        "scaled-attention DirectX artifact retained the local alias U",
+        residue is None,
+        "scaled-attention Vulkan artifact retained local alias residue: "
+        f"{residue.group(0) if residue else ''}",
     )
     vulkan_warnings = [
         line
-        for line in generated_by_target["vulkan"].splitlines()
+        for line in generated.splitlines()
         if line.lstrip().startswith("; WARNING:")
     ]
     _require(
@@ -1982,35 +2765,26 @@ def _scaled_attention_local_alias_evidence(
         + (vulkan_warnings[0] if vulkan_warnings else ""),
     )
 
-    directx_entry_count = len(
-        re.findall(
-            r"(?m)^[ \t]*\[numthreads[ \t]*\(",
-            generated_by_target["directx"],
-        )
-    )
     vulkan_entry_count = len(
         re.findall(
             r"(?m)^[ \t]*OpEntryPoint[ \t]+GLCompute\b",
-            generated_by_target["vulkan"],
+            generated,
         )
     )
-    expected_entry_count = MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[
+    expected_entry_count = MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[
         MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
     ]
     _require(
-        directx_entry_count == expected_entry_count
-        and vulkan_entry_count == expected_entry_count,
-        "scaled-attention artifacts did not retain all "
+        vulkan_entry_count == expected_entry_count,
+        "scaled-attention Vulkan artifact did not retain all "
         f"{expected_entry_count} materialized entries",
     )
 
     return {
         "source": MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
-        "targets": paths_by_target,
-        "entryCountByTarget": {
-            "directx": directx_entry_count,
-            "vulkan": vulkan_entry_count,
-        },
+        "target": "vulkan",
+        "artifact": artifact_path,
+        "entryCount": vulkan_entry_count,
         "resolvedDeclarationTypeCount": 402,
         "resolvedCastCount": 87,
         "resolvedStaticMemberCount": 42,
@@ -2040,7 +2814,473 @@ def _directx_toolchain_entry_point(run: Mapping[str, Any]) -> str | None:
     return entry_point
 
 
-def _translate_directx_vulkan_frontier(
+def _require_frontier_project_join(
+    payload: Mapping[str, Any],
+    *,
+    target: str,
+    sources: Sequence[str],
+    index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
+) -> dict[str, Mapping[str, Any]]:
+    expected_sources = set(sources)
+    project = payload.get("project")
+    include_patterns = (
+        project.get("includePatterns") if isinstance(project, Mapping) else None
+    )
+    _require(
+        isinstance(project, Mapping)
+        and isinstance(include_patterns, list)
+        and len(include_patterns) == len(sources)
+        and set(include_patterns) == expected_sources
+        and project.get("targets") == [target]
+        and project.get("workgroupSizeRules") == {}
+        and project.get("workgroupSizeRuleCount") == 0,
+        f"{target.title()} frontier config/report join changed or gained an "
+        "unproved workgroup-size rule",
+    )
+    if index_range_assertions is not None:
+        expected_assertions = [dict(assertion) for assertion in index_range_assertions]
+        _require(
+            project.get("indexRangeAssertions") == expected_assertions
+            and type(project.get("indexRangeAssertionCount")) is int
+            and project.get("indexRangeAssertionCount") == len(expected_assertions),
+            f"{target.title()} frontier index-range assertion contract changed",
+        )
+    units = payload.get("units")
+    _require(
+        isinstance(units, list) and len(units) == len(sources),
+        f"{target.title()} frontier source units are incomplete",
+    )
+    units_by_source: dict[str, Mapping[str, Any]] = {}
+    for unit in units:
+        _require(
+            isinstance(unit, Mapping)
+            and unit.get("id") == unit.get("path")
+            and unit.get("sourceBackend") == "metal"
+            and unit.get("path") in expected_sources,
+            f"{target.title()} frontier source-unit provenance changed",
+        )
+        source = str(unit["path"])
+        _require(
+            source not in units_by_source,
+            f"{target.title()} frontier duplicated source unit {source}",
+        )
+        units_by_source[source] = unit
+    _require(
+        set(units_by_source) == expected_sources,
+        f"{target.title()} frontier source units do not match the config",
+    )
+    return units_by_source
+
+
+def _require_clean_frontier_report(
+    mlx_root: Path,
+    output_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    target: str,
+    sources: Sequence[str],
+    validated: bool = True,
+    index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
+) -> dict[str, Mapping[str, Any]]:
+    units_by_source = _require_frontier_project_join(
+        payload,
+        target=target,
+        sources=sources,
+        index_range_assertions=index_range_assertions,
+    )
+    summary = payload.get("summary")
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == len(sources)
+        and summary.get("artifactCount") == len(sources)
+        and summary.get("translatedCount") == len(sources)
+        and summary.get("failedCount") == 0
+        and isinstance(summary.get("diagnosticCounts"), Mapping)
+        and summary["diagnosticCounts"].get("error", 0) == 0,
+        f"{target.title()} frontier did not retain every clean source artifact",
+    )
+    target_summary = summary.get("artifactsByTarget", {}).get(target, {})
+    _require(
+        isinstance(target_summary, Mapping)
+        and target_summary.get("artifactCount") == len(sources)
+        and target_summary.get("translatedCount") == len(sources)
+        and target_summary.get("failedCount") == 0,
+        f"{target.title()} frontier target artifact accounting changed",
+    )
+    if validated:
+        validation = payload.get("validation")
+        _require(
+            isinstance(validation, Mapping)
+            and isinstance(validation.get("summary"), Mapping)
+            and validation["summary"].get("failedCount") == 0,
+            f"{target.title()} frontier artifact validation reported failures",
+        )
+    artifacts = payload.get("artifacts")
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == len(sources),
+        f"{target.title()} frontier artifact records are incomplete",
+    )
+    artifacts_by_source: dict[str, Mapping[str, Any]] = {}
+    output_root = output_dir.resolve()
+    for artifact in artifacts:
+        _require(
+            isinstance(artifact, Mapping)
+            and artifact.get("target") == target
+            and artifact.get("status") == "translated"
+            and artifact.get("source") in units_by_source,
+            f"{target.title()} frontier translated artifact contract changed",
+        )
+        source = str(artifact["source"])
+        _require(
+            source not in artifacts_by_source,
+            f"{target.title()} frontier duplicated artifact source {source}",
+        )
+        artifact_path = artifact.get("path")
+        _require(
+            isinstance(artifact_path, str) and bool(artifact_path),
+            f"{target.title()} frontier artifact path is missing for {source}",
+        )
+        generated_path = (mlx_root / artifact_path).resolve()
+        _require(
+            _is_relative_to(generated_path, output_root) and generated_path.is_file(),
+            f"{target.title()} frontier artifact is missing or escaped output: "
+            f"{artifact_path}",
+        )
+        _require(
+            artifact.get("sourceHash") == units_by_source[source].get("sourceHash")
+            and artifact.get("sourceSizeBytes")
+            == units_by_source[source].get("sourceSizeBytes"),
+            f"{target.title()} frontier artifact source provenance changed for {source}",
+        )
+        artifacts_by_source[source] = artifact
+    _require(
+        set(artifacts_by_source) == set(sources),
+        f"{target.title()} frontier artifacts do not match the config source set",
+    )
+    return artifacts_by_source
+
+
+def _require_directx_bfloat16_lowering_evidence(
+    artifacts_by_source: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    _require(
+        set(artifacts_by_source) == set(MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE),
+        "DirectX bfloat16 lowering evidence source set changed",
+    )
+    evidence: dict[str, dict[str, Any]] = {}
+    for source, expected in MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE.items():
+        artifact = artifacts_by_source[source]
+        lowering = artifact.get("bfloat16Lowering")
+        required_capabilities = artifact.get("requiredCapabilities")
+        _require(
+            isinstance(lowering, Mapping)
+            and dict(lowering) == expected["bfloat16Lowering"]
+            and required_capabilities == expected["requiredCapabilities"],
+            f"DirectX bfloat16 lowering contract changed for {source}",
+        )
+        evidence[source] = {
+            "bfloat16Lowering": dict(lowering),
+            "requiredCapabilities": list(required_capabilities),
+        }
+    return evidence
+
+
+def _require_dynamic_workgroup_blocker_report(
+    mlx_root: Path,
+    output_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    target: str,
+    sources: Sequence[str],
+    validated: bool,
+) -> dict[str, dict[str, Any]]:
+    units_by_source = _require_frontier_project_join(
+        payload,
+        target=target,
+        sources=sources,
+    )
+    expected_sources = set(sources)
+    summary = payload.get("summary")
+    expected_error_diagnostics = {
+        MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE: len(sources),
+    }
+    if validated:
+        expected_error_diagnostics["project.validate.failed-artifact"] = len(sources)
+    expected_warning_diagnostics: dict[str, int] = {}
+    if validated:
+        validation = payload.get("validation")
+        toolchains = (
+            validation.get("toolchains") if isinstance(validation, Mapping) else None
+        )
+        target_toolchains = [
+            record
+            for record in toolchains or []
+            if isinstance(record, Mapping) and record.get("target") == target
+        ]
+        _require(
+            isinstance(toolchains, list) and len(target_toolchains) == 1,
+            f"{target.title()} dynamic-workgroup toolchain status changed",
+        )
+        toolchain = target_toolchains[0]
+        tools = toolchain.get("tools")
+        status = toolchain.get("status")
+        _require(
+            status in {"available", "unavailable"}
+            and isinstance(tools, list)
+            and bool(tools)
+            and all(isinstance(tool, Mapping) for tool in tools)
+            and (
+                (
+                    status == "available"
+                    and any(tool.get("available") is True for tool in tools)
+                )
+                or (
+                    status == "unavailable"
+                    and all(tool.get("available") is False for tool in tools)
+                )
+            ),
+            f"{target.title()} dynamic-workgroup toolchain evidence changed",
+        )
+        if status == "unavailable":
+            expected_warning_diagnostics["project.validate.toolchain-unavailable"] = 1
+    expected_diagnostics = {
+        **expected_error_diagnostics,
+        **expected_warning_diagnostics,
+    }
+    expected_error_count = sum(expected_error_diagnostics.values())
+    expected_warning_count = sum(expected_warning_diagnostics.values())
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == len(sources)
+        and summary.get("artifactCount") == len(sources)
+        and summary.get("translatedCount") == 0
+        and summary.get("failedCount") == len(sources)
+        and summary.get("diagnosticCounts")
+        == {
+            "error": expected_error_count,
+            "note": 0,
+            "warning": expected_warning_count,
+        }
+        and summary.get("diagnosticsByCode") == expected_diagnostics
+        and summary.get("artifactsByTarget")
+        == {
+            target: {
+                "artifactCount": len(sources),
+                "translatedCount": 0,
+                "failedCount": len(sources),
+            }
+        },
+        f"{target.title()} dynamic-workgroup frontier accounting changed",
+    )
+    error_diagnostics = [
+        diagnostic
+        for diagnostic in payload.get("diagnostics", [])
+        if isinstance(diagnostic, Mapping) and diagnostic.get("severity") == "error"
+    ]
+    _require(
+        len(error_diagnostics) == expected_error_count
+        and Counter(str(diagnostic.get("code")) for diagnostic in error_diagnostics)
+        == Counter(expected_error_diagnostics),
+        f"{target.title()} dynamic-workgroup diagnostics changed",
+    )
+    warning_diagnostics = [
+        diagnostic
+        for diagnostic in payload.get("diagnostics", [])
+        if isinstance(diagnostic, Mapping) and diagnostic.get("severity") == "warning"
+    ]
+    _require(
+        len(warning_diagnostics) == expected_warning_count
+        and Counter(str(diagnostic.get("code")) for diagnostic in warning_diagnostics)
+        == Counter(expected_warning_diagnostics)
+        and all(
+            diagnostic.get("target") == target
+            and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
+            for diagnostic in warning_diagnostics
+        ),
+        f"{target.title()} dynamic-workgroup warning diagnostics changed",
+    )
+    diagnostics_by_source: dict[str, Mapping[str, Any]] = {}
+    source_entries_by_source: dict[str, set[str]] = {}
+    for diagnostic in error_diagnostics:
+        if diagnostic.get("code") != MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE:
+            continue
+        details = diagnostic.get("details")
+        source = details.get("sourcePath") if isinstance(details, Mapping) else None
+        _require(
+            isinstance(source, str)
+            and source in expected_sources
+            and source not in diagnostics_by_source
+            and diagnostic.get("target") == target
+            and diagnostic.get("checkKind") == "execution-specialization"
+            and diagnostic.get("message") == MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE
+            and diagnostic.get("missingCapabilities")
+            == ["execution.workgroup-size-specialization"],
+            f"{target.title()} dynamic-workgroup diagnostic/source join changed",
+        )
+        execution = details.get("executionSpecialization")
+        source_entries = (
+            execution.get("sourceEntryPoints")
+            if isinstance(execution, Mapping)
+            else None
+        )
+        _require(
+            isinstance(source_entries, list)
+            and execution.get("reason") == "aggregate-entry-size-unproven"
+            and len(source_entries) == MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source]
+            and all(isinstance(entry, str) and entry for entry in source_entries)
+            and len(set(source_entries)) == len(source_entries),
+            f"{target.title()} dynamic-workgroup entry evidence changed for {source}",
+        )
+        diagnostics_by_source[source] = diagnostic
+        source_entries_by_source[source] = set(source_entries)
+    _require(
+        set(diagnostics_by_source) == expected_sources,
+        f"{target.title()} dynamic-workgroup diagnostics do not cover the config",
+    )
+
+    artifacts = payload.get("artifacts")
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == len(sources),
+        f"{target.title()} dynamic-workgroup artifact records are incomplete",
+    )
+    artifacts_by_source: dict[str, Mapping[str, Any]] = {}
+    output_root = output_dir.resolve()
+    for artifact in artifacts:
+        source = artifact.get("source") if isinstance(artifact, Mapping) else None
+        _require(
+            isinstance(source, str)
+            and source in expected_sources
+            and source not in artifacts_by_source
+            and artifact.get("target") == target
+            and artifact.get("status") == "failed"
+            and artifact.get("error") == MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE
+            and artifact.get("sourceHash") == units_by_source[source].get("sourceHash")
+            and artifact.get("sourceSizeBytes")
+            == units_by_source[source].get("sourceSizeBytes")
+            and "generatedHash" not in artifact
+            and "generatedSizeBytes" not in artifact,
+            f"{target.title()} dynamic-workgroup artifact/source join changed",
+        )
+        artifact_path = artifact.get("path")
+        _require(
+            isinstance(artifact_path, str) and bool(artifact_path),
+            f"{target.title()} dynamic-workgroup artifact path is missing for {source}",
+        )
+        generated_path = (mlx_root / artifact_path).resolve()
+        _require(
+            _is_relative_to(generated_path, output_root)
+            and not generated_path.exists(),
+            f"{target.title()} dynamic-workgroup source unexpectedly emitted "
+            f"{artifact_path}",
+        )
+        materialization = artifact.get("templateMaterialization")
+        specializations = (
+            materialization.get("specializations")
+            if isinstance(materialization, Mapping)
+            else None
+        )
+        host_names = [
+            record.get("hostName")
+            for record in specializations or []
+            if isinstance(record, Mapping) and record.get("hostName") is not None
+        ]
+        expected_specialization_count = MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source][
+            "specializationCount"
+        ]
+        _require(
+            isinstance(materialization, Mapping)
+            and materialization.get("status") == "materialized"
+            and isinstance(specializations, list)
+            and materialization.get("specializationCount")
+            == expected_specialization_count
+            and len(specializations) == expected_specialization_count
+            and all(isinstance(record, Mapping) for record in specializations)
+            and materialization.get("unsupported") == []
+            and len(host_names) == MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source]
+            and all(
+                isinstance(host_name, str) and host_name for host_name in host_names
+            )
+            and len(set(host_names)) == len(host_names)
+            and set(host_names) == source_entries_by_source[source],
+            f"{target.title()} dynamic-workgroup materialization changed for {source}",
+        )
+        artifacts_by_source[source] = artifact
+    _require(
+        set(artifacts_by_source) == expected_sources,
+        f"{target.title()} dynamic-workgroup artifacts do not cover the config",
+    )
+    if validated:
+        validation = payload.get("validation")
+        _require(
+            isinstance(validation, Mapping)
+            and isinstance(validation.get("summary"), Mapping)
+            and validation["summary"].get("failedCount") == len(sources),
+            f"{target.title()} dynamic-workgroup validation accounting changed",
+        )
+    return {
+        source: {
+            **MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source],
+            "entryPointCount": MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source],
+            "diagnosticCode": MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE,
+            "artifactStatus": "failed",
+            "artifactEmitted": False,
+            "sourceEntryPointIdentityStatus": "matched-materialized-host-names",
+        }
+        for source in sources
+    }
+
+
+def _run_frontier_project(
+    *,
+    mlx_root: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+    command_name: str,
+    target: str,
+    sources: Sequence[str],
+    output_dir: Path,
+    validate: bool = False,
+    run_toolchains: bool = False,
+    check: bool = True,
+    specialization_constants: Mapping[str, bool | int | float] | None = None,
+    index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
+) -> tuple[CommandResult, dict[str, Any], Path, Path]:
+    config_path = config_dir / f"{command_name}.toml"
+    report_path = report_dir / f"{command_name}.json"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    report_path.unlink(missing_ok=True)
+    _write_project_config(
+        config_path,
+        include=sources,
+        targets=(target,),
+        output_dir=_relpath(output_dir, mlx_root),
+        specialization_constants=specialization_constants,
+        index_range_assertions=index_range_assertions,
+    )
+    command = [
+        python,
+        "-m",
+        "crosstl",
+        "translate-project",
+        str(mlx_root),
+        "--config",
+        str(config_path),
+        "--report",
+        str(report_path),
+    ]
+    if validate:
+        command.append("--validate")
+    if run_toolchains:
+        command.append("--run-toolchains")
+    result = _run_command(command_name, command, log_dir=log_dir, check=check)
+    _require(report_path.is_file(), f"{command_name} did not produce a project report")
+    return result, _load_json(report_path), config_path, report_path
+
+
+def _translate_directx_frontier(
     mlx_root: Path,
     work_dir: Path,
     config_dir: Path,
@@ -2049,149 +3289,110 @@ def _translate_directx_vulkan_frontier(
     python: str,
     *,
     require_directx_toolchain: bool,
-    require_vulkan_toolchain: bool,
 ) -> dict[str, Any]:
-    config_path = config_dir / "directx-vulkan-frontier.toml"
-    report_path = report_dir / "directx-vulkan-frontier.json"
-    _write_project_config(
-        config_path,
-        include=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
-        targets=("directx", "vulkan"),
-        output_dir=_relpath(work_dir / "out-directx-vulkan-frontier", mlx_root),
+    run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
+    clean_output_dir = work_dir / "out-directx-frontier"
+    _result, clean_payload, _config_path, report_path = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+        command_name="directx-frontier",
+        target="directx",
+        sources=MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
+        output_dir=clean_output_dir,
+        validate=True,
         specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
     )
-    run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
-    _run_command(
-        "translate-directx-vulkan-frontier",
-        [
-            python,
-            "-m",
-            "crosstl",
-            "translate-project",
-            str(mlx_root),
-            "--config",
-            str(config_path),
-            "--report",
-            str(report_path),
-            "--validate",
-        ],
-        log_dir=log_dir,
+    clean_artifacts = _require_clean_frontier_report(
+        mlx_root,
+        clean_output_dir,
+        clean_payload,
+        target="directx",
+        sources=MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
     )
-    payload = _load_json(report_path)
-    summary = payload.get("summary", {})
-    _require(isinstance(summary, dict), "translation report summary must be an object")
-    frontier_count = len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
-    _require(
-        summary.get("unitCount") == frontier_count,
-        f"DirectX/Vulkan frontier translation must scan {frontier_count} units",
+    bfloat16_lowering_evidence = _require_directx_bfloat16_lowering_evidence(
+        clean_artifacts
     )
-    _require(
-        summary.get("artifactCount") == frontier_count * 2,
-        "DirectX/Vulkan frontier translation must emit {} artifacts".format(
-            frontier_count * 2
-        ),
-    )
-    _require(
-        summary.get("translatedCount") == frontier_count * 2,
-        "DirectX/Vulkan frontier translation did not emit every artifact",
-    )
-    _require(
-        summary.get("failedCount") == 0,
-        "DirectX/Vulkan frontier translation reported failed artifacts",
-    )
-    _require(
-        summary.get("diagnosticCounts", {}).get("error", 0) == 0,
-        "DirectX/Vulkan frontier translation reported errors",
-    )
-    artifacts_by_target = summary.get("artifactsByTarget", {})
-    for target in ("directx", "vulkan"):
-        target_summary = artifacts_by_target.get(target, {})
-        _require(
-            target_summary.get("translatedCount") == frontier_count
-            and target_summary.get("failedCount") == 0,
-            f"DirectX/Vulkan frontier {target} artifacts were not translated cleanly",
-        )
-    validation = payload.get("validation", {})
-    _require(isinstance(validation, dict), "translation validation must be an object")
-    artifact_validation = validation.get("summary", {})
-    _require(
-        artifact_validation.get("failedCount") == 0,
-        "artifact validation reported failures for DirectX/Vulkan frontier outputs",
-    )
-    scaled_attention_alias_evidence = _scaled_attention_local_alias_evidence(
-        mlx_root, payload
-    )
-    toolchain_payloads = [payload]
-    toolchain_artifact_payloads = {"directx": payload, "vulkan": payload}
-    if run_toolchains:
-        toolchain_targets = [
-            target
-            for target, required in (
-                ("directx", require_directx_toolchain),
-                ("vulkan", require_vulkan_toolchain),
-            )
-            if required
-        ] or ["vulkan"]
-        toolchain_name = "-".join(toolchain_targets)
-        # DXC gates its selected subset; Vulkan gates the whole frontier. When the
-        # DirectX toolchain is required, restrict the compile gate to the Windows
-        # subset (CI requires one target per OS).
-        toolchain_sources = (
-            MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
-            if "directx" in toolchain_targets
-            else MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-        )
-        toolchain_config_path = config_dir / f"{toolchain_name}-frontier-toolchain.toml"
-        toolchain_report_path = report_dir / f"{toolchain_name}-frontier-toolchain.json"
-        _write_project_config(
-            toolchain_config_path,
-            include=toolchain_sources,
-            targets=tuple(toolchain_targets),
-            output_dir=_relpath(
-                work_dir / f"out-{toolchain_name}-frontier-toolchain", mlx_root
-            ),
+
+    blocked_output_dir = work_dir / "out-directx-workgroup-frontier"
+    blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
+        _run_frontier_project(
+            mlx_root=mlx_root,
+            config_dir=config_dir,
+            report_dir=report_dir,
+            log_dir=log_dir,
+            python=python,
+            command_name="directx-workgroup-frontier",
+            target="directx",
+            sources=MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+            output_dir=blocked_output_dir,
+            validate=True,
+            check=False,
             specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
         )
-        _run_command(
-            f"validate-{toolchain_name}-frontier-toolchain",
-            [
-                python,
-                "-m",
-                "crosstl",
-                "translate-project",
-                str(mlx_root),
-                "--config",
-                str(toolchain_config_path),
-                "--report",
-                str(toolchain_report_path),
-                "--run-toolchains",
-            ],
-            log_dir=log_dir,
+    )
+    _require(
+        blocked_result.returncode == 1,
+        "DirectX dynamic-workgroup frontier must fail with exit code 1",
+    )
+    dispatch_evidence = _require_dynamic_workgroup_blocker_report(
+        mlx_root,
+        blocked_output_dir,
+        blocked_payload,
+        target="directx",
+        sources=MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+        validated=True,
+    )
+
+    directx_runs: list[Mapping[str, Any]] = []
+    if run_toolchains and require_directx_toolchain:
+        toolchain_output_dir = work_dir / "out-directx-frontier-toolchain"
+        _toolchain_result, toolchain_payload, _toolchain_config, _toolchain_report = (
+            _run_frontier_project(
+                mlx_root=mlx_root,
+                config_dir=config_dir,
+                report_dir=report_dir,
+                log_dir=log_dir,
+                python=python,
+                command_name="validate-directx-frontier-toolchain",
+                target="directx",
+                sources=MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+                output_dir=toolchain_output_dir,
+                run_toolchains=True,
+                specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+            )
         )
-        toolchain_payload = _load_json(toolchain_report_path)
-        toolchain_payloads.append(toolchain_payload)
-        for target in toolchain_targets:
-            toolchain_artifact_payloads[target] = toolchain_payload
-    toolchain_runs = []
-    for toolchain_payload in toolchain_payloads:
-        toolchain_validation = toolchain_payload.get("validation", {})
+        artifacts = _require_clean_frontier_report(
+            mlx_root,
+            toolchain_output_dir,
+            toolchain_payload,
+            target="directx",
+            sources=MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+        )
+        _require_directx_bfloat16_lowering_evidence(artifacts)
+        validation = toolchain_payload.get("validation")
+        runs = (
+            validation.get("toolchainRuns") if isinstance(validation, Mapping) else None
+        )
         _require(
-            isinstance(toolchain_validation, dict),
-            "frontier toolchain validation must be an object",
+            isinstance(runs, list), "DirectX frontier toolchainRuns must be a list"
         )
-        payload_runs = toolchain_validation.get("toolchainRuns", [])
-        _require(isinstance(payload_runs, list), "toolchainRuns must be a list")
-        toolchain_runs.extend(payload_runs)
-    directx_runs = [
-        run
-        for run in toolchain_runs
-        if isinstance(run, dict) and run.get("target") == "directx"
-    ]
-    vulkan_runs = [
-        run
-        for run in toolchain_runs
-        if isinstance(run, dict) and run.get("target") == "vulkan"
-    ]
+        directx_runs = [
+            run
+            for run in runs
+            if isinstance(run, Mapping) and run.get("target") == "directx"
+        ]
+        artifact_paths = {artifact["path"] for artifact in artifacts.values()}
+        validated_paths = {
+            run.get("path") for run in directx_runs if run.get("status") == "ok"
+        }
+        _require(
+            artifact_paths <= validated_paths,
+            "DirectX toolchain did not validate every translated source artifact",
+        )
+
     directx_entry_points_by_source: dict[str, list[str]] = {
         source: [] for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     }
@@ -2224,64 +3425,8 @@ def _translate_directx_vulkan_frontier(
         for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
         if source in directx_validated_entry_point_counts
     ]
-    required_toolchains = {
-        "directx": (
-            require_directx_toolchain,
-            directx_runs,
-            len(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
-        ),
-        "vulkan": (require_vulkan_toolchain, vulkan_runs, frontier_count),
-    }
-    for target, (required, runs, expected_count) in required_toolchains.items():
-        if required and run_toolchains:
-            artifact_payload = toolchain_artifact_payloads.get(target, payload)
-            artifact_paths = {
-                artifact.get("path")
-                for artifact in artifact_payload.get("artifacts", [])
-                if isinstance(artifact, dict)
-                and artifact.get("target") == target
-                and artifact.get("status") == "translated"
-                and isinstance(artifact.get("path"), str)
-            }
-            if target == "directx":
-                artifact_sources = {
-                    artifact.get("source")
-                    for artifact in artifact_payload.get("artifacts", [])
-                    if isinstance(artifact, dict)
-                    and artifact.get("target") == target
-                    and artifact.get("status") == "translated"
-                    and isinstance(artifact.get("source"), str)
-                }
-                _require(
-                    artifact_sources == set(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
-                    "DirectX toolchain artifact sources did not match the frontier",
-                )
-            validated_paths = {
-                run.get("path")
-                for run in runs
-                if run.get("status") == "ok" and isinstance(run.get("path"), str)
-            }
-            _require(
-                len(artifact_paths) == expected_count
-                and artifact_paths <= validated_paths,
-                (
-                    f"{target.title()} toolchain validation was required for every "
-                    "validated frontier artifact"
-                ),
-            )
-        for run in runs:
-            _require(
-                run.get("status") == "ok",
-                f"{target.title()} toolchain validation failed",
-            )
-        if required and not run_toolchains:
-            _require(
-                not runs,
-                (
-                    f"{target.title()} toolchain validation ran while active "
-                    "validation issues are tracked"
-                ),
-            )
+    for run in directx_runs:
+        _require(run.get("status") == "ok", "DirectX toolchain validation failed")
     if require_directx_toolchain and run_toolchains:
         _require(
             directx_validated_sources == list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
@@ -2293,15 +3438,20 @@ def _translate_directx_vulkan_frontier(
             "DirectX toolchain did not validate every generated compute entry point",
         )
     return {
-        "name": "directx-vulkan-frontier",
-        "status": "passed",
-        "scope": "clean-frontier",
+        "name": "directx-frontier",
+        "status": "passed-with-expected-workgroup-blockers",
+        "scope": "target-split-frontier",
         "report": _relpath(report_path, mlx_root),
+        "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
         "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
-        "unitCount": frontier_count,
-        "artifactCount": frontier_count * 2,
-        "targets": ["directx", "vulkan"],
-        "toolchainRuns": len(toolchain_runs),
+        "unitCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "artifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "translatedSources": list(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES),
+        "translatedArtifactCount": len(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES),
+        "workgroupBlockedSources": list(MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "workgroupBlockedArtifactCount": len(MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "target": "directx",
+        "toolchainRuns": len(directx_runs),
         "directxToolchainRequired": require_directx_toolchain,
         "directxToolchainSources": list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
         "directxToolchainArtifactCount": len(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
@@ -2319,15 +3469,117 @@ def _translate_directx_vulkan_frontier(
         "directxToolchainValidatedEntryPointCount": sum(
             directx_validated_entry_point_counts.values()
         ),
-        "vulkanToolchainRequired": require_vulkan_toolchain,
         "directxValidationStatus": (
             "validated" if run_toolchains and directx_runs else "not-required"
         ),
-        "vulkanValidationStatus": (
-            "validated"
-            if vulkan_runs
-            else ("not-run" if run_toolchains else "blocked-by-tracked-issues")
-        ),
+        "bfloat16LoweringEvidence": bfloat16_lowering_evidence,
+        "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
+        "semanticReadinessStatus": "not-established",
+        "trackedIssues": [
+            MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
+            *FRONTIER_VALIDATION_TRACKED_ISSUES,
+        ],
+        "runtimeParityClaimed": False,
+    }
+
+
+def _translate_vulkan_frontier(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+    *,
+    require_toolchain: bool,
+    run_optional_toolchain: bool,
+) -> dict[str, Any]:
+    output_dir = work_dir / "out-vulkan-frontier"
+    _result, payload, _config_path, report_path = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+        command_name="vulkan-frontier",
+        target="vulkan",
+        sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+        output_dir=output_dir,
+        validate=True,
+        specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+    )
+    _require_clean_frontier_report(
+        mlx_root,
+        output_dir,
+        payload,
+        target="vulkan",
+        sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+    )
+    scaled_attention_alias_evidence = _scaled_attention_local_alias_evidence(
+        mlx_root, payload
+    )
+
+    vulkan_runs: list[Mapping[str, Any]] = []
+    run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
+    if run_toolchains and (require_toolchain or run_optional_toolchain):
+        toolchain_output_dir = work_dir / "out-vulkan-frontier-toolchain"
+        _toolchain_result, toolchain_payload, _toolchain_config, _toolchain_report = (
+            _run_frontier_project(
+                mlx_root=mlx_root,
+                config_dir=config_dir,
+                report_dir=report_dir,
+                log_dir=log_dir,
+                python=python,
+                command_name="validate-vulkan-frontier-toolchain",
+                target="vulkan",
+                sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+                output_dir=toolchain_output_dir,
+                run_toolchains=True,
+                specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+            )
+        )
+        artifacts = _require_clean_frontier_report(
+            mlx_root,
+            toolchain_output_dir,
+            toolchain_payload,
+            target="vulkan",
+            sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+        )
+        validation = toolchain_payload.get("validation")
+        runs = (
+            validation.get("toolchainRuns") if isinstance(validation, Mapping) else None
+        )
+        _require(isinstance(runs, list), "Vulkan frontier toolchainRuns must be a list")
+        vulkan_runs = [
+            run
+            for run in runs
+            if isinstance(run, Mapping) and run.get("target") == "vulkan"
+        ]
+        for run in vulkan_runs:
+            _require(run.get("status") == "ok", "Vulkan toolchain validation failed")
+        if require_toolchain:
+            artifact_paths = {artifact["path"] for artifact in artifacts.values()}
+            validated_paths = {
+                run.get("path") for run in vulkan_runs if run.get("status") == "ok"
+            }
+            _require(
+                artifact_paths <= validated_paths,
+                "Vulkan toolchain did not validate every configured source artifact",
+            )
+
+    return {
+        "name": "vulkan-frontier",
+        "status": "passed",
+        "scope": "target-split-frontier",
+        "report": _relpath(report_path, mlx_root),
+        "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "unitCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "artifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "translatedArtifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "target": "vulkan",
+        "toolchainRuns": len(vulkan_runs),
+        "vulkanToolchainRequired": require_toolchain,
+        "vulkanValidationStatus": "validated" if vulkan_runs else "not-run",
         "semanticReadinessStatus": "not-established",
         "regressionEvidence": [scaled_attention_alias_evidence],
         "trackedIssues": list(FRONTIER_VALIDATION_TRACKED_ISSUES),
@@ -2536,92 +3788,71 @@ def _check_opengl_frontier(
     *,
     require_toolchain: bool,
 ) -> dict[str, Any]:
-    config_path = config_dir / "opengl-frontier.toml"
-    report_path = report_dir / "opengl-frontier.json"
-    _write_project_config(
-        config_path,
-        include=MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
-        targets=("opengl",),
-        output_dir=_relpath(work_dir / "out-opengl-frontier", mlx_root),
-    )
-    result = _run_command(
-        "translate-opengl-frontier",
-        [
-            python,
-            "-m",
-            "crosstl",
-            "translate-project",
-            str(mlx_root),
-            "--config",
-            str(config_path),
-            "--report",
-            str(report_path),
-        ],
+    clean_output_dir = work_dir / "out-opengl-frontier"
+    _result, payload, _config_path, report_path = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
         log_dir=log_dir,
-        check=False,
+        python=python,
+        command_name="opengl-frontier",
+        target="opengl",
+        sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
+        output_dir=clean_output_dir,
+        index_range_assertions=MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
     )
-    payload = _load_json(report_path)
+    artifacts_by_source = _require_clean_frontier_report(
+        mlx_root,
+        clean_output_dir,
+        payload,
+        target="opengl",
+        sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
+        validated=False,
+        index_range_assertions=MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
+    )
     summary = payload.get("summary", {})
-    _require(
-        isinstance(summary, Mapping),
-        "OpenGL frontier summary must be an object",
-    )
-    if result.returncode != 0:
-        messages = [
-            str(item.get("message"))
-            for item in payload.get("diagnostics", [])
-            if isinstance(item, Mapping) and isinstance(item.get("message"), str)
-        ]
-        messages.extend(
-            str(item.get("error"))
-            for item in payload.get("artifacts", [])
-            if isinstance(item, Mapping) and isinstance(item.get("error"), str)
-        )
-        detail = f": {messages[0]}" if messages else ""
-        raise PortingCheckError(f"OpenGL frontier translation failed{detail}")
-
-    artifacts = payload.get("artifacts", [])
-    _require(
-        isinstance(artifacts, list),
-        "OpenGL frontier artifacts must be a list",
-    )
-    frontier_count = len(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
     diagnostic_counts = summary.get("diagnosticCounts", {})
     diagnostics = payload.get("diagnostics", [])
     _require(
-        isinstance(diagnostic_counts, Mapping) and isinstance(diagnostics, list),
-        "OpenGL frontier diagnostics must be reported as structured collections",
-    )
-    _require(
-        summary.get("unitCount") == frontier_count
-        and summary.get("artifactCount") == frontier_count
-        and summary.get("translatedCount") == frontier_count
-        and summary.get("failedCount") == 0
-        and len(artifacts) == frontier_count,
-        "OpenGL frontier report did not contain every clean translated artifact",
-    )
-    _require(
-        not diagnostics
+        isinstance(diagnostic_counts, Mapping)
+        and diagnostics == []
         and all(
             diagnostic_counts.get(severity) == 0
             for severity in ("note", "warning", "error")
         ),
-        "OpenGL frontier translation must complete with zero project diagnostics",
+        "OpenGL clean frontier translation must have zero project diagnostics",
     )
-    artifacts_by_source = {
-        artifact.get("source"): artifact
-        for artifact in artifacts
-        if isinstance(artifact, Mapping)
-        and artifact.get("target") == "opengl"
-        and artifact.get("status") == "translated"
-        and isinstance(artifact.get("source"), str)
-    }
+
+    blocked_output_dir = work_dir / "out-opengl-workgroup-frontier"
+    blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
+        _run_frontier_project(
+            mlx_root=mlx_root,
+            config_dir=config_dir,
+            report_dir=report_dir,
+            log_dir=log_dir,
+            python=python,
+            command_name="opengl-workgroup-frontier",
+            target="opengl",
+            sources=MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+            output_dir=blocked_output_dir,
+            check=False,
+        )
+    )
     _require(
-        set(artifacts_by_source) == set(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
-        "OpenGL frontier translated artifact set does not match its source set",
+        blocked_result.returncode == 1,
+        "OpenGL dynamic-workgroup frontier must fail with exit code 1",
     )
+    dispatch_evidence = _require_dynamic_workgroup_blocker_report(
+        mlx_root,
+        blocked_output_dir,
+        blocked_payload,
+        target="opengl",
+        sources=MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+        validated=False,
+    )
+
     generated_paths: dict[str, Path] = {}
-    for source in MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
+    for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES:
         artifact_path = artifacts_by_source[source].get("path")
         _require(
             isinstance(artifact_path, str),
@@ -2636,6 +3867,8 @@ def _check_opengl_frontier(
 
     specialization_evidence: dict[str, dict[str, int]] = {}
     for source, expected_constants in MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.items():
+        if source not in artifacts_by_source:
+            continue
         artifact = artifacts_by_source[source]
         reflected_constants = artifact.get("specializationConstants", [])
         _require(
@@ -2747,20 +3980,30 @@ def _check_opengl_frontier(
             toolchain_validated_sources.append(source)
         _require(
             toolchain_validated_sources == list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
-            "OpenGL frontier toolchain did not validate every configured source",
+            "OpenGL frontier toolchain did not validate every translated source",
         )
         validation_status = "validated"
 
     return {
         "name": "opengl-frontier",
-        "status": "passed",
+        "status": "passed-with-expected-workgroup-blockers",
+        "scope": "target-split-frontier",
         "report": _relpath(report_path, mlx_root),
-        "sources": list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
-        "sourceCount": frontier_count,
+        "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
+        "sources": list(MLX_OPENGL_FRONTIER_SOURCES),
+        "sourceCount": len(MLX_OPENGL_FRONTIER_SOURCES),
         "target": "opengl",
-        "artifactCount": frontier_count,
+        "artifactCount": len(MLX_OPENGL_FRONTIER_SOURCES),
+        "translatedSources": list(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES),
+        "translatedArtifactCount": len(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES),
+        "workgroupBlockedSources": list(MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "workgroupBlockedArtifactCount": len(
+            MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        ),
         "projectDiagnosticCount": 0,
+        "expectedProjectErrorCount": len(MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
         "toolchainRequired": require_toolchain,
+        "toolchainSources": list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
         "toolchainValidatedSources": toolchain_validated_sources,
         "toolchainValidatedArtifactCount": len(toolchain_validated_sources),
         "nativeValidationStatus": validation_status,
@@ -2768,11 +4011,29 @@ def _check_opengl_frontier(
         "spirvValidator": "spirv-val",
         "nativeValidationOutputs": validation_outputs,
         "specializationConstants": specialization_evidence,
+        "indexRangeAssertionEvidence": {
+            "assertionCount": len(MLX_OPENGL_INDEX_RANGE_ASSERTIONS),
+            "inclusiveBounds": {
+                "minimum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+                "maximum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+            },
+            "expressionsBySource": {
+                source: list(expressions)
+                for source, expressions in (
+                    MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS.items()
+                )
+            },
+            "contractKind": "explicit-host-runtime-portability-preconditions",
+            "inferred": False,
+            "runtimeEnforced": False,
+        },
+        "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
+        "trackedIssues": [MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE],
         "runtimeIntegrationIncluded": False,
     }
 
 
-def _check_gemv_opengl_toolchain(
+def _check_fft_opengl_workgroup_pointer_frontier(
     mlx_root: Path,
     work_dir: Path,
     config_dir: Path,
@@ -2780,32 +4041,25 @@ def _check_gemv_opengl_toolchain(
     log_dir: Path,
     python: str,
 ) -> dict[str, Any]:
-    required_tools = {
-        "glslangValidator": shutil.which("glslangValidator"),
-        "spirv-val": shutil.which("spirv-val"),
-    }
-    missing_tools = sorted(
-        name for name, resolved in required_tools.items() if resolved is None
-    )
-    _require(
-        not missing_tools,
-        "OpenGL GEMV validation requires: " + ", ".join(missing_tools),
-    )
-
-    config_path = config_dir / "gemv-opengl.toml"
-    report_path = report_dir / "gemv-opengl.json"
+    config_path = config_dir / "fft-opengl-workgroup-pointer.toml"
+    report_path = report_dir / "fft-opengl-workgroup-pointer.json"
+    output_dir = work_dir / "out-fft-opengl-workgroup-pointer"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
     _write_project_config(
         config_path,
-        include=MLX_GEMV_SOURCE,
+        include=MLX_FFT_SOURCE,
         targets=("opengl",),
-        output_dir=_relpath(work_dir / "out-gemv-opengl", mlx_root),
+        output_dir=_relpath(output_dir, mlx_root),
         metal_source_options={
-            "max_template_specializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
-            "max_template_materialization_work": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
+            "max_template_specializations": FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS,
+            "max_template_materialization_work": (
+                FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK
+            ),
         },
     )
     result = _run_command(
-        "translate-gemv-opengl",
+        "translate-fft-opengl-workgroup-pointer",
         [
             python,
             "-m",
@@ -2820,154 +4074,1089 @@ def _check_gemv_opengl_toolchain(
         ],
         log_dir=log_dir,
         check=False,
+        timeout_seconds=FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS,
     )
-    payload = _load_json(report_path)
-    summary = payload.get("summary", {})
-    _require(isinstance(summary, dict), "OpenGL GEMV summary must be an object")
-    if result.returncode != 0:
-        diagnostics = [
-            str(item.get("message"))
-            for item in payload.get("diagnostics", [])
-            if isinstance(item, Mapping) and isinstance(item.get("message"), str)
-        ]
-        detail = f": {diagnostics[0]}" if diagnostics else ""
-        raise PortingCheckError(f"OpenGL GEMV translation failed{detail}")
     _require(
-        summary.get("translatedCount") == 1 and summary.get("failedCount") == 0,
-        "OpenGL GEMV report did not contain one clean translated artifact",
+        result.returncode == 1,
+        "OpenGL FFT translation must remain fail-closed at its tracked "
+        "workgroup-pointer frontier",
+    )
+    _require(
+        report_path.is_file(),
+        "OpenGL FFT translation did not produce a project report",
     )
 
-    artifact = next(
-        (
-            item
-            for item in payload.get("artifacts", [])
-            if isinstance(item, Mapping)
-            and item.get("source") == MLX_GEMV_SOURCE
-            and item.get("target") == "opengl"
-            and item.get("status") == "translated"
-        ),
-        None,
+    payload = _load_json(report_path)
+    _require(
+        payload.get("kind") == "crosstl-project-portability-report",
+        "OpenGL FFT translation report kind changed",
     )
-    _require(isinstance(artifact, Mapping), "OpenGL GEMV artifact is missing")
+    summary = payload.get("summary", {})
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == 1
+        and summary.get("artifactCount") == 1
+        and summary.get("translatedCount") == 0
+        and summary.get("failedCount") == 1,
+        "OpenGL FFT translation report did not retain one failed artifact",
+    )
+    _require(
+        summary.get("diagnosticCounts") == {"error": 1, "note": 0, "warning": 0}
+        and summary.get("diagnosticsByCode") == {FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1}
+        and summary.get("missingCapabilityCounts")
+        == {FFT_OPENGL_EXPECTED_MISSING_CAPABILITY: 1},
+        "OpenGL FFT workgroup-pointer diagnostic summary changed",
+    )
+
+    diagnostics = payload.get("diagnostics", [])
+    _require(
+        isinstance(diagnostics, list) and len(diagnostics) == 1,
+        "OpenGL FFT report must contain one workgroup-pointer diagnostic",
+    )
+    diagnostic = diagnostics[0]
+    _require(
+        isinstance(diagnostic, Mapping)
+        and diagnostic.get("severity") == "error"
+        and diagnostic.get("code") == FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE
+        and diagnostic.get("message") == FFT_OPENGL_EXPECTED_MESSAGE
+        and diagnostic.get("sourceBackend") == "metal"
+        and diagnostic.get("target") == "opengl"
+        and diagnostic.get("missingCapabilities")
+        == [FFT_OPENGL_EXPECTED_MISSING_CAPABILITY],
+        "OpenGL FFT workgroup-pointer diagnostic contract changed",
+    )
+    location = diagnostic.get("location", {})
+    _require(
+        isinstance(location, Mapping) and location.get("file") == MLX_FFT_SOURCE,
+        "OpenGL FFT diagnostic source changed",
+    )
+    details = diagnostic.get("details", {})
+    _require(
+        isinstance(details, Mapping)
+        and details.get("sourcePath") == MLX_FFT_SOURCE
+        and details.get("workgroupPointer") == FFT_OPENGL_EXPECTED_POINTER_EVIDENCE,
+        "OpenGL FFT diagnostic lost concrete workgroup-pointer provenance",
+    )
+
+    artifacts = payload.get("artifacts", [])
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == 1,
+        "OpenGL FFT report must contain one failed artifact record",
+    )
+    artifact = artifacts[0]
+    artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
+    _require(
+        isinstance(artifact, Mapping)
+        and artifact.get("source") == MLX_FFT_SOURCE
+        and artifact.get("sourceBackend") == "metal"
+        and artifact.get("target") == "opengl"
+        and artifact.get("status") == "failed"
+        and artifact.get("error") == FFT_OPENGL_EXPECTED_MESSAGE
+        and isinstance(artifact_path, str),
+        "OpenGL FFT failed artifact contract changed",
+    )
+    _require(
+        details.get("targetArtifact") == artifact_path,
+        "OpenGL FFT diagnostic and artifact paths disagree",
+    )
+    _require(
+        artifact.get("sourceHash") == {"algorithm": "sha256", "value": MLX_FFT_SHA256}
+        and artifact.get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES,
+        "OpenGL FFT source identity changed at the pinned MLX commit",
+    )
+    specialization_constants = artifact.get("specializationConstants", [])
+    materialization = artifact.get("templateMaterialization", {})
+    _require(
+        isinstance(specialization_constants, list)
+        and len(specialization_constants)
+        == FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT,
+        "OpenGL FFT function-constant inventory changed",
+    )
+    _require(
+        isinstance(materialization, Mapping)
+        and materialization.get("status") == "materialized"
+        and len(materialization.get("specializations", []))
+        == FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT
+        and materialization.get("unsupported") == [],
+        "OpenGL FFT template materialization evidence changed",
+    )
+
+    generated_path = (mlx_root / artifact_path).resolve()
+    _require(
+        _is_relative_to(generated_path, output_dir.resolve()),
+        "OpenGL FFT artifact path escaped its output directory",
+    )
+    _require(
+        not generated_path.exists(),
+        "OpenGL FFT emitted GLSL despite its fail-closed project diagnostic",
+    )
+
+    return {
+        "name": "fft-opengl-workgroup-pointer-frontier",
+        "status": "blocked-as-expected",
+        "report": _relpath(report_path, mlx_root),
+        "source": MLX_FFT_SOURCE,
+        "sourceHash": MLX_FFT_SHA256,
+        "target": "opengl",
+        "artifactStatus": "failed",
+        "artifactEmitted": False,
+        "nativeValidationAttempted": False,
+        "nativeValidationStatus": "not-run-no-artifact",
+        "templateMaterializationStatus": "materialized",
+        "templateSpecializationCount": FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT,
+        "functionConstantCount": FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT,
+        "workgroupPointer": dict(FFT_OPENGL_EXPECTED_POINTER_EVIDENCE),
+        "provenanceStatus": "concrete-backing-preserved",
+        "accessRangeStatus": "unprovable",
+        "trackedIssue": FFT_OPENGL_WORKGROUP_POINTER_ISSUE,
+        "maxTemplateSpecializations": FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS,
+        "maxTemplateMaterializationWork": FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
+    }
+
+
+def _dxc_diagnostics(result: CommandResult) -> list[dict[str, Any]]:
+    header_pattern = re.compile(
+        r"^(?P<path>.+):(?P<line>\d+):(?P<column>\d+): "
+        r"(?P<severity>warning|error|note): (?P<message>.+)$",
+        re.IGNORECASE,
+    )
+    diagnostics: list[dict[str, Any]] = []
+    for stream_path in (result.stdout_path, result.stderr_path):
+        lines = stream_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        for index, line in enumerate(lines):
+            if re.search(r"\b(?:warning|error|note):", line, re.IGNORECASE) is None:
+                continue
+            match = header_pattern.match(line)
+            _require(
+                match is not None,
+                f"DXC emitted an unrecognized diagnostic: {line}",
+            )
+            diagnostics.append(
+                {
+                    "severity": match.group("severity").lower(),
+                    "message": match.group("message"),
+                    "sourceLine": (
+                        lines[index + 1].strip() if index + 1 < len(lines) else ""
+                    ),
+                }
+            )
+    return diagnostics
+
+
+def _bare_value_discard_statements(source: str) -> list[str]:
+    pattern = re.compile(
+        r"(?m)^[ \t]*(?P<expression>"
+        r"(?:[A-Za-z_]\w*(?:\s*(?:\.\s*[A-Za-z_]\w*|\[[^\]\r\n]+\]))*)"
+        r"|(?:true|false)|(?:\d+(?:\.\d+)?[fFuUlL]*))"
+        r"[ \t]*;[ \t]*(?://[^\r\n]*)?$"
+    )
+    control_flow_statements = {"break", "continue", "discard", "return"}
+    return [
+        expression
+        for match in pattern.finditer(source)
+        if (expression := match.group("expression").replace(" ", ""))
+        not in control_flow_statements
+    ]
+
+
+def _require_gemv_project_workgroup_size_rule(
+    payload: Mapping[str, Any], *, target: str
+) -> None:
+    project = payload.get("project")
+    expected_rules = {
+        MLX_GEMV_SOURCE: list(GEMV_REPORT_WORKGROUP_SIZE_RULE),
+    }
+    _require(
+        isinstance(project, Mapping)
+        and project.get("workgroupSizeRules") == expected_rules
+        and project.get("workgroupSizeRuleCount") == 1,
+        f"{target} GEMV report did not retain the exact workgroup-size rule",
+    )
+
+
+def _is_sha256_contract_identity(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and value.get("algorithm") == "sha256"
+        and isinstance(value.get("value"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", value["value"]) is not None
+    )
+
+
+def _gemv_directx_execution_evidence(
+    artifact: Mapping[str, Any],
+    specializations: Sequence[Any],
+    compute_entries: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    host_materializations: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for record in specializations:
+        _require(
+            isinstance(record, Mapping),
+            "DirectX GEMV materialization records must be objects",
+        )
+        if "hostName" not in record:
+            continue
+        host_name = record.get("hostName")
+        materialized_name = record.get("materializedName")
+        _require(
+            isinstance(host_name, str)
+            and bool(host_name)
+            and isinstance(materialized_name, str)
+            and bool(materialized_name),
+            "DirectX GEMV host materialization identity is incomplete",
+        )
+        identity = (host_name, materialized_name)
+        _require(
+            identity not in host_materializations,
+            "DirectX GEMV host materialization identities must be unique",
+        )
+        host_materializations[identity] = record
+    _require(
+        len(host_materializations) == GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "DirectX GEMV must retain exactly 224 host-named materializations",
+    )
+
+    execution = artifact.get("execution")
+    execution_entries = (
+        execution.get("entryPoints") if isinstance(execution, Mapping) else None
+    )
+    _require(
+        isinstance(execution_entries, list)
+        and len(execution_entries) == GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "DirectX GEMV report must contain exactly 224 execution entries",
+    )
+    rule_path = f"project.workgroup_size_rules[{json.dumps(MLX_GEMV_SOURCE)}]"
+    _require(
+        execution.get("provenance")
+        == {
+            "kind": "materialized-template-rule",
+            "path": rule_path,
+        }
+        and _is_sha256_contract_identity(execution.get("identity")),
+        "DirectX GEMV execution provenance or identity changed",
+    )
+
+    report_entries_by_identity: dict[tuple[str, str], Mapping[str, Any]] = {}
+    report_entries_by_target: dict[str, Mapping[str, Any]] = {}
+    report_workgroup_size_counts: Counter[tuple[int, int, int]] = Counter()
+    for entry in execution_entries:
+        _require(
+            isinstance(entry, Mapping),
+            "DirectX GEMV execution entries must be objects",
+        )
+        source_entry = entry.get("sourceEntryPoint")
+        materialized_entry = entry.get("materializedEntryPoint")
+        target_entry = entry.get("targetEntryPoint")
+        _require(
+            isinstance(source_entry, str)
+            and bool(source_entry)
+            and isinstance(materialized_entry, str)
+            and bool(materialized_entry)
+            and isinstance(target_entry, str)
+            and bool(target_entry),
+            "DirectX GEMV execution entry identity is incomplete",
+        )
+        materialization_identity = (source_entry, materialized_entry)
+        _require(
+            materialization_identity not in report_entries_by_identity,
+            "DirectX GEMV execution materialization identities must be unique",
+        )
+        _require(
+            target_entry not in report_entries_by_target,
+            "DirectX GEMV execution target identities must be unique",
+        )
+        host_record = host_materializations.get(materialization_identity)
+        _require(
+            host_record is not None,
+            "DirectX GEMV execution entry has no matching host/materialized identity",
+        )
+        entry_materialization = entry.get("materialization")
+        _require(
+            isinstance(entry_materialization, Mapping)
+            and entry_materialization.get("hostName") == source_entry
+            and entry_materialization.get("materializedName") == materialized_entry
+            and entry_materialization.get("name") == host_record.get("name"),
+            "DirectX GEMV execution entry materialization identity changed",
+        )
+        parameters = entry.get("parameters")
+        parameter_sources = entry.get("parameterSources")
+        _require(
+            isinstance(parameters, Mapping)
+            and parameters == host_record.get("parameters")
+            and isinstance(parameter_sources, Mapping)
+            and parameter_sources == host_record.get("parameterSources"),
+            "DirectX GEMV execution parameters lost materialization provenance",
+        )
+        rule = entry.get("rule")
+        _require(
+            isinstance(rule, Mapping)
+            and rule.get("components") == list(GEMV_REPORT_WORKGROUP_SIZE_RULE)
+            and rule.get("sourcePattern") == MLX_GEMV_SOURCE
+            and rule.get("path") == rule_path,
+            "DirectX GEMV execution entry workgroup-size rule changed",
+        )
+        try:
+            resolved_size = (
+                32,
+                int(str(parameters["BN"])),
+                int(str(parameters["BM"])),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PortingCheckError(
+                "DirectX GEMV execution entry lacks integral BN/BM parameters"
+            ) from exc
+        _require(
+            entry.get("workgroupSize") == list(resolved_size)
+            and _is_sha256_contract_identity(entry.get("identity")),
+            "DirectX GEMV execution entry workgroup-size contract changed",
+        )
+        report_entries_by_identity[materialization_identity] = entry
+        report_entries_by_target[target_entry] = entry
+        report_workgroup_size_counts[resolved_size] += 1
+
+    _require(
+        set(report_entries_by_identity) == set(host_materializations),
+        "DirectX GEMV execution entries must join every host materialization by identity",
+    )
+    source_entry_points = execution.get("sourceEntryPoints")
+    _require(
+        isinstance(source_entry_points, list)
+        and len(source_entry_points) == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and len(set(source_entry_points)) == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and set(source_entry_points)
+        == {identity[0] for identity in report_entries_by_identity},
+        "DirectX GEMV execution source identities changed",
+    )
+
+    generated_entries_by_target = {
+        str(entry["targetEntryPoint"]): entry for entry in compute_entries
+    }
+    _require(
+        len(generated_entries_by_target) == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and set(generated_entries_by_target) == set(report_entries_by_target),
+        "DirectX GEMV generated target entries do not match report identities",
+    )
+    for target_entry, report_entry in report_entries_by_target.items():
+        generated_size = generated_entries_by_target[target_entry]["workgroupSize"]
+        _require(
+            generated_size == tuple(report_entry["workgroupSize"]),
+            "DirectX GEMV generated numthreads declaration does not match its "
+            f"report entry contract: {target_entry}",
+        )
+
+    resolved_sizes = tuple(sorted(report_workgroup_size_counts))
+    _require(
+        resolved_sizes == GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES,
+        "DirectX GEMV resolved workgroup-size set changed",
+    )
+    return {
+        "hostNamedMaterializationCount": len(host_materializations),
+        "reportExecutionEntryCount": len(report_entries_by_identity),
+        "executionIdentityJoinCount": len(report_entries_by_identity),
+        "generatedTargetEntryIdentityCount": len(generated_entries_by_target),
+        "generatedNumthreadsContractCount": len(generated_entries_by_target),
+        "resolvedWorkgroupSizes": [list(size) for size in resolved_sizes],
+        "resolvedWorkgroupSizeCounts": [
+            {
+                "workgroupSize": list(size),
+                "entryCount": report_workgroup_size_counts[size],
+            }
+            for size in resolved_sizes
+        ],
+    }
+
+
+def _check_gemv_directx_compiler_frontier(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+) -> dict[str, Any]:
+    dxc = shutil.which("dxc")
+    _require(dxc is not None, "DirectX GEMV compiler validation requires dxc")
+
+    source_path = mlx_root / MLX_GEMV_SOURCE
+    _require(source_path.is_file(), f"pinned MLX GEMV source is missing: {source_path}")
+    _require(
+        source_path.stat().st_size == MLX_GEMV_SOURCE_SIZE_BYTES
+        and _sha256(source_path) == MLX_GEMV_SHA256,
+        "DirectX GEMV source identity changed at the pinned MLX commit",
+    )
+
+    config_path = config_dir / "gemv-directx-compiler-frontier.toml"
+    report_path = report_dir / "gemv-directx-compiler-frontier.json"
+    output_dir = work_dir / "out-gemv-directx-compiler-frontier"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    report_path.unlink(missing_ok=True)
+    _write_project_config(
+        config_path,
+        include=MLX_GEMV_SOURCE,
+        targets=("directx",),
+        output_dir=_relpath(output_dir, mlx_root),
+        workgroup_size_rules={
+            MLX_GEMV_SOURCE: GEMV_WORKGROUP_SIZE_RULE,
+        },
+        metal_source_options={
+            "max_template_specializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
+            "max_template_materialization_work": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        },
+    )
+    translation = _run_command(
+        "translate-gemv-directx-compiler-frontier",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            "--no-format",
+        ],
+        log_dir=log_dir,
+        check=False,
+        timeout_seconds=GEMV_DIRECTX_TRANSLATION_TIMEOUT_SECONDS,
+    )
+    _require(
+        translation.returncode == 0,
+        "DirectX GEMV project translation failed; inspect the translation logs",
+    )
+    _require(
+        report_path.is_file(),
+        "DirectX GEMV translation did not produce a project report",
+    )
+
+    payload = _load_json(report_path)
+    _require(
+        payload.get("kind") == "crosstl-project-portability-report",
+        "DirectX GEMV translation report kind changed",
+    )
+    _require_gemv_project_workgroup_size_rule(payload, target="DirectX")
+    summary = payload.get("summary", {})
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == 1
+        and summary.get("skippedCount") == 0
+        and summary.get("targetCount") == 1
+        and summary.get("artifactCount") == 1
+        and summary.get("translatedCount") == 1
+        and summary.get("failedCount") == 0,
+        "DirectX GEMV report did not retain one clean translated artifact",
+    )
+    _require(
+        summary.get("diagnosticCounts") == {"error": 0, "note": 0, "warning": 0}
+        and summary.get("diagnosticsByCode") == {}
+        and summary.get("missingCapabilityCounts") == {}
+        and payload.get("diagnostics") == [],
+        "DirectX GEMV project translation emitted an unexpected diagnostic",
+    )
+    _require(
+        summary.get("artifactProvenanceByPipeline") == {"single-file-translate": 1}
+        and summary.get("artifactProvenanceByIntermediate") == {"crossgl": 1},
+        "DirectX GEMV report provenance summary changed",
+    )
+
+    expected_source_hash = {"algorithm": "sha256", "value": MLX_GEMV_SHA256}
+    units = payload.get("units", [])
+    _require(
+        isinstance(units, list)
+        and len(units) == 1
+        and isinstance(units[0], Mapping)
+        and units[0].get("id") == MLX_GEMV_SOURCE
+        and units[0].get("path") == MLX_GEMV_SOURCE
+        and units[0].get("sourceBackend") == "metal"
+        and units[0].get("extension") == ".metal"
+        and units[0].get("sourceHash") == expected_source_hash
+        and units[0].get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES,
+        "DirectX GEMV source-unit provenance changed at the pinned MLX commit",
+    )
+
+    artifacts = payload.get("artifacts", [])
+    _require(
+        isinstance(artifacts, list)
+        and len(artifacts) == 1
+        and isinstance(artifacts[0], Mapping),
+        "DirectX GEMV report must contain one artifact record",
+    )
+    artifact = artifacts[0]
     artifact_path = artifact.get("path")
     _require(
-        isinstance(artifact_path, str),
-        "OpenGL GEMV artifact path is missing",
+        artifact.get("source") == MLX_GEMV_SOURCE
+        and artifact.get("sourceBackend") == "metal"
+        and artifact.get("target") == "directx"
+        and artifact.get("status") == "translated"
+        and isinstance(artifact_path, str),
+        "DirectX GEMV translated artifact contract changed",
     )
-    generated_path = mlx_root / artifact_path
+    _require(
+        artifact.get("sourceHash") == expected_source_hash
+        and artifact.get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES
+        and artifact.get("provenance")
+        == {"intermediate": "crossgl", "pipeline": "single-file-translate"},
+        "DirectX GEMV artifact provenance changed",
+    )
+
+    generated_path = (mlx_root / artifact_path).resolve()
+    _require(
+        _is_relative_to(generated_path, output_dir.resolve()),
+        "DirectX GEMV artifact path escaped its output directory",
+    )
     _require(
         generated_path.is_file(),
-        f"OpenGL GEMV artifact is missing: {artifact_path}",
+        f"DirectX GEMV artifact is missing: {artifact_path}",
+    )
+    generated_hash = _sha256(generated_path)
+    generated_size = generated_path.stat().st_size
+    _require(
+        artifact.get("generatedHash")
+        == {"algorithm": "sha256", "value": generated_hash}
+        and artifact.get("generatedSizeBytes") == generated_size
+        and generated_size > 0,
+        "DirectX GEMV artifact hash or size does not match the emitted file",
+    )
+
+    materialization = artifact.get("templateMaterialization", {})
+    specializations = (
+        materialization.get("specializations", [])
+        if isinstance(materialization, Mapping)
+        else []
+    )
+    _require(
+        isinstance(materialization, Mapping)
+        and materialization.get("status") == "materialized"
+        and materialization.get("specializationCount")
+        == GEMV_EXPECTED_SPECIALIZATION_COUNT
+        and isinstance(specializations, list)
+        and len(specializations) == GEMV_EXPECTED_SPECIALIZATION_COUNT
+        and materialization.get("unsupported") == [],
+        "DirectX GEMV artifact did not retain complete materialization evidence",
+    )
+
+    generated = generated_path.read_text(encoding="utf-8")
+    entry_profile = dxc_profile_for_source(GEMV_DIRECTX_ENTRY_PROFILE, generated)
+    library_profile = dxc_profile_for_source(
+        GEMV_DIRECTX_LIBRARY_PROFILE,
+        generated,
+    )
+    compiler_arguments = dxc_compiler_arguments_for_source(generated)
+    compute_entry_pattern = re.compile(
+        r"(?m)^[ \t]*(?P<source_expression>"
+        r"\[numthreads\(\s*(?P<x>\d+)\s*,\s*(?P<y>\d+)\s*,\s*"
+        r"(?P<z>\d+)\s*\)\])[ \t]*\r?\n"
+        r"[ \t]*void[ \t]+(?P<target_entry>CSMain(?:_\d+)?)[ \t]*\("
+    )
+    compute_entries = [
+        {
+            "sourceExpression": match.group("source_expression"),
+            "workgroupSize": tuple(
+                int(match.group(component)) for component in ("x", "y", "z")
+            ),
+            "targetEntryPoint": match.group("target_entry"),
+        }
+        for match in compute_entry_pattern.finditer(generated)
+    ]
+    entry_points = [str(entry["targetEntryPoint"]) for entry in compute_entries]
+    _require(
+        len(compute_entries) == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and len(set(entry_points)) == GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "DirectX GEMV artifact compute-entry count changed",
+    )
+    _require(
+        all(
+            entry_point in entry_points
+            for entry_point in GEMV_DIRECTX_COMPILER_ENTRY_POINTS
+        ),
+        "DirectX GEMV compiler-frontier entry selection changed",
+    )
+    _require(
+        entry_points == list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
+        "DirectX GEMV artifact export set changed",
+    )
+    execution_evidence = _gemv_directx_execution_evidence(
+        artifact,
+        specializations,
+        compute_entries,
+    )
+    residue = re.search(
+        r"BinaryOpNode|IdentifierNode|LiteralNode|PrimitiveType|"
+        r"\b(?:acc_type|nullptr)\b|(?:^|\s)WARNING:",
+        generated,
+        re.MULTILINE,
+    )
+    _require(
+        residue is None,
+        "DirectX GEMV artifact retained unresolved materialization text: "
+        f"{residue.group(0) if residue else ''}",
+    )
+    bare_value_discards = _bare_value_discard_statements(generated)
+    _require(
+        not bare_value_discards,
+        "DirectX GEMV artifact retained a bare value-discard statement: "
+        f"{bare_value_discards[0] if bare_value_discards else ''};",
+    )
+
+    compile_dir = work_dir / "validation" / "gemv-directx"
+    compile_dir.mkdir(parents=True, exist_ok=True)
+    entry_profile_runs = []
+    for entry_point in GEMV_DIRECTX_COMPILER_ENTRY_POINTS:
+        output_path = compile_dir / f"{entry_point}.dxil"
+        output_path.unlink(missing_ok=True)
+        command_name = entry_point.lower().replace("_", "-")
+        compile_result = _run_command(
+            f"compile-gemv-directx-{command_name}",
+            [
+                dxc,
+                "-T",
+                entry_profile,
+                *compiler_arguments,
+                "-E",
+                entry_point,
+                str(generated_path),
+                "-Fo",
+                str(output_path),
+            ],
+            log_dir=log_dir,
+            check=False,
+        )
+        _require(
+            compile_result.returncode == 0,
+            f"DXC failed to compile DirectX GEMV entry {entry_point}",
+        )
+        _require(
+            output_path.is_file() and output_path.stat().st_size > 0,
+            f"DXC did not emit a binary for DirectX GEMV entry {entry_point}",
+        )
+        diagnostics = _dxc_diagnostics(compile_result)
+        _require(
+            not diagnostics,
+            f"DXC diagnostics changed for DirectX GEMV entry {entry_point}",
+        )
+        entry_profile_runs.append(
+            {
+                "entryPoint": entry_point,
+                "profile": entry_profile,
+                **(
+                    {
+                        "compilerArguments": list(compiler_arguments),
+                        "minimumShaderModel": "6.2",
+                    }
+                    if compiler_arguments
+                    else {}
+                ),
+                "status": "compiled",
+                "output": _relpath(output_path, mlx_root),
+                "outputHash": {
+                    "algorithm": "sha256",
+                    "value": _sha256(output_path),
+                },
+                "outputSizeBytes": output_path.stat().st_size,
+                "diagnosticCount": 0,
+                "unusedValueWarningCount": 0,
+                "stdout": _relpath(compile_result.stdout_path, mlx_root),
+                "stderr": _relpath(compile_result.stderr_path, mlx_root),
+            }
+        )
+
+    library_exports = ";".join(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
+    library_output_path = compile_dir / "all-entries.dxil"
+    library_output_path.unlink(missing_ok=True)
+    library_result = _run_command(
+        "compile-gemv-directx-all-entries",
+        [
+            dxc,
+            "-T",
+            library_profile,
+            *compiler_arguments,
+            "-exports",
+            library_exports,
+            str(generated_path),
+            "-Fo",
+            str(library_output_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        library_result.returncode == 0,
+        "DXC failed to compile the DirectX GEMV all-entry library",
+    )
+    _require(
+        library_output_path.is_file() and library_output_path.stat().st_size > 0,
+        "DXC did not emit the DirectX GEMV all-entry library",
+    )
+    library_diagnostics = _dxc_diagnostics(library_result)
+    library_diagnostic_counts = Counter(
+        (
+            diagnostic.get("severity"),
+            diagnostic.get("message"),
+            diagnostic.get("sourceLine"),
+        )
+        for diagnostic in library_diagnostics
+    )
+    expected_library_diagnostic_counts = Counter(
+        (
+            "warning",
+            GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
+            str(entry["sourceExpression"]),
+        )
+        for entry in compute_entries
+    )
+    _require(
+        library_diagnostic_counts == expected_library_diagnostic_counts,
+        "DXC diagnostics changed for the DirectX GEMV all-entry library",
+    )
+    library_output_hash = _sha256(library_output_path)
+    library_output_size = library_output_path.stat().st_size
+    warning_source_counts = Counter(
+        str(entry["sourceExpression"]) for entry in compute_entries
+    )
+    source_expression_by_size = {
+        tuple(entry["workgroupSize"]): str(entry["sourceExpression"])
+        for entry in compute_entries
+    }
+    library_allowed_warnings = [
+        {
+            "classification": "library-profile-numthreads-ignored",
+            "severity": "warning",
+            "message": GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
+            "sourceExpression": source_expression_by_size[size],
+            "count": warning_source_counts[source_expression_by_size[size]],
+        }
+        for size in GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+    ]
+
+    return {
+        "name": "gemv-directx-compiler-frontier",
+        "status": "passed",
+        "report": _relpath(report_path, mlx_root),
+        "source": MLX_GEMV_SOURCE,
+        "sourceHash": MLX_GEMV_SHA256,
+        "sourceSizeBytes": MLX_GEMV_SOURCE_SIZE_BYTES,
+        "target": "directx",
+        "artifactStatus": "translated",
+        "artifactPackaging": "single-aggregate-artifact",
+        "artifact": _relpath(generated_path, mlx_root),
+        "artifactHash": {"algorithm": "sha256", "value": generated_hash},
+        "artifactSizeBytes": generated_size,
+        "artifactProvenance": {
+            "intermediate": "crossgl",
+            "pipeline": "single-file-translate",
+        },
+        "projectDiagnosticCount": 0,
+        "templateMaterializationStatus": "materialized",
+        "templateSpecializationCount": GEMV_EXPECTED_SPECIALIZATION_COUNT,
+        "unsupportedSpecializationCount": 0,
+        "workgroupSizeRule": list(GEMV_WORKGROUP_SIZE_RULE),
+        "reportWorkgroupSizeRule": list(GEMV_REPORT_WORKGROUP_SIZE_RULE),
+        "reportWorkgroupSizeRuleCount": 1,
+        **execution_evidence,
+        "materializationResidueCount": 0,
+        "bareValueDiscardCount": 0,
+        "computeEntryPointCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "compiler": "dxc",
+        **(
+            {
+                "compilerArguments": list(compiler_arguments),
+                "minimumShaderModel": "6.2",
+            }
+            if compiler_arguments
+            else {}
+        ),
+        "entryProfile": entry_profile,
+        "entryProfileCompilerEntryPoints": list(GEMV_DIRECTX_COMPILER_ENTRY_POINTS),
+        "entryProfileCompiledEntryPointCount": len(entry_profile_runs),
+        "entryProfileCompilerRuns": entry_profile_runs,
+        "entryProfileDiagnosticCount": 0,
+        "entryProfileUnusedValueWarningCount": 0,
+        "libraryProfile": library_profile,
+        "libraryExports": list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
+        "libraryExportCount": len(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
+        "libraryExportSetHash": {
+            "algorithm": "sha256",
+            "value": hashlib.sha256(library_exports.encode("utf-8")).hexdigest(),
+        },
+        "libraryCompilerRun": {
+            "profile": library_profile,
+            **(
+                {
+                    "compilerArguments": list(compiler_arguments),
+                    "minimumShaderModel": "6.2",
+                }
+                if compiler_arguments
+                else {}
+            ),
+            "status": "compiled",
+            "output": _relpath(library_output_path, mlx_root),
+            "outputHash": {"algorithm": "sha256", "value": library_output_hash},
+            "outputSizeBytes": library_output_size,
+            "allowedWarningCounts": {
+                "libraryNumthreads": GEMV_DIRECTX_EXPECTED_LIBRARY_WARNING_COUNT,
+            },
+            "unusedValueWarningCount": 0,
+            "stdout": _relpath(library_result.stdout_path, mlx_root),
+            "stderr": _relpath(library_result.stderr_path, mlx_root),
+        },
+        "libraryAllowedWarnings": library_allowed_warnings,
+        "libraryUnusedValueWarningCount": 0,
+        "compilerCoveredEntryPointCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "uncompiledEntryPointCount": 0,
+        "compilerCoverageStatus": "all-exported-entry-points-compiled",
+        "libraryCodeGenerationScope": "all-exported-functions",
+        "wholeArtifactSemanticValidityClaimed": False,
+        "libraryExecutionSemanticsEstablished": False,
+        "observedNumthreadsDirectives": [
+            source_expression_by_size[size]
+            for size in GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+        ],
+        "numthreadsDirectiveCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "numthreadsContractEstablished": True,
+        "exactWorkgroupSizeEstablished": True,
+        "requiredWaveSize": 32,
+        "requiredWaveSizeEstablished": False,
+        "executionContractBlockedBy": list(GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES),
+        "runtimeExecutionAttempted": False,
+        "runtimeIntegrationIncluded": False,
+        "numericalParityClaimed": False,
+        "runtimeParityClaimed": False,
+    }
+
+
+def _check_gemv_opengl_frontier(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+) -> dict[str, Any]:
+    config_path = config_dir / "gemv-opengl-frontier.toml"
+    report_path = report_dir / "gemv-opengl-frontier.json"
+    output_dir = work_dir / "out-gemv-opengl-frontier"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    report_path.unlink(missing_ok=True)
+    _write_project_config(
+        config_path,
+        include=MLX_GEMV_SOURCE,
+        targets=("opengl",),
+        output_dir=_relpath(output_dir, mlx_root),
+        workgroup_size_rules={
+            MLX_GEMV_SOURCE: GEMV_WORKGROUP_SIZE_RULE,
+        },
+        metal_source_options={
+            "max_template_specializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
+            "max_template_materialization_work": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        },
+    )
+    result = _run_command(
+        "translate-gemv-opengl-frontier",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            "--no-format",
+        ],
+        log_dir=log_dir,
+        check=False,
+        timeout_seconds=GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS,
+    )
+    _require(
+        result.returncode == 1,
+        "OpenGL GEMV translation must remain fail-closed at its pinned "
+        "workgroup-pointer frontier",
+    )
+    _require(
+        report_path.is_file(),
+        "OpenGL GEMV translation did not produce a project report",
+    )
+
+    payload = _load_json(report_path)
+    _require(
+        payload.get("kind") == "crosstl-project-portability-report",
+        "OpenGL GEMV translation report kind changed",
+    )
+    _require_gemv_project_workgroup_size_rule(payload, target="OpenGL")
+    summary = payload.get("summary", {})
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == 1
+        and summary.get("skippedCount") == 0
+        and summary.get("targetCount") == 1
+        and summary.get("artifactCount") == 1
+        and summary.get("translatedCount") == 0
+        and summary.get("failedCount") == 1,
+        "OpenGL GEMV translation report did not retain one failed unit/artifact",
+    )
+    _require(
+        summary.get("diagnosticCounts") == {"error": 1, "note": 0, "warning": 0}
+        and summary.get("diagnosticsByCode")
+        == {GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1}
+        and summary.get("missingCapabilityCounts")
+        == {GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY: 1},
+        "OpenGL GEMV workgroup-pointer diagnostic summary changed",
+    )
+    _require(
+        summary.get("artifactProvenanceByPipeline") == {"single-file-translate": 1}
+        and summary.get("artifactProvenanceByIntermediate") == {"crossgl": 1},
+        "OpenGL GEMV report provenance summary changed",
+    )
+
+    units = payload.get("units", [])
+    _require(
+        isinstance(units, list) and len(units) == 1,
+        "OpenGL GEMV report must contain one source unit",
+    )
+    unit = units[0]
+    expected_source_hash = {"algorithm": "sha256", "value": MLX_GEMV_SHA256}
+    _require(
+        isinstance(unit, Mapping)
+        and unit.get("id") == MLX_GEMV_SOURCE
+        and unit.get("path") == MLX_GEMV_SOURCE
+        and unit.get("sourceBackend") == "metal"
+        and unit.get("extension") == ".metal"
+        and unit.get("sourceHash") == expected_source_hash
+        and unit.get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES,
+        "OpenGL GEMV source-unit provenance changed at the pinned MLX commit",
+    )
+
+    diagnostics = payload.get("diagnostics", [])
+    _require(
+        isinstance(diagnostics, list) and len(diagnostics) == 1,
+        "OpenGL GEMV report must contain one workgroup-pointer diagnostic",
+    )
+    diagnostic = diagnostics[0]
+    _require(
+        isinstance(diagnostic, Mapping)
+        and diagnostic.get("severity") == "error"
+        and diagnostic.get("code") == GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE
+        and diagnostic.get("message") == GEMV_OPENGL_EXPECTED_MESSAGE
+        and diagnostic.get("sourceBackend") == "metal"
+        and diagnostic.get("target") == "opengl"
+        and diagnostic.get("missingCapabilities")
+        == [GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY],
+        "OpenGL GEMV workgroup-pointer diagnostic contract changed",
+    )
+    location = diagnostic.get("location", {})
+    _require(
+        isinstance(location, Mapping) and location.get("file") == MLX_GEMV_SOURCE,
+        "OpenGL GEMV diagnostic source changed",
+    )
+    details = diagnostic.get("details", {})
+    _require(isinstance(details, Mapping), "OpenGL GEMV diagnostic details are missing")
+
+    artifacts = payload.get("artifacts", [])
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == 1,
+        "OpenGL GEMV report must contain one failed artifact record",
+    )
+    artifact = artifacts[0]
+    artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
+    _require(
+        isinstance(artifact, Mapping)
+        and artifact.get("source") == MLX_GEMV_SOURCE
+        and artifact.get("sourceBackend") == "metal"
+        and artifact.get("target") == "opengl"
+        and artifact.get("status") == "failed"
+        and artifact.get("error") == GEMV_OPENGL_EXPECTED_MESSAGE
+        and isinstance(artifact_path, str),
+        "OpenGL GEMV failed artifact contract changed",
+    )
+    _require(
+        details
+        == {
+            "sourcePath": MLX_GEMV_SOURCE,
+            "targetArtifact": artifact_path,
+            "workgroupPointer": GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE,
+        },
+        "OpenGL GEMV diagnostic lost exact workgroup-pointer provenance",
+    )
+    _require(
+        artifact.get("sourceHash") == expected_source_hash
+        and artifact.get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES
+        and artifact.get("provenance")
+        == {"intermediate": "crossgl", "pipeline": "single-file-translate"},
+        "OpenGL GEMV failed artifact provenance changed",
     )
 
     materialization = artifact.get("templateMaterialization", {})
     _require(
         isinstance(materialization, Mapping)
+        and materialization.get("status") == "materialized"
         and materialization.get("specializationCount")
         == GEMV_EXPECTED_SPECIALIZATION_COUNT,
-        "OpenGL GEMV artifact did not materialize the complete specialization set",
+        "OpenGL GEMV artifact specialization count changed",
     )
-    generated = generated_path.read_text(encoding="utf-8")
-    entry_point_count = len(
-        re.findall(
-            r"(?m)^void\s+(?:main|compute_main(?:_\d+)?)\s*\(",
-            generated,
-        )
-    )
+    specializations = materialization.get("specializations", [])
     _require(
-        entry_point_count == GEMV_EXPECTED_ENTRY_POINT_COUNT,
-        "OpenGL GEMV artifact did not emit the complete entry-point set",
-    )
-    residue = re.search(
-        r"BinaryOpNode|LoopedElemToLoc|\b(?:OffsetT|acc_type|nullptr)\b",
-        generated,
-    )
-    _require(
-        residue is None,
-        f"OpenGL GEMV artifact retained unresolved materialization text: {residue.group(0) if residue else ''}",
+        isinstance(specializations, list)
+        and len(specializations) == GEMV_EXPECTED_SPECIALIZATION_COUNT
+        and materialization.get("unsupported") == [],
+        "OpenGL GEMV artifact did not retain complete materialization evidence",
     )
 
-    output_path = work_dir / "validation" / "gemv-opengl.spv"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    compile_result = _run_command(
-        "validate-gemv-opengl",
-        [
-            str(required_tools["glslangValidator"]),
-            "--target-env",
-            "opengl",
-            "--target-env",
-            "spirv1.3",
-            "-S",
-            "comp",
-            str(generated_path),
-            "-o",
-            str(output_path),
-        ],
-        log_dir=log_dir,
-        check=False,
+    generated_path = (mlx_root / artifact_path).resolve()
+    _require(
+        _is_relative_to(generated_path, output_dir.resolve()),
+        "OpenGL GEMV artifact path escaped its output directory",
     )
     _require(
-        compile_result.returncode == 0,
-        "OpenGL GEMV native compilation failed; inspect validate-gemv-opengl logs",
+        not generated_path.exists(),
+        "OpenGL GEMV emitted GLSL despite its fail-closed project diagnostic",
     )
     _require(
-        output_path.is_file(),
-        "OpenGL GEMV native compilation succeeded without producing SPIR-V",
+        not output_dir.exists()
+        or not any(
+            path.is_file() or path.is_symlink() for path in output_dir.rglob("*")
+        ),
+        "OpenGL GEMV emitted target files despite its fail-closed project diagnostic",
     )
-    validation_result = _run_command(
-        "validate-gemv-opengl-spirv",
-        [
-            str(required_tools["spirv-val"]),
-            "--target-env",
-            "spv1.3",
-            str(output_path),
-        ],
-        log_dir=log_dir,
-        check=False,
-    )
-    _require(
-        validation_result.returncode == 0,
-        "OpenGL GEMV SPIR-V validation failed; inspect validate-gemv-opengl-spirv logs",
-    )
-    warning_lines = [
-        line
-        for path in (
-            compile_result.stdout_path,
-            compile_result.stderr_path,
-            validation_result.stdout_path,
-            validation_result.stderr_path,
-        )
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if "warning:" in line.lower()
-    ]
-    unexpected_warnings = [
-        line
-        for line in warning_lines
-        if 'identifiers containing consecutive underscores ("__") are reserved'
-        not in line
-    ]
-    _require(
-        not unexpected_warnings,
-        "OpenGL GEMV native compilation emitted an untracked warning: "
-        + (unexpected_warnings[0] if unexpected_warnings else ""),
-    )
+
     return {
-        "name": "gemv-opengl-toolchain",
-        "status": "passed",
+        "name": "gemv-opengl-frontier",
+        "status": "blocked-as-expected",
         "report": _relpath(report_path, mlx_root),
         "source": MLX_GEMV_SOURCE,
+        "sourceHash": MLX_GEMV_SHA256,
         "target": "opengl",
-        "specializationCount": materialization.get("specializationCount"),
-        "entryPointCount": entry_point_count,
-        "nativeValidationStatus": "validated",
-        "nativeValidator": "glslangValidator",
-        "spirvValidator": "spirv-val",
-        "nativeWarningCount": len(warning_lines),
-        "nativeWarningsTrackedBy": (
-            "https://github.com/CrossGL/crosstl/issues/1513" if warning_lines else None
-        ),
-        "nativeValidationOutput": _relpath(output_path, mlx_root),
+        "artifactStatus": "failed",
+        "artifactEmitted": False,
+        "emittedTargetFileCount": 0,
+        "nativeValidationAttempted": False,
+        "nativeValidationStatus": "not-run-no-artifact",
+        "templateMaterializationStatus": "materialized",
+        "templateSpecializationCount": GEMV_EXPECTED_SPECIALIZATION_COUNT,
+        "workgroupSizeRule": list(GEMV_WORKGROUP_SIZE_RULE),
+        "reportWorkgroupSizeRule": list(GEMV_REPORT_WORKGROUP_SIZE_RULE),
+        "reportWorkgroupSizeRuleCount": 1,
+        "workgroupSizeRuleConfigured": True,
+        "diagnosticCode": GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
+        "missingCapability": GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY,
+        "workgroupPointer": dict(GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE),
+        "provenanceStatus": "concrete-backing-preserved",
+        "accessRangeStatus": "unprovable",
+        "trackedIssues": list(GEMV_OPENGL_FRONTIER_TRACKED_ISSUES),
+        "translationBlockedBy": [GEMV_OPENGL_BACKING_RANGE_ISSUE],
+        "executionContractBlockedBy": list(GEMV_OPENGL_EXECUTION_TRACKED_ISSUES),
+        "maxTemplateSpecializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
+        "maxTemplateMaterializationWork": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        "runtimeExecutionAttempted": False,
         "runtimeIntegrationIncluded": False,
+        "runnableArtifactClaimed": False,
+        "numericalParityClaimed": False,
+        "runtimeParityClaimed": False,
     }
 
 
@@ -3794,9 +5983,17 @@ def _plan_reduced_runtime_readiness(
         _plan_runtime_readiness_for_report(
             mlx_root=mlx_root,
             report_dir=report_dir,
-            name="directx-vulkan-runtime-readiness",
-            artifact_report=report_dir / "directx-vulkan-frontier.json",
-            targets=("directx", "vulkan"),
+            name="directx-runtime-readiness",
+            artifact_report=report_dir / "directx-frontier.json",
+            targets=("directx",),
+            required_native_runtime_targets=(),
+        ),
+        _plan_runtime_readiness_for_report(
+            mlx_root=mlx_root,
+            report_dir=report_dir,
+            name="vulkan-runtime-readiness",
+            artifact_report=report_dir / "vulkan-frontier.json",
+            targets=("vulkan",),
             required_native_runtime_targets=(
                 ("vulkan",) if require_vulkan_native_runtime else ()
             ),
@@ -4140,11 +6337,14 @@ def _translate_full_corpus(
 def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     mlx_root = Path(args.mlx_root).resolve()
     require_metal_toolchain = bool(getattr(args, "require_metal_toolchain", False))
+    require_directx_gemv_compiler_frontier = bool(
+        getattr(args, "require_directx_gemv_compiler_frontier", False)
+    )
     require_opengl_frontier_toolchain = bool(
         getattr(args, "require_opengl_frontier_toolchain", False)
     )
-    require_opengl_gemv_toolchain = bool(
-        getattr(args, "require_opengl_gemv_toolchain", False)
+    require_opengl_gemv_frontier = bool(
+        getattr(args, "require_opengl_gemv_frontier", False)
     )
     require_opengl_native_runtime = bool(
         getattr(args, "require_opengl_native_runtime", False)
@@ -4153,12 +6353,18 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         getattr(args, "require_vulkan_gemv_toolchain", False)
     )
     _require(
+        not require_directx_gemv_compiler_frontier
+        or args.mode == REDUCED_FRONTIER_MODE,
+        "--require-directx-gemv-compiler-frontier is only valid in "
+        "reduced-frontier mode",
+    )
+    _require(
         not require_opengl_frontier_toolchain or args.mode == REDUCED_FRONTIER_MODE,
         "--require-opengl-frontier-toolchain is only valid in reduced-frontier mode",
     )
     _require(
-        not require_opengl_gemv_toolchain or args.mode == REDUCED_FRONTIER_MODE,
-        "--require-opengl-gemv-toolchain is only valid in reduced-frontier mode",
+        not require_opengl_gemv_frontier or args.mode == REDUCED_FRONTIER_MODE,
+        "--require-opengl-gemv-frontier is only valid in reduced-frontier mode",
     )
     _require(
         not require_opengl_native_runtime or args.mode == REDUCED_FRONTIER_MODE,
@@ -4223,7 +6429,17 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
         checks.append(
-            _translate_directx_vulkan_frontier(
+            _check_template_member_buffer_pointer(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+            )
+        )
+        checks.append(
+            _translate_directx_frontier(
                 mlx_root,
                 work_dir,
                 config_dir,
@@ -4231,7 +6447,21 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 log_dir,
                 args.python,
                 require_directx_toolchain=args.require_directx_toolchain,
-                require_vulkan_toolchain=args.require_vulkan_toolchain,
+            )
+        )
+        checks.append(
+            _translate_vulkan_frontier(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+                require_toolchain=args.require_vulkan_toolchain,
+                run_optional_toolchain=(
+                    not args.require_directx_toolchain
+                    and not args.require_vulkan_toolchain
+                ),
             )
         )
         checks.append(
@@ -4244,6 +6474,17 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 args.python,
             )
         )
+        if require_directx_gemv_compiler_frontier:
+            checks.append(
+                _check_gemv_directx_compiler_frontier(
+                    mlx_root,
+                    work_dir,
+                    config_dir,
+                    report_dir,
+                    log_dir,
+                    args.python,
+                )
+            )
         checks.append(
             _check_opengl_frontier(
                 mlx_root,
@@ -4255,9 +6496,19 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 require_toolchain=require_opengl_frontier_toolchain,
             )
         )
-        if require_opengl_gemv_toolchain:
+        checks.append(
+            _check_fft_opengl_workgroup_pointer_frontier(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+            )
+        )
+        if require_opengl_gemv_frontier:
             checks.append(
-                _check_gemv_opengl_toolchain(
+                _check_gemv_opengl_frontier(
                     mlx_root,
                     work_dir,
                     config_dir,
@@ -4299,6 +6550,8 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     else:
         raise PortingCheckError(f"unsupported MLX porting mode: {args.mode}")
     reference_accessor_included = args.mode == REDUCED_FRONTIER_MODE
+    template_member_pointer_included = args.mode == REDUCED_FRONTIER_MODE
+    fft_opengl_pointer_frontier_included = args.mode == REDUCED_FRONTIER_MODE
     return {
         "schema_version": 1,
         "repository": {
@@ -4313,9 +6566,25 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "metalRoundTripIncluded": True,
             "metalToolchainRequired": require_metal_toolchain,
             "frontierSources": list(MLX_REDUCED_FRONTIER_SOURCES),
-            "cleanFrontierSources": list(MLX_CLEAN_REDUCED_FRONTIER_SOURCES),
+            "nonFenceFrontierSources": list(MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES),
             "blockedFrontierSources": list(MLX_BLOCKED_REDUCED_FRONTIER_SOURCES),
             "blockedFrontierIssues": list(FENCE_CONTRACT_TRACKED_ISSUES),
+            "directxTranslatedFrontierSources": list(
+                MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+            ),
+            "directxWorkgroupBlockedFrontierSources": list(
+                MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+            ),
+            "vulkanTranslatedFrontierSources": list(
+                MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+            ),
+            "openglTranslatedFrontierSources": list(
+                MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+            ),
+            "openglWorkgroupBlockedFrontierSources": list(
+                MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+            ),
+            "dynamicWorkgroupTrackedIssue": MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
             "fullCorpusTargets": list(FULL_CORPUS_TARGETS),
             "fullCorpusExpectedUnitCount": EXPECTED_METAL_KERNEL_COUNT,
             "fullCorpusExpectedArtifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
@@ -4340,8 +6609,23 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "referenceAccessorOpenglToolchainRequired": bool(
                 reference_accessor_included and require_opengl_frontier_toolchain
             ),
+            "templateMemberBufferPointerProofIncluded": (
+                template_member_pointer_included
+            ),
+            "templateMemberBufferPointerTargets": (
+                list(TEMPLATE_MEMBER_POINTER_TARGETS)
+                if template_member_pointer_included
+                else []
+            ),
+            "templateMemberBufferPointerNativeValidationIncluded": False,
             "openglFrontierToolchainRequired": require_opengl_frontier_toolchain,
-            "openglGemvToolchainRequired": require_opengl_gemv_toolchain,
+            "directxGemvCompilerFrontierRequired": (
+                require_directx_gemv_compiler_frontier
+            ),
+            "fftOpenGLWorkgroupPointerFrontierIncluded": (
+                fft_opengl_pointer_frontier_included
+            ),
+            "openglGemvFrontierRequired": require_opengl_gemv_frontier,
             "openglNativeRuntimeRequired": require_opengl_native_runtime,
             "vulkanGemvToolchainRequired": require_vulkan_gemv_toolchain,
             "runtimeParityClaimed": False,
@@ -4394,6 +6678,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Fail unless the DirectX HLSL smoke check runs successfully.",
     )
     parser.add_argument(
+        "--require-directx-gemv-compiler-frontier",
+        action="store_true",
+        help=(
+            "Translate pinned GEMV to DirectX and compile the three configured "
+            "representative entries with DXC."
+        ),
+    )
+    parser.add_argument(
         "--require-vulkan-toolchain",
         action="store_true",
         help="Fail unless the Vulkan SPIR-V smoke check runs successfully.",
@@ -4420,11 +6712,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--require-opengl-gemv-toolchain",
+        "--require-opengl-gemv-frontier",
         action="store_true",
         help=(
-            "Materialize pinned GEMV for OpenGL and require native GLSL and "
-            "SPIR-V 1.3 validation."
+            "Require pinned GEMV OpenGL translation to materialize all source "
+            "specializations and stop at the exact tracked workgroup-pointer frontier."
         ),
     )
     parser.add_argument(

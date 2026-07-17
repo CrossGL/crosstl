@@ -152,8 +152,14 @@ def test_directx_runtime_smoke_builds_boolean_order_dispatch(tmp_path, monkeypat
 
     assert "min(false, false)" not in generated
     assert "max(true, true)" not in generated
-    assert "bool4 minimum = and(" in generated
-    assert "bool4 maximum = or(" in generated
+    assert (
+        "bool4 minimum = ((bool4(false, false, true, true)) & "
+        "(bool4(false, true, false, true)));"
+    ) in generated
+    assert (
+        "bool4 maximum = ((bool4(false, false, true, true)) | "
+        "(bool4(false, true, false, true)));"
+    ) in generated
     assert request.loaded_artifact == b"DXBC-boolean-order-smoke"
     assert request.buffers["output"].dtype == "uint32"
     assert request.buffers["output"].shape == (16,)

@@ -156,7 +156,7 @@ jobs:
               --mode reduced-frontier \
               --mlx-root mlx-upstream \
               --require-opengl-frontier-toolchain \
-              --require-opengl-gemv-toolchain \
+              --require-opengl-gemv-frontier \
               --require-opengl-native-runtime \
               --require-vulkan-gemv-toolchain \
               --require-vulkan-toolchain \
@@ -166,7 +166,8 @@ jobs:
             python demos/integrations/mlx/run_mlx_porting.py \
               --mode reduced-frontier \
               --mlx-root mlx-upstream \
-              --require-directx-toolchain
+              --require-directx-toolchain \
+              --require-directx-gemv-compiler-frontier
           else
             python demos/integrations/mlx/run_mlx_porting.py \
               --mode reduced-frontier \
@@ -228,9 +229,36 @@ jobs:
           from pathlib import Path
 
           from demos.integrations.mlx.run_mlx_porting import (
+              GEMV_DIRECTX_COMPILER_ENTRY_POINTS,
+              GEMV_DIRECTX_EXPECTED_ENTRY_POINTS,
+              GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
+              GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES,
+              GEMV_OPENGL_BACKING_RANGE_ISSUE,
+              GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
+              GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
+              GEMV_REPORT_WORKGROUP_SIZE_RULE,
+              GEMV_WORKGROUP_SIZE_RULE,
+              MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE,
               MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
               MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+              MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
+              MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+              MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE,
+              MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE,
+              MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS,
+              MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+              MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
+              MLX_GEMV_SHA256,
+              MLX_GEMV_SOURCE,
+              MLX_GEMV_SOURCE_SIZE_BYTES,
+              MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+              MLX_OPENGL_FRONTIER_SOURCES,
+              MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS,
+              MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+              MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+              MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
               MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
+              MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
           )
 
           fence_source = "mlx/backend/metal/kernels/fence.metal"
@@ -241,29 +269,95 @@ jobs:
           )
           directx_frontier_count = len(directx_frontier_sources)
           directx_entry_point_count = sum(directx_entry_point_counts.values())
-          opengl_frontier_sources = set(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
+          directx_blocked_sources = set(MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES)
+          directx_blocked_entry_point_counts = dict(
+              MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS
+          )
+          directx_blocked_entry_point_count = sum(
+              directx_blocked_entry_point_counts.values()
+          )
+          vulkan_frontier_sources = set(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
+          gemv_workgroup_size_rule = list(GEMV_WORKGROUP_SIZE_RULE)
+          gemv_report_workgroup_size_rule = list(GEMV_REPORT_WORKGROUP_SIZE_RULE)
+          gemv_resolved_workgroup_sizes = list(
+              GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+          )
+          opengl_frontier_sources = set(MLX_OPENGL_FRONTIER_SOURCES)
           opengl_frontier_count = len(opengl_frontier_sources)
+          opengl_toolchain_frontier_sources = set(
+              MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+          )
+          opengl_toolchain_frontier_count = len(
+              opengl_toolchain_frontier_sources
+          )
+          opengl_blocked_sources = set(
+              MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+          )
           required_opengl_promotions = {
               "mlx/backend/metal/kernels/binary_two.metal",
               "mlx/backend/metal/kernels/ternary.metal",
           }
-          if not required_opengl_promotions <= opengl_frontier_sources:
+          if not required_opengl_promotions <= opengl_toolchain_frontier_sources:
               raise SystemExit("required OpenGL frontier promotions are missing")
           if opengl_frontier_count != 8:
-              raise SystemExit("expected 8 OpenGL toolchain frontier sources")
+              raise SystemExit("expected 8 OpenGL attempted frontier sources")
+          if opengl_toolchain_frontier_count != 3:
+              raise SystemExit("expected 3 OpenGL toolchain frontier sources")
           payload = json.loads(
               Path("mlx-upstream/.crosstl-mlx-porting/summary.json").read_text(
                   encoding="utf-8"
               )
           )
+          expected_repository = {
+              "name": "ml-explore/mlx",
+              "url": "https://github.com/ml-explore/mlx",
+              "commit": os.environ["MLX_COMMIT"],
+          }
+          if (
+              payload.get("schema_version") != 1
+              or payload.get("repository") != expected_repository
+              or payload.get("status") != "passed"
+          ):
+              raise SystemExit("MLX summary identity or status is incorrect")
           scope = payload["scope"]
-          if len(scope["cleanFrontierSources"]) != 11:
-              raise SystemExit("expected 11 clean MLX frontier sources")
+          if set(scope["nonFenceFrontierSources"]) != vulkan_frontier_sources:
+              raise SystemExit("expected the exact 11-source non-fence MLX frontier")
           if scope["blockedFrontierSources"] != [fence_source]:
               raise SystemExit("fence.metal must be the sole blocked frontier source")
           if scope["blockedFrontierIssues"] != [fence_issue]:
               raise SystemExit("blocked frontier must track issue #1537")
-          checks = {check["name"]: check for check in payload["checks"]}
+          if (
+              set(scope["directxTranslatedFrontierSources"])
+              != set(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES)
+              or set(scope["directxWorkgroupBlockedFrontierSources"])
+              != directx_blocked_sources
+              or set(scope["vulkanTranslatedFrontierSources"])
+              != vulkan_frontier_sources
+              or set(scope["openglTranslatedFrontierSources"])
+              != set(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES)
+              or set(scope["openglWorkgroupBlockedFrontierSources"])
+              != opengl_blocked_sources
+              or scope["dynamicWorkgroupTrackedIssue"]
+              != MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE
+          ):
+              raise SystemExit("target-split frontier scope accounting is incomplete")
+          check_records = payload.get("checks")
+          if not isinstance(check_records, list) or not all(
+              isinstance(check, dict) and isinstance(check.get("name"), str)
+              for check in check_records
+          ):
+              raise SystemExit("MLX summary checks are malformed")
+          checks = {check["name"]: check for check in check_records}
+          if len(checks) != len(check_records):
+              raise SystemExit("MLX summary check names must be unique")
+          checkout = checks.get("mlx-checkout")
+          if (
+              not isinstance(checkout, dict)
+              or checkout.get("status") != "passed"
+              or checkout.get("repository") != expected_repository["url"]
+              or checkout.get("commit") != expected_repository["commit"]
+          ):
+              raise SystemExit("MLX checkout proof does not match the pinned revision")
           fence = checks["atomic-fence-contract"]
           if fence["failedArtifactCount"] != 3 or fence["emittedArtifactCount"] != 0:
               raise SystemExit("fence contract accounting must be 3 failed, 0 emitted")
@@ -363,9 +457,18 @@ jobs:
                       f"reference accessor {target} native validation must be "
                       f"{expected_status} on {os.environ['RUNNER_OS']}"
                   )
-          directx = checks["directx-vulkan-frontier"]
+          directx = checks["directx-frontier"]
           if (
-              set(directx["directxToolchainSources"])
+              directx["status"]
+              != "passed-with-expected-workgroup-blockers"
+              or set(directx["sources"]) != vulkan_frontier_sources
+              or set(directx["translatedSources"]) != directx_frontier_sources
+              or directx["translatedArtifactCount"] != directx_frontier_count
+              or set(directx["workgroupBlockedSources"])
+              != directx_blocked_sources
+              or directx["workgroupBlockedArtifactCount"]
+              != len(directx_blocked_sources)
+              or set(directx["directxToolchainSources"])
               != directx_frontier_sources
               or directx["directxToolchainArtifactCount"]
               != directx_frontier_count
@@ -375,6 +478,34 @@ jobs:
               != directx_entry_point_count
           ):
               raise SystemExit("DirectX frontier accounting is incomplete")
+          if set(directx["dynamicWorkgroupDispatchEvidence"]) != directx_blocked_sources:
+              raise SystemExit("DirectX workgroup blocker source join is incomplete")
+          if (
+              directx["bfloat16LoweringEvidence"]
+              != MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE
+          ):
+              raise SystemExit("DirectX bfloat16 lowering evidence is incomplete")
+          for source, expected_evidence in MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE.items():
+              observed_evidence = directx["dynamicWorkgroupDispatchEvidence"][source]
+              if (
+                  any(
+                      observed_evidence.get(key) != value
+                      for key, value in expected_evidence.items()
+                  )
+                  or observed_evidence["entryPointCount"]
+                  != directx_blocked_entry_point_counts[source]
+                  or observed_evidence["diagnosticCode"]
+                  != MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE
+                  or observed_evidence["artifactStatus"] != "failed"
+                  or observed_evidence["artifactEmitted"] is not False
+                  or observed_evidence["sourceEntryPointIdentityStatus"]
+                  != "matched-materialized-host-names"
+              ):
+                  raise SystemExit(
+                      f"DirectX workgroup blocker evidence changed for {source}"
+                  )
+          if directx_blocked_entry_point_count != 106:
+              raise SystemExit("expected 106 fail-closed DirectX compute entries")
           if os.environ["RUNNER_OS"] == "Windows":
               if (
                   directx["directxToolchainRequired"] is not True
@@ -393,18 +524,269 @@ jobs:
                       "DirectX frontier toolchain must validate every configured "
                       "source artifact and compute entry"
                   )
-          opengl = checks["opengl-frontier"]
-          if set(opengl["sources"]) != opengl_frontier_sources:
-              raise SystemExit("OpenGL toolchain frontier sources are incomplete")
+          vulkan = checks["vulkan-frontier"]
           if (
-              opengl["sourceCount"] != opengl_frontier_count
+              vulkan["status"] != "passed"
+              or set(vulkan["sources"]) != vulkan_frontier_sources
+              or vulkan["unitCount"] != len(vulkan_frontier_sources)
+              or vulkan["artifactCount"] != len(vulkan_frontier_sources)
+              or vulkan["translatedArtifactCount"]
+              != len(vulkan_frontier_sources)
+              or vulkan["target"] != "vulkan"
+          ):
+              raise SystemExit("Vulkan frontier accounting is incomplete")
+          if os.environ["RUNNER_OS"] == "Linux" and (
+              vulkan["vulkanToolchainRequired"] is not True
+              or vulkan["vulkanValidationStatus"] != "validated"
+              or vulkan["toolchainRuns"] < len(vulkan_frontier_sources)
+          ):
+              raise SystemExit("Vulkan frontier toolchain validation is incomplete")
+          expected_directx_gemv = os.environ["RUNNER_OS"] == "Windows"
+          if (
+              scope["directxGemvCompilerFrontierRequired"]
+              is not expected_directx_gemv
+          ):
+              raise SystemExit("DirectX GEMV compiler-frontier scope is incorrect")
+          if expected_directx_gemv:
+              gemv_directx = checks["gemv-directx-compiler-frontier"]
+              library_run = gemv_directx["libraryCompilerRun"]
+              if (
+                  gemv_directx["status"] != "passed"
+                  or gemv_directx["source"] != MLX_GEMV_SOURCE
+                  or gemv_directx["sourceHash"] != MLX_GEMV_SHA256
+                  or gemv_directx["sourceSizeBytes"] != MLX_GEMV_SOURCE_SIZE_BYTES
+                  or gemv_directx["artifactStatus"] != "translated"
+                  or gemv_directx["artifactPackaging"]
+                  != "single-aggregate-artifact"
+                  or gemv_directx["projectDiagnosticCount"] != 0
+                  or gemv_directx["templateSpecializationCount"] != 225
+                  or gemv_directx["hostNamedMaterializationCount"] != 224
+                  or gemv_directx["unsupportedSpecializationCount"] != 0
+                  or gemv_directx["workgroupSizeRule"]
+                  != gemv_workgroup_size_rule
+                  or gemv_directx["reportWorkgroupSizeRule"]
+                  != gemv_report_workgroup_size_rule
+                  or gemv_directx["reportWorkgroupSizeRuleCount"] != 1
+                  or gemv_directx["reportExecutionEntryCount"] != 224
+                  or gemv_directx["executionIdentityJoinCount"] != 224
+                  or gemv_directx["generatedTargetEntryIdentityCount"] != 224
+                  or gemv_directx["generatedNumthreadsContractCount"] != 224
+                  or gemv_directx["materializationResidueCount"] != 0
+                  or gemv_directx["bareValueDiscardCount"] != 0
+                  or gemv_directx["computeEntryPointCount"] != 224
+                  or gemv_directx["artifactProvenance"]
+                  != {
+                      "intermediate": "crossgl",
+                      "pipeline": "single-file-translate",
+                  }
+                  or gemv_directx["artifactHash"]["algorithm"] != "sha256"
+                  or gemv_directx["artifactSizeBytes"] <= 0
+              ):
+                  raise SystemExit("DirectX GEMV project-artifact evidence is incomplete")
+              resolved_size_counts = {
+                  tuple(item["workgroupSize"]): item["entryCount"]
+                  for item in gemv_directx["resolvedWorkgroupSizeCounts"]
+              }
+              if (
+                  len(gemv_directx["resolvedWorkgroupSizeCounts"])
+                  != len(gemv_resolved_workgroup_sizes)
+                  or gemv_directx["resolvedWorkgroupSizes"]
+                  != [list(size) for size in gemv_resolved_workgroup_sizes]
+                  or set(resolved_size_counts) != set(gemv_resolved_workgroup_sizes)
+                  or sum(resolved_size_counts.values()) != 224
+                  or any(count <= 0 for count in resolved_size_counts.values())
+              ):
+                  raise SystemExit(
+                      "DirectX GEMV resolved workgroup-size evidence is incomplete"
+                  )
+              if (
+                  gemv_directx["entryProfile"] != "cs_6_2"
+                  or gemv_directx["compilerArguments"]
+                  != ["-enable-16bit-types"]
+                  or gemv_directx["minimumShaderModel"] != "6.2"
+                  or gemv_directx["entryProfileCompilerEntryPoints"]
+                  != list(GEMV_DIRECTX_COMPILER_ENTRY_POINTS)
+                  or gemv_directx["entryProfileCompiledEntryPointCount"] != 3
+                  or gemv_directx["entryProfileDiagnosticCount"] != 0
+                  or gemv_directx["entryProfileUnusedValueWarningCount"] != 0
+                  or any(
+                      run["profile"] != "cs_6_2"
+                      or run["compilerArguments"] != ["-enable-16bit-types"]
+                      or run["minimumShaderModel"] != "6.2"
+                      for run in gemv_directx["entryProfileCompilerRuns"]
+                  )
+                  or gemv_directx["libraryProfile"] != "lib_6_6"
+                  or gemv_directx["libraryExports"]
+                  != list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
+                  or gemv_directx["libraryExportCount"] != 224
+                  or library_run["profile"] != "lib_6_6"
+                  or library_run["compilerArguments"]
+                  != ["-enable-16bit-types"]
+                  or library_run["minimumShaderModel"] != "6.2"
+                  or library_run["status"] != "compiled"
+                  or library_run["outputSizeBytes"] <= 0
+                  or library_run["unusedValueWarningCount"] != 0
+                  or gemv_directx["libraryUnusedValueWarningCount"] != 0
+                  or gemv_directx["compilerCoveredEntryPointCount"] != 224
+                  or gemv_directx["uncompiledEntryPointCount"] != 0
+                  or gemv_directx["compilerCoverageStatus"]
+                  != "all-exported-entry-points-compiled"
+              ):
+                  raise SystemExit("DirectX GEMV compiler coverage is incomplete")
+              library_warnings = gemv_directx["libraryAllowedWarnings"]
+              expected_warning_counts = {
+                  f"[numthreads({size[0]}, {size[1]}, {size[2]})]": (
+                      resolved_size_counts[size]
+                  )
+                  for size in gemv_resolved_workgroup_sizes
+              }
+              observed_warning_counts = {}
+              for warning in library_warnings:
+                  source_expression = warning["sourceExpression"]
+                  if (
+                      warning["classification"]
+                      != "library-profile-numthreads-ignored"
+                      or warning["severity"] != "warning"
+                      or warning["message"]
+                      != GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE
+                      or source_expression in observed_warning_counts
+                  ):
+                      raise SystemExit(
+                          "DirectX GEMV compiler warning classification changed"
+                      )
+                  observed_warning_counts[source_expression] = warning["count"]
+              if (
+                  observed_warning_counts != expected_warning_counts
+                  or library_run["allowedWarningCounts"]
+                  != {"libraryNumthreads": 224}
+              ):
+                  raise SystemExit("DirectX GEMV compiler warning evidence changed")
+              if (
+                  gemv_directx["wholeArtifactSemanticValidityClaimed"] is not False
+                  or gemv_directx["libraryExecutionSemanticsEstablished"] is not False
+                  or gemv_directx["observedNumthreadsDirectives"]
+                  != list(expected_warning_counts)
+                  or gemv_directx["numthreadsDirectiveCount"] != 224
+                  or gemv_directx["numthreadsContractEstablished"] is not True
+                  or gemv_directx["exactWorkgroupSizeEstablished"] is not True
+                  or gemv_directx["requiredWaveSize"] != 32
+                  or gemv_directx["requiredWaveSizeEstablished"] is not False
+                  or gemv_directx["executionContractBlockedBy"]
+                  != [GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE]
+                  or gemv_directx["runtimeExecutionAttempted"] is not False
+                  or gemv_directx["runtimeIntegrationIncluded"] is not False
+                  or gemv_directx["numericalParityClaimed"] is not False
+                  or gemv_directx["runtimeParityClaimed"] is not False
+              ):
+                  raise SystemExit("DirectX GEMV execution non-claims changed")
+          elif "gemv-directx-compiler-frontier" in checks:
+              raise SystemExit("DirectX GEMV compiler frontier ran outside Windows")
+          expected_opengl_gemv = os.environ["RUNNER_OS"] == "Linux"
+          if scope["openglGemvFrontierRequired"] is not expected_opengl_gemv:
+              raise SystemExit("OpenGL GEMV frontier scope is incorrect")
+          if expected_opengl_gemv:
+              gemv_opengl = checks["gemv-opengl-frontier"]
+              if (
+                  gemv_opengl["status"] != "blocked-as-expected"
+                  or gemv_opengl["source"] != MLX_GEMV_SOURCE
+                  or gemv_opengl["sourceHash"] != MLX_GEMV_SHA256
+                  or gemv_opengl["artifactStatus"] != "failed"
+                  or gemv_opengl["artifactEmitted"] is not False
+                  or gemv_opengl["emittedTargetFileCount"] != 0
+                  or gemv_opengl["nativeValidationAttempted"] is not False
+                  or gemv_opengl["workgroupSizeRule"]
+                  != gemv_workgroup_size_rule
+                  or gemv_opengl["reportWorkgroupSizeRule"]
+                  != gemv_report_workgroup_size_rule
+                  or gemv_opengl["reportWorkgroupSizeRuleCount"] != 1
+                  or gemv_opengl["workgroupSizeRuleConfigured"] is not True
+                  or gemv_opengl["diagnosticCode"]
+                  != GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE
+                  or gemv_opengl["translationBlockedBy"]
+                  != [GEMV_OPENGL_BACKING_RANGE_ISSUE]
+                  or gemv_opengl["executionContractBlockedBy"]
+                  != [GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE]
+                  or gemv_opengl["trackedIssues"]
+                  != [
+                      GEMV_OPENGL_BACKING_RANGE_ISSUE,
+                      GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
+                  ]
+                  or gemv_opengl["runtimeExecutionAttempted"] is not False
+                  or gemv_opengl["runtimeIntegrationIncluded"] is not False
+                  or gemv_opengl["runnableArtifactClaimed"] is not False
+                  or gemv_opengl["numericalParityClaimed"] is not False
+                  or gemv_opengl["runtimeParityClaimed"] is not False
+              ):
+                  raise SystemExit("OpenGL GEMV fail-closed evidence is incomplete")
+          elif "gemv-opengl-frontier" in checks:
+              raise SystemExit("OpenGL GEMV frontier ran outside Linux")
+          opengl = checks["opengl-frontier"]
+          if (
+              opengl["status"]
+              != "passed-with-expected-workgroup-blockers"
+              or set(opengl["sources"]) != opengl_frontier_sources
+              or opengl["sourceCount"] != opengl_frontier_count
               or opengl["artifactCount"] != opengl_frontier_count
+              or set(opengl["translatedSources"])
+              != opengl_toolchain_frontier_sources
+              or opengl["translatedArtifactCount"]
+              != opengl_toolchain_frontier_count
+              or set(opengl["workgroupBlockedSources"])
+              != opengl_blocked_sources
+              or opengl["workgroupBlockedArtifactCount"]
+              != len(opengl_blocked_sources)
               or opengl["projectDiagnosticCount"] != 0
+              or opengl["expectedProjectErrorCount"]
+              != len(opengl_blocked_sources)
+              or set(opengl["toolchainSources"])
+              != opengl_toolchain_frontier_sources
+              or opengl["trackedIssues"]
+              != [MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE]
+              or opengl["runtimeIntegrationIncluded"] is not False
           ):
               raise SystemExit(
-                  "OpenGL frontier accounting must cover every configured source "
-                  "with one artifact and zero project diagnostics"
+                  "OpenGL target-split frontier accounting is incomplete"
               )
+          opengl_index_evidence = opengl["indexRangeAssertionEvidence"]
+          if (
+              opengl_index_evidence["assertionCount"]
+              != len(MLX_OPENGL_INDEX_RANGE_ASSERTIONS)
+              or opengl_index_evidence["inclusiveBounds"]
+              != {
+                  "minimum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+                  "maximum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+              }
+              or opengl_index_evidence["expressionsBySource"]
+              != {
+                  source: list(expressions)
+                  for source, expressions in (
+                      MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS.items()
+                  )
+              }
+              or opengl_index_evidence["contractKind"]
+              != "explicit-host-runtime-portability-preconditions"
+              or opengl_index_evidence["inferred"] is not False
+              or opengl_index_evidence["runtimeEnforced"] is not False
+          ):
+              raise SystemExit(
+                  "OpenGL index-range portability evidence is incomplete"
+              )
+          opengl_dispatch_evidence = opengl["dynamicWorkgroupDispatchEvidence"]
+          if set(opengl_dispatch_evidence) != opengl_blocked_sources:
+              raise SystemExit("OpenGL workgroup blocker source join is incomplete")
+          for source in opengl_blocked_sources:
+              expected_evidence = MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source]
+              observed_evidence = opengl_dispatch_evidence[source]
+              if any(
+                  observed_evidence.get(key) != value
+                  for key, value in expected_evidence.items()
+              ) or (
+                  observed_evidence["sourceEntryPointIdentityStatus"]
+                  != "matched-materialized-host-names"
+              ):
+                  raise SystemExit(
+                      f"OpenGL workgroup blocker evidence changed for {source}"
+                  )
           if os.environ["RUNNER_OS"] == "Linux":
               validated_sources = set(opengl["toolchainValidatedSources"])
               validation_outputs = set(opengl["nativeValidationOutputs"])
@@ -412,12 +794,12 @@ jobs:
                   opengl["toolchainRequired"] is not True
                   or opengl["nativeValidationStatus"] != "validated"
                   or opengl["toolchainValidatedArtifactCount"]
-                  != opengl_frontier_count
-                  or validated_sources != opengl_frontier_sources
-                  or validation_outputs != opengl_frontier_sources
+                  != opengl_toolchain_frontier_count
+                  or validated_sources != opengl_toolchain_frontier_sources
+                  or validation_outputs != opengl_toolchain_frontier_sources
               ):
                   raise SystemExit(
-                      "OpenGL frontier toolchain must validate every source path"
+                      "OpenGL frontier toolchain must validate every emitted source"
                   )
           PY
 

@@ -843,6 +843,204 @@ def test_plan_runtime_test_manifest_warns_for_unbound_incomplete_layout_resource
     assert plan["summary"]["failedCount"] == 0
 
 
+def test_plan_runtime_test_manifest_accepts_matching_compiled_workgroup_size(tmp_path):
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(
+                entryPoints=[
+                    {
+                        "name": "vector_add",
+                        "stage": "compute",
+                        "workgroupSize": [8, 1, 1],
+                    }
+                ]
+            )
+        ],
+    )
+    fixture = _runtime_fixture(
+        adapter="runtime-check",
+        entryPoint="vector_add",
+        runtimeAdapter={
+            "dispatch": {
+                "entryPoint": "vector_add",
+                "workgroupSize": [8, 1, 1],
+                "globalSize": [16, 1, 1],
+            }
+        },
+    )
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        _native_runtime_manifest(fixture=fixture),
+        project_root=tmp_path,
+    )
+
+    case = plan["testCases"][0]
+    assert case["status"] == "planned"
+    assert case["runtimeExecution"]["dispatch"]["workgroupSize"] == [8, 1, 1]
+    assert all(
+        diagnostic["code"] != "project.runtime-verification.workgroup-size-mismatch"
+        for diagnostic in case["diagnostics"]
+    )
+
+
+def test_plan_runtime_test_manifest_rejects_compiled_workgroup_size_mismatch(tmp_path):
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(
+                id="compiled-vector-add",
+                entryPoints=[
+                    {
+                        "name": "vector_add",
+                        "stage": "compute",
+                        "workgroupSize": [8, 1, 1],
+                        "metadata": {
+                            "workgroupSizeProvenance": "project.workgroupSize"
+                        },
+                    }
+                ],
+            )
+        ],
+    )
+    fixture = _runtime_fixture(
+        adapter="runtime-check",
+        entryPoint="vector_add",
+        runtimeAdapter={
+            "dispatch": {
+                "entryPoint": "vector_add",
+                "workgroupSize": [4, 1, 1],
+                "globalSize": [16, 1, 1],
+            }
+        },
+    )
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        _native_runtime_manifest(fixture=fixture),
+        project_root=tmp_path,
+    )
+
+    case = plan["testCases"][0]
+    diagnostic = next(
+        item
+        for item in case["diagnostics"]
+        if item["code"] == "project.runtime-verification.workgroup-size-mismatch"
+    )
+    assert case["status"] == RUNTIME_FAILED
+    assert case["failurePhase"] == "runtime-setup"
+    assert plan["summary"]["plannedCount"] == 0
+    assert diagnostic["requestedWorkgroupSize"] == [4, 1, 1]
+    assert diagnostic["compiledWorkgroupSize"] == [8, 1, 1]
+    assert diagnostic["selectedEntryPoint"] == "vector_add"
+    assert diagnostic["entryPointSelectionSource"] == "fixture.entryPoint"
+    assert diagnostic["selectedEntryPointProvenance"] == {
+        "source": "fixture.entryPoint",
+        "artifactEntry": {
+            "name": "vector_add",
+            "stage": "compute",
+            "workgroupSize": [8, 1, 1],
+            "metadata": {"workgroupSizeProvenance": "project.workgroupSize"},
+        },
+    }
+
+
+def test_plan_runtime_test_manifest_checks_selected_entry_workgroup_size(tmp_path):
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(
+                entryPoints=[
+                    {
+                        "name": "vector_add",
+                        "stage": "compute",
+                        "workgroupSize": [4, 1, 1],
+                    },
+                    {
+                        "name": "reduce_sum",
+                        "stage": "compute",
+                        "workgroupSize": [16, 1, 1],
+                    },
+                ]
+            )
+        ],
+    )
+    fixture = _runtime_fixture(
+        adapter="runtime-check",
+        entryPoint="reduce_sum",
+        runtimeAdapter={
+            "dispatch": {
+                "entryPoint": "reduce_sum",
+                "workgroupSize": [4, 1, 1],
+                "globalSize": [16, 1, 1],
+            }
+        },
+    )
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        _native_runtime_manifest(fixture=fixture),
+        project_root=tmp_path,
+    )
+
+    case = plan["testCases"][0]
+    diagnostic = next(
+        item
+        for item in case["diagnostics"]
+        if item["code"] == "project.runtime-verification.workgroup-size-mismatch"
+    )
+    assert case["status"] == RUNTIME_FAILED
+    assert diagnostic["selectedEntryPoint"] == "reduce_sum"
+    assert diagnostic["compiledWorkgroupSize"] == [16, 1, 1]
+    assert diagnostic["requestedWorkgroupSize"] == [4, 1, 1]
+    assert diagnostic["entryPointSelectionSource"] == "fixture.entryPoint"
+
+
+@pytest.mark.parametrize(
+    ("compiled_size", "requested_size", "expected_size"),
+    [
+        ([8, 1, 1], None, [8, 1, 1]),
+        (None, [4, 1, 1], [4, 1, 1]),
+    ],
+)
+def test_plan_runtime_test_manifest_completes_missing_workgroup_size_side(
+    tmp_path,
+    compiled_size,
+    requested_size,
+    expected_size,
+):
+    entry_point = {"name": "vector_add", "stage": "compute"}
+    if compiled_size is not None:
+        entry_point["workgroupSize"] = compiled_size
+    dispatch = {"entryPoint": "vector_add", "globalSize": [16, 1, 1]}
+    if requested_size is not None:
+        dispatch["workgroupSize"] = requested_size
+    artifact_report = _artifact_report(
+        tmp_path,
+        [_translated_artifact(entryPoints=[entry_point])],
+    )
+    fixture = _runtime_fixture(
+        adapter="runtime-check",
+        entryPoint="vector_add",
+        runtimeAdapter={"dispatch": dispatch},
+    )
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        _native_runtime_manifest(fixture=fixture),
+        project_root=tmp_path,
+    )
+
+    case = plan["testCases"][0]
+    assert case["status"] == "planned"
+    assert case["runtimeExecution"]["dispatch"]["workgroupSize"] == expected_size
+    assert all(
+        diagnostic["code"] != "project.runtime-verification.workgroup-size-mismatch"
+        for diagnostic in case["diagnostics"]
+    )
+
+
 def test_plan_runtime_test_manifest_scopes_contract_to_fixture_entry_point(tmp_path):
     artifact_report = _artifact_report(
         tmp_path,
@@ -1017,9 +1215,9 @@ def test_plan_runtime_test_manifest_rejects_invalid_artifact_contract_mode(tmp_p
 
 def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path):
     fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
-    artifact_path = tmp_path / "out" / "directx" / "arange.hlsl"
+    artifact_path = tmp_path / "out" / "directx" / "arange" / "arangeuint32.hlsl"
     artifact_path.parent.mkdir(parents=True)
-    artifact_path.write_text("// generated aggregate", encoding="utf-8")
+    artifact_path.write_text("// generated standalone entry", encoding="utf-8")
     artifact_report = {
         "kind": "crosstl-runtime-artifact-manifest",
         "project": {"root": str(tmp_path), "targets": ["directx"]},
@@ -1027,7 +1225,7 @@ def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path)
             {
                 "id": "mlx-arange-generated-directx",
                 "source": "mlx/backend/metal/kernels/arange.metal",
-                "path": "out/directx/arange.hlsl",
+                "path": "out/directx/arange/arangeuint32.hlsl",
                 "target": "directx",
                 "sourceBackend": "metal",
                 "status": "translated",
@@ -1096,14 +1294,14 @@ def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path)
     )
 
     assert manifest["success"] is True
-    assert manifest["tests"][0]["entryPoint"] == "CSMain_3"
+    assert manifest["tests"][0]["entryPoint"] == "CSMain"
     assert manifest["tests"][0]["metadata"]["runtimeMetadata"]["status"] == (
         "incomplete"
     )
     case = plan["testCases"][0]
     assert case["status"] == "planned"
     assert case["runtimeExecution"]["dispatch"] == {
-        "entryPoint": "CSMain_3",
+        "entryPoint": "CSMain",
         "workgroupSize": [1, 1, 1],
         "workgroupCount": [7, 1, 1],
         "globalSize": [7, 1, 1],
@@ -1114,7 +1312,7 @@ def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path)
         "arangeuint32_step_Constants",
         "out_",
     ]
-    assert [binding["binding"]["binding"] for binding in bindings] == [4, 5, 2]
+    assert [binding["binding"]["binding"] for binding in bindings] == [0, 1, 2]
     assert bindings[0]["binding"]["metadata"]["parameterBlock"] == {
         "field": "arangeuint32_start",
         "byteOffset": 0,
@@ -2582,7 +2780,59 @@ def test_runtime_parity_native_directx_adapter_compiles_hlsl(tmp_path):
     )
 
     assert report["results"][0]["status"] == PASSED
-    assert calls[0][:6] == ("/fake/dxc", "-T", "cs_6_0", "-E", "main", "-Fo")
+    assert calls[0][:-2] == ("/fake/dxc", "-T", "cs_6_0", "-E", "main", "-Fo")
+    assert "-enable-16bit-types" not in calls[0]
+    assert Path(calls[0][-2]).name == "add.dxil"
+    assert calls[0][-1] == str(artifact_path.resolve())
+
+
+def test_runtime_parity_native_directx_adapter_enables_native_16bit_hlsl(tmp_path):
+    artifact_path = tmp_path / "out" / "directx" / "debug" / "add.hlsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        "RWStructuredBuffer<uint16_t> output : register(u0);\n"
+        "[numthreads(2,1,1)] void main() { output[0] = uint16_t(1); }\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def passing_command(command, *, input_text=None):
+        assert input_text is None
+        calls.append(command)
+        return {"returncode": 0}
+
+    adapter = DirectXRuntimeParityAdapter(
+        runtime=FakeNativeRuntime(),
+        required_tools=(),
+        supported_platforms=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=passing_command,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(
+            tmp_path,
+            [
+                _native_runtime_artifact(
+                    path="out/directx/debug/add.hlsl", target="directx"
+                )
+            ],
+        ),
+        _native_runtime_manifest(target="directx"),
+        executors={"directx": adapter},
+    )
+
+    assert report["results"][0]["status"] == PASSED
+    assert calls[0][:-2] == (
+        "/fake/dxc",
+        "-T",
+        "cs_6_2",
+        "-enable-16bit-types",
+        "-E",
+        "main",
+        "-Fo",
+    )
+    assert Path(calls[0][-2]).name == "add.dxil"
     assert calls[0][-1] == str(artifact_path.resolve())
 
 

@@ -187,6 +187,185 @@ def test_generated_target_only_backend_aliases_are_visible_as_target_aliases():
     assert backends["wgsl"]["target_aliases"] == ["webgpu"]
 
 
+def test_project_workgroup_size_specialization_support_is_target_scoped():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.workgroup_size_specialization"]
+    backend_ids = {backend["id"] for backend in matrix["backends"]}
+    supported_targets = {"directx", "opengl"}
+    rejection_evidence = (
+        "tests/test_translator/test_project_workgroup_rules.py::def "
+        "test_project_workgroup_rule_rejects_unsupported_target"
+    )
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Per-entry workgroup size specialization"
+    assert set(feature["support"]) == backend_ids
+    assert {
+        backend_id
+        for backend_id, support in feature["support"].items()
+        if support["status"] == "supported"
+    } == supported_targets
+
+    directx = feature["support"]["directx"]
+    assert "[project.workgroup_size_rules]" in directx["notes"]
+    assert "independent numthreads values per entry" in directx["notes"]
+    assert (
+        "tests/test_translator/test_codegen/test_directx_codegen.py::def "
+        "test_hlsl_compute_workgroup_size_projects_declared_source_shape"
+    ) in directx["evidence"]
+
+    opengl = feature["support"]["opengl"]
+    assert "standalone GLSL artifacts with runnable main entry points" in (
+        opengl["notes"]
+    )
+    assert (
+        "tests/test_translator/test_project_workgroup_rules.py::def "
+        "test_project_workgroup_rule_report_rejects_missing_opengl_split"
+    ) in opengl["evidence"]
+    assert (
+        "tests/test_translator/test_codegen/test_GLSL_codegen.py::def "
+        "test_glsl_compute_workgroup_size_projects_declared_source_shape"
+    ) in opengl["evidence"]
+
+    for backend_id, support in feature["support"].items():
+        assert "shader/kernel artifact" in support["notes"]
+        assert "runtime execution and numerical parity are not claimed" in (
+            support["notes"]
+        )
+        if backend_id in supported_targets:
+            assert support["status"] == "supported"
+            assert (
+                "tests/test_translator/test_project_workgroup_rules.py::def "
+                "test_project_workgroup_rules_emit_directx_library_and_opengl_entries"
+            ) in support["evidence"]
+        else:
+            assert support["status"] == "validated_rejection"
+            assert rejection_evidence in support["evidence"]
+            assert (
+                "project.translate.workgroup-size-rule-unsupported-target"
+                in support["notes"]
+            )
+
+
+def test_project_execution_contract_documentation_has_focused_evidence():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    workgroup_evidence = {
+        (
+            "tests/test_translator/test_project_workgroup_rules.py::def "
+            "test_project_workgroup_size_materializes_each_host_named_entry"
+        ),
+        (
+            "tests/test_translator/test_project_workgroup_rules.py::def "
+            "test_project_workgroup_size_variants_keep_host_entry_identities_"
+            "and_replay"
+        ),
+        (
+            "tests/test_translator/test_project_workgroup_rules.py::def "
+            "test_project_workgroup_size_keeps_ordinary_multi_entry_aggregate_closed"
+        ),
+    }
+    runtime_evidence = {
+        (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_plan_runtime_test_manifest_rejects_compiled_workgroup_size_"
+            "mismatch"
+        ),
+        (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_plan_runtime_test_manifest_completes_missing_workgroup_size_side"
+        ),
+    }
+    for backend in ("directx", "opengl"):
+        assert workgroup_evidence <= set(
+            features["project.workgroup_size_specialization"]["support"][backend][
+                "evidence"
+            ]
+        )
+        assert runtime_evidence <= set(
+            features["project.runtime_test_manifest"]["support"][backend]["evidence"]
+        )
+
+    docs = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
+        encoding="utf-8"
+    )
+    normalized_docs = " ".join(docs.split())
+    assert "host-named template materialization" in normalized_docs
+    assert (
+        "sources without that deterministic materialization identity" in normalized_docs
+    )
+    assert "project.runtime-verification.workgroup-size-mismatch" in normalized_docs
+    assert "either missing side of the runtime contract can be" in normalized_docs
+
+
+def test_project_subgroup_width_specialization_support_is_target_scoped():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.subgroup_width_specialization"]
+    backend_ids = {backend["id"] for backend in matrix["backends"]}
+    rejection_evidence = (
+        "tests/test_translator/test_project_subgroup_width_rules.py::def "
+        "test_subgroup_width_rules_fail_closed_without_target_enforcement"
+    )
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Per-entry subgroup width specialization"
+    assert set(feature["support"]) == backend_ids
+    assert {
+        backend_id
+        for backend_id, support in feature["support"].items()
+        if support["status"] == "supported"
+    } == {"directx"}
+
+    directx = feature["support"]["directx"]
+    assert "[project.subgroup_width_rules]" in directx["notes"]
+    assert "single-value WaveSize(width)" in directx["notes"]
+    assert "cs_6_6 profile requirement" in directx["notes"]
+    assert "exact widths 4, 8, 16, 32, 64, and 128" in directx["notes"]
+    assert (
+        "tests/test_translator/test_project_subgroup_width_rules.py::def "
+        "test_subgroup_width_rules_emit_exact_directx_contract"
+    ) in directx["evidence"]
+    assert (
+        "tests/test_translator/test_project_subgroup_width_rules.py::def "
+        "test_directx_exact_wave_size_profile_boundary"
+    ) in directx["evidence"]
+
+    opengl = feature["support"]["opengl"]
+    assert opengl["status"] == "validated_rejection"
+    assert "opengl-enforcement-unavailable" in opengl["notes"]
+    assert "no GLSL artifact is emitted" in opengl["notes"]
+
+    for backend_id, support in feature["support"].items():
+        assert "shader/kernel artifact" in support["notes"]
+        assert "runtime execution and numerical parity are not established" in (
+            support["notes"]
+        )
+        if backend_id == "directx":
+            assert support["status"] == "supported"
+        else:
+            assert support["status"] == "validated_rejection"
+            assert rejection_evidence in support["evidence"]
+            assert (
+                "project.translate.subgroup-width-enforcement-unsupported"
+                in support["notes"]
+            )
+            assert "execution.subgroup-width-specialization" in support["notes"]
+
+
 def test_project_report_inspection_is_first_class_support_feature():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(
@@ -957,6 +1136,64 @@ def test_project_runtime_loader_manifest_is_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_runtime_loader_manifest_json_writes_output"
         ) in backend_support["evidence"]
+
+
+def test_project_runtime_variant_registry_documents_execution_key_schema_v2():
+    catalog = json.loads(
+        (ROOT / "support" / "features.json").read_text(encoding="utf-8")
+    )
+    features = {feature["id"]: feature for feature in catalog["features"]}
+    feature = features["project.runtime_variant_registry"]
+    execution_evidence = {
+        (
+            "tests/test_translator/test_runtime_variant_registry.py::def "
+            "test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact"
+        ),
+        (
+            "tests/test_translator/test_runtime_variant_registry.py::def "
+            "test_runtime_variant_execution_uses_only_the_selected_entry"
+        ),
+        (
+            "tests/test_translator/test_runtime_variant_registry.py::def "
+            "test_runtime_variant_subgroup_width_distinguishes_exact_variants"
+        ),
+        (
+            "tests/test_translator/test_runtime_variant_registry.py::def "
+            "test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs"
+        ),
+        (
+            "tests/test_translator/test_runtime_variant_registry.py::def "
+            "test_runtime_variant_key_rejects_legacy_schema_with_migration_error"
+        ),
+    }
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime variant registry"
+    for backend_support in feature["support"].values():
+        notes = backend_support["notes"]
+        assert backend_support["status"] == "supported"
+        assert "canonical crosstl-rvk2 exact keys" in notes
+        assert "selected binding-interface entry point" in notes
+        assert "workgroupSize and subgroupWidth" in notes
+        assert "unavailable values remain null" in notes
+        assert "exact available execution alternatives" in notes
+        assert "legacy crosstl-rvk1 keys" in notes
+        assert "regenerate both the key and registry" in notes
+        assert "selection and packaging metadata" in notes
+        assert "runtime execution and numerical parity are not established" in notes
+        assert execution_evidence <= set(backend_support["evidence"])
+
+    docs = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
+        encoding="utf-8"
+    )
+    normalized_docs = " ".join(docs.split())
+    assert "runtime variant key schema is version 2" in normalized_docs
+    assert "selected binding-interface entry point's execution identity" in (
+        normalized_docs
+    )
+    assert "availableExecutionAlternatives" in normalized_docs
+    assert "regenerate both the key and registry" in normalized_docs
+    assert "numerical parity are not established by the registry" in normalized_docs
 
 
 def test_project_runtime_test_manifest_is_first_class_support_feature():

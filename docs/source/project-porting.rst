@@ -197,8 +197,8 @@ Vulkan smoke checks validate binary ``.spv`` artifacts with ``spirv-val`` and
 assemble textual ``.spvasm`` artifacts with ``spirv-as -o`` pointed at the
 platform null device.
 
-Entry-Scoped OpenGL Artifacts
------------------------------
+Entry-Scoped Compute Artifacts
+------------------------------
 
 Repositories can request a standalone artifact for one materialized source
 entry by adding a repository-relative selector table to ``crosstl.toml``:
@@ -208,24 +208,137 @@ entry by adding a repository-relative selector table to ``crosstl.toml``:
    [project]
    include = ["kernels/arange.metal"]
    include_dirs = ["."]
-   targets = ["opengl"]
+   targets = ["directx", "opengl"]
    output_dir = "crosstl-out"
 
    [project.entry_points]
    "kernels/arange.metal" = "arangeuint32"
 
-For OpenGL compute output, the selected source entry is emitted as target entry
-``main``. A source such as ``kernels/arange.metal`` produces
-``crosstl-out/opengl/kernels/arange/arangeuint32.glsl``. The portability report
-records the source entry, target entry, and reflected stage on the artifact;
-embedded validation records carry the same identity. Runtime artifact manifests
-then reflect only the selected stage interface from that standalone output.
+For DirectX compute output, the selected source entry is emitted as target entry
+``CSMain``. A source such as ``kernels/arange.metal`` produces
+``crosstl-out/directx/kernels/arange/arangeuint32.hlsl``. The standalone HLSL
+retains only the selected entry's reachable helpers, resources, constants, and
+execution contract. Explicit registers and spaces remain unchanged, while
+runtime-loader metadata records the selected ``cs_6_0`` entry profile.
+
+For OpenGL compute output, the same selection produces
+``crosstl-out/opengl/kernels/arange/arangeuint32.glsl`` with target entry
+``main``. For both targets, the portability report records the source entry,
+target entry, and reflected stage on the artifact; embedded validation records
+carry the same identity. Runtime artifact manifests then reflect only the
+selected stage interface from that standalone output.
 
 Selection is exact after source materialization. Missing or ambiguous entries
 fail with structured diagnostics and no target file. Targets that do not yet
 implement standalone entry generation also fail explicitly instead of pruning
 an aggregate artifact. When ``project.entry_points`` is absent, project
 translation keeps the existing aggregate output path and behavior.
+
+Project Index-Range Assertions
+------------------------------
+
+Some source index types cannot be represented directly by a target's legal
+scalar index types. When the application already constrains an index at the
+host or runtime boundary, record that precondition in ``crosstl.toml``:
+
+.. code-block:: toml
+
+   [[project.index_range_assertions]]
+   source = "kernels/*.metal"
+   function = "gather_values"
+   expression = "element_index"
+   minimum = 0
+   maximum = 1023
+
+Each assertion table has these fields:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - Field
+     - Meaning
+   * - ``source``
+     - Repository-relative source glob. The assertion is considered only for
+       matching translation units; omitting it defaults to ``*``.
+   * - ``function``
+     - Optional exact source function name. When omitted, the assertion can
+       apply in any function containing the matching expression.
+   * - ``expression``
+     - Source index expression covered by the assertion. Matching ignores
+       whitespace but otherwise preserves the expression identity.
+   * - ``minimum``
+     - Inclusive integer lower bound for the expression.
+   * - ``maximum``
+     - Inclusive integer upper bound for the expression. It must not be less
+       than ``minimum``.
+
+Index-range assertions are explicit host/runtime portability preconditions.
+CrossGL does not infer, emit, or enforce them at runtime. It uses an assertion
+only to justify a semantics-preserving target index conversion when the full
+asserted range is legal for the target representation and indexed extent. An
+assertion does not clamp, wrap, or otherwise redefine out-of-range source
+values; the application remains responsible for satisfying the precondition on
+every execution.
+
+The portability report records the configured tables under
+``project.indexRangeAssertions`` and their count under
+``project.indexRangeAssertionCount``. Report consumers can therefore audit the
+host/runtime assumptions used during translation alongside the generated
+artifacts.
+
+Exact DirectX bfloat16 Contract
+-------------------------------
+
+Exact DirectX bfloat16 lowering preserves bfloat16 storage and conversion
+semantics instead of substituting IEEE half precision. When generated HLSL uses
+native 16-bit storage, its artifact and runtime metadata advertise DirectX 12,
+a minimum Shader Model of 6.2, and entry profiles such as ``cs_6_2``. DXC
+validation and runtime loader commands for that HLSL require
+``-enable-16bit-types``; application-specific compiler wrappers and build
+commands must preserve the same option.
+
+Successful artifacts that use this path record a ``bfloat16Lowering`` object
+with ``status`` set to ``exact``, ``approximationUsed`` set to ``false``, and
+the register, storage, and rounding representations used by the generated
+HLSL. This keeps exact lowering distinct from a compile-only half-precision
+substitution in machine-readable reports.
+
+If an operation cannot be lowered with exact bfloat16 semantics, translation
+fails closed with a structured
+``project.translate.directx-bfloat16-unsupported`` diagnostic. Its
+``details.bfloat16Lowering`` record identifies available context such as the
+target profile, operation, source type, and reason instead of silently changing
+precision or behavior.
+
+These compiler requirements and diagnostics define an artifact contract only.
+They do not imply automatic host runtime or backend integration: CrossGL does
+not modify application loader code, configure a DirectX backend, bind
+resources, or wire generated artifacts into a framework.
+
+Fail-Closed Pointer Provenance
+------------------------------
+
+Targets that cannot represent a source pointer directly must prove its backing
+storage and composed offset before emitting an artifact. For workgroup storage,
+that proof includes the concrete backing declaration, entry-point ownership,
+element extent and type, offset composition through helper calls, and the
+affected materialization or specialization. Dynamic backing selection,
+unresolved offsets, incompatible declarations, escaped identity, and
+cross-entry ownership fail closed instead of producing target code with altered
+aliasing or synchronization behavior.
+
+When the target exception provides provenance, an OpenGL workgroup-pointer
+diagnostic records the available ``function``, ``parameter``, ``backingName``,
+``offsetExpression``, ``materializationName``, and ``reason`` values under
+``details.workgroupPointer``. Unavailable values are omitted so consumers can
+distinguish retained evidence from assumptions. The surrounding diagnostic
+also identifies the source path, intended artifact, target, and missing target
+capability.
+
+This report contract localizes translation work and preserves actionable
+evidence. It does not establish whole-repository semantic parity, rewrite host
+runtime integration, or prove execution correctness for a framework or corpus.
 
 Project scan, report, and translation commands also accept repeatable
 ``--source-root``, ``--include-dir``, ``--define``, and ``--source-override``
@@ -569,6 +682,17 @@ The contract fields are intentionally limited to kernel execution metadata:
      - Expected pre-run, runtime, post-run, or comparison checks that a
        downstream executor should perform or report as skipped/unavailable.
 
+Runtime planning scopes artifact execution metadata to the selected compiled
+entry before merging the fixture's requested adapter contract. When both the
+selected entry and requested dispatch provide a concrete workgroup size, the
+values must match. A mismatch produces
+``project.runtime-verification.workgroup-size-mismatch`` during runtime setup,
+records both sizes and the selected-entry provenance, and leaves the test case
+unplanned. When only one side provides the size, the planner carries that value
+into the merged dispatch, so either missing side of the runtime contract can be
+completed from the other. This completion does not hide a disagreement when
+both sides are present.
+
 Downstream runtimes implement the ``RuntimeAdapter`` protocol or subclass
 ``RuntimeExecutor`` and receive the merged contract in ``run(request)``. For
 example, an MLX validation adapter can consume translated Metal artifacts and
@@ -712,14 +836,19 @@ package or loader manifest:
      --output runtime-variant-registry.json
 
 Runtime variant registries emit a schema-v1
-``crosstl-runtime-variant-registry`` JSON document. Each ``variants`` entry is
-indexed by a canonical ``crosstl-rvk1:`` key: URL-safe base64 without padding
-over canonical JSON containing the source unit and source entry, target and
-target profile, type and value template arguments, specialization constant
-IDs and values, and defines. Key fields are sorted before encoding, registry
-records and target summaries are ordered by key, and ``registryHash`` covers
-the key schema and records. Equivalent input records therefore produce the
-same registry regardless of package or loader record order.
+``crosstl-runtime-variant-registry`` JSON document whose runtime variant key
+schema is version 2. Each ``variants`` entry is indexed by a canonical
+``crosstl-rvk2:`` key: URL-safe base64 without padding over canonical JSON
+containing the source unit and source entry, target and target profile, the
+selected binding-interface entry point's execution identity, type and value
+template arguments, specialization constant IDs and values, and defines. The
+``execution`` identity contains ``workgroupSize`` and ``subgroupWidth``; each
+field remains ``null`` when the selected entry does not provide an exact value.
+Unselected entry points and project-level aggregate metadata do not affect the
+key. Key fields are sorted before encoding, registry records and target
+summaries are ordered by key, and ``registryHash`` covers the key schema and
+records. Equivalent input records therefore produce the same registry
+regardless of package or loader record order.
 
 Each registry record preserves source and target names separately and maps the
 exact key to the target artifact path, format, hash and byte size, target entry
@@ -737,10 +866,15 @@ key contract, and ``lookup_runtime_variant`` performs exact lookup with the
 available keys included in not-found diagnostics. Lookup validates the closed
 registry schema, ``registryHash``, canonical key-to-record identity, and record
 eligibility before returning a ready artifact. Modified or malformed registry
-records fail as invalid rather than participating in selection. This slice has
-no implicit defaults or best-match behavior. Target compilation, deferred
-compilation, host runtime dispatch, and device execution remain host-runtime
-work for later slices; the registry does not simulate them.
+records fail as invalid rather than participating in selection. When the
+non-execution identity matches but the requested execution identity does not,
+the diagnostic reports ``requestedExecution`` and the exact
+``availableExecutionAlternatives`` with their keys, status, workgroup size,
+and subgroup width. There is no fallback to one of those alternatives. Legacy
+``crosstl-rvk1:`` keys are rejected with guidance to regenerate both the key
+and registry. This remains deterministic selection and packaging metadata;
+target compilation, deferred compilation, host runtime dispatch, device
+execution, and numerical parity are not established by the registry.
 
 Build deterministic host loader scaffold metadata from a runtime loader
 manifest:
@@ -923,12 +1057,19 @@ configuration contract is intentionally small:
    output_dir = "crosstl-out"
    include_dirs = ["shaders/include"]
    external_corpus_manifest = "external-corpus.json"
+   workgroup_size = [32, 8, 4]
 
    [project.sources]
    "legacy/**/*.shader" = "cgl"
 
    [project.defines]
    USE_FAST_PATH = "1"
+
+   [project.workgroup_size_rules]
+   "kernels/gemv.metal" = ["32", "BN", "BM"]
+
+   [project.subgroup_width_rules]
+   "kernels/wave.metal" = "WIDTH"
 
    [project.source_options.metal]
    max_template_specializations = 2048
@@ -945,6 +1086,7 @@ configuration contract is intentionally small:
 
    [project.variants.debug]
    USE_FAST_PATH = "0"
+   workgroup_size = [32, 4, 8]
 
    [project.specialization_constants]
    useFastPath = true
@@ -1006,6 +1148,140 @@ the selected variant override, project value, or source default and fails closed
 without emitting HLSL when a required value is missing, conflicting, or
 incompatible with the source type.
 
+``project.workgroup_size`` defines one concrete local workgroup size as exactly
+three positive integers in X, Y, Z order. A named variant can override it with
+``project.variants.<name>.workgroup_size``. Workgroup-size entries are execution
+metadata, not preprocessor defines. They therefore do not enter the artifact
+define map, while each named size still produces its own variant path and
+deterministic execution identity.
+
+For DirectX and OpenGL translation from Metal, a concrete
+``project.workgroup_size`` or
+``project.variants.<name>.workgroup_size`` can specialize every compute entry
+produced by deterministic, host-named template materialization. This requires
+a complete one-to-one join between emitted compute stages and materialization
+records using their stable ``hostName`` and ``materializedName`` identities.
+Every joined entry receives the configured size for that project variant.
+DirectX preserves the entries in one HLSL library artifact, while OpenGL emits
+one standalone ``main`` artifact per entry. Their execution records retain the
+source, materialized, and target entry identities together with
+``project-config`` or ``project-variant`` provenance.
+
+``[project.workgroup_size_rules]`` defines repository-relative, source-specific
+workgroup sizes for materialized compute entries. Each key is a source path
+pattern and each value contains three integral expressions in X, Y, Z order.
+An exact path takes precedence over a glob; otherwise the most specific matching
+pattern is selected. Expressions may use the concrete parameters recorded for
+each host-named template materialization and the integer operators supported by
+the Metal constant-expression evaluator. They are evaluated with signed 64-bit
+intermediate bounds. Calls, casts, member access, unknown identifiers,
+non-integral parameters or literals, unsigned width-dependent arithmetic,
+overflow, division by zero, and non-positive results fail closed with a
+structured workgroup-rule diagnostic.
+
+Rule evaluation joins emitted compute entries to materialization records by the
+stable ``hostName`` and ``materializedName`` identities. Record order is not
+significant. Every host-named record must be matched exactly once; missing,
+duplicate, conflicting, or unmatched records fail the artifact. Helper
+materializations without ``hostName`` remain provenance records and are not
+reported as runnable entries. The source is materialized and parsed once per
+target, after which a distinct size is applied to each matched compute stage.
+
+For DirectX and OpenGL project translation, a consumed Metal
+``[[threads_per_threadgroup]]`` parameter requires this concrete configuration
+or equivalent concrete source execution metadata. Translation emits
+``[numthreads(x, y, z)]`` and the matching OpenGL local-size declaration from
+the same canonical value. A scalar source parameter observes ``.x``, a
+two-component parameter observes ``.xy``, and a three-component parameter
+retains all components. Missing, malformed, non-positive, target-limit-
+exceeding, or conflicting values fail the artifact with an
+``execution-specialization`` diagnostic instead of using a default local size.
+
+DirectX can package several materialized compute entries in one HLSL artifact.
+Each exported entry receives its own ``numthreads`` declaration and retains its
+source, materialized, and target entry identities. Standard OpenGL GLSL exposes
+one runnable ``main`` entry, so project translation emits one independently
+runnable artifact per source entry. Each OpenGL artifact records only its own
+entry in ``execution`` and maps that entry to ``main``. Its source-wide template
+materialization metadata retains the complete host identity set so report
+validation and artifact-matrix inspection reject a missing split artifact.
+Helper wrappers are not presented as runnable OpenGL entries.
+
+The fixed ``project.workgroup_size`` contract remains available for genuinely
+single-entry artifacts, source metadata proving a shared size, and the complete
+host-named materialization join described above. Merely configuring one size
+does not prove an ordinary multi-entry aggregate safe: sources without that
+deterministic materialization identity remain ambiguous and fail closed instead
+of applying the value to every entry. Missing, duplicate, conflicting, or
+unmatched host records also fail closed. A multi-entry OpenGL source is still
+packaged as separate runnable artifacts even when every entry uses the same
+size, and translation fails if the artifact model cannot represent that split.
+
+Targets that do not implement per-entry workgroup specialization reject a
+matching rule before source materialization or target generation. The failed
+artifact and structured ``execution-specialization`` diagnostic retain the
+selected rule, target, and supported target set so the configuration cannot be
+silently ignored.
+
+Successful artifact records include an ``execution`` object with the canonical
+``workgroupSize``, affected ``sourceEntryPoints``, configuration or source
+``provenance``, and a SHA-256 ``identity``. Report validation recomputes that
+identity, and runtime artifact manifests preserve the execution object alongside
+reflected target dispatch metadata. Workgroup size is independent of subgroup
+width; the project pipeline does not infer or record a subgroup requirement from
+any workgroup dimension.
+
+Rule-based artifacts instead record an ``execution.entryPoints`` array. Each
+entry includes the source, materialized, and target entry names, evaluated
+dimensions, exact expression rule, concrete parameter values and provenance,
+the joined materialization identity, and a deterministic SHA-256 identity. The
+aggregate execution identity covers the complete entry array and rule
+provenance. Report validation re-evaluates every expression, verifies the
+materialization join and hashes, and checks the generated target entry metadata.
+These records describe shader or kernel translation and dispatch requirements;
+they do not rewrite framework runtime code or establish numerical runtime
+parity.
+
+``[project.subgroup_width_rules]`` defines repository-relative,
+source-specific exact subgroup widths for materialized compute entries. Each
+key is a source path pattern and each value is one bounded integral expression.
+Pattern selection, materialization joins, expression syntax, parameter
+provenance, and signed 64-bit evaluation follow the per-entry workgroup rule
+contract. The expression must resolve independently for every host-named
+materialized entry; unknown or non-integral parameters, invalid arithmetic,
+non-positive results, missing materializations, and ambiguous joins fail the
+artifact with a structured ``execution-specialization`` diagnostic.
+
+DirectX currently enforces this contract for exact widths ``4``, ``8``,
+``16``, ``32``, ``64``, and ``128``. Every generated target entry receives one
+single-value ``[WaveSize(width)]`` attribute, and its execution metadata records
+a ``cs_6_6`` profile requirement. Report validation re-evaluates the expression
+against the recorded template materialization, verifies deterministic entry and
+execution identities, and checks the generated ``WaveSize`` and shader-profile
+contract. A subgroup-width rule can accompany a per-entry workgroup-size rule;
+both must resolve to the same materialized entry identities.
+
+OpenGL cannot enforce an exact subgroup width through this project contract, so
+a matching rule fails before GLSL generation with
+``project.translate.subgroup-width-enforcement-unsupported`` and reason
+``opengl-enforcement-unavailable``. Every other target currently fails closed
+with the same diagnostic and reason ``target-not-supported``. These failures
+record the missing ``execution.subgroup-width-specialization`` capability, rule
+provenance, and the supported target set without emitting a misleading target
+artifact.
+
+Subgroup-width specialization establishes a compiler-facing shader contract
+only. It does not dispatch device work, verify hardware support, integrate a
+host runtime, or establish numerical parity. Workgroup dimensions also remain
+independent and do not imply a subgroup width.
+
+For example, the host code at pinned MLX commit
+``4367c73b60541ddd5a266ce4644fd93d20223b6e`` selects GEMV tile parameters per
+entry and dispatches ``(32, BN, BM)``. That is evidence for distinct per-entry
+workgroup variants. The leading ``32`` remains the X workgroup dimension and is
+not evidence of a required subgroup width. This repository example does not
+change the backend-neutral configuration contract.
+
 The pinned MLX project-porting gate applies this contract to
 ``mlx/backend/metal/kernels/rms_norm.metal`` at commit
 ``4367c73b60541ddd5a266ce4644fd93d20223b6e``. Its DirectX project declares two
@@ -1016,8 +1292,8 @@ DXC on Windows. Its unconfigured OpenGL project checks deferred
 ``layout(constant_id = 20)`` emission and validates generated OpenGL SPIR-V on
 Linux. This proves translation and native compilation only; it does not claim
 RMSNorm numerical runtime parity or full MLX test-suite support. Numerical
-execution additionally requires the entry-point workgroup-size specialization
-contract tracked in ``CrossGL/crosstl#1750``.
+execution also requires host dispatch values to match each compiled artifact's
+workgroup-size contract.
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Project
@@ -1330,7 +1606,8 @@ Project reports are JSON documents with:
   source-root status records and status counts, include/exclude
   patterns, targets, output directory, source override map, include
   directories, include-directory status records and status counts, define and
-  variant maps, project and per-variant specialization constant maps,
+  variant maps, project and per-variant specialization constant maps, project
+  and per-variant workgroup sizes,
   per-variant define and specialization constant counts, and counts for source
   roots, include patterns, exclude patterns, source overrides, include
   directories, defines, variants, and project specialization constants.
@@ -1406,6 +1683,11 @@ Project reports are JSON documents with:
   state, effective values, and value provenance, plus
   ``specializationMaterialization`` metadata that distinguishes native deferred
   specialization from a concrete CrossGL variant.
+  Artifacts with a concrete workgroup-size contract carry an ``execution``
+  record with canonical dimensions, source entry points, provenance, and a
+  deterministic identity. Full report validation rejects malformed dimensions,
+  unknown variant provenance, or an identity that does not match the artifact
+  source, target, variant, entries, and dimensions.
   Successful artifact records in full reports must include file-level
   source-map anchors. Generated CrossGL artifacts also include a
   compiler-compatible ``source-remap`` sidecar with a file-level

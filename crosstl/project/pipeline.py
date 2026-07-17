@@ -25,6 +25,12 @@ from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, T
 
 from crosstl._crosstl import translate
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.project.directx_toolchain import (
+    directx_target_profiles_for_source,
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+    hlsl_requires_native_16bit_types,
+)
 from crosstl.project.host_reflection import (
     empty_host_interface_record,
     host_interface_record,
@@ -34,11 +40,26 @@ from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
 )
+from crosstl.translator.ast import (
+    AttributeNode,
+    IdentifierNode,
+    LiteralNode,
+    PrimitiveType,
+)
 from crosstl.translator.codegen import (
     backend_names,
     get_backend_extension,
+    get_codegen,
     normalize_backend_name,
 )
+from crosstl.translator.codegen.index_range_contracts import (
+    IndexRangeAssertion,
+    parse_index_range_assertions,
+)
+from crosstl.translator.codegen.pointer_reinterpret import (
+    validate_pointer_reinterpretation_target,
+)
+from crosstl.translator.default_arguments import lower_default_arguments
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
@@ -157,14 +178,39 @@ RUNTIME_VARIANT_REGISTRY_NON_GOALS = (
     "target-compilation",
     "deferred-compilation-execution",
 )
-RUNTIME_VARIANT_KEY_PREFIX = "crosstl-rvk1:"
-RUNTIME_VARIANT_KEY_ENCODING = "base64url-canonical-json-v1"
+RUNTIME_VARIANT_KEY_PREFIX = "crosstl-rvk2:"
+RUNTIME_VARIANT_KEY_ENCODING = "base64url-canonical-json-v2"
+_RUNTIME_VARIANT_LEGACY_KEY_PREFIX = "crosstl-rvk1:"
+RUNTIME_VARIANT_KEY_EXECUTION_FIELDS = frozenset(
+    (
+        "workgroupSize",
+        "subgroupWidth",
+    )
+)
+_RUNTIME_VARIANT_WORKGROUP_SIZE_FIELDS = (
+    "numthreads",
+    "workgroup_size",
+    "workgroupSize",
+    "local_size",
+)
+_RUNTIME_VARIANT_LOCAL_SIZE_FIELDS = (
+    "local_size_x",
+    "local_size_y",
+    "local_size_z",
+)
+_RUNTIME_VARIANT_SUBGROUP_WIDTH_FIELDS = (
+    "subgroupWidth",
+    "subgroup_width",
+    "waveSize",
+    "wave_size",
+)
 RUNTIME_VARIANT_KEY_FIELDS = frozenset(
     (
         "sourceUnit",
         "sourceEntry",
         "target",
         "targetProfile",
+        "execution",
         "typeArguments",
         "valueArguments",
         "specializationConstants",
@@ -374,6 +420,7 @@ RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS = frozenset(
         "entryPoint",
         "templateMaterialization",
         "specializationMaterialization",
+        "execution",
         "sourceHash",
         "sourceSizeBytes",
         "hash",
@@ -943,6 +990,7 @@ RUNTIME_VARIANT_REGISTRY_RECORD_FIELDS = frozenset(
         "arguments",
         "defines",
         "specializationConstants",
+        "execution",
         "bindingInterface",
         "artifact",
         "provenance",
@@ -1384,6 +1432,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "entryPointSelectionCount",
         "sourceOptions",
         "sourceOptionCount",
+        "indexRangeAssertions",
+        "indexRangeAssertionCount",
         "includeDirs",
         "includeDirCount",
         "includeDirStatus",
@@ -1397,6 +1447,12 @@ REPORT_PROJECT_FIELDS = frozenset(
         "specializationConstantCount",
         "variantSpecializationConstants",
         "variantSpecializationConstantCounts",
+        "workgroupSize",
+        "variantWorkgroupSizes",
+        "workgroupSizeRules",
+        "workgroupSizeRuleCount",
+        "subgroupWidthRules",
+        "subgroupWidthRuleCount",
         "selectedVariants",
         "externalCorpusManifest",
     )
@@ -1411,6 +1467,13 @@ SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
+WORKGROUP_SIZE_CONFIG_KEY = "workgroup_size"
+WORKGROUP_SIZE_RULES_CONFIG_KEY = "workgroup_size_rules"
+WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY = "execution.workgroup-size-specialization"
+WORKGROUP_SIZE_SPECIALIZATION_TARGETS = frozenset(("directx", "opengl"))
+SUBGROUP_WIDTH_RULES_CONFIG_KEY = "subgroup_width_rules"
+SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY = "execution.subgroup-width-specialization"
+DIRECTX_EXACT_SUBGROUP_WIDTHS = frozenset((4, 8, 16, 32, 64, 128))
 DEFERRED_SPECIALIZATION_TARGETS = frozenset(
     ("cgl", "crossgl", "metal", "opengl", "vulkan")
 )
@@ -1625,7 +1688,18 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "specializationMaterialization",
         "templateMaterialization",
         "requiredCapabilities",
+        "bfloat16Lowering",
         "entryPoint",
+        "execution",
+    )
+)
+REPORT_ARTIFACT_BFLOAT16_LOWERING_FIELDS = frozenset(
+    (
+        "status",
+        "approximationUsed",
+        "registerRepresentation",
+        "storageRepresentation",
+        "roundingMode",
     )
 )
 WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG = {
@@ -1657,6 +1731,48 @@ REPORT_ARTIFACT_INCLUDE_DEPENDENCY_PROCESSING_FIELDS = frozenset(
 REPORT_HASH_FIELDS = frozenset(("algorithm", "value"))
 REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(("pipeline", "intermediate"))
 REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
+REPORT_ARTIFACT_EXECUTION_FIELDS = frozenset(
+    (
+        "workgroupSize",
+        "sourceEntryPoints",
+        "entryPoints",
+        "provenance",
+        "subgroupWidthProvenance",
+        "subgroupWidthEnforcement",
+        "identity",
+    )
+)
+REPORT_ARTIFACT_EXECUTION_PROVENANCE_FIELDS = frozenset(("kind", "path", "variant"))
+REPORT_ARTIFACT_EXECUTION_ENTRY_FIELDS = frozenset(
+    (
+        "sourceEntryPoint",
+        "materializedEntryPoint",
+        "targetEntryPoint",
+        "workgroupSize",
+        "subgroupWidth",
+        "rule",
+        "subgroupWidthRule",
+        "parameters",
+        "parameterSources",
+        "materialization",
+        "identity",
+    )
+)
+REPORT_ARTIFACT_EXECUTION_RULE_FIELDS = frozenset(
+    ("components", "sourcePattern", "path")
+)
+REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_RULE_FIELDS = frozenset(
+    ("expression", "sourcePattern", "path")
+)
+REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_ENFORCEMENT_FIELDS = frozenset(
+    ("mechanism", "minimumShaderModel", "entryProfiles")
+)
+REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_PROFILE_FIELDS = frozenset(
+    ("entryPoint", "profile")
+)
+REPORT_ARTIFACT_EXECUTION_MATERIALIZATION_FIELDS = frozenset(
+    ("name", "hostName", "materializedName")
+)
 REPORT_ARTIFACT_SOURCE_REMAP_FIELDS = frozenset(
     (
         "schemaVersion",
@@ -1853,6 +1969,9 @@ VALIDATION_TOOLCHAIN_RUN_FIELDS = frozenset(
     )
 )
 VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS = frozenset(("artifact", "tool-availability"))
+PROJECT_REPORT_DIAGNOSTIC_CHECK_KINDS = frozenset(
+    (*VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS, "execution-specialization")
+)
 SOURCE_MAP_SPAN_FIELDS = (
     "file",
     "line",
@@ -2762,6 +2881,7 @@ DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE = {
     "ps": "ps_6_4",
     "gs": "gs_6_4",
 }
+DIRECTX_DXC_EXACT_WAVE_SIZE_MIN_PROFILE_BY_STAGE = {"cs": "cs_6_6"}
 DIRECTX_HLSL_FUNCTION_RE = re.compile(
     r"(?P<attributes>(?:\s*\[[^\]]+\]\s*)*)"
     r"(?P<return_type>(?:[A-Za-z_][\w:<>,]*\s+)+?)"
@@ -2778,6 +2898,19 @@ DIRECTX_HLSL_SHADER_ATTR_RE = re.compile(
     r"\[\s*shader\s*\(\s*\"([^\"]+)\"\s*\)\s*\]", re.IGNORECASE
 )
 DIRECTX_HLSL_NUMTHREADS_RE = re.compile(r"\[\s*numthreads\s*\(", re.IGNORECASE)
+DIRECTX_HLSL_NUMTHREADS_VALUES_RE = re.compile(
+    r"\[\s*numthreads\s*\(\s*(?P<x>[^,\]]+)\s*,\s*"
+    r"(?P<y>[^,\]]+)\s*,\s*(?P<z>[^,\]]+)\s*\)\s*\]",
+    re.IGNORECASE,
+)
+DIRECTX_HLSL_EXACT_WAVE_SIZE_RE = re.compile(
+    r"\[\s*WaveSize\s*\(\s*(?P<width>[^,\]]+)\s*\)\s*\]",
+    re.IGNORECASE,
+)
+DIRECTX_HLSL_WAVE_SIZE_RE = re.compile(
+    r"\[\s*WaveSize\s*\((?P<arguments>[^\]]*)\)\s*\]",
+    re.IGNORECASE,
+)
 DIRECTX_HLSL_SEMANTIC_RE = re.compile(
     r":\s*(?P<semantic>[A-Za-z_]\w*)\b", re.IGNORECASE
 )
@@ -3420,6 +3553,104 @@ def _as_specialization_value_mapping(
     return result
 
 
+def _as_workgroup_size(
+    value: Any,
+    *,
+    field_name: str,
+) -> tuple[int, int, int] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise ValueError(f"{field_name} must be an array of three positive integers")
+    values = list(value)
+    if len(values) != 3:
+        raise ValueError(f"{field_name} must contain exactly three values")
+    if any(not isinstance(item, int) or isinstance(item, bool) for item in values):
+        raise ValueError(f"{field_name} values must be integers")
+    if any(item <= 0 for item in values):
+        raise ValueError(f"{field_name} values must be positive")
+    return values[0], values[1], values[2]
+
+
+def _as_workgroup_size_rules(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, tuple[str, str, str]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+
+    result: dict[str, tuple[str, str, str]] = {}
+    for raw_pattern, raw_components in value.items():
+        if not isinstance(raw_pattern, str) or not raw_pattern.strip():
+            raise ValueError(f"{field_name} keys must be non-empty source patterns")
+        pattern = _normalize_project_relative_path(raw_pattern)
+        component_path = _mapping_key_path(field_name, pattern)
+        if not isinstance(raw_components, Sequence) or isinstance(
+            raw_components, (str, bytes, bytearray)
+        ):
+            raise ValueError(
+                f"{component_path} must be an array of three integral expressions"
+            )
+        raw_values = list(raw_components)
+        if len(raw_values) != 3:
+            raise ValueError(f"{component_path} must contain exactly three values")
+        components: list[str] = []
+        for index, component in enumerate(raw_values):
+            if isinstance(component, int) and not isinstance(component, bool):
+                components.append(str(component))
+                continue
+            if isinstance(component, str) and component.strip():
+                components.append(component.strip())
+                continue
+            raise ValueError(
+                f"{component_path}[{index}] must be an integer or non-empty "
+                "integral expression"
+            )
+        normalized = (components[0], components[1], components[2])
+        existing = result.get(pattern)
+        if existing is not None and existing != normalized:
+            raise ValueError(
+                f"{field_name} contains conflicting normalized pattern '{pattern}'"
+            )
+        result[pattern] = normalized
+    return result
+
+
+def _as_subgroup_width_rules(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+    result: dict[str, str] = {}
+    for raw_pattern, raw_expression in value.items():
+        if not isinstance(raw_pattern, str) or not raw_pattern.strip():
+            raise ValueError(f"{field_name} keys must be non-empty source patterns")
+        pattern = _normalize_project_relative_path(raw_pattern)
+        expression_path = _mapping_key_path(field_name, pattern)
+        if isinstance(raw_expression, int) and not isinstance(raw_expression, bool):
+            expression = str(raw_expression)
+        elif isinstance(raw_expression, str) and raw_expression.strip():
+            expression = raw_expression.strip()
+        else:
+            raise ValueError(
+                f"{expression_path} must be an integer or non-empty integral expression"
+            )
+        existing = result.get(pattern)
+        if existing is not None and existing != expression:
+            raise ValueError(
+                f"{field_name} contains conflicting normalized pattern '{pattern}'"
+            )
+        result[pattern] = expression
+    return result
+
+
 def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
     for name, value in variants.items():
@@ -3434,7 +3665,11 @@ def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
             {
                 key: item
                 for key, item in value.items()
-                if key != SPECIALIZATION_CONSTANTS_CONFIG_KEY
+                if key
+                not in {
+                    SPECIALIZATION_CONSTANTS_CONFIG_KEY,
+                    WORKGROUP_SIZE_CONFIG_KEY,
+                }
             },
             field_name=f"crosstl.toml [{variant_path}]",
         )
@@ -3461,6 +3696,28 @@ def _variant_specialization_constants(
         )
         if specializations:
             result[name] = specializations
+    return result
+
+
+def _variant_workgroup_sizes(
+    variants: Mapping[str, Any],
+) -> dict[str, tuple[int, int, int]]:
+    result: dict[str, tuple[int, int, int]] = {}
+    for name, value in variants.items():
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(value, Mapping)
+            or WORKGROUP_SIZE_CONFIG_KEY not in value
+        ):
+            continue
+        variant_path = _mapping_key_path("project.variants", name)
+        workgroup_size = _as_workgroup_size(
+            value.get(WORKGROUP_SIZE_CONFIG_KEY),
+            field_name=f"crosstl.toml [{variant_path}].{WORKGROUP_SIZE_CONFIG_KEY}",
+        )
+        if workgroup_size is not None:
+            result[name] = workgroup_size
     return result
 
 
@@ -7091,8 +7348,15 @@ class ProjectConfig:
     variant_specialization_constants: Mapping[str, Mapping[str, Any]] = field(
         default_factory=dict
     )
+    workgroup_size: Sequence[int] | None = None
+    variant_workgroup_sizes: Mapping[str, Sequence[int]] = field(default_factory=dict)
+    workgroup_size_rules: Mapping[str, Sequence[str | int]] = field(
+        default_factory=dict
+    )
+    subgroup_width_rules: Mapping[str, str | int] = field(default_factory=dict)
     selected_variants: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
+    index_range_assertions: Sequence[Any] = ()
 
     def __post_init__(self) -> None:
         root_path = _filesystem_path_arg(self.root, field_name="ProjectConfig.root")
@@ -7180,10 +7444,30 @@ class ProjectConfig:
                 self.source_options, field_name="ProjectConfig.source_options"
             ),
         )
+        assertions = parse_index_range_assertions(
+            self.index_range_assertions,
+            field_name="ProjectConfig.index_range_assertions",
+        )
+        object.__setattr__(
+            self,
+            "index_range_assertions",
+            tuple(
+                replace(
+                    assertion,
+                    source=(
+                        assertion.source
+                        if assertion.source == "*"
+                        else _normalize_project_relative_path(assertion.source)
+                    ),
+                )
+                for assertion in assertions
+            ),
+        )
         if not isinstance(self.variants, Mapping):
             raise ValueError("ProjectConfig.variants must be a mapping")
         variants: dict[str, dict[str, str]] = {}
         nested_variant_specializations: dict[str, dict[str, Any]] = {}
+        nested_variant_workgroup_sizes: dict[str, tuple[int, int, int]] = {}
         for name, defines in self.variants.items():
             if not isinstance(name, str) or not name.strip():
                 raise ValueError(
@@ -7198,11 +7482,23 @@ class ProjectConfig:
                     f"{SPECIALIZATION_CONSTANTS_CONFIG_KEY}"
                 ),
             )
+            nested_workgroup_size = _as_workgroup_size(
+                defines.get(WORKGROUP_SIZE_CONFIG_KEY),
+                field_name=(
+                    f"ProjectConfig.variants.{name}.{WORKGROUP_SIZE_CONFIG_KEY}"
+                ),
+            )
+            if nested_workgroup_size is not None:
+                nested_variant_workgroup_sizes[name] = nested_workgroup_size
             variants[name] = _as_str_mapping(
                 {
                     key: value
                     for key, value in defines.items()
-                    if key != SPECIALIZATION_CONSTANTS_CONFIG_KEY
+                    if key
+                    not in {
+                        SPECIALIZATION_CONSTANTS_CONFIG_KEY,
+                        WORKGROUP_SIZE_CONFIG_KEY,
+                    }
                 },
                 field_name=f"ProjectConfig.variants.{name}",
             )
@@ -7253,6 +7549,69 @@ class ProjectConfig:
             self,
             "variant_specialization_constants",
             merged_variant_specializations,
+        )
+        object.__setattr__(
+            self,
+            "workgroup_size",
+            _as_workgroup_size(
+                self.workgroup_size,
+                field_name="ProjectConfig.workgroup_size",
+            ),
+        )
+        if not isinstance(self.variant_workgroup_sizes, Mapping):
+            raise ValueError("ProjectConfig.variant_workgroup_sizes must be a mapping")
+        explicit_variant_workgroup_sizes: dict[str, tuple[int, int, int]] = {}
+        for name, value in self.variant_workgroup_sizes.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(
+                    "ProjectConfig.variant_workgroup_sizes keys must be "
+                    "non-empty strings"
+                )
+            workgroup_size = _as_workgroup_size(
+                value,
+                field_name=f"ProjectConfig.variant_workgroup_sizes.{name}",
+            )
+            if workgroup_size is not None:
+                explicit_variant_workgroup_sizes[name] = workgroup_size
+            variants.setdefault(name, {})
+        conflicts = [
+            name
+            for name in (
+                nested_variant_workgroup_sizes.keys()
+                & explicit_variant_workgroup_sizes.keys()
+            )
+            if nested_variant_workgroup_sizes[name]
+            != explicit_variant_workgroup_sizes[name]
+        ]
+        if conflicts:
+            raise ValueError(
+                "ProjectConfig variant workgroup sizes conflict for: "
+                + ", ".join(sorted(conflicts))
+            )
+        object.__setattr__(self, "variants", variants)
+        object.__setattr__(
+            self,
+            "variant_workgroup_sizes",
+            {
+                **nested_variant_workgroup_sizes,
+                **explicit_variant_workgroup_sizes,
+            },
+        )
+        object.__setattr__(
+            self,
+            "workgroup_size_rules",
+            _as_workgroup_size_rules(
+                self.workgroup_size_rules,
+                field_name="ProjectConfig.workgroup_size_rules",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "subgroup_width_rules",
+            _as_subgroup_width_rules(
+                self.subgroup_width_rules,
+                field_name="ProjectConfig.subgroup_width_rules",
+            ),
         )
         if self.external_corpus_manifest is not None:
             external_corpus_manifest = _path_string_arg(
@@ -7434,6 +7793,68 @@ class MetalSourceMaterializationError(ValueError):
             self.missing_capabilities = tuple(diagnostic.missing_capabilities)
             self.source_location = diagnostic.location
             self.details = dict(diagnostic.details)
+
+
+class ProjectWorkgroupSizeError(ValueError):
+    """A project artifact cannot satisfy its concrete workgroup-size contract."""
+
+    missing_capabilities = (WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY,)
+    check_kind = "execution-specialization"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        reason: str,
+        source_entry_points: Sequence[str] = (),
+        workgroup_size: Sequence[int] | None = None,
+        source_workgroup_size: Sequence[int] | None = None,
+        source_location: Any = None,
+        rule_details: Mapping[str, Any] | None = None,
+        materialization_details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.project_diagnostic_code = code
+        self.reason = reason
+        self.source_entry_points = tuple(source_entry_points)
+        self.workgroup_size = (
+            tuple(workgroup_size) if workgroup_size is not None else None
+        )
+        self.source_workgroup_size = (
+            tuple(source_workgroup_size) if source_workgroup_size is not None else None
+        )
+        self.source_location = source_location
+        self.rule_details = dict(rule_details or {})
+        self.materialization_details = dict(materialization_details or {})
+
+
+class ProjectSubgroupWidthError(ValueError):
+    """A project artifact cannot enforce an exact subgroup-width contract."""
+
+    missing_capabilities = (SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY,)
+    check_kind = "execution-specialization"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        reason: str,
+        source_entry_points: Sequence[str] = (),
+        subgroup_width: int | None = None,
+        source_subgroup_width: int | None = None,
+        rule_details: Mapping[str, Any] | None = None,
+        materialization_details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.project_diagnostic_code = code
+        self.reason = reason
+        self.source_entry_points = tuple(source_entry_points)
+        self.subgroup_width = subgroup_width
+        self.source_subgroup_width = source_subgroup_width
+        self.rule_details = dict(rule_details or {})
+        self.materialization_details = dict(materialization_details or {})
 
 
 def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
@@ -7721,6 +8142,21 @@ def _scan_pattern_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                 missing_capabilities=["artifact.entry-point-selection"],
             )
         )
+    for pattern in config.workgroup_size_rules:
+        if _is_repository_relative_glob(pattern):
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.config.workgroup-size-rule-pattern-outside-project",
+                message=(
+                    f"Configured workgroup-size rule pattern '{pattern}' is not "
+                    "repository-relative."
+                ),
+                location=location,
+                missing_capabilities=[WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY],
+            )
+        )
     if config.source_overrides:
         register_default_sources()
         discover_backend_plugins()
@@ -7926,6 +8362,11 @@ class ProjectPortabilityReport:
                     for name, options in sorted(self.config.source_options.items())
                 },
                 "sourceOptionCount": len(self.config.source_options),
+                "indexRangeAssertions": [
+                    assertion.to_json()
+                    for assertion in self.config.index_range_assertions
+                ],
+                "indexRangeAssertionCount": len(self.config.index_range_assertions),
                 "includeDirs": list(self.config.include_dirs),
                 "includeDirCount": len(self.config.include_dirs),
                 "includeDirStatus": include_dir_status,
@@ -7957,6 +8398,28 @@ class ProjectPortabilityReport:
                         self.config.variant_specialization_constants
                     )
                 ),
+                "workgroupSize": (
+                    list(self.config.workgroup_size)
+                    if self.config.workgroup_size is not None
+                    else None
+                ),
+                "variantWorkgroupSizes": {
+                    name: list(workgroup_size)
+                    for name, workgroup_size in sorted(
+                        self.config.variant_workgroup_sizes.items()
+                    )
+                },
+                "workgroupSizeRules": {
+                    pattern: list(components)
+                    for pattern, components in sorted(
+                        self.config.workgroup_size_rules.items()
+                    )
+                },
+                "workgroupSizeRuleCount": len(self.config.workgroup_size_rules),
+                "subgroupWidthRules": dict(
+                    sorted(self.config.subgroup_width_rules.items())
+                ),
+                "subgroupWidthRuleCount": len(self.config.subgroup_width_rules),
                 "selectedVariants": list(self.config.selected_variants),
                 "externalCorpusManifest": self.config.external_corpus_manifest,
             },
@@ -8092,6 +8555,10 @@ def load_project_config(
         project.get("source_options"),
         field_name="crosstl.toml [project.source_options]",
     )
+    index_range_assertions = parse_index_range_assertions(
+        project.get("index_range_assertions"),
+        field_name="crosstl.toml [project.index_range_assertions]",
+    )
     entry_points = _as_non_empty_str_mapping(
         project.get("entry_points"),
         field_name="crosstl.toml [project.entry_points]",
@@ -8102,6 +8569,18 @@ def load_project_config(
     specialization_constants = _as_specialization_value_mapping(
         project.get(SPECIALIZATION_CONSTANTS_CONFIG_KEY),
         field_name=(f"crosstl.toml [project.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"),
+    )
+    workgroup_size = _as_workgroup_size(
+        project.get(WORKGROUP_SIZE_CONFIG_KEY),
+        field_name=f"crosstl.toml [project].{WORKGROUP_SIZE_CONFIG_KEY}",
+    )
+    workgroup_size_rules = _as_workgroup_size_rules(
+        project.get(WORKGROUP_SIZE_RULES_CONFIG_KEY),
+        field_name=f"crosstl.toml [project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}]",
+    )
+    subgroup_width_rules = _as_subgroup_width_rules(
+        project.get(SUBGROUP_WIDTH_RULES_CONFIG_KEY),
+        field_name=f"crosstl.toml [project.{SUBGROUP_WIDTH_RULES_CONFIG_KEY}]",
     )
     output_dir = _as_optional_non_empty_str(
         project.get("output_dir"),
@@ -8147,11 +8626,16 @@ def load_project_config(
         variants=_variant_defines(variants),
         specialization_constants=specialization_constants,
         variant_specialization_constants=_variant_specialization_constants(variants),
+        workgroup_size=workgroup_size,
+        variant_workgroup_sizes=_variant_workgroup_sizes(variants),
+        workgroup_size_rules=workgroup_size_rules,
+        subgroup_width_rules=subgroup_width_rules,
         selected_variants=_as_str_list(
             project.get("selected_variants"),
             field_name="project.selected_variants",
         ),
         external_corpus_manifest=external_corpus_manifest,
+        index_range_assertions=index_range_assertions,
     )
 
 
@@ -8284,6 +8768,52 @@ def _entry_point_selection_diagnostics(
     ]
 
 
+def _workgroup_size_rule_diagnostics(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+) -> list[ProjectDiagnostic]:
+    unit_paths = [unit.relative_path for unit in units]
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.config.workgroup-size-rule-pattern-unmatched",
+            message=(
+                f"Configured workgroup-size rule pattern '{pattern}' does not "
+                "match a discovered translation unit."
+            ),
+            location=_config_location(config),
+            missing_capabilities=[WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY],
+            details={"pattern": pattern, "components": list(components)},
+        )
+        for pattern, components in config.workgroup_size_rules.items()
+        if _is_repository_relative_glob(pattern)
+        and not any(fnmatch.fnmatch(path, pattern) for path in unit_paths)
+    ]
+
+
+def _subgroup_width_rule_diagnostics(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+) -> list[ProjectDiagnostic]:
+    unit_paths = [unit.relative_path for unit in units]
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.config.subgroup-width-rule-pattern-unmatched",
+            message=(
+                f"Configured subgroup-width rule pattern '{pattern}' does not "
+                "match a discovered translation unit."
+            ),
+            location=_config_location(config),
+            missing_capabilities=[SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY],
+            details={"pattern": pattern, "expression": expression},
+        )
+        for pattern, expression in config.subgroup_width_rules.items()
+        if _is_repository_relative_glob(pattern)
+        and not any(fnmatch.fnmatch(path, pattern) for path in unit_paths)
+    ]
+
+
 def scan_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -8406,6 +8936,8 @@ def scan_project(
         _external_corpus_source_backend_mismatch_diagnostics(scan_config, units)
     )
     diagnostics.extend(_entry_point_selection_diagnostics(scan_config, units))
+    diagnostics.extend(_workgroup_size_rule_diagnostics(scan_config, units))
+    diagnostics.extend(_subgroup_width_rule_diagnostics(scan_config, units))
     if not units:
         diagnostics.append(
             ProjectDiagnostic(
@@ -8480,6 +9012,17 @@ def _unit_artifact_source_path(unit: Any) -> str | None:
     if _is_non_empty_string(source) and _is_report_identity_path(source):
         return source
     return None
+
+
+def _index_range_assertions_for_unit(
+    config: ProjectConfig, relative_path: str
+) -> tuple[IndexRangeAssertion, ...]:
+    normalized_path = _normalize_project_relative_path(relative_path)
+    return tuple(
+        assertion
+        for assertion in config.index_range_assertions
+        if assertion.source == "*" or fnmatch.fnmatch(normalized_path, assertion.source)
+    )
 
 
 def _artifact_source_suffix_pairs(
@@ -8677,7 +9220,1124 @@ def _config_with_selected_variants(
             for name in selected
             if name in config.variant_specialization_constants
         },
+        variant_workgroup_sizes={
+            name: config.variant_workgroup_sizes[name]
+            for name in selected
+            if name in config.variant_workgroup_sizes
+        },
         selected_variants=tuple(selected),
+    )
+
+
+def _configured_workgroup_size(
+    config: ProjectConfig,
+    variant: str | None,
+) -> tuple[tuple[int, int, int] | None, dict[str, Any] | None]:
+    if variant is not None and variant in config.variant_workgroup_sizes:
+        return config.variant_workgroup_sizes[variant], {
+            "kind": "project-variant",
+            "path": (
+                f"{_mapping_key_path('project.variants', variant)}."
+                f"{WORKGROUP_SIZE_CONFIG_KEY}"
+            ),
+            "variant": variant,
+        }
+    if config.workgroup_size is not None:
+        return config.workgroup_size, {
+            "kind": "project-config",
+            "path": f"project.{WORKGROUP_SIZE_CONFIG_KEY}",
+        }
+    return None, None
+
+
+def _configured_workgroup_size_rule(
+    config: ProjectConfig,
+    relative_path: str,
+) -> tuple[str, tuple[str, str, str], dict[str, Any]] | None:
+    normalized_path = _normalize_project_relative_path(relative_path)
+    matches = [
+        (pattern, components)
+        for pattern, components in config.workgroup_size_rules.items()
+        if fnmatch.fnmatch(normalized_path, pattern)
+    ]
+    if not matches:
+        return None
+    pattern, components = max(
+        matches,
+        key=lambda item: _entry_point_selector_priority(item[0], normalized_path),
+    )
+    path = _mapping_key_path(
+        f"project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}",
+        pattern,
+    )
+    return (
+        pattern,
+        components,
+        {
+            "kind": "materialized-template-rule",
+            "path": path,
+        },
+    )
+
+
+def _configured_subgroup_width_rule(
+    config: ProjectConfig,
+    relative_path: str,
+) -> tuple[str, str, dict[str, Any]] | None:
+    normalized_path = _normalize_project_relative_path(relative_path)
+    matches = [
+        (pattern, expression)
+        for pattern, expression in config.subgroup_width_rules.items()
+        if fnmatch.fnmatch(normalized_path, pattern)
+    ]
+    if not matches:
+        return None
+    pattern, expression = max(
+        matches,
+        key=lambda item: _entry_point_selector_priority(item[0], normalized_path),
+    )
+    return (
+        pattern,
+        expression,
+        {
+            "kind": "materialized-template-rule",
+            "path": _mapping_key_path(
+                f"project.{SUBGROUP_WIDTH_RULES_CONFIG_KEY}", pattern
+            ),
+        },
+    )
+
+
+def _unsupported_subgroup_width_rule_target_error(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+) -> ProjectSubgroupWidthError | None:
+    configured = _configured_subgroup_width_rule(config, unit.relative_path)
+    if configured is None or target == "directx":
+        return None
+    pattern, expression, provenance = configured
+    reason = (
+        "opengl-enforcement-unavailable"
+        if target == "opengl"
+        else "target-not-supported"
+    )
+    return ProjectSubgroupWidthError(
+        f"Target '{target}' cannot enforce an exact subgroup width.",
+        code="project.translate.subgroup-width-enforcement-unsupported",
+        reason=reason,
+        rule_details={
+            "path": provenance["path"],
+            "sourcePattern": pattern,
+            "expression": expression,
+            "target": target,
+            "supportedTargets": ["directx"],
+        },
+    )
+
+
+def _unsupported_workgroup_size_rule_target_error(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+) -> ProjectWorkgroupSizeError | None:
+    if target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS:
+        return None
+    configured = _configured_workgroup_size_rule(config, unit.relative_path)
+    if configured is None:
+        return None
+    pattern, components, provenance = configured
+    return ProjectWorkgroupSizeError(
+        f"Per-entry workgroup-size rules are not supported for target '{target}'.",
+        code="project.translate.workgroup-size-rule-unsupported-target",
+        reason="target-not-supported",
+        rule_details={
+            "path": provenance["path"],
+            "sourcePattern": pattern,
+            "components": list(components),
+            "target": target,
+            "supportedTargets": sorted(WORKGROUP_SIZE_SPECIALIZATION_TARGETS),
+        },
+    )
+
+
+def _workgroup_execution_identity(
+    *,
+    source: str,
+    target: str,
+    variant: str | None,
+    source_entry_points: Sequence[str],
+    workgroup_size: Sequence[int],
+) -> dict[str, str]:
+    payload = {
+        "source": source,
+        "target": target,
+        "variant": variant,
+        "sourceEntryPoints": sorted(source_entry_points),
+        "workgroupSize": list(workgroup_size),
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return {"algorithm": "sha256", "value": hashlib.sha256(encoded).hexdigest()}
+
+
+def _canonical_contract_hash(value: Any) -> dict[str, str]:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return {"algorithm": "sha256", "value": hashlib.sha256(encoded).hexdigest()}
+
+
+class _ProjectWorkgroupRuleExpressionError(ValueError):
+    def __init__(self, message: str, *, reason: str, identifier: str | None = None):
+        super().__init__(message)
+        self.reason = reason
+        self.identifier = identifier
+
+
+def _evaluate_project_bounded_integer_expression(
+    expression: str,
+    parameters: Mapping[str, str],
+) -> int:
+    text = str(expression).strip()
+    if not text:
+        raise _ProjectWorkgroupRuleExpressionError(
+            "workgroup-size rule expression is empty",
+            reason="empty-expression",
+        )
+    if re.search(r"(?:->|::|\.)", text):
+        reason = (
+            "non-integral-expression"
+            if re.search(r"(?:^|[^A-Za-z0-9_])\d+\.\d", text)
+            else "member-access-unsupported"
+        )
+        raise _ProjectWorkgroupRuleExpressionError(
+            "workgroup-size rule expressions do not allow member access or "
+            "floating-point values",
+            reason=reason,
+        )
+    if re.search(r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(", text):
+        raise _ProjectWorkgroupRuleExpressionError(
+            "workgroup-size rule expressions do not allow calls or casts",
+            reason="call-unsupported",
+        )
+
+    identifiers = sorted(set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", text)))
+    unknown = [identifier for identifier in identifiers if identifier not in parameters]
+    if unknown:
+        raise _ProjectWorkgroupRuleExpressionError(
+            f"unknown workgroup-size rule identifier '{unknown[0]}'",
+            reason="unknown-identifier",
+            identifier=unknown[0],
+        )
+
+    replacements = {name: f"({parameters[name]})" for name in identifiers}
+    expanded, _changed = _metal_rewrite_identifier_tokens(text, replacements)
+    if re.search(r"(?:->|::|\.)", expanded):
+        raise _ProjectWorkgroupRuleExpressionError(
+            "materialized workgroup-size parameter is not integral",
+            reason="non-integral-parameter",
+        )
+    if re.search(r"\b[A-Za-z_][A-Za-z0-9_]*\b", expanded):
+        raise _ProjectWorkgroupRuleExpressionError(
+            "materialized workgroup-size parameter is not a concrete integer",
+            reason="non-integral-parameter",
+        )
+    tokens = _metal_integer_constant_expression_tokens(expanded)
+    if not tokens:
+        raise _ProjectWorkgroupRuleExpressionError(
+            "workgroup-size rule is not a bounded integral expression",
+            reason="invalid-expression",
+        )
+    if any(token[0].isdigit() and re.search(r"[uU]", token) for token in tokens):
+        raise _ProjectWorkgroupRuleExpressionError(
+            "unsigned workgroup-size expressions require width-dependent arithmetic",
+            reason="unsigned-arithmetic-unsupported",
+        )
+    try:
+        return _MetalIntegerConstantExpressionParser(tokens, checked=True).parse()
+    except OverflowError as exc:
+        raise _ProjectWorkgroupRuleExpressionError(
+            "workgroup-size rule expression overflowed signed 64-bit arithmetic",
+            reason="overflow",
+        ) from exc
+    except ValueError as exc:
+        reason = (
+            "division-by-zero"
+            if "division by zero" in str(exc)
+            else "invalid-expression"
+        )
+        raise _ProjectWorkgroupRuleExpressionError(
+            f"workgroup-size rule expression is invalid: {exc}",
+            reason=reason,
+        ) from exc
+
+
+def _workgroup_rule_entry_identity(
+    *,
+    source: str,
+    source_hash: Mapping[str, Any],
+    target: str,
+    variant: str | None,
+    entry: Mapping[str, Any],
+) -> dict[str, str]:
+    payload = {
+        "source": source,
+        "sourceHash": dict(source_hash),
+        "target": target,
+        "variant": variant,
+        "entry": {key: entry[key] for key in sorted(entry) if key != "identity"},
+    }
+    return _canonical_contract_hash(payload)
+
+
+def _workgroup_rule_execution_identity(
+    *,
+    source: str,
+    source_hash: Mapping[str, Any],
+    target: str,
+    variant: str | None,
+    source_entry_points: Sequence[str],
+    entry_points: Sequence[Mapping[str, Any]],
+    provenance: Mapping[str, Any],
+) -> dict[str, str]:
+    return _canonical_contract_hash(
+        {
+            "source": source,
+            "sourceHash": dict(source_hash),
+            "target": target,
+            "variant": variant,
+            "sourceEntryPoints": list(source_entry_points),
+            "entryPoints": [dict(entry) for entry in entry_points],
+            "provenance": dict(provenance),
+        }
+    )
+
+
+def _subgroup_rule_execution_identity(
+    *,
+    source: str,
+    source_hash: Mapping[str, Any],
+    target: str,
+    variant: str | None,
+    execution: Mapping[str, Any],
+) -> dict[str, str]:
+    return _canonical_contract_hash(
+        {
+            "source": source,
+            "sourceHash": dict(source_hash),
+            "target": target,
+            "variant": variant,
+            "execution": {
+                key: execution[key] for key in sorted(execution) if key != "identity"
+            },
+        }
+    )
+
+
+def _target_entry_points_for_crossgl_stages(
+    ast: Any,
+    target: str,
+    stages: Sequence[Any],
+) -> dict[str, str]:
+    if target == "opengl":
+        return {
+            str(getattr(getattr(stage, "entry_point", None), "name", "main")): "main"
+            for stage in stages
+        }
+    if target != "directx":
+        return {}
+    codegen = get_codegen(target)
+    stage_entry_names = codegen.stage_entry_names(ast)
+    result: dict[str, str] = {}
+    for stage in stages:
+        function = getattr(stage, "entry_point", None)
+        if function is None:
+            continue
+        source_name = str(getattr(function, "name", "main"))
+        target_name = stage_entry_names.get(id(function))
+        if not _is_non_empty_string(target_name):
+            target_name = codegen.stage_entry_base_name("compute", function)
+        result[source_name] = str(target_name)
+    return result
+
+
+def _workgroup_materialization_join(
+    *,
+    stages: Sequence[Any],
+    materialization: Mapping[str, Any] | None,
+    missing_message: str,
+    contract_details: Mapping[str, Any],
+) -> list[tuple[Any, Mapping[str, Any]]]:
+    specializations = (
+        materialization.get("specializations")
+        if isinstance(materialization, Mapping)
+        else None
+    )
+    if not isinstance(specializations, list):
+        raise ProjectWorkgroupSizeError(
+            missing_message,
+            code="project.translate.workgroup-size-materialization-invalid",
+            reason="materialization-records-missing",
+            rule_details=contract_details,
+        )
+
+    host_records: list[tuple[int, Mapping[str, Any]]] = []
+    helper_aliases: dict[str, list[int]] = {}
+    aliases: dict[str, list[int]] = {}
+    for index, record in enumerate(specializations):
+        if not isinstance(record, Mapping):
+            continue
+        host_name = record.get("hostName")
+        materialized_name = record.get("materializedName")
+        if not _is_non_empty_string(host_name):
+            if _is_non_empty_string(materialized_name):
+                helper_aliases.setdefault(str(materialized_name), []).append(index)
+            continue
+        if not _is_non_empty_string(materialized_name):
+            raise ProjectWorkgroupSizeError(
+                "Host-named materialization is missing a stable materialized name.",
+                code="project.translate.workgroup-size-materialization-invalid",
+                reason="materialized-name-missing",
+                materialization_details={"recordIndex": index, "hostName": host_name},
+            )
+        host_records.append((index, record))
+        for alias in {str(host_name), str(materialized_name)}:
+            aliases.setdefault(alias, []).append(index)
+
+    records_by_index = dict(host_records)
+    joined: list[tuple[Any, Mapping[str, Any]]] = []
+    used_records: dict[int, str] = {}
+    for stage in stages:
+        function = getattr(stage, "entry_point", None)
+        entry_name = str(getattr(function, "name", "main"))
+        candidate_indexes = sorted(set(aliases.get(entry_name, [])))
+        if not candidate_indexes:
+            reason = (
+                "helper-only-materialization"
+                if helper_aliases.get(entry_name)
+                else "entry-materialization-missing"
+            )
+            raise ProjectWorkgroupSizeError(
+                f"Compute entry point '{entry_name}' does not resolve to exactly "
+                "one host-named materialization.",
+                code="project.translate.workgroup-size-materialization-invalid",
+                reason=reason,
+                source_entry_points=(entry_name,),
+                materialization_details={
+                    "entryPoint": entry_name,
+                    "helperRecordIndexes": helper_aliases.get(entry_name, []),
+                },
+            )
+        if len(candidate_indexes) != 1:
+            raise ProjectWorkgroupSizeError(
+                f"Compute entry point '{entry_name}' matches duplicate "
+                "materialization identities.",
+                code="project.translate.workgroup-size-materialization-invalid",
+                reason="duplicate-entry-materialization",
+                source_entry_points=(entry_name,),
+                materialization_details={
+                    "entryPoint": entry_name,
+                    "recordIndexes": candidate_indexes,
+                },
+            )
+        record_index = candidate_indexes[0]
+        if record_index in used_records:
+            raise ProjectWorkgroupSizeError(
+                "One materialization identity cannot own multiple emitted compute "
+                "entry points.",
+                code="project.translate.workgroup-size-materialization-invalid",
+                reason="conflicting-entry-materialization",
+                source_entry_points=(used_records[record_index], entry_name),
+                materialization_details={
+                    "recordIndex": record_index,
+                    "entryPoints": [used_records[record_index], entry_name],
+                },
+            )
+        used_records[record_index] = entry_name
+        joined.append((stage, records_by_index[record_index]))
+    unmatched_indexes = sorted(set(records_by_index) - set(used_records))
+    if unmatched_indexes:
+        unmatched = [records_by_index[index] for index in unmatched_indexes]
+        raise ProjectWorkgroupSizeError(
+            "Host-named materializations remain unmatched by emitted compute "
+            "entry points.",
+            code="project.translate.workgroup-size-materialization-invalid",
+            reason="host-materialization-unmatched",
+            source_entry_points=tuple(
+                str(record.get("hostName")) for record in unmatched
+            ),
+            materialization_details={
+                "recordIndexes": unmatched_indexes,
+                "hostNames": [str(record.get("hostName")) for record in unmatched],
+            },
+        )
+    return joined
+
+
+def _project_workgroup_rule_execution_metadata(
+    *,
+    ast: Any,
+    stages: Sequence[Any],
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    materialization: Mapping[str, Any] | None,
+    source_sizes: Mapping[str, tuple[int, int, int]],
+) -> dict[str, Any] | None:
+    configured = _configured_workgroup_size_rule(config, unit.relative_path)
+    if configured is None:
+        return None
+    source_pattern, components, provenance = configured
+    joined = _workgroup_materialization_join(
+        stages=stages,
+        materialization=materialization,
+        missing_message=(
+            "Per-entry workgroup-size rules require template materialization "
+            "records."
+        ),
+        contract_details={
+            "path": provenance["path"],
+            "sourcePattern": source_pattern,
+            "components": list(components),
+        },
+    )
+    target_entry_points = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    entries: list[dict[str, Any]] = []
+    for stage, record in joined:
+        function = getattr(stage, "entry_point", None)
+        materialized_entry = str(getattr(function, "name", "main"))
+        host_name = str(record["hostName"])
+        parameters = record.get("parameters")
+        parameter_sources = record.get("parameterSources")
+        if (
+            not isinstance(parameters, Mapping)
+            or not isinstance(parameter_sources, Mapping)
+            or set(parameters) != set(parameter_sources)
+        ):
+            raise ProjectWorkgroupSizeError(
+                f"Materialization '{host_name}' has incomplete parameter provenance.",
+                code="project.translate.workgroup-size-materialization-invalid",
+                reason="parameter-provenance-invalid",
+                source_entry_points=(host_name,),
+                materialization_details={
+                    "hostName": host_name,
+                    "materializedName": record.get("materializedName"),
+                },
+            )
+        normalized_parameters = {
+            str(name): str(value) for name, value in sorted(parameters.items())
+        }
+        normalized_parameter_sources = {
+            str(name): str(value) for name, value in sorted(parameter_sources.items())
+        }
+        resolved: list[int] = []
+        for component_index, expression in enumerate(components):
+            try:
+                value = _evaluate_project_bounded_integer_expression(
+                    expression,
+                    normalized_parameters,
+                )
+            except _ProjectWorkgroupRuleExpressionError as exc:
+                details: dict[str, Any] = {
+                    "path": provenance["path"],
+                    "sourcePattern": source_pattern,
+                    "components": list(components),
+                    "componentIndex": component_index,
+                    "expression": expression,
+                    "reason": exc.reason,
+                    "hostName": host_name,
+                }
+                if exc.identifier is not None:
+                    details["identifier"] = exc.identifier
+                raise ProjectWorkgroupSizeError(
+                    f"Workgroup-size rule component {component_index} for "
+                    f"'{host_name}' is invalid: {exc}",
+                    code="project.translate.workgroup-size-rule-invalid",
+                    reason=exc.reason,
+                    source_entry_points=(host_name,),
+                    rule_details=details,
+                    materialization_details={
+                        "hostName": host_name,
+                        "materializedName": record.get("materializedName"),
+                    },
+                ) from exc
+            if value <= 0:
+                raise ProjectWorkgroupSizeError(
+                    f"Workgroup-size rule component {component_index} for "
+                    f"'{host_name}' resolved to a non-positive value.",
+                    code="project.translate.workgroup-size-rule-invalid",
+                    reason="non-positive-result",
+                    source_entry_points=(host_name,),
+                    rule_details={
+                        "path": provenance["path"],
+                        "sourcePattern": source_pattern,
+                        "components": list(components),
+                        "componentIndex": component_index,
+                        "expression": expression,
+                        "resolvedValue": value,
+                        "hostName": host_name,
+                    },
+                )
+            resolved.append(value)
+        workgroup_size = (resolved[0], resolved[1], resolved[2])
+        source_size = source_sizes.get(materialized_entry)
+        if source_size is not None and tuple(source_size) != workgroup_size:
+            raise ProjectWorkgroupSizeError(
+                f"Workgroup-size rule for '{host_name}' conflicts with concrete "
+                "source execution metadata.",
+                code="project.translate.workgroup-size-conflict",
+                reason="rule-source-conflict",
+                source_entry_points=(host_name,),
+                workgroup_size=workgroup_size,
+                source_workgroup_size=source_size,
+                rule_details={
+                    "path": provenance["path"],
+                    "sourcePattern": source_pattern,
+                    "components": list(components),
+                },
+            )
+        _set_crossgl_stage_workgroup_size(stage, workgroup_size)
+        entry = {
+            "sourceEntryPoint": host_name,
+            "materializedEntryPoint": str(record["materializedName"]),
+            "targetEntryPoint": target_entry_points.get(materialized_entry, "main"),
+            "workgroupSize": list(workgroup_size),
+            "rule": {
+                "components": list(components),
+                "sourcePattern": source_pattern,
+                "path": provenance["path"],
+            },
+            "parameters": normalized_parameters,
+            "parameterSources": normalized_parameter_sources,
+            "materialization": {
+                "name": str(record.get("name", "")),
+                "hostName": host_name,
+                "materializedName": str(record["materializedName"]),
+            },
+        }
+        entry["identity"] = _workgroup_rule_entry_identity(
+            source=unit.relative_path,
+            source_hash=unit.source_hash,
+            target=target,
+            variant=variant,
+            entry=entry,
+        )
+        entries.append(entry)
+
+    entries.sort(
+        key=lambda entry: (
+            entry["sourceEntryPoint"],
+            entry["materializedEntryPoint"],
+            entry["targetEntryPoint"],
+        )
+    )
+    source_entry_points = [str(entry["sourceEntryPoint"]) for entry in entries]
+    execution = {
+        "sourceEntryPoints": source_entry_points,
+        "entryPoints": entries,
+        "provenance": provenance,
+    }
+    execution["identity"] = _workgroup_rule_execution_identity(
+        source=unit.relative_path,
+        source_hash=unit.source_hash,
+        target=target,
+        variant=variant,
+        source_entry_points=source_entry_points,
+        entry_points=entries,
+        provenance=provenance,
+    )
+    return execution
+
+
+def _has_host_named_template_materializations(
+    materialization: Mapping[str, Any] | None,
+) -> bool:
+    specializations = (
+        materialization.get("specializations")
+        if isinstance(materialization, Mapping)
+        else None
+    )
+    return any(
+        isinstance(record, Mapping) and _is_non_empty_string(record.get("hostName"))
+        for record in _record_sequence(specializations)
+    )
+
+
+def _project_materialized_workgroup_execution_metadata(
+    *,
+    ast: Any,
+    stages: Sequence[Any],
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    materialization: Mapping[str, Any] | None,
+    workgroup_size: Sequence[int],
+    provenance: Mapping[str, Any],
+    source_sizes: Mapping[str, tuple[int, int, int]],
+) -> dict[str, Any] | None:
+    if not _has_host_named_template_materializations(materialization):
+        return None
+
+    joined = _workgroup_materialization_join(
+        stages=stages,
+        materialization=materialization,
+        missing_message=(
+            "Per-entry constant workgroup-size specialization requires template "
+            "materialization records."
+        ),
+        contract_details={
+            "path": provenance["path"],
+            "workgroupSize": list(workgroup_size),
+        },
+    )
+    target_entry_points = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    entries: list[dict[str, Any]] = []
+    for stage, record in joined:
+        function = getattr(stage, "entry_point", None)
+        materialized_entry = str(getattr(function, "name", "main"))
+        host_name = str(record["hostName"])
+        parameters = record.get("parameters")
+        parameter_sources = record.get("parameterSources")
+        if (
+            not isinstance(parameters, Mapping)
+            or not isinstance(parameter_sources, Mapping)
+            or set(parameters) != set(parameter_sources)
+        ):
+            raise ProjectWorkgroupSizeError(
+                f"Materialization '{host_name}' has incomplete parameter provenance.",
+                code="project.translate.workgroup-size-materialization-invalid",
+                reason="parameter-provenance-invalid",
+                source_entry_points=(host_name,),
+                workgroup_size=workgroup_size,
+                materialization_details={
+                    "hostName": host_name,
+                    "materializedName": record.get("materializedName"),
+                },
+            )
+
+        source_size = source_sizes.get(materialized_entry)
+        if source_size is not None and tuple(source_size) != tuple(workgroup_size):
+            raise ProjectWorkgroupSizeError(
+                f"Configured workgroup size for '{host_name}' conflicts with "
+                "concrete source execution metadata.",
+                code="project.translate.workgroup-size-conflict",
+                reason="project-source-conflict",
+                source_entry_points=(host_name,),
+                workgroup_size=workgroup_size,
+                source_workgroup_size=source_size,
+                materialization_details={
+                    "hostName": host_name,
+                    "materializedName": record.get("materializedName"),
+                },
+            )
+
+        _set_crossgl_stage_workgroup_size(stage, workgroup_size)
+        entry = {
+            "sourceEntryPoint": host_name,
+            "materializedEntryPoint": str(record["materializedName"]),
+            "targetEntryPoint": target_entry_points.get(materialized_entry, "main"),
+            "workgroupSize": list(workgroup_size),
+            "parameters": {
+                str(name): str(value) for name, value in sorted(parameters.items())
+            },
+            "parameterSources": {
+                str(name): str(value)
+                for name, value in sorted(parameter_sources.items())
+            },
+            "materialization": {
+                "name": str(record.get("name", "")),
+                "hostName": host_name,
+                "materializedName": str(record["materializedName"]),
+            },
+        }
+        entry["identity"] = _workgroup_rule_entry_identity(
+            source=unit.relative_path,
+            source_hash=unit.source_hash,
+            target=target,
+            variant=variant,
+            entry=entry,
+        )
+        entries.append(entry)
+
+    entries.sort(
+        key=lambda entry: (
+            entry["sourceEntryPoint"],
+            entry["materializedEntryPoint"],
+            entry["targetEntryPoint"],
+        )
+    )
+    source_entry_points = [str(entry["sourceEntryPoint"]) for entry in entries]
+    execution = {
+        "sourceEntryPoints": source_entry_points,
+        "entryPoints": entries,
+        "provenance": dict(provenance),
+    }
+    execution["identity"] = _workgroup_rule_execution_identity(
+        source=unit.relative_path,
+        source_hash=unit.source_hash,
+        target=target,
+        variant=variant,
+        source_entry_points=source_entry_points,
+        entry_points=entries,
+        provenance=provenance,
+    )
+    return execution
+
+
+def _wave_size_attribute(attribute: Any) -> bool:
+    name = str(getattr(attribute, "name", "")).strip().lower()
+    if name.startswith("hlsl_"):
+        name = name[len("hlsl_") :]
+    return name == "wavesize"
+
+
+def _set_crossgl_stage_subgroup_width(stage: Any, subgroup_width: int) -> None:
+    function = getattr(stage, "entry_point", None)
+    entry_name = str(getattr(function, "name", "main"))
+    attributes = list(getattr(function, "attributes", []) or [])
+    existing = [
+        attribute for attribute in attributes if _wave_size_attribute(attribute)
+    ]
+    if len(existing) > 1:
+        raise ProjectSubgroupWidthError(
+            f"Compute entry point '{entry_name}' declares multiple WaveSize attributes.",
+            code="project.translate.subgroup-width-conflict",
+            reason="source-metadata-ambiguous",
+            source_entry_points=(entry_name,),
+            subgroup_width=subgroup_width,
+        )
+    if existing:
+        arguments = list(getattr(existing[0], "arguments", []) or [])
+        source_width = (
+            _literal_workgroup_size_component(arguments[0])
+            if len(arguments) == 1
+            else None
+        )
+        if source_width is None:
+            raise ProjectSubgroupWidthError(
+                f"Compute entry point '{entry_name}' has a non-exact WaveSize attribute.",
+                code="project.translate.subgroup-width-invalid",
+                reason="source-metadata-not-exact",
+                source_entry_points=(entry_name,),
+                subgroup_width=subgroup_width,
+            )
+        if source_width != subgroup_width:
+            raise ProjectSubgroupWidthError(
+                f"Configured subgroup width {subgroup_width} conflicts with source "
+                f"WaveSize({source_width}) on '{entry_name}'.",
+                code="project.translate.subgroup-width-conflict",
+                reason="project-source-conflict",
+                source_entry_points=(entry_name,),
+                subgroup_width=subgroup_width,
+                source_subgroup_width=source_width,
+            )
+    function.attributes = [
+        attribute for attribute in attributes if not _wave_size_attribute(attribute)
+    ]
+    function.attributes.append(
+        AttributeNode(
+            "WaveSize",
+            [LiteralNode(subgroup_width, PrimitiveType("int"))],
+        )
+    )
+
+
+def _project_subgroup_width_rule_execution_metadata(
+    *,
+    ast: Any,
+    stages: Sequence[Any],
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    materialization: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    configured = _configured_subgroup_width_rule(config, unit.relative_path)
+    if configured is None:
+        return None
+    source_pattern, expression, provenance = configured
+    try:
+        joined = _workgroup_materialization_join(
+            stages=stages,
+            materialization=materialization,
+            missing_message=(
+                "Per-entry subgroup-width rules require template materialization "
+                "records."
+            ),
+            contract_details={
+                "path": provenance["path"],
+                "sourcePattern": source_pattern,
+                "expression": expression,
+            },
+        )
+    except ProjectWorkgroupSizeError as exc:
+        raise ProjectSubgroupWidthError(
+            "Subgroup-width rules require one host-named materialization per "
+            "compute entry point.",
+            code="project.translate.subgroup-width-materialization-invalid",
+            reason=exc.reason,
+            source_entry_points=exc.source_entry_points,
+            rule_details={
+                "path": provenance["path"],
+                "sourcePattern": source_pattern,
+                "expression": expression,
+            },
+            materialization_details=exc.materialization_details,
+        ) from exc
+
+    target_names = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    entries = []
+    for stage, record in joined:
+        function = getattr(stage, "entry_point", None)
+        materialized_entry = str(getattr(function, "name", "main"))
+        host_name = str(record["hostName"])
+        parameters = record.get("parameters")
+        parameter_sources = record.get("parameterSources")
+        if (
+            not isinstance(parameters, Mapping)
+            or not isinstance(parameter_sources, Mapping)
+            or set(parameters) != set(parameter_sources)
+        ):
+            raise ProjectSubgroupWidthError(
+                f"Materialization '{host_name}' has incomplete parameter provenance.",
+                code="project.translate.subgroup-width-materialization-invalid",
+                reason="parameter-provenance-invalid",
+                source_entry_points=(host_name,),
+            )
+        normalized_parameters = {
+            str(name): str(value) for name, value in sorted(parameters.items())
+        }
+        normalized_parameter_sources = {
+            str(name): str(value) for name, value in sorted(parameter_sources.items())
+        }
+        try:
+            subgroup_width = _evaluate_project_bounded_integer_expression(
+                expression, normalized_parameters
+            )
+        except _ProjectWorkgroupRuleExpressionError as exc:
+            raise ProjectSubgroupWidthError(
+                f"Subgroup-width rule for '{host_name}' is invalid: {exc}",
+                code="project.translate.subgroup-width-rule-invalid",
+                reason=exc.reason,
+                source_entry_points=(host_name,),
+                rule_details={
+                    "path": provenance["path"],
+                    "sourcePattern": source_pattern,
+                    "expression": expression,
+                    "identifier": exc.identifier,
+                },
+            ) from exc
+        if subgroup_width <= 0:
+            raise ProjectSubgroupWidthError(
+                f"Subgroup-width rule for '{host_name}' resolved to a non-positive value.",
+                code="project.translate.subgroup-width-rule-invalid",
+                reason="non-positive-result",
+                source_entry_points=(host_name,),
+                subgroup_width=subgroup_width,
+            )
+        if subgroup_width not in DIRECTX_EXACT_SUBGROUP_WIDTHS:
+            raise ProjectSubgroupWidthError(
+                f"DirectX cannot enforce subgroup width {subgroup_width} for "
+                f"'{host_name}'.",
+                code="project.translate.subgroup-width-invalid",
+                reason="target-width-unsupported",
+                source_entry_points=(host_name,),
+                subgroup_width=subgroup_width,
+                rule_details={
+                    "path": provenance["path"],
+                    "sourcePattern": source_pattern,
+                    "expression": expression,
+                    "supportedWidths": sorted(DIRECTX_EXACT_SUBGROUP_WIDTHS),
+                },
+            )
+        _set_crossgl_stage_subgroup_width(stage, subgroup_width)
+        entry = {
+            "sourceEntryPoint": host_name,
+            "materializedEntryPoint": str(record["materializedName"]),
+            "targetEntryPoint": target_names.get(
+                materialized_entry, materialized_entry
+            ),
+            "subgroupWidth": subgroup_width,
+            "subgroupWidthRule": {
+                "expression": expression,
+                "sourcePattern": source_pattern,
+                "path": provenance["path"],
+            },
+            "parameters": normalized_parameters,
+            "parameterSources": normalized_parameter_sources,
+            "materialization": {
+                "name": str(record.get("name", "")),
+                "hostName": host_name,
+                "materializedName": str(record["materializedName"]),
+            },
+        }
+        entry["identity"] = _workgroup_rule_entry_identity(
+            source=unit.relative_path,
+            source_hash=unit.source_hash,
+            target=target,
+            variant=variant,
+            entry=entry,
+        )
+        entries.append(entry)
+    entries.sort(
+        key=lambda entry: (
+            entry["sourceEntryPoint"],
+            entry["materializedEntryPoint"],
+            entry["targetEntryPoint"],
+        )
+    )
+    execution = {
+        "sourceEntryPoints": [entry["sourceEntryPoint"] for entry in entries],
+        "entryPoints": entries,
+        "subgroupWidthProvenance": provenance,
+        "subgroupWidthEnforcement": {
+            "mechanism": "hlsl-wave-size-attribute",
+            "minimumShaderModel": "6.6",
+            "entryProfiles": [
+                {"entryPoint": entry["targetEntryPoint"], "profile": "cs_6_6"}
+                for entry in entries
+            ],
+        },
+    }
+    execution["identity"] = _subgroup_rule_execution_identity(
+        source=unit.relative_path,
+        source_hash=unit.source_hash,
+        target=target,
+        variant=variant,
+        execution=execution,
+    )
+    return execution
+
+
+def _merge_subgroup_rule_execution(
+    *,
+    workgroup: Mapping[str, Any] | None,
+    subgroup: Mapping[str, Any],
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+) -> dict[str, Any]:
+    if workgroup is None:
+        return dict(subgroup)
+    workgroup_entries = [
+        dict(entry)
+        for entry in _record_sequence(workgroup.get("entryPoints"))
+        if isinstance(entry, Mapping)
+    ]
+    subgroup_entries = [
+        dict(entry)
+        for entry in _record_sequence(subgroup.get("entryPoints"))
+        if isinstance(entry, Mapping)
+    ]
+    if not workgroup_entries:
+        raise ProjectSubgroupWidthError(
+            "Per-entry subgroup-width rules cannot be combined with aggregate "
+            "workgroup metadata.",
+            code="project.translate.subgroup-width-conflict",
+            reason="mixed-specialization-granularity",
+            source_entry_points=subgroup.get("sourceEntryPoints", ()),
+        )
+    key = lambda entry: (
+        str(entry.get("sourceEntryPoint", "")),
+        str(entry.get("materializedEntryPoint", "")),
+        str(entry.get("targetEntryPoint", "")),
+    )
+    workgroup_by_key = {key(entry): entry for entry in workgroup_entries}
+    subgroup_by_key = {key(entry): entry for entry in subgroup_entries}
+    if set(workgroup_by_key) != set(subgroup_by_key):
+        raise ProjectSubgroupWidthError(
+            "Workgroup and subgroup rules resolve different materialized entries.",
+            code="project.translate.subgroup-width-conflict",
+            reason="materialized-entry-identity-mismatch",
+            source_entry_points=subgroup.get("sourceEntryPoints", ()),
+        )
+    merged = dict(workgroup)
+    merged_entries = []
+    for identity in sorted(workgroup_by_key):
+        entry = workgroup_by_key[identity]
+        subgroup_entry = subgroup_by_key[identity]
+        for field_name in ("parameters", "parameterSources", "materialization"):
+            if entry.get(field_name) != subgroup_entry.get(field_name):
+                raise ProjectSubgroupWidthError(
+                    "Workgroup and subgroup rules have inconsistent materialization "
+                    "provenance.",
+                    code="project.translate.subgroup-width-conflict",
+                    reason="materialization-provenance-mismatch",
+                    source_entry_points=(identity[0],),
+                )
+        entry["subgroupWidth"] = subgroup_entry["subgroupWidth"]
+        entry["subgroupWidthRule"] = subgroup_entry["subgroupWidthRule"]
+        entry["identity"] = _workgroup_rule_entry_identity(
+            source=unit.relative_path,
+            source_hash=unit.source_hash,
+            target=target,
+            variant=variant,
+            entry=entry,
+        )
+        merged_entries.append(entry)
+    merged["entryPoints"] = merged_entries
+    merged["subgroupWidthProvenance"] = subgroup["subgroupWidthProvenance"]
+    merged["subgroupWidthEnforcement"] = subgroup["subgroupWidthEnforcement"]
+    merged["identity"] = _subgroup_rule_execution_identity(
+        source=unit.relative_path,
+        source_hash=unit.source_hash,
+        target=target,
+        variant=variant,
+        execution=merged,
+    )
+    return merged
+
+
+def _project_input_requires_workgroup_specialization(
+    *,
+    input_path: Path,
+    source_backend: str,
+    config: ProjectConfig,
+    variant: str | None,
+    project_relative_path: str | None = None,
+) -> bool:
+    if project_relative_path is not None and (
+        _configured_workgroup_size_rule(config, project_relative_path) is not None
+    ):
+        return True
+    try:
+        relative_path = _relpath(input_path, config.root)
+    except ValueError:
+        relative_path = None
+    if relative_path is not None and (
+        _configured_workgroup_size_rule(config, relative_path) is not None
+    ):
+        return True
+    configured_size, _provenance = _configured_workgroup_size(config, variant)
+    if configured_size is not None:
+        return True
+    if source_backend not in {"metal", "cgl", "crossgl"}:
+        return False
+    try:
+        source = input_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    source = _masked_metal_non_code_text(source)
+    if source_backend == "metal":
+        return re.search(r"\bthreads_per_threadgroup\b", source) is not None
+    return any(
+        re.search(pattern, source) is not None
+        for pattern in (
+            r"\bgl_WorkGroupSize\b",
+            r"@\s*(?:local_size|numthreads|workgroup_size)\s*\(",
+            r"\blocal_size_[xyz]\b",
+        )
     )
 
 
@@ -11381,16 +13041,30 @@ def _metal_local_variable_declaration(
     return name, _normalize_metal_type_text(type_text)
 
 
+PROJECT_INTEGER_EXPRESSION_MIN = -(1 << 63)
+PROJECT_INTEGER_EXPRESSION_MAX = (1 << 63) - 1
+
+
+def _checked_project_integer(value: int) -> int:
+    if not PROJECT_INTEGER_EXPRESSION_MIN <= value <= PROJECT_INTEGER_EXPRESSION_MAX:
+        raise OverflowError("integer expression overflow")
+    return value
+
+
 class _MetalIntegerConstantExpressionParser:
-    def __init__(self, tokens: Sequence[str]):
+    def __init__(self, tokens: Sequence[str], *, checked: bool = False):
         self.tokens = list(tokens)
         self.index = 0
+        self.checked = checked
+
+    def _checked_value(self, value: int) -> int:
+        return _checked_project_integer(value) if self.checked else value
 
     def parse(self) -> int:
         value = self._parse_conditional(True)
         if self.index != len(self.tokens):
             raise ValueError("unexpected integer constant expression token")
-        return value
+        return self._checked_value(value)
 
     def _peek(self) -> str | None:
         if self.index >= len(self.tokens):
@@ -11439,7 +13113,7 @@ class _MetalIntegerConstantExpressionParser:
         while self._match("|"):
             right = self._parse_bitwise_xor(evaluate)
             if evaluate:
-                value |= right
+                value = self._checked_value(value | right)
         return value if evaluate else 0
 
     def _parse_bitwise_xor(self, evaluate: bool) -> int:
@@ -11447,7 +13121,7 @@ class _MetalIntegerConstantExpressionParser:
         while self._match("^"):
             right = self._parse_bitwise_and(evaluate)
             if evaluate:
-                value ^= right
+                value = self._checked_value(value ^ right)
         return value if evaluate else 0
 
     def _parse_bitwise_and(self, evaluate: bool) -> int:
@@ -11455,7 +13129,7 @@ class _MetalIntegerConstantExpressionParser:
         while self._match("&"):
             right = self._parse_equality(evaluate)
             if evaluate:
-                value &= right
+                value = self._checked_value(value & right)
         return value if evaluate else 0
 
     def _parse_equality(self, evaluate: bool) -> int:
@@ -11496,7 +13170,9 @@ class _MetalIntegerConstantExpressionParser:
                 continue
             if right < 0:
                 raise ValueError("negative shift count")
-            value = value << right if operator == "<<" else value >> right
+            value = self._checked_value(
+                value << right if operator == "<<" else value >> right
+            )
         return value if evaluate else 0
 
     def _parse_additive(self, evaluate: bool) -> int:
@@ -11506,7 +13182,9 @@ class _MetalIntegerConstantExpressionParser:
             self.index += 1
             right = self._parse_multiplicative(evaluate)
             if evaluate:
-                value = value + right if operator == "+" else value - right
+                value = self._checked_value(
+                    value + right if operator == "+" else value - right
+                )
         return value if evaluate else 0
 
     def _parse_multiplicative(self, evaluate: bool) -> int:
@@ -11518,13 +13196,15 @@ class _MetalIntegerConstantExpressionParser:
             if not evaluate:
                 continue
             if operator == "*":
-                value *= right
+                value = self._checked_value(value * right)
                 continue
             if right == 0:
                 raise ValueError("division by zero")
             quotient = abs(value) // abs(right)
             quotient = -quotient if (value < 0) != (right < 0) else quotient
-            value = quotient if operator == "/" else value - quotient * right
+            value = self._checked_value(
+                quotient if operator == "/" else value - quotient * right
+            )
         return value if evaluate else 0
 
     def _parse_unary(self, evaluate: bool) -> int:
@@ -11537,10 +13217,10 @@ class _MetalIntegerConstantExpressionParser:
             if token == "+":
                 return value
             if token == "-":
-                return -value
+                return self._checked_value(-value)
             if token == "!":
                 return int(not value)
-            return ~value
+            return self._checked_value(~value)
         return self._parse_primary(evaluate)
 
     def _parse_primary(self, evaluate: bool) -> int:
@@ -11552,7 +13232,9 @@ class _MetalIntegerConstantExpressionParser:
         if token is None or not token[0].isdigit():
             raise ValueError("expected integer literal")
         self.index += 1
-        return _metal_integer_literal_value(token) if evaluate else 0
+        return (
+            self._checked_value(_metal_integer_literal_value(token)) if evaluate else 0
+        )
 
 
 def _metal_integer_literal_value(token: str) -> int:
@@ -17754,6 +19436,38 @@ def _directx_private_pointer_failure_details(
     return dict(sorted(details.items()))
 
 
+def _directx_bfloat16_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.directx-bfloat16-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    contract = {
+        "approximationUsed": False,
+        "status": "unsupported",
+    }
+    fields = {
+        "targetProfile": getattr(exc, "target_profile", None),
+        "operation": getattr(exc, "operation", None),
+        "sourceType": getattr(exc, "source_type", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            contract[name] = value
+    if contract:
+        details["bfloat16Lowering"] = dict(sorted(contract.items()))
+    return dict(sorted(details.items()))
+
+
 def _directx_resource_pointer_array_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -17876,9 +19590,10 @@ def _opengl_index_type_failure_details(
     unit: ProjectTranslationUnit,
     artifact_path: str | None,
 ) -> dict[str, Any]:
-    if _translation_failure_diagnostic_code(exc) != (
-        "project.translate.opengl-index-type-unsupported"
-    ):
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.opengl-index-type-unsupported",
+        "project.translate.webgl-index-type-unsupported",
+    }:
         return {}
 
     details: dict[str, Any] = {
@@ -17889,6 +19604,9 @@ def _opengl_index_type_failure_details(
     index_type = getattr(exc, "index_type", None)
     target_index_type = getattr(exc, "target_index_type", None)
     indexed_value = getattr(exc, "indexed_value", None)
+    index_expression = getattr(exc, "index_expression", None)
+    target_profile = getattr(exc, "target_profile", None)
+    range_status = getattr(exc, "range_status", None)
     reason = getattr(exc, "reason", None)
     if _is_non_empty_string(index_type):
         index["sourceType"] = index_type
@@ -17896,6 +19614,23 @@ def _opengl_index_type_failure_details(
         index["targetType"] = target_index_type
     if _is_non_empty_string(indexed_value):
         index["indexedValue"] = indexed_value
+    if _is_non_empty_string(target_index_type):
+        if _is_non_empty_string(index_expression):
+            index["indexExpression"] = index_expression
+        if _is_non_empty_string(target_profile):
+            index["targetProfile"] = target_profile
+        if _is_non_empty_string(range_status):
+            index["rangeStatus"] = range_status
+        for field_name, attribute_name in (
+            ("sourceRange", "source_range"),
+            ("acceptedRange", "accepted_range"),
+        ):
+            value = getattr(exc, attribute_name, None)
+            to_json = getattr(value, "to_json", None)
+            if callable(to_json):
+                index[field_name] = to_json()
+            elif isinstance(value, Mapping):
+                index[field_name] = dict(value)
     if _is_non_empty_string(reason):
         index["reason"] = reason
     if index:
@@ -17918,15 +19653,17 @@ def _opengl_workgroup_pointer_failure_details(
         "targetArtifact": artifact_path or "",
     }
     pointer = {}
-    function_name = getattr(exc, "function_name", None)
-    parameter_name = getattr(exc, "parameter_name", None)
-    reason = getattr(exc, "reason", None)
-    if _is_non_empty_string(function_name):
-        pointer["function"] = function_name
-    if _is_non_empty_string(parameter_name):
-        pointer["parameter"] = parameter_name
-    if _is_non_empty_string(reason):
-        pointer["reason"] = reason
+    fields = {
+        "function": getattr(exc, "function_name", None),
+        "parameter": getattr(exc, "parameter_name", None),
+        "backingName": getattr(exc, "backing_name", None),
+        "offsetExpression": getattr(exc, "offset_expression", None),
+        "materializationName": getattr(exc, "materialization_name", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            pointer[name] = value
     if pointer:
         details["workgroupPointer"] = dict(sorted(pointer.items()))
     return dict(sorted(details.items()))
@@ -18193,6 +19930,88 @@ def _metal_stateless_global_failure_details(
     return dict(sorted(details.items()))
 
 
+def _workgroup_size_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.workgroup-size-required",
+        "project.translate.workgroup-size-conflict",
+        "project.translate.workgroup-size-invalid",
+        "project.translate.workgroup-size-entry-ambiguous",
+        "project.translate.workgroup-size-rule-invalid",
+        "project.translate.workgroup-size-rule-unsupported-target",
+        "project.translate.workgroup-size-materialization-invalid",
+        "project.translate.subgroup-width-conflict",
+        "project.translate.subgroup-width-enforcement-unsupported",
+        "project.translate.subgroup-width-invalid",
+        "project.translate.subgroup-width-rule-invalid",
+        "project.translate.subgroup-width-materialization-invalid",
+    }:
+        return {}
+    execution: dict[str, Any] = {
+        "reason": getattr(exc, "reason", None),
+        "sourceEntryPoints": list(getattr(exc, "source_entry_points", ()) or ()),
+        "workgroupSize": (
+            list(getattr(exc, "workgroup_size"))
+            if getattr(exc, "workgroup_size", None) is not None
+            else None
+        ),
+        "sourceWorkgroupSize": (
+            list(getattr(exc, "source_workgroup_size"))
+            if getattr(exc, "source_workgroup_size", None) is not None
+            else None
+        ),
+        "subgroupWidth": getattr(exc, "subgroup_width", None),
+        "sourceSubgroupWidth": getattr(exc, "source_subgroup_width", None),
+        "rule": (
+            dict(getattr(exc, "rule_details"))
+            if getattr(exc, "rule_details", None)
+            else None
+        ),
+        "materialization": (
+            dict(getattr(exc, "materialization_details"))
+            if getattr(exc, "materialization_details", None)
+            else None
+        ),
+    }
+    return {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+        "executionSpecialization": {
+            key: value for key, value in sorted(execution.items()) if value is not None
+        },
+    }
+
+
+def _directx_entry_point_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.directx-entry-point-unavailable"
+    ):
+        return {}
+
+    selection = {
+        "entryPoint": getattr(exc, "entry_point", None),
+        "availableEntryPoints": sorted(
+            str(entry) for entry in getattr(exc, "available_entry_points", ()) or ()
+        ),
+        "reason": getattr(exc, "reason", None),
+        "stage": getattr(exc, "stage", None),
+    }
+    return {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+        "entryPointSelection": {
+            key: value for key, value in sorted(selection.items()) if value is not None
+        },
+    }
+
+
 def _translation_failure_details(
     exc: Exception,
     target: str,
@@ -18213,6 +20032,7 @@ def _translation_failure_details(
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
         **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
         **_directx_private_pointer_failure_details(exc, unit, artifact_path),
+        **_directx_bfloat16_failure_details(exc, unit, artifact_path),
         **_directx_resource_pointer_array_failure_details(exc, unit, artifact_path),
         **_directx_trailing_zero_failure_details(exc, unit, artifact_path),
         **_opengl_private_pointer_failure_details(exc, unit, artifact_path),
@@ -18233,6 +20053,8 @@ def _translation_failure_details(
         **_metal_callable_failure_details(exc, unit, artifact_path),
         **_metal_callable_alias_failure_details(exc, unit, artifact_path),
         **_template_materialization_failure_details(exc),
+        **_workgroup_size_failure_details(exc, unit, artifact_path),
+        **_directx_entry_point_failure_details(exc, unit, artifact_path),
     }
 
 
@@ -18275,6 +20097,7 @@ def _translation_failure_project_diagnostics(
                     target=target,
                     source_backend=unit.source_backend,
                     variant=variant,
+                    check_kind=getattr(exc, "check_kind", None),
                     missing_capabilities=missing_capabilities,
                     details=_translation_failure_details(
                         exc,
@@ -18295,6 +20118,7 @@ def _translation_failure_project_diagnostics(
             target=target,
             source_backend=unit.source_backend,
             variant=variant,
+            check_kind=getattr(exc, "check_kind", None),
             missing_capabilities=_translation_failure_missing_capabilities(exc, target),
             details=_translation_failure_details(exc, target, unit, artifact_path),
         )
@@ -18652,6 +20476,9 @@ def _translation_failure_location(
             return source_location
         return replace(source_location, file=file_name)
     if source_location is None:
+        index_location = _index_type_failure_location(exc, unit)
+        if index_location is not None:
+            return index_location
         context = _metal_template_declaration_context(exc, unit)
         if context is not None:
             return context["location"]
@@ -18708,6 +20535,53 @@ def _translation_failure_location(
             0,
         ),
     )
+
+
+def _index_type_failure_location(
+    exc: Exception, unit: ProjectTranslationUnit
+) -> SourceLocation | None:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.opengl-index-type-unsupported",
+        "project.translate.webgl-index-type-unsupported",
+    }:
+        return None
+    index_expression = getattr(exc, "index_expression", None)
+    indexed_value = getattr(exc, "indexed_value", None)
+    if not _is_non_empty_string(index_expression):
+        return None
+    try:
+        source = unit.path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    def source_pattern(value: str) -> str:
+        return r"\s*".join(re.escape(part) for part in value.strip().split())
+
+    index_pattern = source_pattern(index_expression)
+    patterns = []
+    if _is_non_empty_string(indexed_value):
+        indexed_pattern = source_pattern(indexed_value)
+        patterns.extend(
+            (
+                rf"{indexed_pattern}\s*\[\s*(?P<index>{index_pattern})",
+                rf"\bbuffer_(?:load|store)\s*\(\s*{indexed_pattern}\s*,\s*"
+                rf"(?P<index>{index_pattern})",
+                rf"\btexelFetch\s*\(\s*{indexed_pattern}\s*,\s*"
+                rf"(?P<index>{index_pattern})",
+            )
+        )
+    patterns.append(rf"(?P<index>{index_pattern})")
+    for pattern in patterns:
+        match = re.search(pattern, source)
+        if match is None:
+            continue
+        return _source_location_at_offset(
+            unit,
+            source,
+            match.start("index"),
+            match.end("index") - match.start("index"),
+        )
+    return None
 
 
 _SPECIALIZATION_CONSTANT_ID_MAX = 0x7FFFFFFF
@@ -19807,6 +21681,784 @@ def _project_specialization_metadata_for_input(
     return records, metadata, diagnostics
 
 
+def _crossgl_parameter_has_semantic(parameter: Any, semantic: str) -> bool:
+    parameter_semantic = getattr(parameter, "semantic", None)
+    if _is_non_empty_string(parameter_semantic) and parameter_semantic == semantic:
+        return True
+    for attribute in getattr(parameter, "attributes", []) or []:
+        name = getattr(attribute, "name", None)
+        if _is_non_empty_string(name) and name == semantic:
+            return True
+    return False
+
+
+def _crossgl_function_references_identifier(function: Any, name: str) -> bool:
+    body = getattr(function, "body", None)
+    if body is None or not callable(getattr(body, "walk", None)):
+        return False
+    return any(
+        isinstance(node, IdentifierNode) and getattr(node, "name", None) == name
+        for node in body.walk()
+    )
+
+
+def _crossgl_stage_name(stage: Any) -> str:
+    value = getattr(stage, "value", stage)
+    return str(value).strip().lower()
+
+
+def _crossgl_compute_stages(ast: Any, entry_point: str | None) -> list[Any]:
+    stages = getattr(ast, "stages", None)
+    stage_items = stages.items() if hasattr(stages, "items") else []
+    return [
+        stage_node
+        for stage_name, stage_node in stage_items
+        if _crossgl_stage_name(stage_name) == "compute"
+        and (
+            entry_point is None
+            or getattr(getattr(stage_node, "entry_point", None), "name", None)
+            == entry_point
+        )
+    ]
+
+
+def _literal_workgroup_size_component(value: Any) -> int | None:
+    value = getattr(value, "value", value)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if value > 0 else None
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]*", value.strip()):
+        return None
+    parsed = int(value.strip())
+    return parsed if parsed > 0 else None
+
+
+def _crossgl_execution_workgroup_size(
+    execution_config: Mapping[str, Any],
+) -> tuple[tuple[int, int, int] | None, str | None, bool]:
+    for field_name in ("numthreads", "workgroup_size", "local_size"):
+        if field_name not in execution_config:
+            continue
+        raw = execution_config.get(field_name)
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+            return None, field_name, True
+        values = list(raw)
+        if len(values) != 3:
+            return None, field_name, True
+        parsed = tuple(_literal_workgroup_size_component(value) for value in values)
+        if any(value is None for value in parsed):
+            return None, field_name, True
+        return (int(parsed[0]), int(parsed[1]), int(parsed[2])), field_name, False
+
+    fields = ("local_size_x", "local_size_y", "local_size_z")
+    if not any(field_name in execution_config for field_name in fields):
+        return None, None, False
+    parsed = tuple(
+        _literal_workgroup_size_component(execution_config.get(field_name, 1))
+        for field_name in fields
+    )
+    if any(value is None for value in parsed):
+        return None, "local_size", True
+    return (int(parsed[0]), int(parsed[1]), int(parsed[2])), "local_size", False
+
+
+def _set_crossgl_stage_workgroup_size(
+    stage: Any,
+    workgroup_size: Sequence[int],
+) -> None:
+    x, y, z = (str(value) for value in workgroup_size)
+    execution_config = dict(getattr(stage, "execution_config", {}) or {})
+    execution_config.update(
+        {
+            "local_size_x": x,
+            "local_size_y": y,
+            "local_size_z": z,
+            "numthreads": (x, y, z),
+        }
+    )
+    stage.execution_config = execution_config
+
+
+def _crossgl_ast_for_project_target(
+    *,
+    input_path: Path,
+    source_backend: str,
+    original_source_backend: str,
+    target: str,
+    include_paths: Sequence[str],
+    defines: Mapping[str, str],
+    source_options: Mapping[str, Any],
+    source_is_materialized: bool = False,
+) -> Any:
+    register_default_sources()
+    source_spec = SOURCE_REGISTRY.get(source_backend)
+    cgl_spec = SOURCE_REGISTRY.get("cgl")
+    if source_spec is None or cgl_spec is None:
+        raise ValueError("CrossGL source frontend is unavailable")
+
+    if source_backend in {"cgl", "crossgl"}:
+        intermediate = input_path.read_text(encoding="utf-8", errors="replace")
+    else:
+        source = input_path.read_text(encoding="utf-8", errors="replace")
+        parser_defines = defines
+        parser_options = source_options
+        if source_backend == "metal" and not source_is_materialized:
+            materialized = materialize_metal_source_for_target(
+                source=source,
+                file_path=input_path,
+                target=target,
+                include_paths=include_paths,
+                defines=defines,
+                source_options=source_options,
+            )
+            if materialized is not None:
+                source = materialized.text
+                parser_defines = materialized.defines
+                parser_options = materialized.source_options
+        source_ast = source_spec.parse(
+            source,
+            file_path=str(input_path),
+            include_paths=include_paths,
+            defines=parser_defines,
+            source_options=parser_options,
+        )
+        lower_default_arguments(source_ast)
+        if source_spec.reverse_codegen_factory is None:
+            raise ValueError(
+                f"Reverse translation not supported for source backend {source_backend}"
+            )
+        intermediate = source_spec.reverse_codegen_factory().generate(source_ast)
+
+    return cgl_spec.parse(
+        intermediate,
+        source_options={
+            "strict_function_bodies": original_source_backend != "mojo",
+        },
+    )
+
+
+def _project_workgroup_execution_metadata(
+    *,
+    ast: Any,
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    selected_entry_point: str | None,
+    template_materialization: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    stages = _crossgl_compute_stages(ast, selected_entry_point)
+    if not stages:
+        return None
+
+    configured_size, configured_provenance = _configured_workgroup_size(config, variant)
+    consumed_entries: list[str] = []
+    source_sizes: dict[str, tuple[int, int, int]] = {}
+    source_paths: dict[str, str] = {}
+    source_location = None
+    for stage in stages:
+        function = getattr(stage, "entry_point", None)
+        if function is None:
+            continue
+        entry_name = str(getattr(function, "name", "main"))
+        if _crossgl_function_references_identifier(function, "gl_WorkGroupSize"):
+            consumed_entries.append(entry_name)
+        for parameter in (
+            getattr(function, "parameters", getattr(function, "params", [])) or []
+        ):
+            if not _crossgl_parameter_has_semantic(parameter, "gl_WorkGroupSize"):
+                continue
+            if _crossgl_function_references_identifier(
+                function, str(getattr(parameter, "name", ""))
+            ):
+                consumed_entries.append(entry_name)
+                if source_location is None:
+                    source_location = getattr(parameter, "source_location", None)
+
+        execution_config = dict(getattr(stage, "execution_config", {}) or {})
+        source_size, source_path, invalid = _crossgl_execution_workgroup_size(
+            execution_config
+        )
+        if invalid:
+            raise ProjectWorkgroupSizeError(
+                f"Compute entry point '{entry_name}' has non-concrete workgroup-size "
+                "metadata; configure a concrete project workgroup_size variant.",
+                code="project.translate.workgroup-size-invalid",
+                reason="source-metadata-not-concrete",
+                source_entry_points=(entry_name,),
+                workgroup_size=configured_size,
+                source_location=source_location,
+            )
+        if source_size is not None and source_path is not None:
+            source_sizes[entry_name] = source_size
+            source_paths[entry_name] = source_path
+
+    consumed_entries = sorted(set(consumed_entries))
+    source_entry_points = sorted(
+        {
+            str(getattr(getattr(stage, "entry_point", None), "name", "main"))
+            for stage in stages
+        }
+    )
+    rule_execution = _project_workgroup_rule_execution_metadata(
+        ast=ast,
+        stages=stages,
+        config=config,
+        unit=unit,
+        target=target,
+        variant=variant,
+        materialization=template_materialization,
+        source_sizes=source_sizes,
+    )
+    if rule_execution is not None:
+        return rule_execution
+
+    distinct_source_sizes = set(source_sizes.values())
+    if len(distinct_source_sizes) > 1:
+        raise ProjectWorkgroupSizeError(
+            "Compute entry points in one artifact declare conflicting workgroup "
+            "sizes; select one entry point or emit separate named variants.",
+            code="project.translate.workgroup-size-conflict",
+            reason="source-entry-point-conflict",
+            source_entry_points=source_entry_points,
+            workgroup_size=configured_size,
+            source_location=source_location,
+        )
+
+    if (
+        configured_size is not None
+        and configured_provenance is not None
+        and selected_entry_point is None
+        and len(source_entry_points) > 1
+    ):
+        materialized_execution = _project_materialized_workgroup_execution_metadata(
+            ast=ast,
+            stages=stages,
+            unit=unit,
+            target=target,
+            variant=variant,
+            materialization=template_materialization,
+            workgroup_size=configured_size,
+            provenance=configured_provenance,
+            source_sizes=source_sizes,
+        )
+        if materialized_execution is not None:
+            return materialized_execution
+
+    source_size = next(iter(distinct_source_sizes), None)
+    source_proves_shared_size = bool(source_entry_points) and (
+        set(source_sizes) == set(source_entry_points)
+        and len(distinct_source_sizes) == 1
+    )
+    aggregate_size_is_unproven = (
+        selected_entry_point is None
+        and len(source_entry_points) > 1
+        and not source_proves_shared_size
+        and (configured_size is not None or len(consumed_entries) > 1)
+    )
+    if aggregate_size_is_unproven:
+        raise ProjectWorkgroupSizeError(
+            "A multi-entry compute artifact cannot apply one workgroup size when "
+            "the emitted entry points do not declare a shared source size. Select "
+            "one entry point or emit independently specialized artifacts.",
+            code="project.translate.workgroup-size-entry-ambiguous",
+            reason="aggregate-entry-size-unproven",
+            source_entry_points=source_entry_points,
+            workgroup_size=configured_size,
+            source_location=source_location,
+        )
+    if configured_size is not None and source_size is not None:
+        if tuple(configured_size) != tuple(source_size):
+            raise ProjectWorkgroupSizeError(
+                "Configured workgroup size conflicts with concrete source execution "
+                "metadata.",
+                code="project.translate.workgroup-size-conflict",
+                reason="project-source-conflict",
+                source_entry_points=source_entry_points,
+                workgroup_size=configured_size,
+                source_workgroup_size=source_size,
+                source_location=source_location,
+            )
+
+    effective_size = configured_size or source_size
+    if effective_size is None and consumed_entries:
+        raise ProjectWorkgroupSizeError(
+            "A consumed threads_per_threadgroup value requires a concrete project "
+            "workgroup_size or source execution size for this target.",
+            code="project.translate.workgroup-size-required",
+            reason="consumed-source-value-unconfigured",
+            source_entry_points=consumed_entries,
+            source_location=source_location,
+        )
+    if effective_size is None:
+        return None
+
+    for stage in stages:
+        _set_crossgl_stage_workgroup_size(stage, effective_size)
+
+    if configured_provenance is not None:
+        provenance = configured_provenance
+    else:
+        entry_name = source_entry_points[0]
+        provenance = {
+            "kind": "source",
+            "path": (
+                f"source.entryPoints.{entry_name}.executionConfig."
+                f"{source_paths.get(entry_name, 'numthreads')}"
+            ),
+        }
+    return {
+        "workgroupSize": list(effective_size),
+        "sourceEntryPoints": source_entry_points,
+        "provenance": provenance,
+        "identity": _workgroup_execution_identity(
+            source=unit.relative_path,
+            target=target,
+            variant=variant,
+            source_entry_points=source_entry_points,
+            workgroup_size=effective_size,
+        ),
+    }
+
+
+def _generate_project_target_from_crossgl_ast(
+    *,
+    ast: Any,
+    target: str,
+    output_path: Path,
+    entry_point: str | None,
+    format_output: bool,
+    index_range_assertions: Sequence[IndexRangeAssertion] = (),
+) -> str:
+    codegen = get_codegen(target)
+    if index_range_assertions:
+        configure_index_ranges = getattr(codegen, "set_index_range_assertions", None)
+        if not callable(configure_index_ranges):
+            raise ValueError(
+                f"Target '{target}' does not consume index range assertions"
+            )
+        configure_index_ranges(index_range_assertions)
+    lower_default_arguments(ast)
+    validate_pointer_reinterpretation_target(ast, target)
+    if entry_point is None:
+        generated = codegen.generate(ast)
+    else:
+        generate_entry = getattr(codegen, "generate_entry", None)
+        if not callable(generate_entry):
+            raise ValueError(
+                "Entry-scoped artifact generation is not supported for the "
+                "requested target backend"
+            )
+        generated = generate_entry(ast, entry_point)
+    if format_output:
+        try:
+            from crosstl.formatter import format_shader_code
+        except ImportError:
+            pass
+        else:
+            generated = format_shader_code(generated, target, str(output_path))
+    with output_path.open("w", encoding="utf-8", newline="") as output_file:
+        output_file.write(generated)
+    return generated
+
+
+def _project_target_workgroup_entries(
+    output_path: Path,
+    target: str,
+) -> list[tuple[str, tuple[Any, ...]]]:
+    if target == "directx":
+        source = output_path.read_text(encoding="utf-8", errors="replace")
+        entries = []
+        for match in DIRECTX_HLSL_FUNCTION_RE.finditer(source):
+            dimensions = DIRECTX_HLSL_NUMTHREADS_VALUES_RE.search(
+                match.group("attributes") or ""
+            )
+            if dimensions is None:
+                continue
+            try:
+                size = tuple(
+                    parse_c_family_integral_literal(dimensions.group(axis))
+                    for axis in ("x", "y", "z")
+                )
+            except CFamilyIntegralLiteralError:
+                continue
+            entries.append((match.group("name"), size))
+        return entries
+
+    reflected = reflect_target_host_interface(output_path, target=target)
+    entries = []
+    for entry_point in _record_sequence(reflected.get("entryPoints")):
+        if (
+            not isinstance(entry_point, Mapping)
+            or entry_point.get("stage") != "compute"
+            or not _is_non_empty_string(entry_point.get("name"))
+        ):
+            continue
+        execution_config = entry_point.get("executionConfig")
+        if not isinstance(execution_config, Mapping):
+            continue
+        workgroup_size, _source = _runtime_manifest_execution_workgroup_size(
+            execution_config
+        )
+        if workgroup_size is not None:
+            entries.append((str(entry_point["name"]), tuple(workgroup_size)))
+    return entries
+
+
+def _validate_project_workgroup_target_output(
+    output_path: Path,
+    *,
+    target: str,
+    execution: Mapping[str, Any],
+) -> None:
+    execution_entries = [
+        entry
+        for entry in _record_sequence(execution.get("entryPoints"))
+        if isinstance(entry, Mapping) and "workgroupSize" in entry
+    ]
+    if execution_entries:
+        expected_by_target = {
+            str(entry.get("targetEntryPoint")): tuple(entry.get("workgroupSize", ()))
+            for entry in execution_entries
+            if _is_non_empty_string(entry.get("targetEntryPoint"))
+        }
+        reflected_entries = _project_target_workgroup_entries(output_path, target)
+        reflected_by_target = dict(reflected_entries)
+        reflected_names = [name for name, _size in reflected_entries]
+        if len(reflected_names) != len(set(reflected_names)) or set(
+            reflected_by_target
+        ) != set(expected_by_target):
+            raise ProjectWorkgroupSizeError(
+                "Generated target entries do not match the per-entry execution "
+                "specialization contract.",
+                code="project.translate.workgroup-size-materialization-invalid",
+                reason="target-entry-identity-mismatch",
+                source_entry_points=execution.get("sourceEntryPoints", ()),
+                materialization_details={
+                    "expectedTargetEntryPoints": sorted(expected_by_target),
+                    "reflectedTargetEntryPoints": sorted(reflected_by_target),
+                },
+            )
+        mismatches = [
+            (name, expected_by_target[name], reflected_by_target[name])
+            for name in sorted(expected_by_target)
+            if expected_by_target[name] != reflected_by_target[name]
+        ]
+        if mismatches:
+            name, expected_size, reflected_size = mismatches[0]
+            raise ProjectWorkgroupSizeError(
+                f"Generated target entry '{name}' has a workgroup size that does "
+                "not match its execution specialization.",
+                code="project.translate.workgroup-size-conflict",
+                reason="target-output-mismatch",
+                source_entry_points=execution.get("sourceEntryPoints", ()),
+                workgroup_size=expected_size,
+                source_workgroup_size=reflected_size,
+                materialization_details={"targetEntryPoint": name},
+            )
+        return
+
+    if "workgroupSize" not in execution:
+        return
+    expected = tuple(execution.get("workgroupSize", ()))
+    reflected = reflect_target_host_interface(output_path, target=target)
+    reflected_sizes = []
+    for entry_point in _record_sequence(reflected.get("entryPoints")):
+        if (
+            not isinstance(entry_point, Mapping)
+            or entry_point.get("stage") != "compute"
+        ):
+            continue
+        execution_config = entry_point.get("executionConfig")
+        if not isinstance(execution_config, Mapping):
+            continue
+        workgroup_size, _source = _runtime_manifest_execution_workgroup_size(
+            execution_config
+        )
+        if workgroup_size is not None:
+            reflected_sizes.append(tuple(workgroup_size))
+    if not reflected_sizes:
+        raise ProjectWorkgroupSizeError(
+            "Generated target artifact does not expose reflected workgroup-size "
+            "metadata.",
+            code="project.translate.workgroup-size-invalid",
+            reason="target-metadata-unavailable",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+            workgroup_size=expected,
+        )
+    mismatches = [size for size in reflected_sizes if size != expected]
+    if mismatches:
+        raise ProjectWorkgroupSizeError(
+            "Generated target workgroup size does not match the project execution "
+            "specialization.",
+            code="project.translate.workgroup-size-conflict",
+            reason="target-output-mismatch",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+            workgroup_size=expected,
+            source_workgroup_size=mismatches[0],
+        )
+
+
+def _validate_project_subgroup_width_target_output(
+    output_path: Path,
+    *,
+    execution: Mapping[str, Any],
+) -> None:
+    entries = [
+        entry
+        for entry in _record_sequence(execution.get("entryPoints"))
+        if isinstance(entry, Mapping) and "subgroupWidth" in entry
+    ]
+    if not entries:
+        return
+    expected = {
+        str(entry["targetEntryPoint"]): int(entry["subgroupWidth"]) for entry in entries
+    }
+    enforcement = execution.get("subgroupWidthEnforcement")
+    profiles = (
+        enforcement.get("entryProfiles") if isinstance(enforcement, Mapping) else None
+    )
+    profile_map = {
+        str(item.get("entryPoint")): str(item.get("profile"))
+        for item in _record_sequence(profiles)
+        if isinstance(item, Mapping)
+        and _is_non_empty_string(item.get("entryPoint"))
+        and _is_non_empty_string(item.get("profile"))
+    }
+    if (
+        not isinstance(enforcement, Mapping)
+        or enforcement.get("mechanism") != "hlsl-wave-size-attribute"
+        or enforcement.get("minimumShaderModel") != "6.6"
+        or set(profile_map) != set(expected)
+        or any(profile != "cs_6_6" for profile in profile_map.values())
+    ):
+        raise ProjectSubgroupWidthError(
+            "DirectX subgroup-width enforcement requires WaveSize and cs_6_6.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-profile-contract-invalid",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+        )
+
+    source = output_path.read_text(encoding="utf-8", errors="replace")
+    reflected = {}
+    for match in DIRECTX_HLSL_FUNCTION_RE.finditer(source):
+        attributes = match.group("attributes") or ""
+        if not DIRECTX_HLSL_NUMTHREADS_RE.search(attributes):
+            continue
+        matches = list(DIRECTX_HLSL_EXACT_WAVE_SIZE_RE.finditer(attributes))
+        width = None
+        if len(matches) == 1:
+            try:
+                width = parse_c_family_integral_literal(matches[0].group("width"))
+            except CFamilyIntegralLiteralError:
+                width = None
+        reflected[match.group("name")] = width
+    if set(reflected) != set(expected):
+        raise ProjectSubgroupWidthError(
+            "Generated DirectX entries do not match the subgroup-width contract.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-entry-identity-mismatch",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+        )
+    mismatch = next(
+        (
+            (name, expected[name], reflected[name])
+            for name in sorted(expected)
+            if reflected[name] != expected[name]
+        ),
+        None,
+    )
+    if mismatch is not None:
+        name, expected_width, reflected_width = mismatch
+        raise ProjectSubgroupWidthError(
+            f"Generated DirectX entry '{name}' does not enforce "
+            f"WaveSize({expected_width}).",
+            code="project.translate.subgroup-width-conflict",
+            reason="target-output-mismatch",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+            subgroup_width=expected_width,
+            source_subgroup_width=reflected_width,
+        )
+    generated_profiles = dict(_directx_dxc_entry_profiles_from_source(source) or ())
+    if set(generated_profiles) != set(expected) or any(
+        not profile.startswith("cs_") or _directx_dxc_profile_version(profile) < (6, 6)
+        for profile in generated_profiles.values()
+    ):
+        raise ProjectSubgroupWidthError(
+            "Generated DirectX entries do not require Shader Model 6.6 or newer.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-profile-too-low",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+        )
+
+
+def _opengl_workgroup_split_specs(
+    execution: Mapping[str, Any],
+    *,
+    unit: ProjectTranslationUnit,
+    variant: str | None,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    execution_entries = [
+        dict(entry)
+        for entry in _record_sequence(execution.get("entryPoints"))
+        if isinstance(entry, Mapping)
+    ]
+    if execution_entries:
+        specs = []
+        for entry in execution_entries:
+            source_entry = str(entry["sourceEntryPoint"])
+            materialized_entry = str(entry["materializedEntryPoint"])
+            split_entry = dict(entry)
+            split_entry["targetEntryPoint"] = "main"
+            split_entry["identity"] = _workgroup_rule_entry_identity(
+                source=unit.relative_path,
+                source_hash=unit.source_hash,
+                target="opengl",
+                variant=variant,
+                entry=split_entry,
+            )
+            split_execution = {
+                "sourceEntryPoints": [source_entry],
+                "entryPoints": [split_entry],
+                "provenance": dict(execution["provenance"]),
+            }
+            split_execution["identity"] = _workgroup_rule_execution_identity(
+                source=unit.relative_path,
+                source_hash=unit.source_hash,
+                target="opengl",
+                variant=variant,
+                source_entry_points=[source_entry],
+                entry_points=[split_entry],
+                provenance=split_execution["provenance"],
+            )
+            specs.append((source_entry, materialized_entry, split_execution))
+        return specs
+
+    source_entries = [str(entry) for entry in execution.get("sourceEntryPoints", ())]
+    if len(source_entries) <= 1:
+        return []
+    workgroup_size = list(execution["workgroupSize"])
+    specs = []
+    for source_entry in source_entries:
+        provenance = dict(execution["provenance"])
+        provenance_path = provenance.get("path")
+        if provenance.get("kind") == "source" and isinstance(provenance_path, str):
+            provenance["path"] = re.sub(
+                r"^source\.entryPoints\.[^.]+\.",
+                f"source.entryPoints.{source_entry}.",
+                provenance_path,
+            )
+        split_execution = {
+            "workgroupSize": workgroup_size,
+            "sourceEntryPoints": [source_entry],
+            "provenance": provenance,
+            "identity": _workgroup_execution_identity(
+                source=unit.relative_path,
+                target="opengl",
+                variant=variant,
+                source_entry_points=[source_entry],
+                workgroup_size=workgroup_size,
+            ),
+        }
+        specs.append((source_entry, source_entry, split_execution))
+    return specs
+
+
+def _template_materialization_for_entry(
+    materialization: Mapping[str, Any],
+    *,
+    source_entry_point: str,
+    materialized_entry_point: str,
+) -> dict[str, Any]:
+    payload = dict(materialization)
+    specializations = [
+        dict(record)
+        for record in _record_sequence(materialization.get("specializations"))
+        if isinstance(record, Mapping)
+    ]
+    selected = [
+        record
+        for record in specializations
+        if record.get("hostName") == source_entry_point
+        and record.get("materializedName") == materialized_entry_point
+    ]
+    if len(selected) != 1:
+        raise ValueError(
+            "Entry-scoped artifact must select exactly one host-named template "
+            "materialization"
+        )
+    payload["specializations"] = specializations
+    payload["specializationCount"] = len(specializations)
+    return payload
+
+
+def _finalize_project_generated_artifact(
+    *,
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+    artifact: dict[str, Any],
+    output_path: Path,
+    generated_source: str,
+    source_entry_point: str | None = None,
+) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
+    mojo_diagnostics = _mojo_unresolved_target_construct_diagnostics(
+        artifact, generated_source
+    )
+    metal_diagnostics: list[ProjectDiagnostic] = []
+    if unit.source_backend == "metal":
+        metal_diagnostics = _metal_unresolved_target_construct_diagnostics(
+            artifact, generated_source
+        )
+    diagnostics = [*mojo_diagnostics, *metal_diagnostics]
+    if diagnostics:
+        artifact["status"] = "failed"
+        artifact["error"] = diagnostics[0].message
+        _remove_artifact_output_files(output_path)
+        return [artifact], diagnostics
+
+    if source_entry_point is not None:
+        reflected = reflect_target_host_interface(output_path, target=target)
+        reflected_entries = reflected.get("entryPoints", [])
+        if len(reflected_entries) != 1:
+            raise ValueError(
+                "Entry-scoped target artifact must expose exactly one reflected "
+                "entry point"
+            )
+        reflected_entry = reflected_entries[0]
+        artifact["entryPoint"] = {
+            "source": source_entry_point,
+            "target": reflected_entry.get("name"),
+            "stage": reflected_entry.get("stage"),
+        }
+    if target == "directx":
+        uses_native_16bit_storage = hlsl_requires_native_16bit_types(generated_source)
+        if "// CrossGL exact bfloat16 lowering:" in generated_source:
+            artifact["bfloat16Lowering"] = {
+                "status": "exact",
+                "approximationUsed": False,
+                "registerRepresentation": "uint-low-16-bits",
+                "storageRepresentation": (
+                    "native-uint16" if uses_native_16bit_storage else "not-required"
+                ),
+                "roundingMode": "round-to-nearest-ties-to-even",
+            }
+        if uses_native_16bit_storage:
+            required_capabilities = set(artifact.get("requiredCapabilities", ()))
+            required_capabilities.add("directx.native-16bit-types")
+            artifact["requiredCapabilities"] = sorted(required_capabilities)
+    artifact["generatedHash"] = _source_hash(output_path)
+    artifact["generatedSizeBytes"] = output_path.stat().st_size
+    artifact["sourceMap"] = _artifact_source_map(config, unit, target, output_path)
+    split_artifacts = _webgl_split_stage_artifacts(config, unit, artifact, output_path)
+    if split_artifacts is not None:
+        records = split_artifacts
+    else:
+        _attach_artifact_source_remap(config, target, artifact, output_path)
+        records = [artifact]
+    diagnostics.extend(_generated_placeholder_diagnostics(records, config))
+    return records, diagnostics
+
+
 def translate_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -19846,8 +22498,13 @@ def translate_project(
             variants=config.variants,
             specialization_constants=config.specialization_constants,
             variant_specialization_constants=(config.variant_specialization_constants),
+            workgroup_size=config.workgroup_size,
+            variant_workgroup_sizes=config.variant_workgroup_sizes,
+            workgroup_size_rules=config.workgroup_size_rules,
+            subgroup_width_rules=config.subgroup_width_rules,
             selected_variants=config.selected_variants,
             external_corpus_manifest=config.external_corpus_manifest,
+            index_range_assertions=config.index_range_assertions,
         )
     config = _config_with_selected_variants(config, variants)
 
@@ -19984,7 +22641,30 @@ def translate_project(
                     unit.relative_path,
                     target=target,
                 )
+                index_range_assertions = (
+                    _index_range_assertions_for_unit(config, unit.relative_path)
+                    if target in {"opengl", "webgl"}
+                    else ()
+                )
                 try:
+                    unsupported_rule_target = (
+                        _unsupported_workgroup_size_rule_target_error(
+                            config,
+                            unit,
+                            target,
+                        )
+                    )
+                    if unsupported_rule_target is not None:
+                        raise unsupported_rule_target
+                    unsupported_subgroup_target = (
+                        _unsupported_subgroup_width_rule_target_error(
+                            config,
+                            unit,
+                            target,
+                        )
+                    )
+                    if unsupported_subgroup_target is not None:
+                        raise unsupported_subgroup_target
                     template_materialization = (
                         _project_template_materialization_for_artifact(
                             unit=unit,
@@ -20034,6 +22714,8 @@ def translate_project(
                         continue
                 artifact_records = [artifact]
                 template_temp_dir: tempfile.TemporaryDirectory[str] | None = None
+                split_output_paths: list[Path] = []
+                generated_records_finalized = False
                 try:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     translation_input_path = unit.path
@@ -20179,65 +22861,258 @@ def translate_project(
                         translate_kwargs["entry_point"] = selected_entry_point
                     if translation_source_options:
                         translate_kwargs["source_options"] = translation_source_options
-                    generated_source = translate(
-                        str(translation_input_path), **translate_kwargs
-                    )
-                    mojo_host_diagnostics = (
-                        _mojo_unresolved_target_construct_diagnostics(
-                            artifact, generated_source
+                    generated_source = None
+                    crossgl_ast = None
+                    requires_workgroup_specialization = (
+                        target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS
+                        and (
+                            unit.source_backend == "metal"
+                            or translation_source_backend in {"cgl", "crossgl"}
+                        )
+                        and _project_input_requires_workgroup_specialization(
+                            input_path=translation_input_path,
+                            source_backend=translation_source_backend,
+                            config=config,
+                            variant=variant,
+                            project_relative_path=unit.relative_path,
                         )
                     )
-                    metal_construct_diagnostics: list[ProjectDiagnostic] = []
-                    if unit.source_backend == "metal":
-                        metal_construct_diagnostics = (
-                            _metal_unresolved_target_construct_diagnostics(
-                                artifact, generated_source
-                            )
-                        )
-                    unresolved_construct_diagnostics = (
-                        mojo_host_diagnostics + metal_construct_diagnostics
+                    requires_subgroup_specialization = (
+                        target == "directx"
+                        and _configured_subgroup_width_rule(config, unit.relative_path)
+                        is not None
                     )
-                    if unresolved_construct_diagnostics:
-                        artifact["status"] = "failed"
-                        artifact["error"] = unresolved_construct_diagnostics[0].message
-                        _remove_artifact_output_files(output_path)
-                        artifact_records = [artifact]
-                    else:
-                        if selected_entry_point is not None:
-                            reflected = reflect_target_host_interface(
-                                output_path,
+                    if (
+                        requires_workgroup_specialization
+                        or requires_subgroup_specialization
+                    ):
+                        crossgl_ast = _crossgl_ast_for_project_target(
+                            input_path=translation_input_path,
+                            source_backend=translation_source_backend,
+                            original_source_backend=unit.source_backend,
+                            target=target,
+                            include_paths=translation_include_paths,
+                            defines=translation_defines,
+                            source_options=translation_source_options,
+                            source_is_materialized=(
+                                template_materialization is not None
+                            ),
+                        )
+                        workgroup_execution = _project_workgroup_execution_metadata(
+                            ast=crossgl_ast,
+                            config=config,
+                            unit=unit,
+                            target=target,
+                            variant=variant,
+                            selected_entry_point=selected_entry_point,
+                            template_materialization=(
+                                template_materialization.metadata
+                                if template_materialization is not None
+                                else None
+                            ),
+                        )
+                        subgroup_execution = (
+                            _project_subgroup_width_rule_execution_metadata(
+                                ast=crossgl_ast,
+                                stages=_crossgl_compute_stages(
+                                    crossgl_ast, selected_entry_point
+                                ),
+                                config=config,
+                                unit=unit,
                                 target=target,
+                                variant=variant,
+                                materialization=(
+                                    template_materialization.metadata
+                                    if template_materialization is not None
+                                    else None
+                                ),
                             )
-                            reflected_entries = reflected.get("entryPoints", [])
-                            if len(reflected_entries) != 1:
-                                raise ValueError(
-                                    "Entry-scoped target artifact must expose exactly "
-                                    "one reflected entry point"
+                            if requires_subgroup_specialization
+                            else None
+                        )
+                        execution = workgroup_execution
+                        if subgroup_execution is not None:
+                            execution = _merge_subgroup_rule_execution(
+                                workgroup=workgroup_execution,
+                                subgroup=subgroup_execution,
+                                unit=unit,
+                                target=target,
+                                variant=variant,
+                            )
+                        if execution is not None:
+                            split_specs = (
+                                _opengl_workgroup_split_specs(
+                                    execution,
+                                    unit=unit,
+                                    variant=variant,
                                 )
-                            reflected_entry = reflected_entries[0]
-                            artifact["entryPoint"] = {
-                                "source": selected_entry_point,
-                                "target": reflected_entry.get("name"),
-                                "stage": reflected_entry.get("stage"),
-                            }
-                        artifact["generatedHash"] = _source_hash(output_path)
-                        artifact["generatedSizeBytes"] = output_path.stat().st_size
-                        artifact["sourceMap"] = _artifact_source_map(
-                            config, unit, target, output_path
-                        )
-                        split_artifacts = _webgl_split_stage_artifacts(
-                            config, unit, artifact, output_path
-                        )
-                        if split_artifacts is not None:
-                            artifact_records = split_artifacts
-                        else:
-                            _attach_artifact_source_remap(
-                                config, target, artifact, output_path
+                                if target == "opengl" and selected_entry_point is None
+                                else []
                             )
-                        diagnostics.extend(
-                            _generated_placeholder_diagnostics(artifact_records, config)
+                            if split_specs:
+                                artifact_records = []
+                                generated_sources = []
+                                for (
+                                    source_entry,
+                                    materialized_entry,
+                                    split_execution,
+                                ) in split_specs:
+                                    split_output_path = _artifact_path(
+                                        config,
+                                        unit,
+                                        target,
+                                        variant,
+                                        preserve_source_suffix=(
+                                            unit.relative_path,
+                                            target,
+                                        )
+                                        in preserve_source_suffix,
+                                        entry_point=source_entry,
+                                    )
+                                    split_output_path.parent.mkdir(
+                                        parents=True, exist_ok=True
+                                    )
+                                    split_output_paths.append(split_output_path)
+                                    split_artifact = dict(artifact)
+                                    split_artifact["path"] = _artifact_report_path(
+                                        split_output_path, config
+                                    )
+                                    split_artifact["provenance"] = {
+                                        **dict(artifact["provenance"]),
+                                        "pipeline": "entry-scoped-translate",
+                                    }
+                                    if isinstance(
+                                        artifact.get("templateMaterialization"),
+                                        Mapping,
+                                    ):
+                                        split_artifact["templateMaterialization"] = (
+                                            _template_materialization_for_entry(
+                                                artifact["templateMaterialization"],
+                                                source_entry_point=source_entry,
+                                                materialized_entry_point=(
+                                                    materialized_entry
+                                                ),
+                                            )
+                                        )
+                                    split_artifact["execution"] = split_execution
+                                    try:
+                                        split_source = (
+                                            _generate_project_target_from_crossgl_ast(
+                                                ast=crossgl_ast,
+                                                target=target,
+                                                output_path=split_output_path,
+                                                entry_point=materialized_entry,
+                                                format_output=format_output,
+                                                index_range_assertions=(
+                                                    index_range_assertions
+                                                ),
+                                            )
+                                        )
+                                    except Exception as exc:
+                                        if getattr(
+                                            exc, "project_diagnostic_code", None
+                                        ) == "project.translate.workgroup-size-invalid" and not getattr(
+                                            exc, "source_entry_points", ()
+                                        ):
+                                            exc.source_entry_points = (source_entry,)
+                                        raise
+                                    _validate_project_workgroup_target_output(
+                                        split_output_path,
+                                        target=target,
+                                        execution=split_execution,
+                                    )
+                                    _validate_project_subgroup_width_target_output(
+                                        split_output_path,
+                                        execution=split_execution,
+                                    )
+                                    records, split_diagnostics = (
+                                        _finalize_project_generated_artifact(
+                                            config=config,
+                                            unit=unit,
+                                            target=target,
+                                            artifact=split_artifact,
+                                            output_path=split_output_path,
+                                            generated_source=split_source,
+                                            source_entry_point=source_entry,
+                                        )
+                                    )
+                                    artifact_records.extend(records)
+                                    diagnostics.extend(split_diagnostics)
+                                    generated_sources.append(split_source)
+                                generated_source = "\n".join(generated_sources)
+                                generated_records_finalized = True
+                            else:
+                                artifact["execution"] = execution
+                                try:
+                                    generated_source = (
+                                        _generate_project_target_from_crossgl_ast(
+                                            ast=crossgl_ast,
+                                            target=target,
+                                            output_path=output_path,
+                                            entry_point=selected_entry_point,
+                                            format_output=format_output,
+                                            index_range_assertions=(
+                                                index_range_assertions
+                                            ),
+                                        )
+                                    )
+                                except Exception as exc:
+                                    if getattr(
+                                        exc, "project_diagnostic_code", None
+                                    ) == "project.translate.workgroup-size-invalid" and not getattr(
+                                        exc, "source_entry_points", ()
+                                    ):
+                                        exc.source_entry_points = tuple(
+                                            execution.get("sourceEntryPoints", ())
+                                        )
+                                    raise
+                                _validate_project_workgroup_target_output(
+                                    output_path,
+                                    target=target,
+                                    execution=execution,
+                                )
+                                _validate_project_subgroup_width_target_output(
+                                    output_path,
+                                    execution=execution,
+                                )
+                    if generated_source is None and index_range_assertions:
+                        crossgl_ast = crossgl_ast or _crossgl_ast_for_project_target(
+                            input_path=translation_input_path,
+                            source_backend=translation_source_backend,
+                            original_source_backend=unit.source_backend,
+                            target=target,
+                            include_paths=translation_include_paths,
+                            defines=translation_defines,
+                            source_options=translation_source_options,
+                            source_is_materialized=(
+                                template_materialization is not None
+                            ),
                         )
-                    diagnostics.extend(unresolved_construct_diagnostics)
+                        generated_source = _generate_project_target_from_crossgl_ast(
+                            ast=crossgl_ast,
+                            target=target,
+                            output_path=output_path,
+                            entry_point=selected_entry_point,
+                            format_output=format_output,
+                            index_range_assertions=index_range_assertions,
+                        )
+                    if generated_source is None:
+                        generated_source = translate(
+                            str(translation_input_path), **translate_kwargs
+                        )
+                    if not generated_records_finalized:
+                        artifact_records, generated_diagnostics = (
+                            _finalize_project_generated_artifact(
+                                config=config,
+                                unit=unit,
+                                target=target,
+                                artifact=artifact,
+                                output_path=output_path,
+                                generated_source=generated_source,
+                                source_entry_point=selected_entry_point,
+                            )
+                        )
+                        diagnostics.extend(generated_diagnostics)
                 except ProjectSpecializationError as exc:
                     failure_message = str(exc)
                     artifact["status"] = "failed"
@@ -20247,6 +23122,8 @@ def translate_project(
                     artifact.pop("sourceMap", None)
                     artifact.pop("sourceRemap", None)
                     _remove_artifact_output_files(output_path)
+                    for split_output_path in split_output_paths:
+                        _remove_artifact_output_files(split_output_path)
                     artifact_records = [artifact]
                     diagnostics.extend(exc.diagnostics)
                 except Exception as exc:  # noqa: BLE001
@@ -20265,6 +23142,8 @@ def translate_project(
                     artifact.pop("sourceMap", None)
                     artifact.pop("sourceRemap", None)
                     _remove_artifact_output_files(output_path)
+                    for split_output_path in split_output_paths:
+                        _remove_artifact_output_files(split_output_path)
                     artifact_records = [artifact]
                     diagnostics.extend(
                         _translation_failure_project_diagnostics(
@@ -21520,6 +24399,57 @@ def _missing_generated_placeholder_diagnostics(
     return missing
 
 
+def _subgroup_width_target_validation_diagnostics(
+    artifact: Mapping[str, Any],
+    artifact_path: Path,
+) -> list[ProjectDiagnostic]:
+    execution = artifact.get("execution")
+    if artifact.get("target") != "directx" or not isinstance(execution, Mapping):
+        return []
+    entries = [
+        entry
+        for entry in _record_sequence(execution.get("entryPoints"))
+        if isinstance(entry, Mapping) and "subgroupWidth" in entry
+    ]
+    if not entries:
+        return []
+
+    try:
+        _validate_project_subgroup_width_target_output(
+            artifact_path,
+            execution=execution,
+        )
+    except ProjectSubgroupWidthError as exc:
+        specialization = {
+            "reason": exc.reason,
+            "sourceEntryPoints": list(exc.source_entry_points),
+        }
+        if exc.subgroup_width is not None:
+            specialization["subgroupWidth"] = exc.subgroup_width
+        if exc.source_subgroup_width is not None:
+            specialization["sourceSubgroupWidth"] = exc.source_subgroup_width
+        return [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.validate.subgroup-width-contract-mismatch",
+                message=(
+                    "Generated artifact does not satisfy its recorded "
+                    f"subgroup-width contract: {artifact['path']}: {exc}"
+                ),
+                location=SourceLocation(file=str(artifact["source"])),
+                **_artifact_diagnostic_context(artifact),
+                check_kind=exc.check_kind,
+                missing_capabilities=list(exc.missing_capabilities),
+                details={
+                    "sourcePath": str(artifact["source"]),
+                    "targetArtifact": str(artifact["path"]),
+                    "executionSpecialization": specialization,
+                },
+            )
+        ]
+    return []
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -21658,6 +24588,7 @@ def _validate_artifacts(
         generated_size = artifact.get("generatedSizeBytes")
         source_remap_diagnostics: list[ProjectDiagnostic] = []
         source_map_diagnostics: list[ProjectDiagnostic] = []
+        subgroup_width_diagnostics: list[ProjectDiagnostic] = []
         if artifact.get("status") == "translated":
             if not artifact_inside_project:
                 generated_hash_status = "outside-project"
@@ -21717,6 +24648,14 @@ def _validate_artifacts(
                 generated_hash_status=generated_hash_status,
             )
             diagnostics.extend(source_map_diagnostics)
+            if exists and generated_hash_status in {"ok", "not-recorded"}:
+                subgroup_width_diagnostics = (
+                    _subgroup_width_target_validation_diagnostics(
+                        artifact,
+                        artifact_path,
+                    )
+                )
+                diagnostics.extend(subgroup_width_diagnostics)
         source_map_status = _source_map_validation_status(
             artifact,
             source_hash_status=source_hash_status,
@@ -21760,6 +24699,7 @@ def _validate_artifacts(
                 and generated_size_status in {"ok", "not-recorded"}
                 and not source_remap_diagnostics
                 and not source_map_diagnostics
+                and not subgroup_width_diagnostics
                 else "failed"
             ),
             "sourceHashStatus": source_hash_status,
@@ -23246,6 +26186,68 @@ def _runtime_manifest_entry_points(
     ]
 
 
+def _runtime_manifest_execution_host_interface(
+    artifact: Mapping[str, Any],
+    host_interface: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    if artifact.get("target") != "directx" or not isinstance(host_interface, Mapping):
+        return host_interface
+    execution = artifact.get("execution")
+    execution_entries = (
+        execution.get("entryPoints") if isinstance(execution, Mapping) else None
+    )
+    if not isinstance(execution_entries, list) or not execution_entries:
+        return host_interface
+
+    reflected_entries = _runtime_manifest_entry_points(host_interface)
+    reflected_by_name = {
+        str(entry.get("name")): entry
+        for entry in reflected_entries
+        if _is_non_empty_string(entry.get("name"))
+    }
+    entry_points = []
+    expected_names = set()
+    for execution_entry in execution_entries:
+        if not isinstance(execution_entry, Mapping):
+            continue
+        name = execution_entry.get("targetEntryPoint")
+        size = execution_entry.get("workgroupSize")
+        subgroup_width = execution_entry.get("subgroupWidth")
+        if not _is_non_empty_string(name) or (
+            not isinstance(size, list) and subgroup_width is None
+        ):
+            continue
+        expected_names.add(str(name))
+        entry_point = dict(reflected_by_name.get(str(name), {}))
+        execution_config = (
+            dict(entry_point.get("executionConfig"))
+            if isinstance(entry_point.get("executionConfig"), Mapping)
+            else {}
+        )
+        if isinstance(size, list):
+            execution_config["numthreads"] = list(size)
+        if subgroup_width is not None:
+            execution_config["subgroupWidth"] = subgroup_width
+        entry_point.update(
+            {
+                "name": str(name),
+                "stage": "compute",
+                "executionConfig": execution_config,
+            }
+        )
+        entry_points.append(entry_point)
+    entry_points.extend(
+        entry for entry in reflected_entries if entry.get("name") not in expected_names
+    )
+    if not entry_points:
+        return host_interface
+
+    payload = dict(host_interface)
+    payload["entryPoints"] = entry_points
+    payload["entryPointCount"] = len(entry_points)
+    return payload
+
+
 def _runtime_manifest_resources(
     host_interface: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -23572,6 +26574,9 @@ def _runtime_manifest_artifact(
     toolchain_runs: Mapping[tuple[Any, ...], Sequence[Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     host_interface = _runtime_manifest_host_interface(root_path, artifact)
+    host_interface = _runtime_manifest_execution_host_interface(
+        artifact, host_interface
+    )
     entry_points = _runtime_manifest_entry_points(host_interface)
     resource_bindings = _runtime_manifest_resource_bindings(host_interface)
     specialization_constants = _runtime_manifest_specialization_constants(
@@ -23617,6 +26622,11 @@ def _runtime_manifest_artifact(
         "specializationMaterialization": (
             dict(artifact.get("specializationMaterialization"))
             if isinstance(artifact.get("specializationMaterialization"), Mapping)
+            else None
+        ),
+        "execution": (
+            dict(artifact.get("execution"))
+            if isinstance(artifact.get("execution"), Mapping)
             else None
         ),
         "sourceHash": artifact.get("sourceHash"),
@@ -26131,6 +29141,178 @@ def _runtime_package_artifact_host_interface(
     )
 
 
+def _runtime_package_directx_execution_host_interface(
+    package_root: Path,
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if artifact.get("target") != "directx":
+        return None
+    package_path = artifact.get("packagePath")
+    if not _is_non_empty_string(package_path):
+        return None
+    artifact_path = (package_root / str(package_path)).resolve()
+    if not _is_relative_to(artifact_path, package_root) or not artifact_path.is_file():
+        return None
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    source = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
+    source = re.sub(r"//.*", "", source)
+
+    declared_host_interface = artifact.get("hostInterface")
+    declared_entries = {
+        str(entry["name"]): entry
+        for entry in _record_sequence(
+            declared_host_interface.get("entryPoints")
+            if isinstance(declared_host_interface, Mapping)
+            else None
+        )
+        if isinstance(entry, Mapping) and _is_non_empty_string(entry.get("name"))
+    }
+    entries = []
+    for match in DIRECTX_HLSL_FUNCTION_RE.finditer(source):
+        attributes = match.group("attributes") or ""
+        dimensions = DIRECTX_HLSL_NUMTHREADS_VALUES_RE.search(attributes)
+        if dimensions is None:
+            continue
+        components = []
+        for axis in ("x", "y", "z"):
+            raw_value = dimensions.group(axis).strip()
+            try:
+                value: Any = parse_c_family_integral_literal(raw_value)
+            except CFamilyIntegralLiteralError:
+                value = raw_value
+            components.append(value)
+        execution_config: dict[str, Any] = {"numthreads": components}
+        wave_sizes = list(DIRECTX_HLSL_WAVE_SIZE_RE.finditer(attributes))
+        if wave_sizes:
+            arguments = [
+                wave_size.group("arguments").strip() for wave_size in wave_sizes
+            ]
+            if len(arguments) == 1 and "," not in arguments[0]:
+                try:
+                    subgroup_width: Any = parse_c_family_integral_literal(arguments[0])
+                except CFamilyIntegralLiteralError:
+                    subgroup_width = arguments[0]
+            else:
+                subgroup_width = arguments
+            execution_config["subgroupWidth"] = subgroup_width
+        else:
+            declared_entry = declared_entries.get(str(match.group("name")))
+            declared_config = (
+                declared_entry.get("executionConfig")
+                if isinstance(declared_entry, Mapping)
+                else None
+            )
+            declared_subgroups = [
+                declared_config.get(field_name)
+                for field_name in _RUNTIME_VARIANT_SUBGROUP_WIDTH_FIELDS
+                if isinstance(declared_config, Mapping)
+                and declared_config.get(field_name) is not None
+            ]
+            if declared_subgroups:
+                execution_config["subgroupWidth"] = {
+                    "compiled": None,
+                    "declared": declared_subgroups,
+                }
+        entries.append(
+            {
+                "name": match.group("name"),
+                "stage": "compute",
+                "executionConfig": execution_config,
+            }
+        )
+    if not entries:
+        return None
+    return {
+        "status": "ready",
+        "entryPoints": entries,
+    }
+
+
+def _runtime_merge_host_interface_execution_entries(
+    reflected: Mapping[str, Any],
+    declared: Any,
+) -> dict[str, Any]:
+    if not isinstance(declared, Mapping):
+        return dict(reflected)
+    payload = dict(reflected)
+    reflected_entries = [
+        entry
+        for entry in _record_sequence(reflected.get("entryPoints"))
+        if isinstance(entry, Mapping) and _is_non_empty_string(entry.get("name"))
+    ]
+    declared_entries = [
+        entry
+        for entry in _record_sequence(declared.get("entryPoints"))
+        if isinstance(entry, Mapping) and _is_non_empty_string(entry.get("name"))
+    ]
+    entries_by_name = {str(entry["name"]): dict(entry) for entry in reflected_entries}
+    entry_order = [str(entry["name"]) for entry in reflected_entries]
+    for declared_entry in sorted(
+        declared_entries,
+        key=_runtime_variant_canonical_json,
+    ):
+        name = str(declared_entry["name"])
+        reflected_entry = entries_by_name.get(name)
+        if reflected_entry is None:
+            entries_by_name[name] = dict(declared_entry)
+            entry_order.append(name)
+            continue
+        reflected_config = reflected_entry.get("executionConfig")
+        declared_config = declared_entry.get("executionConfig")
+        combined_config = (
+            dict(reflected_config) if isinstance(reflected_config, Mapping) else {}
+        )
+        if isinstance(declared_config, Mapping):
+            for field_name, value in declared_config.items():
+                if field_name not in combined_config:
+                    combined_config[field_name] = value
+                    continue
+                if combined_config[field_name] == value:
+                    continue
+                if (combined_config[field_name] is None) != (value is None):
+                    combined_config[field_name] = {
+                        "reflected": combined_config[field_name],
+                        "declared": value,
+                    }
+                    continue
+                conflict_fields = (
+                    _RUNTIME_VARIANT_WORKGROUP_SIZE_FIELDS
+                    if field_name in _RUNTIME_VARIANT_WORKGROUP_SIZE_FIELDS
+                    else (
+                        _RUNTIME_VARIANT_SUBGROUP_WIDTH_FIELDS
+                        if field_name in _RUNTIME_VARIANT_SUBGROUP_WIDTH_FIELDS
+                        else ()
+                    )
+                )
+                conflict_field = next(
+                    (
+                        candidate
+                        for candidate in conflict_fields
+                        if candidate != field_name and candidate not in combined_config
+                    ),
+                    None,
+                )
+                if conflict_field is not None:
+                    combined_config[conflict_field] = value
+                elif conflict_fields:
+                    combined_config[field_name] = {
+                        "reflected": combined_config[field_name],
+                        "declared": value,
+                    }
+        reflected_entry["executionConfig"] = combined_config
+        if not _is_non_empty_string(reflected_entry.get("stage")):
+            reflected_entry["stage"] = declared_entry.get("stage")
+        entries_by_name[name] = reflected_entry
+    payload["entryPoints"] = [entries_by_name[name] for name in entry_order]
+    payload["entryPointCount"] = len(entries_by_name)
+    if payload["entryPoints"] and payload.get("status") != "ready":
+        payload["status"] = declared.get("status")
+    return payload
+
+
 def _runtime_package_inspection_host_interface(
     *,
     package_root: Path,
@@ -26247,7 +29429,18 @@ def _runtime_package_inspection_host_interface(
             ),
         )
         if isinstance(reflected_interface, Mapping):
-            return dict(reflected_interface)
+            execution_interface = _runtime_package_directx_execution_host_interface(
+                package_root,
+                artifact,
+            )
+            reflected_with_execution = _runtime_merge_host_interface_execution_entries(
+                reflected_interface,
+                execution_interface,
+            )
+            return _runtime_merge_host_interface_execution_entries(
+                reflected_with_execution,
+                artifact.get("hostInterface"),
+            )
 
     if source_spec is None:
         source_host_interface = _runtime_package_artifact_host_interface(artifact)
@@ -27371,6 +30564,19 @@ def _runtime_loader_package_artifact_path(
     return artifact_path
 
 
+def _runtime_loader_directx_source(
+    adapter: Mapping[str, Any], *, package_root: Path | None = None
+) -> str:
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(package_path):
+        return ""
+    artifact_path = _runtime_loader_package_artifact_path(package_path, package_root)
+    try:
+        return artifact_path.read_text(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        return ""
+
+
 def _runtime_loader_directx_entry_profiles(
     adapter: Mapping[str, Any],
     *,
@@ -27408,14 +30614,36 @@ def _runtime_loader_directx_commands(
     if not _is_non_empty_string(package_path) or not tools:
         return []
     command_path = _runtime_loader_package_command_path(package_path)
+    source = _runtime_loader_directx_source(adapter, package_root=package_root)
+    compiler_arguments = dxc_compiler_arguments_for_source(source)
     entry_profiles = _runtime_loader_directx_entry_profiles(
         adapter, package_root=package_root
     )
     tool = tools[0]
     if entry_profiles is None:
-        return [[tool, "-T", "lib_6_3", command_path, "-Fo", os.devnull]]
+        return [
+            [
+                tool,
+                "-T",
+                dxc_profile_for_source("lib_6_3", source),
+                *compiler_arguments,
+                command_path,
+                "-Fo",
+                os.devnull,
+            ]
+        ]
     return [
-        [tool, "-T", profile, "-E", entry, command_path, "-Fo", os.devnull]
+        [
+            tool,
+            "-T",
+            profile,
+            *compiler_arguments,
+            "-E",
+            entry,
+            command_path,
+            "-Fo",
+            os.devnull,
+        ]
         for entry, profile in entry_profiles
     ]
 
@@ -27461,16 +30689,22 @@ def _runtime_loader_target_load_metadata(
             metadata["programGroup"] = dict(program_group)
         return metadata
     if normalized_target == "directx":
-        return {
+        source = _runtime_loader_directx_source(adapter, package_root=package_root)
+        compiler_arguments = dxc_compiler_arguments_for_source(source)
+        metadata = {
             "runtime": "directx",
             "artifactFormat": adapter.get("artifactFormat"),
             "compiler": "dxc",
-            "targetProfiles": ["directx-11", "directx-12"],
+            "targetProfiles": list(directx_target_profiles_for_source(source)),
             "source": _runtime_loader_metadata_source(package_path),
             "entryProfiles": _runtime_loader_directx_entry_profile_metadata(
                 adapter, package_root=package_root
             ),
         }
+        if compiler_arguments:
+            metadata["compilerArguments"] = list(compiler_arguments)
+            metadata["minimumShaderModel"] = "6.2"
+        return metadata
     return {}
 
 
@@ -28117,6 +31351,153 @@ def _runtime_variant_mapping_contract_reasons(
     return reasons
 
 
+def _runtime_variant_execution_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = _unsupported_mapping_field_reasons(
+        prefix,
+        value,
+        RUNTIME_VARIANT_KEY_EXECUTION_FIELDS,
+    )
+    missing = sorted(RUNTIME_VARIANT_KEY_EXECUTION_FIELDS - set(value))
+    if missing:
+        reasons.append(f"{prefix} is missing fields: {', '.join(missing)}")
+
+    workgroup_size = value.get("workgroupSize")
+    if workgroup_size is not None:
+        if not isinstance(workgroup_size, list) or len(workgroup_size) != 3:
+            reasons.append(
+                f"{prefix}.workgroupSize must be a three-component list or null"
+            )
+        else:
+            for index, component in enumerate(workgroup_size):
+                if (
+                    not isinstance(component, int)
+                    or isinstance(component, bool)
+                    or component <= 0
+                ):
+                    reasons.append(
+                        f"{prefix}.workgroupSize[{index}] must be a positive integer"
+                    )
+
+    subgroup_width = value.get("subgroupWidth")
+    if subgroup_width is not None and (
+        not isinstance(subgroup_width, int)
+        or isinstance(subgroup_width, bool)
+        or subgroup_width <= 0
+    ):
+        reasons.append(f"{prefix}.subgroupWidth must be a positive integer or null")
+    return reasons
+
+
+def _runtime_variant_normalized_execution(value: Any) -> Any:
+    if value is None:
+        return {"workgroupSize": None, "subgroupWidth": None}
+    if not isinstance(value, Mapping):
+        return value
+    normalized = dict(value)
+    workgroup_size = normalized.get("workgroupSize")
+    if isinstance(workgroup_size, Sequence) and not isinstance(
+        workgroup_size, (str, bytes, bytearray)
+    ):
+        normalized["workgroupSize"] = list(workgroup_size)
+    normalized.setdefault("workgroupSize", None)
+    normalized.setdefault("subgroupWidth", None)
+    return _runtime_variant_normalize_json(normalized)
+
+
+def _runtime_variant_selected_entry_execution(
+    prefix: str,
+    entry_point: Any,
+) -> tuple[dict[str, Any], list[str]]:
+    execution = {"workgroupSize": None, "subgroupWidth": None}
+    if entry_point is None:
+        return execution, []
+    if not isinstance(entry_point, Mapping):
+        return execution, [f"{prefix} must be an object or null"]
+    execution_config = entry_point.get("executionConfig")
+    if not isinstance(execution_config, Mapping):
+        return execution, [f"{prefix}.executionConfig must be an object"]
+
+    reasons: list[str] = []
+    workgroup_candidates: list[tuple[str, list[int]]] = []
+    for field_name in _RUNTIME_VARIANT_WORKGROUP_SIZE_FIELDS:
+        if (
+            field_name not in execution_config
+            or execution_config.get(field_name) is None
+        ):
+            continue
+        field_prefix = f"{prefix}.executionConfig.{field_name}"
+        value = execution_config.get(field_name)
+        if not isinstance(value, Sequence) or isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            reasons.append(f"{field_prefix} must be a three-component sequence")
+            continue
+        components = list(value)
+        if len(components) != 3:
+            reasons.append(f"{field_prefix} must contain exactly three components")
+            continue
+        if any(
+            not isinstance(component, int)
+            or isinstance(component, bool)
+            or component <= 0
+            for component in components
+        ):
+            reasons.append(f"{field_prefix} components must be exact positive integers")
+            continue
+        workgroup_candidates.append((field_name, list(components)))
+
+    if any(
+        field_name in execution_config
+        for field_name in _RUNTIME_VARIANT_LOCAL_SIZE_FIELDS
+    ):
+        components = [
+            execution_config.get(field_name, 1)
+            for field_name in _RUNTIME_VARIANT_LOCAL_SIZE_FIELDS
+        ]
+        field_prefix = f"{prefix}.executionConfig.local_size"
+        if any(
+            not isinstance(component, int)
+            or isinstance(component, bool)
+            or component <= 0
+            for component in components
+        ):
+            reasons.append(f"{field_prefix} components must be exact positive integers")
+        else:
+            workgroup_candidates.append(("local_size", list(components)))
+
+    workgroup_values = {tuple(value) for _field, value in workgroup_candidates}
+    if len(workgroup_values) > 1:
+        reasons.append(f"{prefix}.executionConfig contains conflicting workgroup sizes")
+    elif workgroup_values:
+        execution["workgroupSize"] = list(next(iter(workgroup_values)))
+
+    subgroup_candidates: list[tuple[str, int]] = []
+    for field_name in _RUNTIME_VARIANT_SUBGROUP_WIDTH_FIELDS:
+        if (
+            field_name not in execution_config
+            or execution_config.get(field_name) is None
+        ):
+            continue
+        field_prefix = f"{prefix}.executionConfig.{field_name}"
+        value = execution_config.get(field_name)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            reasons.append(f"{field_prefix} must be an exact positive integer")
+            continue
+        subgroup_candidates.append((field_name, value))
+
+    subgroup_values = {value for _field, value in subgroup_candidates}
+    if len(subgroup_values) > 1:
+        reasons.append(f"{prefix}.executionConfig contains conflicting subgroup widths")
+    elif subgroup_values:
+        execution["subgroupWidth"] = next(iter(subgroup_values))
+    return execution, sorted(set(reasons))
+
+
 def _runtime_variant_key_specialization_contract_reasons(
     prefix: str,
     values: Any,
@@ -28197,6 +31578,12 @@ def _runtime_variant_key_payload_contract_reasons(value: Any) -> list[str]:
             "variant key payload.targetProfile must be a non-empty string or null"
         )
     reasons.extend(
+        _runtime_variant_execution_contract_reasons(
+            "variant key payload.execution",
+            value.get("execution"),
+        )
+    )
+    reasons.extend(
         _runtime_variant_mapping_contract_reasons(
             "variant key payload.typeArguments",
             value.get("typeArguments"),
@@ -28254,6 +31641,7 @@ def encode_runtime_variant_key(
     target: str,
     *,
     target_profile: str | None = None,
+    execution: Mapping[str, Any] | None = None,
     type_arguments: Mapping[str, str] | None = None,
     value_arguments: Mapping[str, Any] | None = None,
     specialization_constants: Sequence[Mapping[str, Any]] = (),
@@ -28269,6 +31657,7 @@ def encode_runtime_variant_key(
         "sourceEntry": source_entry,
         "target": normalized_target,
         "targetProfile": target_profile,
+        "execution": _runtime_variant_normalized_execution(execution),
         "typeArguments": dict(sorted((type_arguments or {}).items())),
         "valueArguments": {
             key: _runtime_variant_normalize_json(value)
@@ -28291,6 +31680,11 @@ def encode_runtime_variant_key(
 def decode_runtime_variant_key(key: str) -> dict[str, Any]:
     """Decode and validate a canonical runtime variant key."""
 
+    if isinstance(key, str) and key.startswith(_RUNTIME_VARIANT_LEGACY_KEY_PREFIX):
+        raise ValueError(
+            "Legacy runtime variant key schema v1 is not accepted by schema v2; "
+            "regenerate the key and registry before lookup"
+        )
     if not isinstance(key, str) or not key.startswith(RUNTIME_VARIANT_KEY_PREFIX):
         raise ValueError(
             f"Runtime variant key must start with {RUNTIME_VARIANT_KEY_PREFIX}"
@@ -28316,6 +31710,7 @@ def decode_runtime_variant_key(key: str) -> dict[str, Any]:
         payload["sourceEntry"],
         payload["target"],
         target_profile=payload["targetProfile"],
+        execution=payload["execution"],
         type_arguments=payload["typeArguments"],
         value_arguments=payload["valueArguments"],
         specialization_constants=payload["specializationConstants"],
@@ -28514,6 +31909,14 @@ def _runtime_variant_host_interface_contract_reasons(
                 reasons.append(f"{entry_prefix}.stage must be a string or null")
             if not isinstance(entry_point.get("executionConfig"), Mapping):
                 reasons.append(f"{entry_prefix}.executionConfig must be an object")
+            else:
+                _execution, execution_reasons = (
+                    _runtime_variant_selected_entry_execution(
+                        entry_prefix,
+                        entry_point,
+                    )
+                )
+                reasons.extend(execution_reasons)
     reasons.extend(
         _runtime_variant_specialization_input_contract_reasons(
             f"{prefix}.specializationConstants",
@@ -28752,7 +32155,7 @@ def _runtime_variant_payload_hash(value: Any) -> dict[str, str]:
 
 def _runtime_variant_key_schema() -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "encoding": RUNTIME_VARIANT_KEY_ENCODING,
         "prefix": RUNTIME_VARIANT_KEY_PREFIX,
         "matching": "exact",
@@ -28763,6 +32166,7 @@ def _runtime_variant_key_schema() -> dict[str, Any]:
             "sourceEntry",
             "target",
             "targetProfile",
+            "execution",
             "typeArguments",
             "valueArguments",
             "specializationConstants",
@@ -29278,10 +32682,22 @@ def _runtime_variant_candidate(
     specialization_constants, key_specializations, specialization_blockers = (
         _runtime_variant_specialization_records(record)
     )
+    execution, execution_reasons = _runtime_variant_selected_entry_execution(
+        "selected host-interface entry",
+        context.get("entryPoint"),
+    )
     blockers = [
         *_runtime_variant_input_blockers(record, stale_codes=stale_codes),
         *specialization_blockers,
     ]
+    if execution_reasons:
+        blockers.append(
+            _runtime_variant_blocker(
+                "project.runtime-variant-registry.execution-metadata-invalid",
+                "Selected entry execution metadata is not exact and canonical.",
+                details={"reasons": execution_reasons},
+            )
+        )
     if not _is_non_empty_string(source_unit):
         blockers.append(
             _runtime_variant_blocker(
@@ -29331,7 +32747,11 @@ def _runtime_variant_candidate(
         }.values(),
         key=_runtime_variant_canonical_json,
     )
-    status = "stale" if stale_codes else "blocked" if blockers else "ready"
+    status = (
+        "stale"
+        if stale_codes or execution_reasons
+        else "blocked" if blockers else "ready"
+    )
     key = encode_runtime_variant_key(
         (
             str(source_unit)
@@ -29345,6 +32765,7 @@ def _runtime_variant_candidate(
         ),
         target,
         target_profile=target_profile,
+        execution=execution,
         type_arguments=type_arguments,
         value_arguments=value_arguments,
         specialization_constants=key_specializations,
@@ -29383,6 +32804,7 @@ def _runtime_variant_candidate(
         },
         "defines": dict(sorted(record.get("defines", {}).items())),
         "specializationConstants": specialization_constants,
+        "execution": execution,
         "bindingInterface": _runtime_variant_binding_interface(
             record, context, specialization_constants
         ),
@@ -29582,6 +33004,38 @@ def _runtime_variant_registry_target(
     }
 
 
+def _runtime_variant_lookup_execution_alternatives(
+    variants: Mapping[str, Any],
+    requested_payload: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    requested_identity = {
+        field: requested_payload.get(field)
+        for field in RUNTIME_VARIANT_KEY_FIELDS
+        if field != "execution"
+    }
+    alternatives = []
+    for key, record in sorted(variants.items()):
+        try:
+            candidate_payload = decode_runtime_variant_key(str(key))
+        except ValueError:
+            continue
+        candidate_identity = {
+            field: candidate_payload.get(field)
+            for field in RUNTIME_VARIANT_KEY_FIELDS
+            if field != "execution"
+        }
+        if candidate_identity != requested_identity:
+            continue
+        alternatives.append(
+            {
+                "key": str(key),
+                "status": record.get("status") if isinstance(record, Mapping) else None,
+                "execution": candidate_payload["execution"],
+            }
+        )
+    return alternatives
+
+
 def _runtime_variant_lookup_registry_contract_reasons(
     registry: Mapping[str, Any],
 ) -> list[str]:
@@ -29621,7 +33075,7 @@ def _runtime_variant_lookup_registry_contract_reasons(
     for key, record in variants.items():
         prefix = f"runtime variant registry.variants[{key!r}]"
         try:
-            decode_runtime_variant_key(key)
+            decoded_key = decode_runtime_variant_key(key)
         except ValueError as exc:
             reasons.append(f"{prefix} uses an invalid canonical key: {exc}")
             continue
@@ -29659,11 +33113,43 @@ def _runtime_variant_lookup_registry_contract_reasons(
         arguments = record.get("arguments")
         defines = record.get("defines")
         constants = record.get("specializationConstants")
+        execution = record.get("execution")
+        binding_interface = record.get("bindingInterface")
         if not all(
-            isinstance(value, Mapping) for value in (source, target, arguments, defines)
+            isinstance(value, Mapping)
+            for value in (
+                source,
+                target,
+                arguments,
+                defines,
+                execution,
+                binding_interface,
+            )
         ) or not isinstance(constants, list):
             reasons.append(f"{prefix} cannot reconstruct its canonical identity")
             continue
+        execution_reasons = _runtime_variant_execution_contract_reasons(
+            f"{prefix}.execution",
+            execution,
+        )
+        reasons.extend(execution_reasons)
+        selected_execution, selected_execution_reasons = (
+            _runtime_variant_selected_entry_execution(
+                f"{prefix}.bindingInterface.entryPoint",
+                binding_interface.get("entryPoint"),
+            )
+        )
+        reasons.extend(selected_execution_reasons)
+        if not execution_reasons and not selected_execution_reasons:
+            if execution != selected_execution:
+                reasons.append(
+                    f"{prefix}.execution must match its selected "
+                    "bindingInterface entry point"
+                )
+            if decoded_key.get("execution") != execution:
+                reasons.append(
+                    f"{prefix}.execution must match its decoded canonical key"
+                )
         type_arguments = arguments.get("types")
         value_arguments = arguments.get("values")
         if (
@@ -29679,6 +33165,7 @@ def _runtime_variant_lookup_registry_contract_reasons(
                 source.get("entry"),
                 target.get("backend"),
                 target_profile=target.get("profile"),
+                execution=execution,
                 type_arguments=type_arguments,
                 value_arguments=value_arguments,
                 specialization_constants=constants,
@@ -29899,6 +33386,7 @@ def lookup_runtime_variant(
     """Perform one exact registry lookup without defaults or best-match logic."""
 
     diagnostics: list[ProjectDiagnostic] = []
+    requested_payload: dict[str, Any] | None = None
     if not isinstance(registry, Mapping):
         diagnostics.append(
             _runtime_variant_diagnostic(
@@ -29935,7 +33423,7 @@ def lookup_runtime_variant(
         else:
             variants = registry["variants"]
             try:
-                decode_runtime_variant_key(requested_key)
+                requested_payload = decode_runtime_variant_key(requested_key)
             except ValueError as exc:
                 diagnostics.append(
                     _runtime_variant_diagnostic(
@@ -29947,12 +33435,26 @@ def lookup_runtime_variant(
     record = variants.get(requested_key) if not diagnostics else None
     available_keys = sorted(str(candidate) for candidate in variants)
     if record is None and not diagnostics:
+        execution_alternatives = (
+            _runtime_variant_lookup_execution_alternatives(
+                variants,
+                requested_payload,
+            )
+            if requested_payload is not None
+            else []
+        )
         diagnostics.append(
             _runtime_variant_diagnostic(
                 "project.runtime-variant-registry.variant-not-found",
                 "No runtime variant exactly matches the requested key.",
                 details={
                     "requestedKey": requested_key,
+                    "requestedExecution": (
+                        requested_payload.get("execution")
+                        if requested_payload is not None
+                        else None
+                    ),
+                    "availableExecutionAlternatives": execution_alternatives,
                     "availableKeys": available_keys,
                 },
             )
@@ -37165,6 +40667,32 @@ def _project_config_for_scan_validation(
         for name, values in raw_variant_specializations.items()
         if isinstance(values, Mapping)
     }
+    try:
+        workgroup_size = _as_workgroup_size(
+            project.get("workgroupSize"),
+            field_name="project.workgroupSize",
+        )
+        raw_variant_workgroup_sizes = project.get("variantWorkgroupSizes", {})
+        if not isinstance(raw_variant_workgroup_sizes, Mapping):
+            return None
+        variant_workgroup_sizes = {
+            str(name): _as_workgroup_size(
+                value,
+                field_name=f"project.variantWorkgroupSizes.{name}",
+            )
+            for name, value in raw_variant_workgroup_sizes.items()
+            if _is_non_empty_string(name)
+        }
+        workgroup_size_rules = _as_workgroup_size_rules(
+            project.get("workgroupSizeRules", {}),
+            field_name="project.workgroupSizeRules",
+        )
+        subgroup_width_rules = _as_subgroup_width_rules(
+            project.get("subgroupWidthRules", {}),
+            field_name="project.subgroupWidthRules",
+        )
+    except ValueError:
+        return None
 
     output_dir = project.get("outputDir")
     if not isinstance(output_dir, str):
@@ -37204,6 +40732,14 @@ def _project_config_for_scan_validation(
         variants=variants,
         specialization_constants=dict(specialization_constants),
         variant_specialization_constants=variant_specializations,
+        workgroup_size=workgroup_size,
+        variant_workgroup_sizes={
+            name: value
+            for name, value in variant_workgroup_sizes.items()
+            if value is not None
+        },
+        workgroup_size_rules=workgroup_size_rules,
+        subgroup_width_rules=subgroup_width_rules,
         selected_variants=tuple(selected_variants),
         external_corpus_manifest=external_corpus_manifest,
     )
@@ -37395,6 +40931,867 @@ def _configured_entry_point_for_artifact(
     return _entry_point_from_mapping(str(source_path), valid_selections)
 
 
+def _artifact_rule_execution_contract_reasons(
+    prefix: str,
+    record: Mapping[str, Any],
+    execution: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+) -> list[str]:
+    execution_prefix = f"{prefix}.execution"
+    reasons: list[str] = []
+    if "workgroupSize" in execution:
+        reasons.append(
+            f"{execution_prefix}.workgroupSize must be omitted for per-entry "
+            "execution"
+        )
+    raw_entries = execution.get("entryPoints")
+    if not isinstance(raw_entries, list) or not raw_entries:
+        return [f"{execution_prefix}.entryPoints must be a non-empty list"]
+
+    source = record.get("source")
+    target = record.get("target")
+    variant = (
+        record.get("variant") if _is_non_empty_string(record.get("variant")) else None
+    )
+    source_hash = record.get("sourceHash")
+    provenance = execution.get("provenance")
+    provenance_kind = (
+        provenance.get("kind") if isinstance(provenance, Mapping) else None
+    )
+    expected_constant_size = None
+    if provenance_kind == "project-config" and isinstance(project, Mapping):
+        expected_constant_size = project.get("workgroupSize")
+    elif (
+        provenance_kind == "project-variant"
+        and isinstance(project, Mapping)
+        and variant is not None
+    ):
+        variant_sizes = project.get("variantWorkgroupSizes")
+        if isinstance(variant_sizes, Mapping):
+            expected_constant_size = variant_sizes.get(variant)
+    project_rules = (
+        project.get("workgroupSizeRules") if isinstance(project, Mapping) else None
+    )
+    project_rules = project_rules if isinstance(project_rules, Mapping) else {}
+    normalized_rules = {
+        str(pattern): list(components)
+        for pattern, components in project_rules.items()
+        if _is_non_empty_string(pattern) and isinstance(components, list)
+    }
+    selected_rule_pattern = None
+    if _is_non_empty_string(source):
+        matching_patterns = [
+            pattern
+            for pattern in normalized_rules
+            if fnmatch.fnmatch(str(source), pattern)
+        ]
+        if matching_patterns:
+            selected_rule_pattern = max(
+                matching_patterns,
+                key=lambda pattern: _entry_point_selector_priority(
+                    pattern, str(source)
+                ),
+            )
+    rule_execution = selected_rule_pattern is not None
+    constant_execution = not rule_execution and provenance_kind in {
+        "project-config",
+        "project-variant",
+    }
+    if constant_execution:
+        expected_field = (
+            "project.workgroupSize"
+            if provenance_kind == "project-config"
+            else f"project.variantWorkgroupSizes.{variant}"
+        )
+        reasons.extend(
+            _workgroup_size_contract_reasons(
+                expected_field,
+                expected_constant_size,
+            )
+        )
+
+    materialization = record.get("templateMaterialization")
+    specializations = (
+        materialization.get("specializations")
+        if isinstance(materialization, Mapping)
+        else None
+    )
+    host_specializations = [
+        specialization
+        for specialization in _record_sequence(specializations)
+        if isinstance(specialization, Mapping)
+        and _is_non_empty_string(specialization.get("hostName"))
+    ]
+    entry_sources: list[str] = []
+    entry_materialization_identities: list[tuple[str, str]] = []
+    target_entries: list[str] = []
+    for index, entry in enumerate(raw_entries):
+        entry_prefix = f"{execution_prefix}.entryPoints[{index}]"
+        if not isinstance(entry, Mapping):
+            reasons.append(f"{entry_prefix} must be an object")
+            continue
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                entry_prefix,
+                entry,
+                REPORT_ARTIFACT_EXECUTION_ENTRY_FIELDS,
+            )
+        )
+        for field_name in (
+            "sourceEntryPoint",
+            "materializedEntryPoint",
+            "targetEntryPoint",
+        ):
+            if not _is_non_empty_string(entry.get(field_name)):
+                reasons.append(f"{entry_prefix}.{field_name} must be a string")
+        source_entry = entry.get("sourceEntryPoint")
+        materialized_entry = entry.get("materializedEntryPoint")
+        target_entry = entry.get("targetEntryPoint")
+        if _is_non_empty_string(source_entry):
+            entry_sources.append(str(source_entry))
+        if _is_non_empty_string(source_entry) and _is_non_empty_string(
+            materialized_entry
+        ):
+            entry_materialization_identities.append(
+                (str(source_entry), str(materialized_entry))
+            )
+        if _is_non_empty_string(target_entry):
+            target_entries.append(str(target_entry))
+
+        workgroup_size = entry.get("workgroupSize")
+        reasons.extend(
+            _workgroup_size_contract_reasons(
+                f"{entry_prefix}.workgroupSize", workgroup_size
+            )
+        )
+        if (
+            constant_execution
+            and isinstance(expected_constant_size, list)
+            and isinstance(workgroup_size, list)
+            and workgroup_size != expected_constant_size
+        ):
+            expected_field = (
+                "project.workgroupSize"
+                if provenance_kind == "project-config"
+                else f"project.variantWorkgroupSizes.{variant}"
+            )
+            reasons.append(f"{entry_prefix}.workgroupSize must match {expected_field}")
+        rule = entry.get("rule")
+        rule_prefix = f"{entry_prefix}.rule"
+        components: list[str] | None = None
+        if rule_execution and not isinstance(rule, Mapping):
+            reasons.append(f"{rule_prefix} must be an object")
+        elif rule_execution:
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    rule_prefix,
+                    rule,
+                    REPORT_ARTIFACT_EXECUTION_RULE_FIELDS,
+                )
+            )
+            raw_components = rule.get("components")
+            if not isinstance(raw_components, list) or len(raw_components) != 3:
+                reasons.append(
+                    f"{rule_prefix}.components must contain three expressions"
+                )
+            elif any(
+                not _is_non_empty_string(component) for component in raw_components
+            ):
+                reasons.append(
+                    f"{rule_prefix}.components values must be non-empty strings"
+                )
+            else:
+                components = [str(component) for component in raw_components]
+            source_pattern = rule.get("sourcePattern")
+            if not _is_non_empty_string(source_pattern):
+                reasons.append(f"{rule_prefix}.sourcePattern must be a string")
+            else:
+                expected_path = _mapping_key_path(
+                    f"project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}",
+                    str(source_pattern),
+                )
+                if rule.get("path") != expected_path:
+                    reasons.append(f"{rule_prefix}.path must match its sourcePattern")
+                if selected_rule_pattern != source_pattern:
+                    reasons.append(
+                        f"{rule_prefix}.sourcePattern must match the selected "
+                        "project workgroup-size rule"
+                    )
+                if (
+                    components is not None
+                    and normalized_rules.get(str(source_pattern)) != components
+                ):
+                    reasons.append(
+                        f"{rule_prefix}.components must match "
+                        "project.workgroupSizeRules"
+                    )
+        elif constant_execution and "rule" in entry:
+            reasons.append(
+                f"{rule_prefix} must be omitted for project or variant constant "
+                "per-entry execution"
+            )
+
+        parameters = entry.get("parameters")
+        parameter_reasons = _string_mapping_contract_reasons(
+            f"{entry_prefix}.parameters", parameters
+        )
+        reasons.extend(parameter_reasons)
+        parameter_names = (
+            set(parameters)
+            if not parameter_reasons and isinstance(parameters, Mapping)
+            else None
+        )
+        reasons.extend(
+            _template_parameter_source_mapping_contract_reasons(
+                f"{entry_prefix}.parameterSources",
+                entry.get("parameterSources"),
+                expected_parameters=parameter_names,
+            )
+        )
+        if (
+            components is not None
+            and isinstance(parameters, Mapping)
+            and not parameter_reasons
+            and isinstance(workgroup_size, list)
+            and not _workgroup_size_contract_reasons("workgroupSize", workgroup_size)
+        ):
+            resolved = []
+            for component_index, component in enumerate(components):
+                try:
+                    value = _evaluate_project_bounded_integer_expression(
+                        component,
+                        {str(name): str(value) for name, value in parameters.items()},
+                    )
+                except _ProjectWorkgroupRuleExpressionError as exc:
+                    reasons.append(
+                        f"{rule_prefix}.components[{component_index}] is invalid: "
+                        f"{exc.reason}"
+                    )
+                    break
+                resolved.append(value)
+            if len(resolved) == 3 and resolved != workgroup_size:
+                reasons.append(
+                    f"{entry_prefix}.workgroupSize must match its evaluated rule"
+                )
+
+        materialization_record = entry.get("materialization")
+        materialization_prefix = f"{entry_prefix}.materialization"
+        if not isinstance(materialization_record, Mapping):
+            reasons.append(f"{materialization_prefix} must be an object")
+        else:
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    materialization_prefix,
+                    materialization_record,
+                    REPORT_ARTIFACT_EXECUTION_MATERIALIZATION_FIELDS,
+                )
+            )
+            for field_name in ("name", "hostName", "materializedName"):
+                if not _is_non_empty_string(materialization_record.get(field_name)):
+                    reasons.append(
+                        f"{materialization_prefix}.{field_name} must be a string"
+                    )
+            if materialization_record.get("hostName") != source_entry:
+                reasons.append(
+                    f"{materialization_prefix}.hostName must match "
+                    f"{entry_prefix}.sourceEntryPoint"
+                )
+            if materialization_record.get("materializedName") != materialized_entry:
+                reasons.append(
+                    f"{materialization_prefix}.materializedName must match "
+                    f"{entry_prefix}.materializedEntryPoint"
+                )
+            matches = [
+                specialization
+                for specialization in host_specializations
+                if specialization.get("hostName") == source_entry
+                and specialization.get("materializedName") == materialized_entry
+            ]
+            if len(matches) != 1:
+                reasons.append(
+                    f"{materialization_prefix} must match exactly one host-named "
+                    "template materialization"
+                )
+            else:
+                specialization = matches[0]
+                for field_name, specialization_field in (
+                    ("name", "name"),
+                    ("parameters", "parameters"),
+                    ("parameterSources", "parameterSources"),
+                ):
+                    entry_value = (
+                        materialization_record.get(field_name)
+                        if field_name == "name"
+                        else entry.get(field_name)
+                    )
+                    if entry_value != specialization.get(specialization_field):
+                        reasons.append(
+                            f"{entry_prefix}.{field_name} must match its template "
+                            "materialization"
+                        )
+
+        identity_reasons = _hash_contract_reasons(
+            f"{entry_prefix}.identity",
+            entry.get("identity"),
+            require_closed_fields=True,
+        )
+        reasons.extend(identity_reasons)
+        if (
+            not identity_reasons
+            and _is_non_empty_string(source)
+            and _is_non_empty_string(target)
+            and isinstance(source_hash, Mapping)
+        ):
+            expected_identity = _workgroup_rule_entry_identity(
+                source=str(source),
+                source_hash=source_hash,
+                target=str(target),
+                variant=variant,
+                entry=entry,
+            )
+            if entry.get("identity") != expected_identity:
+                reasons.append(
+                    f"{entry_prefix}.identity must match the entry execution contract"
+                )
+
+    if raw_entries != sorted(
+        raw_entries,
+        key=lambda entry: (
+            (
+                str(entry.get("sourceEntryPoint", ""))
+                if isinstance(entry, Mapping)
+                else ""
+            ),
+            (
+                str(entry.get("materializedEntryPoint", ""))
+                if isinstance(entry, Mapping)
+                else ""
+            ),
+            (
+                str(entry.get("targetEntryPoint", ""))
+                if isinstance(entry, Mapping)
+                else ""
+            ),
+        ),
+    ):
+        reasons.append(f"{execution_prefix}.entryPoints must be sorted by identity")
+    if len(set(entry_sources)) != len(entry_sources):
+        reasons.append(
+            f"{execution_prefix}.entryPoints source identities must be unique"
+        )
+    if len(set(entry_materialization_identities)) != len(
+        entry_materialization_identities
+    ):
+        reasons.append(
+            f"{execution_prefix}.entryPoints materialization identities must be unique"
+        )
+    host_materialization_identities = [
+        (str(item.get("hostName")), str(item.get("materializedName")))
+        for item in host_specializations
+    ]
+    if len(host_materialization_identities) != len(
+        set(host_materialization_identities)
+    ):
+        reasons.append(
+            f"{execution_prefix}.entryPoints template materialization identities "
+            "must be unique"
+        )
+    if target != "opengl":
+        if len(host_specializations) != len(raw_entries):
+            reasons.append(
+                f"{execution_prefix}.entryPoints must consume every host-named "
+                "template materialization exactly once"
+            )
+        if set(entry_materialization_identities) != set(
+            host_materialization_identities
+        ):
+            reasons.append(
+                f"{execution_prefix}.entryPoints must match all host-named template "
+                "materialization identities"
+            )
+
+    source_entry_points = execution.get("sourceEntryPoints")
+    reasons.extend(
+        _string_list_contract_reasons(
+            f"{execution_prefix}.sourceEntryPoints", source_entry_points
+        )
+    )
+    if isinstance(source_entry_points, list) and source_entry_points != entry_sources:
+        reasons.append(f"{execution_prefix}.sourceEntryPoints must match entryPoints")
+    if isinstance(source_entry_points, list) and source_entry_points != sorted(
+        set(source_entry_points)
+    ):
+        reasons.append(
+            f"{execution_prefix}.sourceEntryPoints must be sorted and unique"
+        )
+
+    provenance_prefix = f"{execution_prefix}.provenance"
+    if not isinstance(provenance, Mapping):
+        reasons.append(f"{provenance_prefix} must be an object")
+    else:
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                provenance_prefix,
+                provenance,
+                REPORT_ARTIFACT_EXECUTION_PROVENANCE_FIELDS,
+            )
+        )
+        if rule_execution:
+            if provenance_kind != "materialized-template-rule":
+                reasons.append(
+                    f"{provenance_prefix}.kind must be materialized-template-rule "
+                    "when the source matches a project workgroup-size rule"
+                )
+            else:
+                expected_provenance_path = _mapping_key_path(
+                    f"project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}",
+                    selected_rule_pattern,
+                )
+                if provenance.get("path") != expected_provenance_path:
+                    reasons.append(
+                        f"{provenance_prefix}.path must match the selected project "
+                        "rule"
+                    )
+                if "variant" in provenance:
+                    reasons.append(
+                        f"{provenance_prefix}.variant is not allowed for rule "
+                        "provenance"
+                    )
+        elif provenance_kind not in {"project-config", "project-variant"}:
+            reasons.append(
+                f"{provenance_prefix}.kind must be project-config or "
+                "project-variant for constant per-entry execution"
+            )
+        elif provenance_kind == "project-config":
+            if provenance.get("path") != f"project.{WORKGROUP_SIZE_CONFIG_KEY}":
+                reasons.append(
+                    f"{provenance_prefix}.path must be "
+                    f"project.{WORKGROUP_SIZE_CONFIG_KEY} for project-config "
+                    "provenance"
+                )
+            if "variant" in provenance:
+                reasons.append(
+                    f"{provenance_prefix}.variant is not allowed for "
+                    "project-config provenance"
+                )
+        else:
+            if variant is None:
+                reasons.append(
+                    f"{prefix}.variant is required for project-variant provenance"
+                )
+            else:
+                expected_path = (
+                    f"{_mapping_key_path('project.variants', str(variant))}."
+                    f"{WORKGROUP_SIZE_CONFIG_KEY}"
+                )
+                if provenance.get("path") != expected_path:
+                    reasons.append(
+                        f"{provenance_prefix}.path must be {expected_path} for "
+                        "project-variant provenance"
+                    )
+            provenance_variant = provenance.get("variant")
+            if not _is_non_empty_string(provenance_variant):
+                reasons.append(f"{provenance_prefix}.variant must be a string")
+            elif provenance_variant != variant:
+                reasons.append(
+                    f"{provenance_prefix}.variant must match {prefix}.variant"
+                )
+
+    if target == "opengl":
+        if len(raw_entries) != 1 or target_entries != ["main"]:
+            reasons.append(
+                f"{execution_prefix}.entryPoints must describe one OpenGL main "
+                "entry per artifact"
+            )
+        artifact_entry = record.get("entryPoint")
+        if isinstance(artifact_entry, Mapping) and raw_entries:
+            if artifact_entry.get("source") != entry_sources[0]:
+                reasons.append(
+                    f"{prefix}.entryPoint.source must match execution entry identity"
+                )
+            if artifact_entry.get("target") != "main":
+                reasons.append(f"{prefix}.entryPoint.target must be main for OpenGL")
+    elif len(set(target_entries)) != len(target_entries):
+        reasons.append(
+            f"{execution_prefix}.entryPoints target identities must be unique"
+        )
+
+    identity_reasons = _hash_contract_reasons(
+        f"{execution_prefix}.identity",
+        execution.get("identity"),
+        require_closed_fields=True,
+    )
+    reasons.extend(identity_reasons)
+    if (
+        not identity_reasons
+        and _is_non_empty_string(source)
+        and _is_non_empty_string(target)
+        and isinstance(source_hash, Mapping)
+        and isinstance(source_entry_points, list)
+        and isinstance(provenance, Mapping)
+    ):
+        if any(
+            isinstance(entry, Mapping) and "subgroupWidth" in entry
+            for entry in raw_entries
+        ):
+            expected_identity = _subgroup_rule_execution_identity(
+                source=str(source),
+                source_hash=source_hash,
+                target=str(target),
+                variant=variant,
+                execution=execution,
+            )
+        else:
+            expected_identity = _workgroup_rule_execution_identity(
+                source=str(source),
+                source_hash=source_hash,
+                target=str(target),
+                variant=variant,
+                source_entry_points=source_entry_points,
+                entry_points=[
+                    entry for entry in raw_entries if isinstance(entry, Mapping)
+                ],
+                provenance=provenance,
+            )
+        if execution.get("identity") != expected_identity:
+            reasons.append(
+                f"{execution_prefix}.identity must match the execution contract"
+            )
+    return reasons
+
+
+def _artifact_subgroup_rule_execution_contract_reasons(
+    prefix: str,
+    record: Mapping[str, Any],
+    execution: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+) -> list[str]:
+    execution_prefix = f"{prefix}.execution"
+    raw_entries = execution.get("entryPoints")
+    if not isinstance(raw_entries, list) or not raw_entries:
+        return [f"{execution_prefix}.entryPoints must be a non-empty list"]
+    reasons = []
+    source = record.get("source")
+    target = record.get("target")
+    variant = (
+        record.get("variant") if _is_non_empty_string(record.get("variant")) else None
+    )
+    source_hash = record.get("sourceHash")
+    if target != "directx":
+        reasons.append(f"{execution_prefix} subgroup width requires target directx")
+    project_rules = (
+        project.get("subgroupWidthRules") if isinstance(project, Mapping) else None
+    )
+    normalized_rules = {
+        str(pattern): str(expression)
+        for pattern, expression in (
+            project_rules.items() if isinstance(project_rules, Mapping) else ()
+        )
+        if _is_non_empty_string(pattern) and _is_non_empty_string(expression)
+    }
+    selected_pattern = None
+    if _is_non_empty_string(source):
+        matching = [
+            pattern
+            for pattern in normalized_rules
+            if fnmatch.fnmatch(str(source), pattern)
+        ]
+        if matching:
+            selected_pattern = max(
+                matching,
+                key=lambda pattern: _entry_point_selector_priority(
+                    pattern, str(source)
+                ),
+            )
+
+    shadow_entries = []
+    target_entries = []
+    for index, entry in enumerate(raw_entries):
+        entry_prefix = f"{execution_prefix}.entryPoints[{index}]"
+        if not isinstance(entry, Mapping):
+            reasons.append(f"{entry_prefix} must be an object")
+            continue
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                entry_prefix,
+                entry,
+                REPORT_ARTIFACT_EXECUTION_ENTRY_FIELDS,
+            )
+        )
+        subgroup_width = entry.get("subgroupWidth")
+        if (
+            not isinstance(subgroup_width, int)
+            or isinstance(subgroup_width, bool)
+            or subgroup_width <= 0
+        ):
+            reasons.append(f"{entry_prefix}.subgroupWidth must be a positive integer")
+        elif subgroup_width not in DIRECTX_EXACT_SUBGROUP_WIDTHS:
+            reasons.append(
+                f"{entry_prefix}.subgroupWidth is not enforceable by DirectX WaveSize"
+            )
+        rule = entry.get("subgroupWidthRule")
+        expression = None
+        source_pattern = None
+        if not isinstance(rule, Mapping):
+            reasons.append(f"{entry_prefix}.subgroupWidthRule must be an object")
+        else:
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    f"{entry_prefix}.subgroupWidthRule",
+                    rule,
+                    REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_RULE_FIELDS,
+                )
+            )
+            expression = rule.get("expression")
+            source_pattern = rule.get("sourcePattern")
+            if not _is_non_empty_string(expression):
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.expression must be a string"
+                )
+            if not _is_non_empty_string(source_pattern):
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.sourcePattern must be a string"
+                )
+            elif source_pattern != selected_pattern:
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.sourcePattern must match the "
+                    "selected project rule"
+                )
+            expected_path = (
+                _mapping_key_path(
+                    f"project.{SUBGROUP_WIDTH_RULES_CONFIG_KEY}",
+                    str(source_pattern),
+                )
+                if _is_non_empty_string(source_pattern)
+                else None
+            )
+            if rule.get("path") != expected_path:
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.path must match its sourcePattern"
+                )
+            if _is_non_empty_string(source_pattern) and (
+                expression != normalized_rules.get(str(source_pattern))
+            ):
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.expression must match "
+                    "project.subgroupWidthRules"
+                )
+        parameters = entry.get("parameters")
+        if (
+            _is_non_empty_string(expression)
+            and isinstance(parameters, Mapping)
+            and isinstance(subgroup_width, int)
+            and not isinstance(subgroup_width, bool)
+        ):
+            try:
+                evaluated = _evaluate_project_bounded_integer_expression(
+                    str(expression),
+                    {str(name): str(value) for name, value in parameters.items()},
+                )
+            except _ProjectWorkgroupRuleExpressionError as exc:
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.expression is invalid: "
+                    f"{exc.reason}"
+                )
+            else:
+                if evaluated != subgroup_width:
+                    reasons.append(
+                        f"{entry_prefix}.subgroupWidth must match its evaluated rule"
+                    )
+        target_entry = entry.get("targetEntryPoint")
+        if _is_non_empty_string(target_entry):
+            target_entries.append(str(target_entry))
+        identity_reasons = _hash_contract_reasons(
+            f"{entry_prefix}.identity",
+            entry.get("identity"),
+            require_closed_fields=True,
+        )
+        reasons.extend(identity_reasons)
+        if (
+            not identity_reasons
+            and _is_non_empty_string(source)
+            and _is_non_empty_string(target)
+            and isinstance(source_hash, Mapping)
+        ):
+            expected_identity = _workgroup_rule_entry_identity(
+                source=str(source),
+                source_hash=source_hash,
+                target=str(target),
+                variant=variant,
+                entry=entry,
+            )
+            if entry.get("identity") != expected_identity:
+                reasons.append(
+                    f"{entry_prefix}.identity must match the entry execution contract"
+                )
+
+        if _is_non_empty_string(expression) and _is_non_empty_string(source_pattern):
+            shadow = {
+                key: entry[key]
+                for key in (
+                    "sourceEntryPoint",
+                    "materializedEntryPoint",
+                    "targetEntryPoint",
+                    "parameters",
+                    "parameterSources",
+                    "materialization",
+                )
+                if key in entry
+            }
+            shadow["workgroupSize"] = [subgroup_width, 1, 1]
+            shadow["rule"] = {
+                "components": [str(expression), "1", "1"],
+                "sourcePattern": str(source_pattern),
+                "path": _mapping_key_path(
+                    f"project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}", str(source_pattern)
+                ),
+            }
+            if (
+                _is_non_empty_string(source)
+                and _is_non_empty_string(target)
+                and isinstance(source_hash, Mapping)
+            ):
+                shadow["identity"] = _workgroup_rule_entry_identity(
+                    source=str(source),
+                    source_hash=source_hash,
+                    target=str(target),
+                    variant=variant,
+                    entry=shadow,
+                )
+            shadow_entries.append(shadow)
+
+    if shadow_entries and selected_pattern is not None:
+        shadow_provenance = {
+            "kind": "materialized-template-rule",
+            "path": _mapping_key_path(
+                f"project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}", selected_pattern
+            ),
+        }
+        shadow_execution = {
+            "sourceEntryPoints": execution.get("sourceEntryPoints"),
+            "entryPoints": shadow_entries,
+            "provenance": shadow_provenance,
+        }
+        if (
+            _is_non_empty_string(source)
+            and _is_non_empty_string(target)
+            and isinstance(source_hash, Mapping)
+            and isinstance(execution.get("sourceEntryPoints"), list)
+        ):
+            shadow_execution["identity"] = _workgroup_rule_execution_identity(
+                source=str(source),
+                source_hash=source_hash,
+                target=str(target),
+                variant=variant,
+                source_entry_points=execution["sourceEntryPoints"],
+                entry_points=shadow_entries,
+                provenance=shadow_provenance,
+            )
+        shadow_project = dict(project or {})
+        shadow_project["workgroupSizeRules"] = {
+            pattern: [expression, "1", "1"]
+            for pattern, expression in normalized_rules.items()
+        }
+        reasons.extend(
+            _artifact_rule_execution_contract_reasons(
+                prefix,
+                record,
+                shadow_execution,
+                shadow_project,
+            )
+        )
+
+    provenance = execution.get("subgroupWidthProvenance")
+    expected_provenance = {
+        "kind": "materialized-template-rule",
+        "path": (
+            _mapping_key_path(
+                f"project.{SUBGROUP_WIDTH_RULES_CONFIG_KEY}", selected_pattern
+            )
+            if selected_pattern is not None
+            else None
+        ),
+    }
+    if provenance != expected_provenance:
+        reasons.append(
+            f"{execution_prefix}.subgroupWidthProvenance must match the selected "
+            "project rule"
+        )
+    enforcement = execution.get("subgroupWidthEnforcement")
+    profiles = (
+        enforcement.get("entryProfiles") if isinstance(enforcement, Mapping) else None
+    )
+    if isinstance(enforcement, Mapping):
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                f"{execution_prefix}.subgroupWidthEnforcement",
+                enforcement,
+                REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_ENFORCEMENT_FIELDS,
+            )
+        )
+    profile_records = []
+    if not isinstance(profiles, list):
+        reasons.append(
+            f"{execution_prefix}.subgroupWidthEnforcement.entryProfiles must be a list"
+        )
+    else:
+        for index, item in enumerate(profiles):
+            profile_prefix = (
+                f"{execution_prefix}.subgroupWidthEnforcement.entryProfiles[{index}]"
+            )
+            if not isinstance(item, Mapping):
+                reasons.append(f"{profile_prefix} must be an object")
+                continue
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    profile_prefix,
+                    item,
+                    REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_PROFILE_FIELDS,
+                )
+            )
+            profile_records.append(item)
+    profile_entries = [str(item.get("entryPoint", "")) for item in profile_records]
+    if (
+        not isinstance(enforcement, Mapping)
+        or enforcement.get("mechanism") != "hlsl-wave-size-attribute"
+        or enforcement.get("minimumShaderModel") != "6.6"
+        or profile_entries != sorted(set(target_entries))
+        or any(
+            not _is_non_empty_string(item.get("profile"))
+            or item.get("profile") != "cs_6_6"
+            for item in profile_records
+        )
+    ):
+        reasons.append(
+            f"{execution_prefix}.subgroupWidthEnforcement must require WaveSize "
+            "and cs_6_6 for every target entry"
+        )
+    identity_reasons = _hash_contract_reasons(
+        f"{execution_prefix}.identity",
+        execution.get("identity"),
+        require_closed_fields=True,
+    )
+    reasons.extend(identity_reasons)
+    if (
+        not identity_reasons
+        and _is_non_empty_string(source)
+        and _is_non_empty_string(target)
+        and isinstance(source_hash, Mapping)
+    ):
+        expected_identity = _subgroup_rule_execution_identity(
+            source=str(source),
+            source_hash=source_hash,
+            target=str(target),
+            variant=variant,
+            execution=execution,
+        )
+        if execution.get("identity") != expected_identity:
+            reasons.append(
+                f"{execution_prefix}.identity must match the execution contract"
+            )
+    return reasons
+
+
 def _artifact_entry_point_contract_reasons(
     prefix: str,
     record: Mapping[str, Any],
@@ -37425,6 +41822,206 @@ def _artifact_entry_point_contract_reasons(
         reasons.append(
             f"{prefix}.entryPoint.source must match project.entryPointSelections"
         )
+    return reasons
+
+
+def _artifact_execution_contract_reasons(
+    prefix: str,
+    record: Mapping[str, Any],
+    project: Mapping[str, Any] | None = None,
+) -> list[str]:
+    execution = record.get("execution")
+    if execution is None:
+        return []
+    execution_prefix = f"{prefix}.execution"
+    if not isinstance(execution, Mapping):
+        return [f"{execution_prefix} must be an object"]
+
+    reasons = _unsupported_mapping_field_reasons(
+        execution_prefix,
+        execution,
+        REPORT_ARTIFACT_EXECUTION_FIELDS,
+    )
+    if "entryPoints" in execution:
+        entries = [
+            entry
+            for entry in _record_sequence(execution.get("entryPoints"))
+            if isinstance(entry, Mapping)
+        ]
+        has_workgroup = any("workgroupSize" in entry for entry in entries)
+        has_subgroup = any("subgroupWidth" in entry for entry in entries)
+        if has_workgroup:
+            reasons.extend(
+                _artifact_rule_execution_contract_reasons(
+                    prefix,
+                    record,
+                    execution,
+                    project,
+                )
+            )
+        if has_subgroup:
+            reasons.extend(
+                _artifact_subgroup_rule_execution_contract_reasons(
+                    prefix,
+                    record,
+                    execution,
+                    project,
+                )
+            )
+        if not has_workgroup and not has_subgroup:
+            reasons.append(
+                f"{execution_prefix}.entryPoints must define an execution "
+                "specialization"
+            )
+        return reasons
+    workgroup_size = execution.get("workgroupSize")
+    reasons.extend(
+        _workgroup_size_contract_reasons(
+            f"{execution_prefix}.workgroupSize",
+            workgroup_size,
+        )
+    )
+    source_entry_points = execution.get("sourceEntryPoints")
+    reasons.extend(
+        _string_list_contract_reasons(
+            f"{execution_prefix}.sourceEntryPoints",
+            source_entry_points,
+        )
+    )
+    if isinstance(source_entry_points, list) and (
+        source_entry_points != sorted(set(source_entry_points))
+    ):
+        reasons.append(
+            f"{execution_prefix}.sourceEntryPoints must be sorted and unique"
+        )
+
+    provenance = execution.get("provenance")
+    provenance_prefix = f"{execution_prefix}.provenance"
+    if not isinstance(provenance, Mapping):
+        reasons.append(f"{provenance_prefix} must be an object")
+    else:
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                provenance_prefix,
+                provenance,
+                REPORT_ARTIFACT_EXECUTION_PROVENANCE_FIELDS,
+            )
+        )
+        if provenance.get("kind") not in {
+            "project-config",
+            "project-variant",
+            "source",
+        }:
+            reasons.append(
+                f"{provenance_prefix}.kind must be project-config, "
+                "project-variant, or source"
+            )
+        if not _is_non_empty_string(provenance.get("path")):
+            reasons.append(f"{provenance_prefix}.path must be a string")
+        provenance_variant = provenance.get("variant")
+        if "variant" in provenance:
+            if not _is_non_empty_string(provenance_variant):
+                reasons.append(f"{provenance_prefix}.variant must be a string")
+            elif provenance_variant != record.get("variant"):
+                reasons.append(
+                    f"{provenance_prefix}.variant must match {prefix}.variant"
+                )
+        provenance_kind = provenance.get("kind")
+        provenance_path = provenance.get("path")
+        record_variant = record.get("variant")
+        if provenance_kind == "project-config":
+            if provenance_path != f"project.{WORKGROUP_SIZE_CONFIG_KEY}":
+                reasons.append(
+                    f"{provenance_prefix}.path must be "
+                    f"project.{WORKGROUP_SIZE_CONFIG_KEY} for project-config "
+                    "provenance"
+                )
+            if "variant" in provenance:
+                reasons.append(
+                    f"{provenance_prefix}.variant is not allowed for "
+                    "project-config provenance"
+                )
+            if isinstance(project, Mapping) and (
+                project.get("workgroupSize") != workgroup_size
+            ):
+                reasons.append(
+                    f"{execution_prefix}.workgroupSize must match "
+                    "project.workgroupSize for project-config provenance"
+                )
+        elif provenance_kind == "project-variant":
+            if _is_non_empty_string(record_variant):
+                expected_path = (
+                    f"{_mapping_key_path('project.variants', str(record_variant))}."
+                    f"{WORKGROUP_SIZE_CONFIG_KEY}"
+                )
+                if provenance_path != expected_path:
+                    reasons.append(
+                        f"{provenance_prefix}.path must be {expected_path} for "
+                        "project-variant provenance"
+                    )
+                if isinstance(project, Mapping):
+                    variant_sizes = project.get("variantWorkgroupSizes")
+                    expected_size = (
+                        variant_sizes.get(record_variant)
+                        if isinstance(variant_sizes, Mapping)
+                        else None
+                    )
+                    if expected_size != workgroup_size:
+                        reasons.append(
+                            f"{execution_prefix}.workgroupSize must match "
+                            f"project.variantWorkgroupSizes.{record_variant} for "
+                            "project-variant provenance"
+                        )
+            else:
+                reasons.append(
+                    f"{prefix}.variant is required for project-variant provenance"
+                )
+        elif provenance_kind == "source":
+            if isinstance(provenance_path, str) and not (
+                provenance_path.startswith("source.entryPoints.")
+                and ".executionConfig." in provenance_path
+            ):
+                reasons.append(
+                    f"{provenance_prefix}.path must identify source entry-point "
+                    "execution metadata for source provenance"
+                )
+            if "variant" in provenance:
+                reasons.append(
+                    f"{provenance_prefix}.variant is not allowed for source "
+                    "provenance"
+                )
+
+    identity = execution.get("identity")
+    identity_reasons = _hash_contract_reasons(
+        f"{execution_prefix}.identity",
+        identity,
+        require_closed_fields=True,
+    )
+    reasons.extend(identity_reasons)
+    if (
+        not identity_reasons
+        and isinstance(workgroup_size, list)
+        and not _workgroup_size_contract_reasons("workgroupSize", workgroup_size)
+        and isinstance(source_entry_points, list)
+        and not _string_list_contract_reasons("sourceEntryPoints", source_entry_points)
+        and _is_non_empty_string(record.get("source"))
+        and _is_non_empty_string(record.get("target"))
+    ):
+        expected_identity = _workgroup_execution_identity(
+            source=str(record["source"]),
+            target=str(record["target"]),
+            variant=(
+                str(record.get("variant"))
+                if _is_non_empty_string(record.get("variant"))
+                else None
+            ),
+            source_entry_points=source_entry_points,
+            workgroup_size=workgroup_size,
+        )
+        if identity != expected_identity:
+            reasons.append(
+                f"{execution_prefix}.identity must match the execution contract"
+            )
     return reasons
 
 
@@ -37528,6 +42125,24 @@ def _expected_entry_points_from_artifacts(
         for entry_point in (_artifact_entry_point_source(artifact),)
         if entry_point is not None
     }
+    if target == "opengl":
+        entry_points.update(
+            str(specialization["hostName"])
+            for artifact in artifacts
+            if isinstance(artifact, Mapping)
+            and artifact.get("source") == source
+            and _is_non_empty_string(artifact.get("target"))
+            and _normalized_targets([str(artifact["target"])])[0] == target
+            and _artifact_variant_identity(artifact) == variant
+            and isinstance(artifact.get("execution"), Mapping)
+            and isinstance(artifact["execution"].get("entryPoints"), list)
+            and isinstance(artifact.get("templateMaterialization"), Mapping)
+            for specialization in _record_sequence(
+                artifact["templateMaterialization"].get("specializations")
+            )
+            if isinstance(specialization, Mapping)
+            and _is_non_empty_string(specialization.get("hostName"))
+        )
     if not entry_points:
         return (None,)
     return tuple(sorted(entry_points))
@@ -38659,6 +43274,30 @@ def _project_config_for_include_validation(
         "project.variantSpecializationConstants", raw_variant_specializations
     ):
         raw_variant_specializations = {}
+    try:
+        workgroup_size = _as_workgroup_size(
+            project.get("workgroupSize"),
+            field_name="project.workgroupSize",
+        )
+        raw_variant_workgroup_sizes = project.get("variantWorkgroupSizes", {})
+        if not isinstance(raw_variant_workgroup_sizes, Mapping):
+            raw_variant_workgroup_sizes = {}
+        variant_workgroup_sizes = {
+            str(name): _as_workgroup_size(
+                value,
+                field_name=f"project.variantWorkgroupSizes.{name}",
+            )
+            for name, value in raw_variant_workgroup_sizes.items()
+            if _is_non_empty_string(name)
+        }
+        workgroup_size_rules = _as_workgroup_size_rules(
+            project.get("workgroupSizeRules", {}),
+            field_name="project.workgroupSizeRules",
+        )
+    except ValueError:
+        workgroup_size = None
+        variant_workgroup_sizes = {}
+        workgroup_size_rules = {}
     output_dir = project.get("outputDir", DEFAULT_OUTPUT_DIR)
     if not isinstance(output_dir, str):
         output_dir = DEFAULT_OUTPUT_DIR
@@ -38673,6 +43312,13 @@ def _project_config_for_include_validation(
             for name, values in raw_variant_specializations.items()
             if isinstance(values, Mapping)
         },
+        workgroup_size=workgroup_size,
+        variant_workgroup_sizes={
+            name: value
+            for name, value in variant_workgroup_sizes.items()
+            if value is not None
+        },
+        workgroup_size_rules=workgroup_size_rules,
         selected_variants=tuple(
             name
             for name in project.get("selectedVariants", [])
@@ -39476,6 +44122,85 @@ def _variant_specialization_mapping_contract_reasons(
         reasons.extend(
             _specialization_value_mapping_contract_reasons(variant_prefix, constants)
         )
+    return reasons
+
+
+def _workgroup_size_contract_reasons(
+    prefix: str,
+    value: Any,
+    *,
+    allow_none: bool = False,
+) -> list[str]:
+    if value is None and allow_none:
+        return []
+    if not isinstance(value, list) or len(value) != 3:
+        return [f"{prefix} must be an array of three positive integers"]
+    if any(not isinstance(item, int) or isinstance(item, bool) for item in value):
+        return [f"{prefix} values must be integers"]
+    if any(item <= 0 for item in value):
+        return [f"{prefix} values must be positive"]
+    return []
+
+
+def _variant_workgroup_size_mapping_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons: list[str] = []
+    for variant, workgroup_size in value.items():
+        if not _is_non_empty_string(variant):
+            reasons.append(f"{prefix} keys must be non-empty variant names")
+            variant_prefix = prefix
+        else:
+            variant_prefix = _mapping_key_path(prefix, variant)
+        reasons.extend(_workgroup_size_contract_reasons(variant_prefix, workgroup_size))
+    return reasons
+
+
+def _workgroup_size_rule_mapping_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons: list[str] = []
+    for pattern, components in value.items():
+        if not _is_non_empty_string(pattern):
+            reasons.append(f"{prefix} keys must be non-empty source patterns")
+            rule_prefix = prefix
+        else:
+            rule_prefix = _mapping_key_path(prefix, str(pattern))
+            if not _is_repository_relative_glob(str(pattern)):
+                reasons.append(f"{rule_prefix} pattern must be repository-relative")
+        if not isinstance(components, list) or len(components) != 3:
+            reasons.append(
+                f"{rule_prefix} must be an array of three integral expressions"
+            )
+            continue
+        if any(not _is_non_empty_string(component) for component in components):
+            reasons.append(f"{rule_prefix} values must be non-empty strings")
+    return reasons
+
+
+def _subgroup_width_rule_mapping_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = []
+    for pattern, expression in value.items():
+        if not _is_non_empty_string(pattern):
+            reasons.append(f"{prefix} keys must be non-empty source patterns")
+            rule_prefix = prefix
+        else:
+            rule_prefix = _mapping_key_path(prefix, str(pattern))
+            if not _is_repository_relative_glob(str(pattern)):
+                reasons.append(f"{rule_prefix} pattern must be repository-relative")
+        if not _is_non_empty_string(expression):
+            reasons.append(f"{rule_prefix} must be a non-empty integral expression")
     return reasons
 
 
@@ -40447,6 +45172,29 @@ def _project_metadata_contract_reasons(
                 f"({_value_mismatch_context(source_option_count, len(source_options))})"
             )
 
+    index_range_assertions = project.get("indexRangeAssertions")
+    if _optional_project_field(project, "indexRangeAssertions", required=False):
+        try:
+            parse_index_range_assertions(
+                index_range_assertions,
+                field_name="project.indexRangeAssertions",
+            )
+        except ValueError as exc:
+            reasons.append(str(exc))
+    if _optional_project_field(project, "indexRangeAssertionCount", required=False):
+        count = project.get("indexRangeAssertionCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.indexRangeAssertionCount must be a non-negative integer"
+            )
+        elif isinstance(index_range_assertions, list) and count != len(
+            index_range_assertions
+        ):
+            reasons.append(
+                "project.indexRangeAssertionCount must match "
+                "project.indexRangeAssertions"
+            )
+
     variants = project.get("variants")
     variants_is_mapping = isinstance(variants, Mapping)
     if _optional_project_field(project, "variants", required=require_full_metadata):
@@ -40551,6 +45299,98 @@ def _project_metadata_contract_reasons(
         elif not isinstance(counts, Mapping):
             reasons.append(
                 "project.variantSpecializationConstantCounts must be an object"
+            )
+
+    if _optional_project_field(
+        project,
+        "workgroupSize",
+        required=require_full_metadata,
+    ):
+        reasons.extend(
+            _workgroup_size_contract_reasons(
+                "project.workgroupSize",
+                project.get("workgroupSize"),
+                allow_none=True,
+            )
+        )
+
+    variant_workgroup_sizes = project.get("variantWorkgroupSizes")
+    if _optional_project_field(
+        project,
+        "variantWorkgroupSizes",
+        required=require_full_metadata,
+    ):
+        reasons.extend(
+            _variant_workgroup_size_mapping_contract_reasons(
+                "project.variantWorkgroupSizes",
+                variant_workgroup_sizes,
+            )
+        )
+        if isinstance(variant_workgroup_sizes, Mapping) and variants_is_mapping:
+            unknown_variants = sorted(set(variant_workgroup_sizes) - set(variants))
+            if unknown_variants:
+                reasons.append(
+                    "project.variantWorkgroupSizes keys must be listed in "
+                    "project.variants"
+                )
+
+    workgroup_size_rules = project.get("workgroupSizeRules")
+    if _optional_project_field(
+        project,
+        "workgroupSizeRules",
+        required=require_full_metadata,
+    ):
+        reasons.extend(
+            _workgroup_size_rule_mapping_contract_reasons(
+                "project.workgroupSizeRules",
+                workgroup_size_rules,
+            )
+        )
+    if _optional_project_field(
+        project,
+        "workgroupSizeRuleCount",
+        required=require_full_metadata,
+    ):
+        count = project.get("workgroupSizeRuleCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.workgroupSizeRuleCount must be a non-negative integer"
+            )
+        elif isinstance(workgroup_size_rules, Mapping) and count != len(
+            workgroup_size_rules
+        ):
+            reasons.append(
+                "project.workgroupSizeRuleCount must match "
+                "project.workgroupSizeRules"
+            )
+
+    subgroup_width_rules = project.get("subgroupWidthRules")
+    if _optional_project_field(
+        project,
+        "subgroupWidthRules",
+        required=require_full_metadata,
+    ):
+        reasons.extend(
+            _subgroup_width_rule_mapping_contract_reasons(
+                "project.subgroupWidthRules", subgroup_width_rules
+            )
+        )
+    if _optional_project_field(
+        project,
+        "subgroupWidthRuleCount",
+        required=require_full_metadata,
+    ):
+        count = project.get("subgroupWidthRuleCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.subgroupWidthRuleCount must be a non-negative integer"
+            )
+        elif isinstance(subgroup_width_rules, Mapping) and count != len(
+            subgroup_width_rules
+        ):
+            reasons.append(
+                "project.subgroupWidthRuleCount must match "
+                "project.subgroupWidthRules"
             )
 
     if _optional_project_field(
@@ -43143,6 +47983,47 @@ def _artifact_template_materialization_contract_reasons(
     return reasons
 
 
+def _artifact_bfloat16_lowering_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+) -> list[str]:
+    if "bfloat16Lowering" not in artifact:
+        return []
+
+    prefix = f"artifacts[{index}].bfloat16Lowering"
+    contract = artifact.get("bfloat16Lowering")
+    if not isinstance(contract, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = _unsupported_mapping_field_reasons(
+        prefix,
+        contract,
+        REPORT_ARTIFACT_BFLOAT16_LOWERING_FIELDS,
+    )
+    target = artifact.get("target")
+    if (
+        not _is_non_empty_string(target)
+        or _normalized_targets([target])[0] != "directx"
+    ):
+        reasons.append(f"{prefix} is only supported for DirectX artifacts")
+    if contract.get("status") != "exact":
+        reasons.append(f"{prefix}.status must be exact")
+    if contract.get("approximationUsed") is not False:
+        reasons.append(f"{prefix}.approximationUsed must be false")
+    if contract.get("registerRepresentation") != "uint-low-16-bits":
+        reasons.append(f"{prefix}.registerRepresentation must be uint-low-16-bits")
+    if contract.get("storageRepresentation") not in {
+        "native-uint16",
+        "not-required",
+    }:
+        reasons.append(
+            f"{prefix}.storageRepresentation must be native-uint16 or not-required"
+        )
+    if contract.get("roundingMode") != "round-to-nearest-ties-to-even":
+        reasons.append(f"{prefix}.roundingMode must be round-to-nearest-ties-to-even")
+    return reasons
+
+
 def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnostic]:
     if not isinstance(report, Mapping):
         return [_invalid_report_diagnostic(path, ["expected a JSON object"])]
@@ -43449,6 +48330,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     project=project if isinstance(project, Mapping) else None,
                 )
             )
+            reasons.extend(
+                _artifact_execution_contract_reasons(
+                    f"artifacts[{index}]",
+                    artifact,
+                    project if isinstance(project, Mapping) else None,
+                )
+            )
             if "error" in artifact or (has_summary and status == "failed"):
                 if not _is_non_empty_string(artifact.get("error")):
                     reasons.append(f"artifacts[{index}].error must be a string")
@@ -43522,6 +48410,9 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         artifact.get("requiredCapabilities"),
                     )
                 )
+            reasons.extend(
+                _artifact_bfloat16_lowering_contract_reasons(index, artifact)
+            )
             if isinstance(project, Mapping):
                 reasons.extend(
                     _artifact_defines_contract_reasons(
@@ -43748,8 +48639,8 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     )
             if "checkKind" in diagnostic:
                 check_kind = diagnostic.get("checkKind")
-                if check_kind not in VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS:
-                    allowed = ", ".join(sorted(VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS))
+                if check_kind not in PROJECT_REPORT_DIAGNOSTIC_CHECK_KINDS:
+                    allowed = ", ".join(sorted(PROJECT_REPORT_DIAGNOSTIC_CHECK_KINDS))
                     reasons.append(
                         f"diagnostics[{index}].checkKind must be one of {allowed}"
                     )
@@ -44114,23 +49005,50 @@ def _directx_dxc_smoke_commands(
     *,
     artifact: Mapping[str, Any] | None = None,
 ) -> list[list[str]]:
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        source = ""
+    compiler_arguments = dxc_compiler_arguments_for_source(source)
     entry_profiles = _directx_dxc_entry_profiles(artifact_path, artifact=artifact)
     if entry_profiles is None:
-        return [[tool, "-T", "lib_6_3", str(artifact_path), "-Fo", os.devnull]]
+        return [
+            [
+                tool,
+                "-T",
+                dxc_profile_for_source("lib_6_3", source),
+                *compiler_arguments,
+                str(artifact_path),
+                "-Fo",
+                os.devnull,
+            ]
+        ]
 
     return [
-        _directx_dxc_entry_smoke_command(tool, artifact_path, entry, profile)
+        _directx_dxc_entry_smoke_command(
+            tool,
+            artifact_path,
+            entry,
+            profile,
+            compiler_arguments=compiler_arguments,
+        )
         for entry, profile in entry_profiles
     ]
 
 
 def _directx_dxc_entry_smoke_command(
-    tool: str, artifact_path: Path, entry: str, profile: str
+    tool: str,
+    artifact_path: Path,
+    entry: str,
+    profile: str,
+    *,
+    compiler_arguments: Sequence[str] = (),
 ) -> list[str]:
     return [
         tool,
         "-T",
         profile,
+        *compiler_arguments,
         "-E",
         entry,
         str(artifact_path),
@@ -44429,18 +49347,22 @@ def _directx_hlsl_struct_stage(semantics: Sequence[str]) -> str | None:
 
 
 def _directx_dxc_profile_for_source(profile: str, source: str) -> str:
-    if not re.search(r"\bSV_ShadingRate\b", source, re.IGNORECASE):
-        return profile
-
     stage = profile.split("_", 1)[0]
-    min_profile = DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE.get(stage)
-    if min_profile is None:
-        return profile
-    if _directx_dxc_profile_version(profile) >= _directx_dxc_profile_version(
-        min_profile
-    ):
-        return profile
-    return min_profile
+    minimum_profiles = []
+    if re.search(r"\bSV_ShadingRate\b", source, re.IGNORECASE):
+        minimum_profiles.append(DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE.get(stage))
+    if DIRECTX_HLSL_EXACT_WAVE_SIZE_RE.search(source):
+        minimum_profiles.append(
+            DIRECTX_DXC_EXACT_WAVE_SIZE_MIN_PROFILE_BY_STAGE.get(stage)
+        )
+    required = [value for value in minimum_profiles if value is not None]
+    if required:
+        minimum = max(required, key=_directx_dxc_profile_version)
+        if _directx_dxc_profile_version(profile) < _directx_dxc_profile_version(
+            minimum
+        ):
+            profile = minimum
+    return dxc_profile_for_source(profile, source)
 
 
 def _directx_dxc_profile_version(profile: str) -> tuple[int, int]:

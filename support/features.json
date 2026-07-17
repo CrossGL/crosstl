@@ -3903,17 +3903,21 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "DirectX preserves native HLSL arrays for storage while lowering fixed-array return values to scalar-compatible vectors or generated carrier structs. Matching local declarations and initializers use the same value representation, retain source array types for overload resolution, and preserve constant and dynamic indexing. Direct and project Metal translation plus official DXC validation cover the value-local contract.",
+          "notes": "DirectX preserves native HLSL arrays for storage while lowering fixed-array return values to scalar-compatible vectors or generated carrier structs. Matching local declarations and initializers use the same value representation, retain source array types for overload resolution, and preserve constant and dynamic indexing. Compute workgroup pointer helpers are specialized by concrete groupshared backing identity and fixed extent, with nested views represented as composed integer offsets instead of pointer or array parameters. Static expressions and recognized flat local-invocation ranges are checked against the backing extent; unresolved backing selection, unbounded offsets, and out-of-range views fail closed with structured diagnostics. Direct and project Metal translation plus official DXC validation cover the value-local contract. This support row does not assert complete runtime integration or corpus parity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_nested_helpers_specialize_by_backing_identity",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_rejects_composed_out_of_bounds_view",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_rejects_unprovable_composed_offset",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_value_locals_validate_with_dxc",
             "tests/test_translator/test_project_translation.py::def test_metal_fixed_array_value_locals_match_direct_and_project_directx"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "OpenGL lowers fixed arrays and indexed access, recursively materializes omitted trailing values in partial fixed-array and struct initializers, hoists function-local workgroup arrays to module-scope shared storage, and represents concrete workgroup pointer aliases as backing arrays plus composed element offsets. Nested aliases and helper calls preserve offsets, statically unreachable null-pointer parameters are removed, and excess initializer elements, unresolved extents, or reachable null pointers produce structured diagnostics.",
+          "notes": "OpenGL lowers fixed arrays and indexed access, recursively materializes omitted trailing values in partial fixed-array and struct initializers, and hoists function-local workgroup arrays to module-scope shared storage. Compute workgroup pointer helpers are specialized by concrete shared backing and extent, with nested views represented as composed integer offsets instead of pointer parameters. Static expressions and bounded loop ranges are checked against the backing extent. Unbounded runtime offsets, out-of-range composed views, unresolved extents, reachable null pointers, and other unrepresentable cases fail closed with structured project diagnostics that retain available codegen provenance; statically unreachable null-pointer parameters are removed. This support row does not assert complete runtime integration or corpus parity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_array_handling",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
@@ -3924,8 +3928,14 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_statically_null_unreachable_workgroup_pointer_is_elided",
             "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_atomic_add_through_workgroup_alias_preserves_base_and_access_offsets",
             "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_generic_workgroup_pointer_helper_specializes_without_pointer",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_nested_workgroup_pointer_helpers_preserve_bounded_backing_view",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_nested_workgroup_pointer_helper_rejects_out_of_bounds_view",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_workgroup_pointer_helper_rejects_unbounded_runtime_offset",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_workgroup_pointer_helper_proves_bounded_loop_accesses",
             "tests/test_translator/test_project_translation.py::def test_translate_project_reports_unsupported_opengl_workgroup_pointer",
             "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reachable_null_opengl_workgroup_pointer",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_opengl_workgroup_pointer_provenance",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_nested_opengl_workgroup_pointer_bounds",
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_workgroup_alias_offset_executes_on_vulkan",
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan"
           ]
@@ -7203,12 +7213,19 @@
       "name": "Entry-scoped project artifacts",
       "description": "Select one materialized source entry and emit an independently loadable artifact with deterministic identity, path, provenance, and reflected interface metadata.",
       "support": {
-        "directx": {
-          "status": "validated_rejection",
-          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
-          "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
-          ]
+    "directx": {
+      "status": "supported",
+      "notes": "Project configuration selects one materialized compute entry and emits an independently loadable HLSL artifact at a deterministic entry path. The artifact retains only reachable helpers, resources, constants, and execution state; preserves explicit registers and spaces; and records source-to-target entry identity, the selected execution contract, reflected interface, source maps, validation, profile, and entry-scoped provenance. The pinned MLX arangeuint32 proof compiles the standalone CSMain artifact with DXC and verifies exact Direct3D 12 readback on Windows CI.",
+      "evidence": [
+        "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_entry_scoped_generation_keeps_selected_execution_contract",
+        "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_entry_scoped_generation_reports_available_entries",
+        "tests/test_translator/test_directx_entry_packaging.py::def test_selected_directx_compute_is_standalone_and_replayable",
+        "tests/test_translator/test_directx_entry_packaging.py::def test_directx_project_preserves_aggregate_output_without_selection",
+        "tests/test_translator/test_directx_entry_packaging.py::def test_translate_project_cli_packages_materialized_directx_entry",
+        "tests/test_translator/test_directx_entry_packaging.py::def test_directx_entry_selection_failures_are_structured_and_write_no_file",
+        "tests/test_translator/test_project_translation.py::def test_translate_project_allows_entry_scoped_workgroup_size_specialization",
+        "tests/test_translator/test_native_runtime_drivers.py::def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device"
+      ]
         },
         "opengl": {
           "status": "supported",
@@ -7284,6 +7301,197 @@
           "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.workgroup_size_specialization",
+      "category": "project",
+      "name": "Per-entry workgroup size specialization",
+      "description": "Apply fixed project variants or evaluated per-source workgroup-size rules to deterministic materialized entries and preserve the resulting target execution contract in generated project artifacts and reports.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization, while per-source [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters. Ordinary ambiguous multi-entry sources and incomplete materialization joins fail closed. DirectX emits one HLSL library artifact with independent numthreads values per entry, while execution metadata, source-to-target identities, provenance, and report validation preserve each dispatch contract. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_size_materializes_each_host_named_entry",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_size_variants_keep_host_entry_identities_and_replay",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_size_keeps_ordinary_multi_entry_aggregate_closed",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rules_emit_directx_library_and_opengl_entries",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_reuses_one_materialized_ast_per_target",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_join_is_independent_of_record_order",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_invalid_expressions",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_invalid_materialization_joins",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_reports_target_limits",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_report_rejects_rehashed_parameter_tampering",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_compute_workgroup_size_projects_declared_source_shape"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization, while per-source [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters. Ordinary ambiguous multi-entry sources and incomplete materialization joins fail closed. OpenGL splits materialized entries into deterministic standalone GLSL artifacts with runnable main entry points and entry-specific local-size layouts, while execution metadata, provenance, and report validation preserve each dispatch contract and reject missing splits. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_size_materializes_each_host_named_entry",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_size_variants_keep_host_entry_identities_and_replay",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_size_keeps_ordinary_multi_entry_aggregate_closed",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rules_emit_directx_library_and_opengl_entries",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_report_rejects_missing_opengl_split",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_reuses_one_materialized_ast_per_target",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_compute_workgroup_size_projects_declared_source_shape",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers"
+          ]
+        },
+        "metal": {
+          "status": "validated_rejection",
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no Metal artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ]
+        },
+        "vulkan": {
+          "status": "validated_rejection",
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no Vulkan artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ]
+        },
+        "cuda": {
+          "status": "validated_rejection",
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no CUDA artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ]
+        },
+        "hip": {
+          "status": "validated_rejection",
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no HIP artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ]
+        },
+        "mojo": {
+          "status": "validated_rejection",
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no Mojo artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ]
+        },
+        "rust": {
+          "status": "validated_rejection",
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no Rust artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ]
+        },
+        "slang": {
+          "status": "validated_rejection",
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no Slang artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no WebGL artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ]
+        },
+        "wgsl": {
+          "status": "validated_rejection",
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no WGSL artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.subgroup_width_specialization",
+      "category": "project",
+      "name": "Per-entry subgroup width specialization",
+      "description": "Evaluate per-source subgroup-width rules for each materialized entry and either enforce the exact target execution contract or fail closed with a structured capability diagnostic.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "Per-source [project.subgroup_width_rules] integral expressions are evaluated against each host-named materialized compute entry and joined by deterministic materialization identity. DirectX accepts exact widths 4, 8, 16, 32, 64, and 128, emits one single-value WaveSize(width) attribute per target entry, and records a cs_6_6 profile requirement for every entry. Report validation re-evaluates materialization provenance and verifies the generated WaveSize and profile contract. This support covers generated shader/kernel artifacts and compiler-facing execution metadata only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_emit_exact_directx_contract",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rule_join_is_independent_of_record_order",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_reject_invalid_results",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_report_rejects_rehashed_materialization_tampering",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_directx_exact_wave_size_profile_boundary"
+          ]
+        },
+        "opengl": {
+          "status": "validated_rejection",
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before OpenGL code generation because the target cannot enforce the requested exact subgroup width. The project.translate.subgroup-width-enforcement-unsupported diagnostic reports reason opengl-enforcement-unavailable, the execution.subgroup-width-specialization capability, rule provenance, and the supported target set, and no GLSL artifact is emitted. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ]
+        },
+        "metal": {
+          "status": "validated_rejection",
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Metal code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ]
+        },
+        "vulkan": {
+          "status": "validated_rejection",
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Vulkan code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ]
+        },
+        "cuda": {
+          "status": "validated_rejection",
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before CUDA code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ]
+        },
+        "hip": {
+          "status": "validated_rejection",
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before HIP code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ]
+        },
+        "mojo": {
+          "status": "validated_rejection",
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Mojo code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ]
+        },
+        "rust": {
+          "status": "validated_rejection",
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Rust code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ]
+        },
+        "slang": {
+          "status": "validated_rejection",
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Slang code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before WebGL code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ]
+        },
+        "wgsl": {
+          "status": "validated_rejection",
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before WGSL code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
           ]
         }
       }
@@ -10310,6 +10518,8 @@
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_factories_create_target_adapters",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_rejects_compiled_workgroup_size_mismatch",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_completes_missing_workgroup_size_side",
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_directx_adapter_compiles_hlsl",
             "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
           ]
@@ -10334,6 +10544,8 @@
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_adapter_reports_validation_failure",
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_adapter_reports_dispatch_failure",
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_adapter_reports_numerical_mismatch",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_rejects_compiled_workgroup_size_mismatch",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_completes_missing_workgroup_size_side",
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_opengl_adapter_compiles_specialization_to_spirv",
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_opengl_adapter_preserves_uniform_source_path",
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_reports_missing_spirv_extension",
@@ -10635,13 +10847,18 @@
       "id": "project.runtime_variant_registry",
       "category": "project",
       "name": "Runtime variant registry",
-      "description": "Emit deterministic exact-lookup runtime variant registries from ready runtime packages or loader manifests.",
+      "description": "Emit deterministic exact-lookup runtime variant registries with selected-entry execution identity.",
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
@@ -10652,9 +10869,14 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
@@ -10665,9 +10887,14 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
@@ -10678,9 +10905,14 @@
         },
         "vulkan": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
@@ -10691,9 +10923,14 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
@@ -10704,9 +10941,14 @@
         },
         "hip": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
@@ -10717,9 +10959,14 @@
         },
         "mojo": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
@@ -10730,9 +10977,14 @@
         },
         "rust": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
@@ -10743,9 +10995,14 @@
         },
         "slang": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
@@ -10756,9 +11013,14 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
@@ -10769,9 +11031,14 @@
         },
         "wgsl": {
           "status": "supported",
-          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation and canonical crosstl-rvk2 exact keys. Each key and record include the selected binding-interface entry point's exact execution identity as workgroupSize and subgroupWidth; unavailable values remain null. Lookup reports exact available execution alternatives when the requested execution identity is absent, and legacy crosstl-rvk1 keys are rejected with guidance to regenerate both the key and registry. Records retain separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys. This remains deterministic selection and packaging metadata; it does not compile targets or dispatch a host runtime, and runtime execution and numerical parity are not established.",
           "evidence": [
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_execution_uses_only_the_selected_entry",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_subgroup_width_distinguishes_exact_variants",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_key_rejects_legacy_schema_with_migration_error",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
             "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",

@@ -3,17 +3,30 @@
   "repository": "https://github.com/ml-explore/mlx",
   "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
   "frontier_status": {
-    "status": "structurally-validated",
-    "scope": "clean-frontier",
+    "status": "target-split-with-expected-workgroup-blockers",
+    "scope": "target-split-frontier",
     "sources": 11,
     "targets": [
       "directx",
       "vulkan"
     ],
     "artifacts": 22,
+    "translated_artifacts": 16,
+    "failed_artifacts": 6,
+    "target_artifacts": {
+      "directx": {
+        "translated": 5,
+        "failed": 6
+      },
+      "vulkan": {
+        "translated": 11,
+        "failed": 0
+      }
+    },
     "structural_validation_status": "validated",
     "semantic_readiness_status": "not-established",
-    "blocked_by": [],
+    "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
     "excluded_blocked_sources": [
       "mlx/backend/metal/kernels/fence.metal"
     ],
@@ -88,7 +101,7 @@
     "runtime_parity_claimed": false
   },
   "arg_reduce_status": {
-    "status": "translated",
+    "status": "target-dependent",
     "source": "mlx/backend/metal/kernels/arg_reduce.metal",
     "targets": [
       "directx",
@@ -96,14 +109,23 @@
       "vulkan"
     ],
     "artifact_records": 3,
-    "translated_artifacts": 3,
-    "failed_artifacts": 0,
+    "translated_artifacts": 1,
+    "failed_artifacts": 2,
+    "translated_targets": [
+      "vulkan"
+    ],
+    "workgroup_blocked_targets": [
+      "directx",
+      "opengl"
+    ],
+    "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
     "template_materialization_status": "materialized",
     "specialization_count": 51,
     "unsupported_specialization_count": 0,
     "native_validation": {
-      "directx": "required-on-windows-ci",
-      "opengl": "validated",
+      "directx": "blocked-before-emission",
+      "opengl": "blocked-before-emission",
       "vulkan": "validated"
     },
     "entry_packaging_blocked_by": [
@@ -111,7 +133,7 @@
     ]
   },
   "opengl_frontier_status": {
-    "status": "toolchain-validated",
+    "status": "toolchain-validated-with-expected-workgroup-blockers",
     "sources": [
       "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/binary_two.metal",
@@ -125,32 +147,78 @@
     "source_count": 8,
     "target": "opengl",
     "artifact_count": 8,
-    "project_diagnostic_count": 0,
-    "glslang_compiled_artifact_count": 8,
-    "spirv_validated_artifact_count": 8,
+    "translated_sources": [
+      "mlx/backend/metal/kernels/binary_two.metal",
+      "mlx/backend/metal/kernels/rope.metal",
+      "mlx/backend/metal/kernels/ternary.metal"
+    ],
+    "translated_artifact_count": 3,
+    "workgroup_blocked_sources": [
+      "mlx/backend/metal/kernels/arg_reduce.metal",
+      "mlx/backend/metal/kernels/logsumexp.metal",
+      "mlx/backend/metal/kernels/rms_norm.metal",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
+      "mlx/backend/metal/kernels/softmax.metal"
+    ],
+    "workgroup_blocked_artifact_count": 5,
+    "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
+    "clean_project_diagnostic_count": 0,
+    "glslang_compiled_artifact_count": 3,
+    "spirv_validated_artifact_count": 3,
     "glslang_target_environments": [
       "opengl",
       "spirv1.3"
     ],
     "spirv_val_target_environment": "spv1.3",
     "specialization_constants": {
-      "mlx/backend/metal/kernels/rms_norm.metal": {
-        "has_w": 20
-      },
       "mlx/backend/metal/kernels/rope.metal": {
         "forward": 1,
         "hs_transpose": 3,
         "traditional": 2
-      },
-      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": {
-        "blocks": 26,
-        "bool_mask": 23,
-        "do_causal": 22,
-        "float_mask": 24,
-        "has_mask": 20,
-        "has_sinks": 25,
-        "query_transposed": 21
       }
+    },
+    "index_range_assertion_evidence": {
+      "assertion_count": 24,
+      "inclusive_bounds": {
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      "expressions_by_source": {
+        "mlx/backend/metal/kernels/binary_two.metal": [
+          "offset + i",
+          "a_idx",
+          "b_idx",
+          "out_idx",
+          "out_idx++",
+          "idx.x",
+          "idx.y"
+        ],
+        "mlx/backend/metal/kernels/rope.metal": [
+          "batch_idx * offset_stride",
+          "freq_stride * pos.x",
+          "in_index_1",
+          "in_index_2",
+          "out_index_1",
+          "out_index_2"
+        ],
+        "mlx/backend/metal/kernels/ternary.metal": [
+          "offset + i",
+          "a_idx",
+          "b_idx",
+          "c_idx",
+          "bidx",
+          "cidx",
+          "out_idx",
+          "out_idx++",
+          "idx.x",
+          "idx.y",
+          "idx.z"
+        ]
+      },
+      "contract_kind": "explicit-host-runtime-portability-preconditions",
+      "inferred": false,
+      "runtime_enforced": false
     },
     "binary_two_fixed_array_resource_status": {
       "status": "validated",
@@ -158,6 +226,288 @@
       "resolved_by_commit": "db593d19bfa04b7a58ef9f4b6b224842d802173f"
     },
     "runtime_integration_included": false,
+    "runtime_parity_claimed": false
+  },
+  "opengl_fft_workgroup_pointer_status": {
+    "status": "blocked-after-provenance",
+    "source": "mlx/backend/metal/kernels/fft.metal",
+    "source_sha256": "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825",
+    "target": "opengl",
+    "project_translation": {
+      "unit_count": 1,
+      "artifact_count": 1,
+      "translated_count": 0,
+      "failed_count": 1,
+      "max_template_specializations": 4096,
+      "max_template_materialization_work": 2097152
+    },
+    "materialization": {
+      "status": "materialized",
+      "specialization_count": 117,
+      "unsupported_specialization_count": 0,
+      "function_constant_count": 22
+    },
+    "diagnostic": {
+      "code": "project.translate.opengl-workgroup-pointer-unsupported",
+      "missing_capability": "opengl.workgroup-pointer-lowering",
+      "message": "OpenGL cannot prove the workgroup pointer access range for 'ReadWriter_float2_float2__load.crosstl_ptr_buf' into shared backing 'shared_in'",
+      "workgroup_pointer": {
+        "backingName": "shared_in",
+        "function": "ReadWriter_float2_float2__load",
+        "materializationName": "ReadWriter_float2_float2_load__glsl_crosstl_ptr_buf_fft_mem_256_float2_float2_shared_in_vec2_256",
+        "offsetExpression": "0",
+        "parameter": "crosstl_ptr_buf",
+        "reason": "unprovable-view-access"
+      }
+    },
+    "provenance_status": "concrete-backing-preserved",
+    "access_range_status": "unprovable",
+    "artifact_emitted": false,
+    "native_validation_status": "not-run-no-artifact",
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1671"
+    ],
+    "runtime_integration_included": false,
+    "runtime_parity_claimed": false
+  },
+  "directx_gemv_compiler_frontier_status": {
+    "status": "all-exported-entry-points-compiled",
+    "source": "mlx/backend/metal/kernels/gemv.metal",
+    "source_sha256": "c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f",
+    "source_size_bytes": 5383,
+    "target": "directx",
+    "project_translation": {
+      "unit_count": 1,
+      "artifact_count": 1,
+      "translated_count": 1,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "max_template_specializations": 4096,
+      "max_template_materialization_work": 2097152,
+      "workgroup_size_rule": [
+        32,
+        "BN",
+        "BM"
+      ],
+      "report_workgroup_size_rule": [
+        "32",
+        "BN",
+        "BM"
+      ]
+    },
+    "materialization": {
+      "status": "materialized",
+      "specialization_count": 225,
+      "host_named_specialization_count": 224,
+      "unsupported_specialization_count": 0,
+      "unresolved_residue_count": 0,
+      "bare_value_discard_count": 0,
+      "report_execution_entry_count": 224,
+      "execution_identity_join": "hostName/materializedName"
+    },
+    "artifact": {
+      "status": "translated",
+      "packaging": "single-aggregate-artifact",
+      "provenance": {
+        "intermediate": "crossgl",
+        "pipeline": "single-file-translate"
+      },
+      "generated_hash_verification": "report-sha256-matches-emitted-bytes",
+      "generated_size_verification": "report-size-matches-emitted-bytes",
+      "compute_entry_count": 224,
+      "generated_target_entry_identity_count": 224,
+      "generated_numthreads_contract_count": 224,
+      "resolved_workgroup_sizes": [
+        [32, 1, 1],
+        [32, 1, 4],
+        [32, 1, 8],
+        [32, 2, 1],
+        [32, 4, 1],
+        [32, 8, 1],
+        [32, 16, 1]
+      ]
+    },
+    "compiler": {
+      "name": "dxc",
+      "entry_profile": {
+        "profile": "cs_6_2",
+        "compiler_arguments": [
+          "-enable-16bit-types"
+        ],
+        "entry_points": [
+          "CSMain",
+          "CSMain_85",
+          "CSMain_113"
+        ],
+        "compiled_binary_count": 3,
+        "diagnostic_count": 0,
+        "unused_value_warning_count": 0
+      },
+      "library_profile": {
+        "profile": "lib_6_6",
+        "compiler_arguments": [
+          "-enable-16bit-types"
+        ],
+        "export_set": "CSMain;CSMain_2;...;CSMain_224",
+        "export_count": 224,
+        "compiled_library_count": 1,
+        "coverage": "all-exported-functions-code-generated",
+        "unused_value_warning_count": 0
+      },
+      "allowed_warnings": {
+        "library_numthreads": {
+          "classification": "library-profile-numthreads-ignored",
+          "message": "attribute 'numthreads' ignored without accompanying shader attribute [-Wmisplaced-attributes]",
+          "source_expressions": [
+            "[numthreads(32, 1, 1)]",
+            "[numthreads(32, 1, 4)]",
+            "[numthreads(32, 1, 8)]",
+            "[numthreads(32, 2, 1)]",
+            "[numthreads(32, 4, 1)]",
+            "[numthreads(32, 8, 1)]",
+            "[numthreads(32, 16, 1)]"
+          ],
+          "profile": "lib_6_6",
+          "count": 224
+        }
+      },
+      "whole_artifact_semantic_validity_claimed": false
+    },
+    "execution_contracts": {
+      "workgroup_size_rule": [
+        32,
+        "BN",
+        "BM"
+      ],
+      "resolved_workgroup_sizes": [
+        [32, 1, 1],
+        [32, 1, 4],
+        [32, 1, 8],
+        [32, 2, 1],
+        [32, 4, 1],
+        [32, 8, 1],
+        [32, 16, 1]
+      ],
+      "generated_entry_contract_count": 224,
+      "numthreads_contract_established": true,
+      "exact_workgroup_size_established": true,
+      "required_wave_size": 32,
+      "required_wave_size_established": false,
+      "library_execution_semantics_established": false,
+      "blocked_by": [
+        "https://github.com/CrossGL/crosstl/issues/1786"
+      ]
+    },
+    "tracked_issues": [
+      "https://github.com/CrossGL/crosstl/issues/1786"
+    ],
+    "runtime_execution_attempted": false,
+    "runtime_integration_included": false,
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
+  "opengl_gemv_frontier_status": {
+    "status": "blocked-as-expected",
+    "source": "mlx/backend/metal/kernels/gemv.metal",
+    "source_sha256": "c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f",
+    "source_size_bytes": 5383,
+    "target": "opengl",
+    "project_translation": {
+      "unit_count": 1,
+      "artifact_count": 1,
+      "translated_count": 0,
+      "failed_count": 1,
+      "emitted_target_file_count": 0,
+      "max_template_specializations": 4096,
+      "max_template_materialization_work": 2097152,
+      "workgroup_size_rule": [
+        32,
+        "BN",
+        "BM"
+      ],
+      "report_workgroup_size_rule": [
+        "32",
+        "BN",
+        "BM"
+      ]
+    },
+    "materialization": {
+      "status": "materialized",
+      "specialization_count": 225,
+      "unsupported_specialization_count": 0
+    },
+    "diagnostic": {
+      "code": "project.translate.opengl-workgroup-pointer-unsupported",
+      "missing_capability": "opengl.workgroup-pointer-lowering",
+      "message": "OpenGL cannot prove the workgroup pointer access range for 'GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run.tgp_memory' into shared backing 'tgp_memory'",
+      "workgroup_pointer": {
+        "backingName": "tgp_memory",
+        "function": "GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run",
+        "materializationName": "GEMVKernel_bfloat16_t_1_8_1_32_1_4_0_run__glsl_tgp_memory_gemv_bfloat16_bm1_bn8_sm1_sn32_tm1_tn4_nc0_axpby0_tgp_memory_float_16",
+        "offsetExpression": "0",
+        "parameter": "tgp_memory",
+        "reason": "unprovable-view-access"
+      }
+    },
+    "range_derivation": {
+      "sgN": "simd_gid % 8",
+      "simdM": "simd_gid / 8",
+      "bm": "simdM * 1",
+      "tgp_results": "tgp_memory + sgN * 2 + bm",
+      "source_required_subgroup_width": 32,
+      "configured_workgroup_size": [
+        32,
+        8,
+        1
+      ],
+      "source_reachable_simd_gid": [
+        0,
+        7
+      ],
+      "base_offset_range": [
+        0,
+        14
+      ],
+      "guarded_reduction_max_element_index": 14,
+      "backing_element_count": 16,
+      "highest_valid_element_index": 15
+    },
+    "provenance_status": "concrete-backing-preserved",
+    "access_range_status": "unprovable",
+    "artifact_emitted": false,
+    "native_validation_attempted": false,
+    "native_validation_status": "not-run-no-artifact",
+    "translation_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1671"
+    ],
+    "execution_contracts": {
+      "workgroup_size_specialization": {
+        "status": "configured-in-project-report",
+        "rule": [
+          32,
+          "BN",
+          "BM"
+        ],
+        "report_rule": [
+          "32",
+          "BN",
+          "BM"
+        ],
+        "emitted_artifact_contract_claimed": false
+      },
+      "subgroup_width_specialization": {
+        "status": "not-established",
+        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1786"
+      }
+    },
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1671",
+      "https://github.com/CrossGL/crosstl/issues/1786"
+    ],
+    "runtime_execution_attempted": false,
+    "runtime_integration_included": false,
+    "runnable_artifact_claimed": false,
+    "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
   "rms_norm_specialization_status": {
@@ -169,36 +519,100 @@
       "id": 20,
       "required": true
     },
+    "representative_workgroup_contract": {
+      "host_source": "mlx/backend/metal/normalization.cpp",
+      "host_lines": "52-91,137-197",
+      "single_row_formula": "[32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+      "looped_formula": "[maxTotalThreadsPerThreadgroup, 1, 1]",
+      "workgroup_sizes": [
+        [
+          32,
+          1,
+          1
+        ],
+        [
+          64,
+          1,
+          1
+        ]
+      ],
+      "upstream_host_valid": true,
+      "complete_runtime_coverage": false
+    },
+    "host_named_entry_count": 12,
     "directx": {
       "specialization_materialization": "concrete-crossgl-variant",
       "variants": [
         {
-          "name": "has_w_false_by_name",
+          "name": "has_w_false_by_name_workgroup_32",
           "selector": "has_w",
           "selector_kind": "name",
-          "value": false
+          "value": false,
+          "workgroup_size": [
+            32,
+            1,
+            1
+          ]
         },
         {
-          "name": "has_w_true_by_id",
+          "name": "has_w_true_by_id_workgroup_64",
           "selector": "20",
           "selector_kind": "id",
-          "value": true
+          "value": true,
+          "workgroup_size": [
+            64,
+            1,
+            1
+          ]
         }
       ],
       "native_compilation": "required-on-windows-ci",
-      "compiled_entry_count_per_variant": 1
+      "profile": "cs_6_2",
+      "compiler_arguments": [
+        "-enable-16bit-types"
+      ],
+      "library_artifact_count": 2,
+      "execution_entry_count_per_artifact": 12,
+      "generated_numthreads_count_per_artifact": 12,
+      "compiled_entry_count_per_variant": 1,
+      "compiler_run_count": 2
     },
     "opengl": {
       "specialization_materialization": "deferred",
       "constant_id": 20,
+      "variants": [
+        {
+          "name": "workgroup_32",
+          "workgroup_size": [
+            32,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "workgroup_64",
+          "workgroup_size": [
+            64,
+            1,
+            1
+          ]
+        }
+      ],
+      "standalone_artifact_count": 24,
+      "standalone_artifact_count_per_variant": 12,
       "native_compilation": "required-on-linux-ci",
-      "spirv_validation": "required-on-linux-ci"
+      "compiled_artifact_count": 24,
+      "spirv_validation": "required-on-linux-ci",
+      "validated_artifact_count": 24
     },
     "numerical_execution_included": false,
+    "numerical_parity_claimed": false,
     "runtime_parity_claimed": false,
+    "complete_runtime_coverage_claimed": false,
     "full_mlx_test_suite_included": false,
     "runtime_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1750"
+      "https://github.com/CrossGL/crosstl/issues/1462",
+      "https://github.com/CrossGL/crosstl/issues/1735"
     ]
   },
   "pointer_reinterpretation_status": {
@@ -435,8 +849,8 @@
     "runtime_integration_included": false
   },
   "directx_toolchain_status": {
-    "status": "passing",
-    "note": "Windows CI compiles all 574 generated compute entries in the full 11-source clean DirectX HLSL frontier below. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity. fence.metal is a separate blocked source and emits no DirectX artifact under its atomic-fence contract diagnostic.",
+    "status": "passing-with-expected-workgroup-blockers",
+    "note": "Windows CI compiles all 468 generated compute entries in the five-source emitted DirectX HLSL frontier below. Six runtime-selected workgroup sources covering 106 entries fail before emission; no placeholder workgroup size is applied. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity.",
     "compiler": {
       "name": "dxc",
       "version": "v1.9.2602.24"
@@ -455,31 +869,242 @@
     },
     "expected_entry_point_counts": {
       "mlx/backend/metal/kernels/arange.metal": 11,
-      "mlx/backend/metal/kernels/arg_reduce.metal": 24,
       "mlx/backend/metal/kernels/binary_two.metal": 225,
-      "mlx/backend/metal/kernels/layer_norm.metal": 12,
-      "mlx/backend/metal/kernels/logsumexp.metal": 6,
       "mlx/backend/metal/kernels/random.metal": 2,
-      "mlx/backend/metal/kernels/rms_norm.metal": 12,
       "mlx/backend/metal/kernels/rope.metal": 18,
-      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": 42,
-      "mlx/backend/metal/kernels/softmax.metal": 10,
       "mlx/backend/metal/kernels/ternary.metal": 212
     },
+    "expected_entry_point_count": 468,
     "dxc_validated_sources": [
       "mlx/backend/metal/kernels/arange.metal",
-      "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/binary_two.metal",
-      "mlx/backend/metal/kernels/layer_norm.metal",
-      "mlx/backend/metal/kernels/logsumexp.metal",
       "mlx/backend/metal/kernels/random.metal",
-      "mlx/backend/metal/kernels/rms_norm.metal",
       "mlx/backend/metal/kernels/rope.metal",
-      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
-      "mlx/backend/metal/kernels/softmax.metal",
       "mlx/backend/metal/kernels/ternary.metal"
     ],
+    "bfloat16_lowering_evidence": {
+      "mlx/backend/metal/kernels/arange.metal": {
+        "bfloat16Lowering": {
+          "status": "exact",
+          "approximationUsed": false,
+          "registerRepresentation": "uint-low-16-bits",
+          "storageRepresentation": "native-uint16",
+          "roundingMode": "round-to-nearest-ties-to-even"
+        },
+        "requiredCapabilities": [
+          "directx.native-16bit-types"
+        ]
+      },
+      "mlx/backend/metal/kernels/binary_two.metal": {
+        "bfloat16Lowering": {
+          "status": "exact",
+          "approximationUsed": false,
+          "registerRepresentation": "uint-low-16-bits",
+          "storageRepresentation": "native-uint16",
+          "roundingMode": "round-to-nearest-ties-to-even"
+        },
+        "requiredCapabilities": [
+          "directx.native-16bit-types"
+        ]
+      },
+      "mlx/backend/metal/kernels/random.metal": {
+        "bfloat16Lowering": {
+          "status": "exact",
+          "approximationUsed": false,
+          "registerRepresentation": "uint-low-16-bits",
+          "storageRepresentation": "not-required",
+          "roundingMode": "round-to-nearest-ties-to-even"
+        },
+        "requiredCapabilities": []
+      },
+      "mlx/backend/metal/kernels/rope.metal": {
+        "bfloat16Lowering": {
+          "status": "exact",
+          "approximationUsed": false,
+          "registerRepresentation": "uint-low-16-bits",
+          "storageRepresentation": "native-uint16",
+          "roundingMode": "round-to-nearest-ties-to-even"
+        },
+        "requiredCapabilities": [
+          "directx.native-16bit-types"
+        ]
+      },
+      "mlx/backend/metal/kernels/ternary.metal": {
+        "bfloat16Lowering": {
+          "status": "exact",
+          "approximationUsed": false,
+          "registerRepresentation": "uint-low-16-bits",
+          "storageRepresentation": "native-uint16",
+          "roundingMode": "round-to-nearest-ties-to-even"
+        },
+        "requiredCapabilities": [
+          "directx.native-16bit-types"
+        ]
+      }
+    },
+    "workgroup_blocked_sources": [
+      "mlx/backend/metal/kernels/arg_reduce.metal",
+      "mlx/backend/metal/kernels/layer_norm.metal",
+      "mlx/backend/metal/kernels/logsumexp.metal",
+      "mlx/backend/metal/kernels/rms_norm.metal",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
+      "mlx/backend/metal/kernels/softmax.metal"
+    ],
+    "workgroup_blocked_entry_point_counts": {
+      "mlx/backend/metal/kernels/arg_reduce.metal": 24,
+      "mlx/backend/metal/kernels/layer_norm.metal": 12,
+      "mlx/backend/metal/kernels/logsumexp.metal": 6,
+      "mlx/backend/metal/kernels/rms_norm.metal": 12,
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": 42,
+      "mlx/backend/metal/kernels/softmax.metal": 10
+    },
+    "workgroup_blocked_entry_point_count": 106,
+    "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
+    "dispatch_evidence": {
+      "mlx/backend/metal/kernels/arg_reduce.metal": {
+        "specializationCount": 51,
+        "hostSource": "mlx/backend/metal/primitives.cpp",
+        "hostLines": "117-132",
+        "dispatchFormulas": [
+          "[32 * ceil_div(min(ceil_div(axis_size, 4), maxTotalThreadsPerThreadgroup), 32), 1, 1]"
+        ],
+        "dispatchSelection": [
+          "single host dispatch path"
+        ],
+        "runtimeOperands": [
+          "axis_size",
+          "maxTotalThreadsPerThreadgroup"
+        ],
+        "materializationParameters": [
+          "N_READS",
+          "Op",
+          "T"
+        ]
+      },
+      "mlx/backend/metal/kernels/layer_norm.metal": {
+        "specializationCount": 16,
+        "hostSource": "mlx/backend/metal/normalization.cpp",
+        "hostLines": "248-297,346-422",
+        "dispatchFormulas": [
+          "forward block: [32 * ceil_div(ceil_div(axis_size, 8), 32), 1, 1]",
+          "forward looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+          "VJP block: [32 * ceil_div(ceil_div(axis_size, 8), 32), 1, 1]",
+          "VJP looped: [maxTotalThreadsPerThreadgroup, 1, 1]"
+        ],
+        "dispatchSelection": [
+          "forward block when axis_size <= 6656; looped when axis_size > 6656",
+          "VJP block when axis_size <= 8192; looped when axis_size > 8192"
+        ],
+        "runtimeOperands": [
+          "axis_size",
+          "forward_or_vjp_entry",
+          "maxTotalThreadsPerThreadgroup"
+        ],
+        "materializationParameters": [
+          "N_READS",
+          "T"
+        ]
+      },
+      "mlx/backend/metal/kernels/logsumexp.metal": {
+        "specializationCount": 7,
+        "hostSource": "mlx/backend/metal/logsumexp.cpp",
+        "hostLines": "58-91",
+        "dispatchFormulas": [
+          "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+          "looped: [maxTotalThreadsPerThreadgroup, 1, 1]"
+        ],
+        "dispatchSelection": [
+          "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": [
+          "axis_size",
+          "maxTotalThreadsPerThreadgroup"
+        ],
+        "materializationParameters": [
+          "AccT",
+          "N_READS",
+          "T"
+        ]
+      },
+      "mlx/backend/metal/kernels/rms_norm.metal": {
+        "specializationCount": 12,
+        "hostSource": "mlx/backend/metal/normalization.cpp",
+        "hostLines": "52-91,137-197",
+        "dispatchFormulas": [
+          "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+          "looped: [maxTotalThreadsPerThreadgroup, 1, 1]"
+        ],
+        "dispatchSelection": [
+          "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": [
+          "axis_size",
+          "maxTotalThreadsPerThreadgroup"
+        ],
+        "materializationParameters": [
+          "N_READS",
+          "T"
+        ]
+      },
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": {
+        "specializationCount": 42,
+        "hostSource": "mlx/backend/metal/scaled_dot_product_attention.cpp",
+        "hostLines": "31-32,160-163,194-195,323-326,350-415,440-484,561-586,613-640,685-753",
+        "dispatchFormulas": [
+          "full attention (NAX and Metal): [32, 4, 1]",
+          "vector: [1024, 1, 1]",
+          "two-pass first pass: [32, q_heads / kv_heads, q_sequence_length]",
+          "two-pass final pass: [1024, 1, 1]"
+        ],
+        "dispatchSelection": [
+          "full attention when q_sequence_length > 8",
+          "vector mode when q_sequence_length <= 8",
+          "two-pass vector when ((device architecture is d or s) and k_sequence_length >= 1024) or (kv_heads < q_heads and k_sequence_length >= 4096); otherwise one-pass vector"
+        ],
+        "runtimeOperands": [
+          "selected_pass",
+          "device_architecture",
+          "q_heads",
+          "kv_heads",
+          "q_sequence_length",
+          "k_sequence_length"
+        ],
+        "materializationParameters": [
+          "D",
+          "T",
+          "V"
+        ]
+      },
+      "mlx/backend/metal/kernels/softmax.metal": {
+        "specializationCount": 17,
+        "hostSource": "mlx/backend/metal/softmax.cpp",
+        "hostLines": "46-83",
+        "dispatchFormulas": [
+          "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+          "looped: [maxTotalThreadsPerThreadgroup, 1, 1]"
+        ],
+        "dispatchSelection": [
+          "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": [
+          "axis_size",
+          "maxTotalThreadsPerThreadgroup"
+        ],
+        "materializationParameters": [
+          "AccT",
+          "N_READS",
+          "T"
+        ]
+      }
+    },
     "directx_toolchain_gaps": {
+      "mlx/backend/metal/kernels/arg_reduce.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/layer_norm.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/logsumexp.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/rms_norm.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "runtime-selected pass and shape determine the workgroup size, which is unavailable to source materialization; translation fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/softmax.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
       "mlx/backend/metal/kernels/fence.metal": "the requested mem_device, memory_order_seq_cst, thread_scope_system atomic-fence contract is not representable in HLSL and fails with project.translate.directx-atomic-fence-unsupported (https://github.com/CrossGL/crosstl/issues/1537)"
     },
     "native_runtime_executed": false,
@@ -655,9 +1280,12 @@
     "https://github.com/CrossGL/crosstl/issues/1671",
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1696",
+    "https://github.com/CrossGL/crosstl/issues/1735",
     "https://github.com/CrossGL/crosstl/issues/1750",
+    "https://github.com/CrossGL/crosstl/issues/1786",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
+    "https://github.com/CrossGL/crosstl/issues/1462",
     "https://github.com/CrossGL/crosstl/issues/1676",
     "https://github.com/CrossGL/crosstl/issues/1388",
     "https://github.com/CrossGL/crosstl/issues/1471",
