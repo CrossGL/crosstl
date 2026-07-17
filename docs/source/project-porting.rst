@@ -1595,6 +1595,64 @@ configured define names, deterministic define fingerprints, variant names,
 per-variant define counts, variant define names, and deterministic per-variant
 define fingerprints without printing define values.
 
+Bounded Host Dispatch Contract Import
+-------------------------------------
+
+Projects can import versioned JSON host dispatch contracts through
+``project.dispatch_contracts`` in ``crosstl.toml``:
+
+.. code-block:: toml
+
+   [project]
+   dispatch_contracts = [
+     "contracts/layer-norm.dispatch.json",
+     "contracts/copy.dispatch.json",
+   ]
+
+The ``scan``, ``report``, and ``translate-project`` commands also accept a
+repeatable ``--dispatch-contract PATH`` option. Command-line imports augment
+the configured contract list for that invocation:
+
+.. code-block:: bash
+
+   python -m crosstl scan /path/to/repo \
+     --dispatch-contract contracts/layer-norm.dispatch.json
+
+   python -m crosstl report /path/to/repo \
+     --dispatch-contract contracts/layer-norm.dispatch.json \
+     --dispatch-contract contracts/copy.dispatch.json \
+     --output crosstl-out/portability-report.json
+
+   python -m crosstl translate-project /path/to/repo \
+     --dispatch-contract contracts/layer-norm.dispatch.json \
+     --output-dir crosstl-out
+
+Contract expressions are evaluated over finite declared domains in a
+deterministic order. The resulting project metadata includes:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Report field
+     - Contents
+   * - ``dispatchContractFiles``
+     - Ordered configured and command-line contract paths.
+   * - ``dispatchContractCount``
+     - Number of imported contract manifests.
+   * - ``dispatchVariantCount``
+     - Total number of deterministically evaluated dispatch variants.
+   * - ``dispatchContracts``
+     - Embedded normalized manifests, content identities, provenance, and
+       evaluated variant records.
+
+The embedded manifests and evaluations are machine-readable and self-contained
+for project report validation, including deterministic replay without the
+external contract files. Import currently does not generate project translation
+variants, execute kernels, or prove runtime or numerical parity. Artifact
+generation integration remains tracked in `GitHub issue #1793
+<https://github.com/CrossGL/crosstl/issues/1793>`_.
+
 Report Shape
 ------------
 
