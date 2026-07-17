@@ -2154,6 +2154,10 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "github.event_name != 'schedule'" in mlx_porting
     assert "--mode reduced-frontier" in mlx_porting
     assert "--require-metal-toolchain" in mlx_porting
+    assert "Install macOS Metal Toolchain" in mlx_porting
+    assert "if: runner.os == 'macOS'" in mlx_porting
+    assert "xcodebuild -downloadComponent MetalToolchain" in mlx_porting
+    assert mlx_porting.count("xcrun --sdk macosx metal --version") == 2
     assert "--require-directx-toolchain" in mlx_porting
     assert "--require-directx-gemv-compiler-frontier" in mlx_porting
     assert "--require-opengl-frontier-toolchain" in mlx_porting

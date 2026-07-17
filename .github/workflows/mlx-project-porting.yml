@@ -87,6 +87,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e . pytest-xdist
 
+      - name: Install macOS Metal Toolchain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version
+
       - name: Validate bounded MLX dispatch contract
         run: python -m pytest -q -n auto tests/test_mlx_dispatch_contract_fixture.py
 
