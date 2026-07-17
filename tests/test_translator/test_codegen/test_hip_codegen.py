@@ -184,6 +184,8 @@ class TestHipCodeGen:
             HipCodeGen().generate(ast)
 
         diagnostic = exc_info.value
+        assert isinstance(diagnostic, ValueError)
+        assert not isinstance(diagnostic, NotImplementedError)
         assert diagnostic.project_diagnostic_code == (
             "project.translate.unsupported-feature"
         )

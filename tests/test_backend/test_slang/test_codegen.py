@@ -1601,6 +1601,8 @@ def test_reverse_codegen_rejects_extension_conformance_constructs():
 
     diagnostic = exc.value
     message = str(diagnostic)
+    assert isinstance(diagnostic, ValueError)
+    assert not isinstance(diagnostic, NotImplementedError)
     assert "extension MyType : IBar" in message
     assert diagnostic.project_diagnostic_code == (
         "project.translate.unsupported-feature"
@@ -1637,7 +1639,7 @@ def test_reverse_codegen_rejects_generic_prefixed_extension_after_parse():
     ast = parse_code(tokens)
 
     with pytest.raises(
-        NotImplementedError,
+        SlangCrossGLCodeGen.UnsupportedSlangConformanceError,
         match="interface/conformance constructs",
     ) as exc:
         generate_code(ast)
@@ -1686,7 +1688,7 @@ def test_reverse_codegen_rejects_generic_where_conformance_constraint():
     ast = parse_code(tokens)
 
     with pytest.raises(
-        NotImplementedError,
+        SlangCrossGLCodeGen.UnsupportedSlangConformanceError,
         match="function useFoo where T : IFoo",
     ):
         generate_code(ast)
@@ -1702,7 +1704,7 @@ def test_reverse_codegen_rejects_typealias_generic_conformance_constraint():
     ast = parse_code(tokens)
 
     with pytest.raises(
-        NotImplementedError,
+        SlangCrossGLCodeGen.UnsupportedSlangConformanceError,
         match="typealias FooAlias<T> where T : IFoo",
     ):
         generate_code(ast)

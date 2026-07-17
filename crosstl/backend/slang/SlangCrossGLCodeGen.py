@@ -10,7 +10,7 @@ from .SlangLexer import *
 from .SlangParser import *
 
 
-class UnsupportedSlangConformanceError(NotImplementedError):
+class UnsupportedSlangConformanceError(ValueError):
     """Raised when Slang conformance semantics cannot be represented."""
 
     project_diagnostic_code = "project.translate.unsupported-feature"

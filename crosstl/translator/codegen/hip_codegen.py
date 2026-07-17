@@ -219,7 +219,7 @@ HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES = {
 }
 
 
-class UnsupportedHIPAstNodeError(NotImplementedError):
+class UnsupportedHIPAstNodeError(ValueError):
     """Raised when HIP codegen cannot safely lower an AST node."""
 
     project_diagnostic_code = "project.translate.unsupported-feature"
