@@ -13796,6 +13796,131 @@ def test_metal_template_type_binding_uses_struct_specialization_provenance():
     assert bindings == {"T": "float", "M": "2", "N": "3", "Frag": "int"}
 
 
+def test_plain_metal_helper_materialization_deduces_threadgroup_array_decay():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        struct MatrixOp {};
+        struct TileLoader {};
+
+        template <typename T, typename Op, typename Loader>
+        void gemm_loop_aligned(
+            threadgroup T* left,
+            threadgroup T* right,
+            thread Op& op,
+            thread Loader& loader) {
+          left[0] = right[0];
+        }
+
+        template <bool RowsAligned, bool ColsAligned, typename T, typename Op,
+                  typename Loader>
+        void gemm_loop_unaligned(
+            threadgroup T* left,
+            threadgroup T* right,
+            thread Op& op,
+            thread Loader& loader) {
+          left[0] = right[0];
+        }
+
+        template <typename T, typename Op, typename Loader>
+        void gemm_loop_finalize(
+            threadgroup T* left,
+            threadgroup T* right,
+            thread Op& op,
+            thread Loader& loader) {
+          left[0] = right[0];
+        }
+
+        [[kernel]] void launch(device float* output [[buffer(0)]]) {
+          threadgroup float left[4];
+          threadgroup float right[4];
+          thread MatrixOp op;
+          thread TileLoader loader;
+          gemm_loop_aligned(left, right, op, loader);
+          gemm_loop_unaligned<false, true>(left, right, op, loader);
+          gemm_loop_finalize(left, right, op, loader);
+          output[0] = left[0];
+        }
+        """)
+
+    materialized, records, completed_names, _materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {
+        "gemm_loop_aligned",
+        "gemm_loop_finalize",
+        "gemm_loop_unaligned",
+    }
+    assert {record["name"]: record["parameters"] for record in records} == {
+        "gemm_loop_aligned": {
+            "T": "float",
+            "Op": "MatrixOp",
+            "Loader": "TileLoader",
+        },
+        "gemm_loop_unaligned": {
+            "RowsAligned": "false",
+            "ColsAligned": "true",
+            "T": "float",
+            "Op": "MatrixOp",
+            "Loader": "TileLoader",
+        },
+        "gemm_loop_finalize": {
+            "T": "float",
+            "Op": "MatrixOp",
+            "Loader": "TileLoader",
+        },
+    }
+    assert "gemm_loop_aligned_float_MatrixOp_TileLoader(" in materialized
+    assert "gemm_loop_unaligned_false_true_float_MatrixOp_TileLoader(" in materialized
+    assert "gemm_loop_finalize_float_MatrixOp_TileLoader(" in materialized
+
+
+def test_plain_metal_helper_materialization_retains_reachable_unbound_parameter():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename Ignored>
+        void unreachable_helper(Ignored value) {}
+
+        template <typename T, typename Policy>
+        void reachable_helper(threadgroup T* values) {
+          values[0] = T(0);
+        }
+
+        [[kernel]] void launch(device float* output [[buffer(0)]]) {
+          threadgroup float values[4];
+          reachable_helper(values);
+          output[0] = values[0];
+        }
+        """)
+    preprocessor = MetalPreprocessor()
+
+    materialized, records, completed_names, _materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            preprocessor,
+            source,
+        )
+    )
+    templates = preprocessor._find_template_functions(materialized)
+    template_spans = preprocessor._find_template_declaration_spans(materialized)
+    reachable_names = project_pipeline._reachable_metal_template_function_names(
+        preprocessor,
+        materialized,
+        templates,
+        template_spans,
+        preprocessor._reachable_function_spans(materialized, template_spans),
+    )
+
+    assert records == []
+    assert completed_names == set()
+    assert "reachable_helper(values)" in materialized
+    assert reachable_names == {"reachable_helper"}
+
+
 def test_metal_template_diagnostic_preserves_underscore_value_provenance():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 

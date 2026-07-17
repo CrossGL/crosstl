@@ -13012,6 +13012,17 @@ def _collect_metal_template_type_bindings(
 
     expected_element = _metal_array_element_type(expected)
     actual_element = _metal_array_element_type(actual)
+    # Function-call array decay binds a pointer parameter through the array's
+    # element type while retaining the existing template conflict checks.
+    if expected_pointee is not None and actual_element is not None:
+        return _collect_metal_template_type_bindings(
+            preprocessor,
+            expected_type=expected_pointee,
+            actual_type=actual_element,
+            bindings=bindings,
+            template_parameters=template_parameters,
+            template_structs_by_name=template_structs_by_name,
+        )
     if expected_element is not None and actual_element is not None:
         return _collect_metal_template_type_bindings(
             preprocessor,
