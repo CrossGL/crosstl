@@ -54,7 +54,6 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXCooperativeMatrixUnsupportedError,
     DirectXEntryPointSelectionError,
     DirectXForInIterableError,
-    DirectXMappedOverloadError,
     DirectXMinimumPrecisionIntegerArithmeticError,
     DirectXPrivatePointerParameterError,
     DirectXResourcePointerArrayError,

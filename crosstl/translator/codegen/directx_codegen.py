@@ -1086,9 +1086,7 @@ class HLSLCodeGen:
         {"constant", "device", "thread", "threadgroup"}
     )
     METAL_TYPE_ALIAS_GLOBALS = frozenset({"bfloat16_t", "float16_t"})
-    HLSL_SOURCE_BFLOAT16_TYPES = frozenset(
-        {"bfloat", "bfloat16", "bfloat16_t"}
-    )
+    HLSL_SOURCE_BFLOAT16_TYPES = frozenset({"bfloat", "bfloat16", "bfloat16_t"})
     HLSL_BFLOAT16_BUILTIN_CONTRACTS = {
         "abs": ("abs", 1, "bfloat"),
         "ceil": ("ceil", 1, "bfloat"),
@@ -3908,7 +3906,8 @@ class HLSLCodeGen:
             )
 
         helper_sources = {
-            "from_float": """
+            "from_float": (
+                """
 uint __crossgl_bfloat16_from_float(float value) {
     uint bits = asuint(value);
     uint upperBits = bits >> 16u;
@@ -3919,22 +3918,29 @@ uint __crossgl_bfloat16_from_float(float value) {
     uint roundingBias = 0x7fffu + (upperBits & 1u);
     return ((bits + roundingBias) >> 16u) & 0xffffu;
 }
-""",
-            "to_float": """
+"""
+            ),
+            "to_float": (
+                """
 float __crossgl_bfloat16_to_float(uint value) {
     return asfloat((value & 0xffffu) << 16u);
 }
-""",
-            "from_uint16": """
+"""
+            ),
+            "from_uint16": (
+                """
 uint __crossgl_bfloat16_from_uint16(min16uint value) {
     return uint(value) & 0xffffu;
 }
-""",
-            "to_uint16": """
+"""
+            ),
+            "to_uint16": (
+                """
 min16uint __crossgl_bfloat16_to_uint16(uint value) {
     return min16uint(value & 0xffffu);
 }
-""",
+"""
+            ),
         }
         code.extend(helper_sources[name] for name in sorted(required))
         return "".join(code) + "\n"
@@ -5773,15 +5779,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         type_name = self.type_name_string(vtype)
         mapped_type = self.map_type(type_name)
-        if (
-            var_name in self.METAL_TYPE_ALIAS_GLOBALS
-            and (
-                mapped_type == self.type_mapping.get(var_name)
-                or (
-                    var_name == "bfloat16_t"
-                    and mapped_type == self.map_type("half")
-                )
-            )
+        if var_name in self.METAL_TYPE_ALIAS_GLOBALS and (
+            mapped_type == self.type_mapping.get(var_name)
+            or (var_name == "bfloat16_t" and mapped_type == self.map_type("half"))
         ):
             return True
         type_key = str(type_name or "").rsplit("::", 1)[-1]
@@ -9723,9 +9723,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return f"__crossgl_complex64_negate({operand})"
 
     def hlsl_bfloat16_unary_expression(self, expr, operand, op):
-        operand_type = self.hlsl_source_expression_type(
-            getattr(expr, "operand", None)
-        )
+        operand_type = self.hlsl_source_expression_type(getattr(expr, "operand", None))
         if not self.is_hlsl_bfloat16_type(operand_type):
             return None
         if op == "+":
@@ -9756,9 +9754,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             decoded = self.hlsl_bfloat16_to_float_expression(operand)
             delta = "+ 1.0" if op == "++" else "- 1.0"
-            rounded = self.hlsl_float_to_bfloat16_expression(
-                f"({decoded} {delta})"
-            )
+            rounded = self.hlsl_float_to_bfloat16_expression(f"({decoded} {delta})")
             return f"({operand} = {rounded})"
         raise self.directx_bfloat16_unsupported(
             "DirectX exact bfloat16 lowering does not support unary operator "
@@ -10759,9 +10755,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         element_type = self.type_name_string(pointee_type)
         mapped_element_type = self.hlsl_bfloat16_storage_type(
             element_type,
-            operation=(
-                f"storage pointer parameter '{function_name}.{parameter_name}'"
-            ),
+            operation=(f"storage pointer parameter '{function_name}.{parameter_name}'"),
             source_location=getattr(parameter, "source_location", None),
         )
         if not mapped_element_type or any(

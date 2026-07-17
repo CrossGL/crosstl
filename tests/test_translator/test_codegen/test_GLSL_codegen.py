@@ -3814,12 +3814,16 @@ def test_glsl_normalizes_64_bit_subscript_indices(tmp_path):
     }
     """
 
-    generated = GLSLCodeGen().set_index_range_assertions(
-        [
-            {"expression": "offsets.x", "minimum": 0, "maximum": 3},
-            {"expression": "offsets.y", "minimum": 0, "maximum": 3},
-        ]
-    ).generate(crosstl.translator.parse(shader))
+    generated = (
+        GLSLCodeGen()
+        .set_index_range_assertions(
+            [
+                {"expression": "offsets.x", "minimum": 0, "maximum": 3},
+                {"expression": "offsets.y", "minimum": 0, "maximum": 3},
+            ]
+        )
+        .generate(crosstl.translator.parse(shader))
+    )
 
     assert "uint loaded = source[uint(offsets.x)];" in generated
     assert "values[1u] = loaded;" in generated
@@ -3850,16 +3854,20 @@ def test_glsl_generic_integer_vector_component_preserves_index_type(tmp_path):
     }
     """
 
-    generated = GLSLCodeGen().set_index_range_assertions(
-        [
-            {
-                "expression": "location.y",
-                "function": "readValue",
-                "minimum": 0,
-                "maximum": 1,
-            }
-        ]
-    ).generate(crosstl.translator.parse(shader))
+    generated = (
+        GLSLCodeGen()
+        .set_index_range_assertions(
+            [
+                {
+                    "expression": "location.y",
+                    "function": "readValue",
+                    "minimum": 0,
+                    "maximum": 1,
+                }
+            ]
+        )
+        .generate(crosstl.translator.parse(shader))
+    )
 
     assert "uint readValue(i64vec2 location)" in generated
     assert "return source[int(location.y)];" in generated
