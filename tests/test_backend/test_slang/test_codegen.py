@@ -1594,13 +1594,20 @@ def test_reverse_codegen_rejects_extension_conformance_constructs():
     ast = parse_code(tokens)
 
     with pytest.raises(
-        NotImplementedError,
+        SlangCrossGLCodeGen.UnsupportedSlangConformanceError,
         match="interface/conformance constructs",
     ) as exc:
         generate_code(ast)
 
-    message = str(exc.value)
+    diagnostic = exc.value
+    message = str(diagnostic)
     assert "extension MyType : IBar" in message
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.unsupported-feature"
+    )
+    assert diagnostic.missing_capabilities == ("slang.interface-conformance-lowering",)
+    assert "struct MyType : IFoo" in diagnostic.constructs
+    assert diagnostic.suggested_action in message
 
 
 def test_reverse_codegen_rejects_generic_prefixed_extension_after_parse():

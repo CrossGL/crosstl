@@ -53,6 +53,53 @@ class TestHipParser:
         with pytest.raises(SyntaxError, match="Expected SEMICOLON"):
             self.parse_code(code)
 
+    def test_namespace_alias_metadata_is_preserved_for_codegen(self):
+        code = """
+        namespace hstd = std;
+        namespace hhip = hip::std;
+
+        __device__ float kernel(float x, float y) {
+            return hstd::fminf(x, y) + hhip::fmaxf(x, y);
+        }
+        """
+
+        ast = self.parse_code(code)
+        value = ast.statements[0].body[0].value
+
+        assert ast.namespace_aliases == {
+            "hstd": "std",
+            "hhip": "hip::std",
+        }
+        assert isinstance(value.left, FunctionCallNode)
+        assert value.left.name == "hstd::fminf"
+        assert isinstance(value.right, FunctionCallNode)
+        assert value.right.name == "hhip::fmaxf"
+
+    def test_nested_namespace_aliases_do_not_leak_into_file_scope_metadata(self):
+        code = """
+        namespace first {
+            namespace local = std;
+
+            __device__ float first_value(float x, float y) {
+                return local::fminf(x, y);
+            }
+        }
+
+        namespace second {
+            namespace local = hip::std;
+
+            __device__ float second_value(float x, float y) {
+                return local::fmaxf(x, y);
+            }
+        }
+        """
+
+        ast = self.parse_code(code)
+
+        assert ast.namespace_aliases == {}
+        assert ast.statements[0].body[0].value.name == "local::fminf"
+        assert ast.statements[1].body[0].value.name == "local::fmaxf"
+
     def test_missing_semicolon_between_assignments_errors(self):
         code = """
         void host() {

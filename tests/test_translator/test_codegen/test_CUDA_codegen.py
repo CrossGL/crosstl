@@ -47,6 +47,50 @@ def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
     assert result.returncode == 0, result.stderr + "\n\n" + cuda_code
 
 
+def compile_half_vector_helpers_if_cxx_available(helper_code, tmp_path):
+    """Compile CUDA-neutral half vector helpers with a host C++ compiler."""
+    compiler = shutil.which("c++") or shutil.which("clang++") or shutil.which("g++")
+    if compiler is None:
+        pytest.skip("a C++ compiler is not installed")
+
+    source_path = tmp_path / "cuda_half_vector_helpers.cpp"
+    object_path = tmp_path / "cuda_half_vector_helpers.o"
+    source_path.write_text(
+        "\n".join(
+            [
+                "#define __host__",
+                "#define __device__",
+                "struct alignas(2) half {",
+                "    unsigned short bits;",
+                "    half() : bits(0) {}",
+                "    explicit half(float) : bits(0) {}",
+                "    operator float() const { return 0.0f; }",
+                "};",
+                "inline half __float2half(float value) { return half(value); }",
+                helper_code,
+                "int main() {",
+                "    half value = __float2half(1.0f);",
+                "    cgl_half3 three = cgl_make_half3(value, 2.0f, 3);",
+                "    cgl_half4 four = cgl_make_half4(three.x, three.y, three.z, 4.0f);",
+                "    four = cgl_cgl_half4_add(four, four);",
+                "    static_assert(sizeof(cgl_half4) == 8);",
+                "    static_assert(alignof(cgl_half4) == 8);",
+                "    return static_cast<int>(static_cast<float>(four.w));",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [compiler, "-std=c++17", "-c", str(source_path), "-o", str(object_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr + "\n\n" + helper_code
+
+
 def compile_matrix_helpers_if_cxx_available(helper_code, tmp_path):
     """Compile CUDA/HIP-neutral matrix helper overloads with a C++ compiler."""
     compiler = shutil.which("c++") or shutil.which("clang++") or shutil.which("g++")
@@ -2574,36 +2618,108 @@ class TestCudaCodeGen:
         )
         assert "f16vec3" not in cuda_code
 
-    @pytest.mark.parametrize("vector_type", ["vec4<f16>"])
-    def test_fp16_vec4_aliases_raise_cuda_diagnostic(self, vector_type):
+    @pytest.mark.parametrize(
+        "vector_type",
+        [
+            "vec4<f16>",
+            "vec4<float16>",
+            "vec4<half>",
+            "f16vec4",
+            "float16vec4",
+            "half4",
+        ],
+    )
+    def test_fp16_vec4_aliases_lower_to_cuda_half4_helper(self, vector_type):
         source_code = f"""
         shader TestShader {{
             compute {{
-                {vector_type} unsupported() {{
-                    return {vector_type}(1.0, 2.0, 3.0, 4.0);
+                {vector_type} tint({vector_type} input) {{
+                    f16 scalar = f16(0.5);
+                    {vector_type} from_scalars = {vector_type}(
+                        1.0, scalar, input.z, input.w);
+                    {vector_type} from_vector = {vector_type}(input);
+                    {vector_type} from_swizzle = {vector_type}(input.wzyx);
+                    {vector_type} combined = from_scalars + from_swizzle;
+                    f16 component = from_scalars.w;
+                    return {vector_type}(
+                        combined.x, from_vector.y, component, input.x);
                 }}
             }}
         }}
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
 
-        with pytest.raises(
-            ValueError,
-            match=f"CUDA does not support FP16 vector type {vector_type}",
-        ):
-            CudaCodeGen().generate(ast)
+        assert "#include <cuda_fp16.h>" in cuda_code
+        assert "struct alignas(8) cgl_half4" in cuda_code
+        assert "__device__ cgl_half4 tint(cgl_half4 input)" in cuda_code
+        assert "half scalar = __float2half(0.5);" in cuda_code
+        assert (
+            "cgl_half4 from_scalars = cgl_make_half4(1.0, scalar, input.z, input.w);"
+            in cuda_code
+        )
+        assert (
+            "cgl_half4 from_vector = "
+            "cgl_make_half4(input.x, input.y, input.z, input.w);" in cuda_code
+        )
+        assert (
+            "cgl_half4 from_swizzle = "
+            "cgl_make_half4(input.w, input.z, input.y, input.x);" in cuda_code
+        )
+        assert (
+            "__device__ inline cgl_half4 cgl_cgl_half4_add("
+            "cgl_half4 lhs, cgl_half4 rhs)" in cuda_code
+        )
+        assert "return cgl_make_half4((lhs.x + rhs.x)" in cuda_code
+        assert "(lhs.w + rhs.w));" in cuda_code
+        assert (
+            "cgl_half4 combined = "
+            "cgl_cgl_half4_add(from_scalars, from_swizzle);" in cuda_code
+        )
+        assert "from_scalars + from_swizzle" not in cuda_code
+        assert "half component = from_scalars.w;" in cuda_code
+        assert (
+            "return cgl_make_half4(combined.x, from_vector.y, component, input.x);"
+            in cuda_code
+        )
+        if vector_type != "half4":
+            assert vector_type not in cuda_code
 
     @pytest.mark.parametrize(
         "vector_type",
-        ["f16vec4", "float16vec4", "half4"],
+        [
+            "vec4<f16>",
+            "vec4<float16>",
+            "vec4<half>",
+            "f16vec4",
+            "float16vec4",
+            "half4",
+        ],
     )
-    def test_fp16_wide_vector_alias_maps_raise_cuda_diagnostic(self, vector_type):
-        with pytest.raises(
-            ValueError,
-            match=f"CUDA does not support FP16 vector type {vector_type}",
-        ):
-            CudaCodeGen().convert_crossgl_type_to_cuda(vector_type)
+    def test_fp16_wide_vector_alias_maps_emit_cuda_half4(self, vector_type):
+        assert CudaCodeGen().convert_crossgl_type_to_cuda(vector_type) == "cgl_half4"
+
+    def test_fp16_half3_and_half4_helpers_compile_together(self, tmp_path):
+        source_code = """
+        shader HalfVectorHelpers {
+            compute {
+                f16vec4 add(f16vec4 left, f16vec4 right) {
+                    return left + right;
+                }
+            }
+        }
+        """
+        codegen = CudaCodeGen()
+        codegen.generate(Parser(Lexer(source_code).tokens).parse())
+        codegen.require_cuda_half3_helper()
+        helper_code = "\n\n".join(codegen.helper_functions.values())
+
+        assert helper_code.count("inline half cgl_to_half(half value)") == 1
+        assert "struct cgl_half3" in helper_code
+        assert "struct alignas(8) cgl_half4" in helper_code
+        assert "cgl_cgl_half4_add" in helper_code
+        compile_half_vector_helpers_if_cxx_available(helper_code, tmp_path)
 
     def test_composite_vector_constructors_flatten_cuda_lanes(self):
         source_code = """

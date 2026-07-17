@@ -13,6 +13,7 @@ from crosstl.translator.ast import (
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
+    LambdaNode,
     LiteralNode,
     MatchArmNode,
     MatchNode,
@@ -27,7 +28,10 @@ from crosstl.translator.ast import (
     WaveOpNode,
     WildcardPatternNode,
 )
-from crosstl.translator.codegen.hip_codegen import HipCodeGen
+from crosstl.translator.codegen.hip_codegen import (
+    HipCodeGen,
+    UnsupportedHIPAstNodeError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -48,6 +52,50 @@ def compile_hip_if_hipcc_available(hip_code, tmp_path):
         text=True,
     )
     assert result.returncode == 0, result.stderr + "\n\n" + hip_code
+
+
+def compile_half_vector_helpers_if_cxx_available(helper_code, tmp_path):
+    """Compile HIP-neutral half vector helpers with a host C++ compiler."""
+    compiler = shutil.which("c++") or shutil.which("clang++") or shutil.which("g++")
+    if compiler is None:
+        pytest.skip("a C++ compiler is not installed")
+
+    source_path = tmp_path / "hip_half_vector_helpers.cpp"
+    object_path = tmp_path / "hip_half_vector_helpers.o"
+    source_path.write_text(
+        "\n".join(
+            [
+                "#define __host__",
+                "#define __device__",
+                "struct alignas(2) half {",
+                "    unsigned short bits;",
+                "    half() : bits(0) {}",
+                "    explicit half(float) : bits(0) {}",
+                "    operator float() const { return 0.0f; }",
+                "};",
+                "inline half __float2half(float value) { return half(value); }",
+                helper_code,
+                "int main() {",
+                "    half value = __float2half(1.0f);",
+                "    cgl_half3 three = cgl_make_half3(value, 2.0f, 3);",
+                "    cgl_half4 four = cgl_make_half4(three.x, three.y, three.z, 4.0f);",
+                "    four = cgl_cgl_half4_add(four, four);",
+                "    static_assert(sizeof(cgl_half4) == 8);",
+                "    static_assert(alignof(cgl_half4) == 8);",
+                "    return static_cast<int>(static_cast<float>(four.w));",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [compiler, "-std=c++17", "-c", str(source_path), "-o", str(object_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr + "\n\n" + helper_code
 
 
 def compile_matrix_helpers_if_cxx_available(helper_code, tmp_path):
@@ -106,6 +154,46 @@ def compile_matrix_helpers_if_cxx_available(helper_code, tmp_path):
 
 
 class TestHipCodeGen:
+    def test_unhandled_ast_node_raises_structured_hip_diagnostic(self):
+        ast = ShaderNode(
+            name="UnhandledHipAstNode",
+            execution_model=ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "uses_unhandled_expression",
+                    PrimitiveType("void"),
+                    [],
+                    BlockNode(
+                        [
+                            VariableNode(
+                                "value",
+                                PrimitiveType("float"),
+                                LambdaNode(
+                                    [],
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    expression_type=PrimitiveType("float"),
+                                ),
+                            )
+                        ]
+                    ),
+                )
+            ],
+        )
+
+        with pytest.raises(UnsupportedHIPAstNodeError) as exc_info:
+            HipCodeGen().generate(ast)
+
+        diagnostic = exc_info.value
+        assert diagnostic.project_diagnostic_code == (
+            "project.translate.unsupported-feature"
+        )
+        assert diagnostic.missing_capabilities == ("hip.ast-node-lowering",)
+        assert diagnostic.node_type == "LambdaNode"
+        assert diagnostic.feature == "hip.ast-node.LambdaNode"
+        assert diagnostic.suggested_action == (
+            "Implement visit_LambdaNode with semantics-preserving HIP lowering."
+        )
+
     def test_unresolved_generic_function_call_is_diagnostic_for_hip_codegen(self):
         source_code = """
         shader GenericFunctionDiagnostic {
@@ -1727,36 +1815,108 @@ class TestHipCodeGen:
         )
         assert "f16vec3" not in hip_code
 
-    @pytest.mark.parametrize("vector_type", ["vec4<f16>"])
-    def test_fp16_vec4_aliases_raise_hip_diagnostic(self, vector_type):
+    @pytest.mark.parametrize(
+        "vector_type",
+        [
+            "vec4<f16>",
+            "vec4<float16>",
+            "vec4<half>",
+            "f16vec4",
+            "float16vec4",
+            "half4",
+        ],
+    )
+    def test_fp16_vec4_aliases_lower_to_hip_half4_helper(self, vector_type):
         source_code = f"""
         shader TestShader {{
             compute {{
-                {vector_type} unsupported() {{
-                    return {vector_type}(1.0, 2.0, 3.0, 4.0);
+                {vector_type} tint({vector_type} input) {{
+                    f16 scalar = f16(0.5);
+                    {vector_type} from_scalars = {vector_type}(
+                        1.0, scalar, input.z, input.w);
+                    {vector_type} from_vector = {vector_type}(input);
+                    {vector_type} from_swizzle = {vector_type}(input.wzyx);
+                    {vector_type} combined = from_scalars + from_swizzle;
+                    f16 component = from_scalars.w;
+                    return {vector_type}(
+                        combined.x, from_vector.y, component, input.x);
                 }}
             }}
         }}
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
 
-        with pytest.raises(
-            ValueError,
-            match=f"HIP does not support FP16 vector type {vector_type}",
-        ):
-            HipCodeGen().generate(ast)
+        assert "#include <hip/hip_fp16.h>" in hip_code
+        assert "struct alignas(8) cgl_half4" in hip_code
+        assert "__device__ cgl_half4 tint(cgl_half4 input)" in hip_code
+        assert "half scalar = __float2half(0.5);" in hip_code
+        assert (
+            "cgl_half4 from_scalars = cgl_make_half4(1.0, scalar, input.z, input.w);"
+            in hip_code
+        )
+        assert (
+            "cgl_half4 from_vector = "
+            "cgl_make_half4(input.x, input.y, input.z, input.w);" in hip_code
+        )
+        assert (
+            "cgl_half4 from_swizzle = "
+            "cgl_make_half4(input.w, input.z, input.y, input.x);" in hip_code
+        )
+        assert (
+            "__device__ inline cgl_half4 cgl_cgl_half4_add("
+            "cgl_half4 lhs, cgl_half4 rhs)" in hip_code
+        )
+        assert "return cgl_make_half4((lhs.x + rhs.x)" in hip_code
+        assert "(lhs.w + rhs.w));" in hip_code
+        assert (
+            "cgl_half4 combined = "
+            "cgl_cgl_half4_add(from_scalars, from_swizzle);" in hip_code
+        )
+        assert "from_scalars + from_swizzle" not in hip_code
+        assert "half component = from_scalars.w;" in hip_code
+        assert (
+            "return cgl_make_half4(combined.x, from_vector.y, component, input.x);"
+            in hip_code
+        )
+        if vector_type != "half4":
+            assert vector_type not in hip_code
 
     @pytest.mark.parametrize(
         "vector_type",
-        ["f16vec4", "float16vec4", "half4"],
+        [
+            "vec4<f16>",
+            "vec4<float16>",
+            "vec4<half>",
+            "f16vec4",
+            "float16vec4",
+            "half4",
+        ],
     )
-    def test_fp16_wide_vector_alias_maps_raise_hip_diagnostic(self, vector_type):
-        with pytest.raises(
-            ValueError,
-            match=f"HIP does not support FP16 vector type {vector_type}",
-        ):
-            HipCodeGen().map_type(vector_type)
+    def test_fp16_wide_vector_alias_maps_emit_hip_half4(self, vector_type):
+        assert HipCodeGen().map_type(vector_type) == "cgl_half4"
+
+    def test_fp16_half3_and_half4_helpers_compile_together(self, tmp_path):
+        source_code = """
+        shader HalfVectorHelpers {
+            compute {
+                f16vec4 add(f16vec4 left, f16vec4 right) {
+                    return left + right;
+                }
+            }
+        }
+        """
+        codegen = HipCodeGen()
+        codegen.generate(Parser(Lexer(source_code).tokens).parse())
+        codegen.require_hip_half3_helper()
+        helper_code = "\n\n".join(codegen.helper_functions.values())
+
+        assert helper_code.count("inline half cgl_to_half(half value)") == 1
+        assert "struct cgl_half3" in helper_code
+        assert "struct alignas(8) cgl_half4" in helper_code
+        assert "cgl_cgl_half4_add" in helper_code
+        compile_half_vector_helpers_if_cxx_available(helper_code, tmp_path)
 
     def test_composite_vector_constructors_flatten_hip_lanes(self):
         source_code = """
