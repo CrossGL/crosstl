@@ -261,6 +261,124 @@ def test_receiver_declaration_index_preserves_alias_and_lexical_shadowing():
         assert (declaration.scope_start, declaration.scope_end) == expected_scope
 
 
+@pytest.mark.parametrize(
+    "reverse_functions", [False, True], ids=("half-first", "float-first")
+)
+def test_preprocessor_resolves_line_wrapped_qualified_aliases_per_function(
+    reverse_functions,
+):
+    half_function = """
+    void consume_half(uint lane) {
+      threadgroup half left[4];
+      threadgroup half right[4];
+      using block_t = HalfBlock;
+      block_t block(lane);
+      block.mma(left, right);
+    }
+    """
+    float_function = """
+    void consume_float(uint lane) {
+      threadgroup float left[4];
+      threadgroup float right[4];
+      using block_t = kernels::
+          FloatBlock;
+      block_t block(lane);
+      block.mma(left, right);
+    }
+    """
+    functions = [half_function, float_function]
+    if reverse_functions:
+        functions.reverse()
+    source = """
+    namespace kernels {
+    struct FloatBlock {
+      FloatBlock(uint lane) { (void)lane; }
+      void mma(const threadgroup float* left, const threadgroup float* right) {
+        (void)left;
+        (void)right;
+      }
+    };
+    }
+
+    struct HalfBlock {
+      HalfBlock(uint lane) { (void)lane; }
+      void mma(const threadgroup half* left, const threadgroup half* right) {
+        (void)left;
+        (void)right;
+      }
+    };
+    """ + "\n".join(functions)
+
+    output = MetalPreprocessor().preprocess(source)
+
+    half_body = output.split("void consume_half", 1)[1].split("}", 1)[0]
+    float_body = output.split("void consume_float", 1)[1].split("}", 1)[0]
+    assert "HalfBlock__mma(block, left, right)" in half_body
+    assert "FloatBlock__mma(block, left, right)" in float_body
+    assert "FloatBlock__mma(block, left, right)" not in half_body
+    assert "HalfBlock__mma(block, left, right)" not in float_body
+    assert (
+        "void HalfBlock__mma(thread HalfBlock& self, "
+        "const threadgroup half* left, const threadgroup half* right)" in output
+    )
+    assert (
+        "void FloatBlock__mma(thread FloatBlock& self, "
+        "const threadgroup float* left, const threadgroup float* right)" in output
+    )
+
+
+def test_receiver_contract_does_not_borrow_shadowed_alias_declaration():
+    preprocessor = MetalPreprocessor()
+    source = """
+    struct HalfBlock { void mma() {} };
+    using block_t = HalfBlock;
+
+    void consume() {
+      block_t block;
+      block.mma();
+      {
+        using block_t = unresolved::Block;
+        block_t block;
+        block.mma();
+      }
+    }
+    """
+    aliases = preprocessor._collect_struct_type_aliases(
+        source,
+        {"HalfBlock"},
+        [],
+    )
+    outer_call = source.index("block.mma")
+    inner_call = source.index("block.mma", outer_call + 1)
+
+    outer = preprocessor._receiver_contract_for_named_value(
+        source,
+        "HalfBlock",
+        "block",
+        outer_call,
+        type_aliases=aliases,
+    )
+    inner = preprocessor._receiver_contract_for_named_value(
+        source,
+        "HalfBlock",
+        "block",
+        inner_call,
+        type_aliases=aliases,
+    )
+
+    assert outer is not None
+    assert inner is None
+
+    with pytest.raises(MetalStructMethodError) as exc_info:
+        MetalPreprocessor().preprocess(source)
+
+    error = exc_info.value
+    assert error.reason == "concrete-receiver-type-unresolved"
+    assert error.receiver_type == "block_t"
+    assert error.method_name == "mma"
+    assert error.missing_capabilities == ("metal.member-overload-resolution",)
+
+
 def test_preprocessor_receiver_helper_identity_ignores_parameter_names():
     source = """
     struct Box {

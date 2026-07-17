@@ -282,7 +282,7 @@ class _MetalTypeAliasBinding:
     declaration_position: int
     scope_start: int
     scope_end: int
-    target: str
+    target: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -3052,6 +3052,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if key in resolving:
                     return None
                 if key not in cache:
+                    if binding.target is None:
+                        return None
                     cache[key] = canonicalize(
                         binding.target,
                         binding.declaration_position,
@@ -7478,23 +7480,35 @@ class MetalPreprocessor(HLSLPreprocessor):
                 detail="no concrete operator() overload matches the call arguments",
             )
 
-        # Resolve the variable's struct type from the NEAREST declaration at or
-        # before this call site (deterministic; correct across sibling kernels
-        # that reuse a variable name for different functor types).
-        struct_type = self._resolve_declared_type_at(variable_types, ident, ident_start)
-        if struct_type is None:
-            return None
-        receiver_contract = (
-            implicit_receiver_contract
-            if ident == "self" and implicit_receiver_contract is not None
-            else self._receiver_contract_for_named_value(
-                code,
-                struct_type,
+        # Prefer the lexically visible declaration over the legacy positioned
+        # type map. If the current declaration cannot be resolved, it must shadow
+        # same-named receivers from outer or sibling functions.
+        receiver_declaration, struct_type = self._receiver_struct_type_at(
+            code,
+            ident,
+            ident_start,
+            struct_names,
+            struct_type_aliases,
+        )
+        if receiver_declaration is None:
+            struct_type = self._resolve_declared_type_at(
+                variable_types,
                 ident,
                 ident_start,
-                type_aliases=struct_type_aliases,
             )
-        )
+        receiver_contract = None
+        if struct_type is not None:
+            receiver_contract = (
+                implicit_receiver_contract
+                if ident == "self" and implicit_receiver_contract is not None
+                else self._receiver_contract_for_named_value(
+                    code,
+                    struct_type,
+                    ident,
+                    ident_start,
+                    type_aliases=struct_type_aliases,
+                )
+            )
 
         # Instance method call: `var.m(args)` -> `S__m(var, args)`.
         if code[j] == ".":
@@ -7517,6 +7531,31 @@ class MetalPreprocessor(HLSLPreprocessor):
                 # A data-member access (`var.field`) — leave untouched.
                 return None
             arg_open, explicit_template_arguments = call_suffix
+            if struct_type is None:
+                assert receiver_declaration is not None
+                arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+                location_end = arg_close + 1 if arg_close is not None else arg_open + 1
+                receiver_type = receiver_declaration.raw_type_text.strip()
+                raise MetalStructMethodError(
+                    "Cannot lower concrete member call "
+                    f"'{ident}.{member}' because receiver declaration "
+                    f"'{receiver_type} {ident}' does not resolve to a concrete "
+                    "struct in its lexical scope.",
+                    method_name=member,
+                    requested_signature=f"{ident}.{member}",
+                    suggested_action=(
+                        "make the receiver alias resolve to a concrete struct "
+                        "within the current function scope"
+                    ),
+                    source_location=self._source_location_for_offsets(
+                        code,
+                        ident_start,
+                        location_end,
+                    ),
+                    missing_capabilities=("metal.member-overload-resolution",),
+                    reason="concrete-receiver-type-unresolved",
+                    receiver_type=receiver_type,
+                )
             owner_struct = structs_by_name.get(struct_type)
             reference_methods = (
                 self._concrete_reference_methods(owner_struct, member)
@@ -7692,9 +7731,25 @@ class MetalPreprocessor(HLSLPreprocessor):
         if self._is_member_identifier_context(code, ident_start):
             return None
 
-        declared_type = self._resolve_declared_type_at(
-            field_variable_types, ident, ident_start
-        ) or self._resolve_declared_type_at(variable_types, ident, ident_start)
+        receiver_declaration, resolved_receiver_type = self._receiver_struct_type_at(
+            code,
+            ident,
+            ident_start,
+            set(field_structs_by_name),
+            struct_type_aliases,
+        )
+        if receiver_declaration is not None:
+            if resolved_receiver_type is None:
+                return None
+            receiver_contract = self._receiver_contract_from_type_text(
+                receiver_declaration.raw_type_text,
+                resolved_receiver_type,
+            )
+            declared_type = f"{resolved_receiver_type}{receiver_contract.indirection}"
+        else:
+            declared_type = self._resolve_declared_type_at(
+                field_variable_types, ident, ident_start
+            ) or self._resolve_declared_type_at(variable_types, ident, ident_start)
         receiver_info = self._nested_member_receiver_info(
             declared_type, field_structs_by_name
         )
@@ -7907,30 +7962,68 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> Optional[_MetalReceiverContract]:
         if re.fullmatch(r"[A-Za-z_]\w*", receiver) is None:
             return None
-        declaration = None
-        declarations = self._find_receiver_declarations(code).get(receiver, ())
-        for candidate in declarations:
-            if candidate.declaration_end > call_start:
-                break
-            if not (candidate.scope_start <= call_start < candidate.scope_end):
-                continue
-            resolved_type = candidate.declared_type
-            if resolved_type != struct_name and type_aliases is not None:
-                resolved_type = self._resolve_struct_type_alias_at(
-                    type_aliases,
-                    candidate.declared_type,
-                    candidate.type_position,
-                )
-            if resolved_type != struct_name:
-                continue
-            declaration = candidate
+        declaration = self._visible_receiver_declaration_at(
+            code,
+            receiver,
+            call_start,
+        )
         if declaration is None:
+            return None
+        resolved_type = declaration.declared_type
+        if resolved_type != struct_name and type_aliases is not None:
+            resolved_type = self._resolve_struct_type_alias_at(
+                type_aliases,
+                declaration.declared_type,
+                declaration.type_position,
+            )
+        if resolved_type != struct_name:
             return None
 
         return self._receiver_contract_from_type_text(
             declaration.raw_type_text,
             struct_name,
         )
+
+    def _visible_receiver_declaration_at(
+        self,
+        code: str,
+        receiver: str,
+        position: int,
+    ) -> Optional[_MetalReceiverDeclaration]:
+        declaration = None
+        for candidate in self._find_receiver_declarations(code).get(receiver, ()):
+            if candidate.declaration_end > position:
+                break
+            if not (candidate.scope_start <= position < candidate.scope_end):
+                continue
+            declaration = candidate
+        return declaration
+
+    def _receiver_struct_type_at(
+        self,
+        code: str,
+        receiver: str,
+        position: int,
+        struct_names: Set[str],
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
+    ) -> Tuple[Optional[_MetalReceiverDeclaration], Optional[str]]:
+        declaration = self._visible_receiver_declaration_at(
+            code,
+            receiver,
+            position,
+        )
+        if declaration is None:
+            return None, None
+        resolved_type = declaration.declared_type
+        if resolved_type not in struct_names and type_aliases is not None:
+            resolved_type = self._resolve_struct_type_alias_at(
+                type_aliases,
+                declaration.declared_type,
+                declaration.type_position,
+            )
+        if resolved_type not in struct_names:
+            return declaration, None
+        return declaration, resolved_type
 
     def _receiver_contract_from_type_text(
         self,
@@ -12195,13 +12288,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             [*skip_spans, *self._find_comment_and_literal_spans(code)]
         )
         for match in re.finditer(
-            r"\busing\s+([A-Za-z_]\w*)\s*=\s*"
-            r"((?:typename\s+)?[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)?)\s*;",
+            r"\busing\s+(?P<alias>[A-Za-z_]\w*)\s*=\s*" r"(?P<target>[^;{}]+?)\s*;",
             code,
+            re.DOTALL,
         ):
             if self._containing_span(match.start(), ignored_spans) is not None:
                 continue
-            alias, target = match.group(1), match.group(2)
+            alias, target = match.group("alias"), match.group("target")
             raw_aliases.append(
                 (match.start(), alias, self._normalize_template_argument_text(target))
             )
@@ -12214,6 +12307,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             raw_aliases.append((match.start(), alias, target))
 
         aliases: Dict[str, List[_MetalTypeAliasBinding]] = {}
+        qualified_struct_names = {
+            struct.qualified_name.lstrip(":"): struct.name
+            for struct in (structs_by_name or {}).values()
+            if struct.qualified_name
+        }
         lexical_scopes = self._find_lexical_brace_scopes(code)
         for declaration_position, alias, target in sorted(raw_aliases):
             resolved_target = self._resolve_struct_type_alias_at(
@@ -12221,6 +12319,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
             if resolved_target is None and target in struct_names:
                 resolved_target = target
+            if resolved_target is None:
+                resolved_target = qualified_struct_names.get(target.lstrip(":"))
             if resolved_target is None and structs_by_name:
                 qualified = re.fullmatch(
                     r"(?:typename\s+)?(?P<owner>[A-Za-z_]\w*)\s*::\s*"
@@ -12246,8 +12346,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                             or canonical in self._materialized_struct_specializations
                         ):
                             resolved_target = canonical
-            if resolved_target is None:
-                continue
             scope_start, scope_end = self._innermost_lexical_scope(
                 lexical_scopes, declaration_position, len(code)
             )
