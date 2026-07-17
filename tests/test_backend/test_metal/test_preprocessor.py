@@ -5,6 +5,8 @@ import pytest
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
+    CONTAINING_SPAN_CACHE_LIMIT,
+    SOURCE_ANALYSIS_CACHE_LIMIT,
     MetalPreprocessor,
     MetalStatelessGlobalElisionError,
     MetalStructMethodError,
@@ -57,6 +59,112 @@ def test_containing_span_caches_multiple_span_lists_without_thrashing():
     # A single-slot cache could only retain the most recent list; the per-list
     # cache retains both so the alternating lookups never rebuild.
     assert len(preprocessor._containing_span_cache) == 2
+
+
+def test_containing_span_cache_retention_is_bounded():
+    preprocessor = MetalPreprocessor()
+    span_lists = [
+        [(index * 3, index * 3 + 2)] for index in range(CONTAINING_SPAN_CACHE_LIMIT + 5)
+    ]
+
+    for spans in span_lists:
+        assert preprocessor._containing_span(spans[0][0], spans) == spans[0]
+
+    assert len(preprocessor._containing_span_cache) == CONTAINING_SPAN_CACHE_LIMIT
+    assert id(span_lists[0]) not in preprocessor._containing_span_cache
+    assert id(span_lists[-1]) in preprocessor._containing_span_cache
+
+
+def test_source_analysis_cache_reuses_equal_snapshots_and_is_bounded(monkeypatch):
+    preprocessor = MetalPreprocessor()
+    scan_names = (
+        "_scan_comment_and_literal_spans",
+        "_scan_lexical_brace_scopes",
+        "_scan_template_declaration_spans",
+        "_scan_namespace_spans",
+    )
+    scan_counts = {name: 0 for name in scan_names}
+
+    for scan_name in scan_names:
+        original = getattr(preprocessor, scan_name)
+
+        def counted(code, *, _name=scan_name, _original=original):
+            scan_counts[_name] += 1
+            return _original(code)
+
+        monkeypatch.setattr(preprocessor, scan_name, counted)
+
+    source = """
+    namespace example {
+    template <typename T>
+    T identity(T value) {
+        const char* brace = "}";
+        return value;
+    }
+    }
+    """
+    equal_source = "".join((source[: len(source) // 2], source[len(source) // 2 :]))
+    assert equal_source == source
+    assert equal_source is not source
+
+    finders = (
+        preprocessor._find_comment_and_literal_spans,
+        preprocessor._find_lexical_brace_scopes,
+        preprocessor._find_template_declaration_spans,
+        preprocessor._find_namespace_spans,
+    )
+    for finder in finders:
+        first = finder(source)
+        assert finder(equal_source) is first
+
+    assert scan_counts == {name: 1 for name in scan_names}
+
+    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+        preprocessor._find_namespace_spans(
+            f"namespace generated_{index} {{ int value_{index}; }}"
+        )
+
+    assert len(preprocessor._source_analysis_cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert source not in preprocessor._source_analysis_cache
+
+
+def test_alias_free_struct_families_skip_detailed_scope_scans(monkeypatch):
+    preprocessor = MetalPreprocessor()
+    scan_counts = {"comments": 0, "scopes": 0}
+    original_comment_scan = preprocessor._scan_comment_and_literal_spans
+    original_scope_scan = preprocessor._scan_lexical_brace_scopes
+
+    def counted_comment_scan(code):
+        scan_counts["comments"] += 1
+        return original_comment_scan(code)
+
+    def counted_scope_scan(code):
+        scan_counts["scopes"] += 1
+        return original_scope_scan(code)
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_scan_comment_and_literal_spans",
+        counted_comment_scan,
+    )
+    monkeypatch.setattr(
+        preprocessor,
+        "_scan_lexical_brace_scopes",
+        counted_scope_scan,
+    )
+    source = "\n".join(
+        [
+            *(f"struct Plain{index} {{ float value; }};" for index in range(256)),
+            "struct WithAlias { using scalar_t = float; scalar_t value; };",
+        ]
+    )
+
+    definitions = preprocessor._find_concrete_struct_definitions(source)
+
+    assert len(definitions) == 257
+    with_alias = next(item for item in definitions if item.name == "WithAlias")
+    assert with_alias.type_aliases == {"scalar_t": "float"}
+    assert scan_counts == {"comments": 1, "scopes": 1}
 
 
 def test_preprocessor_conditional_expansion():

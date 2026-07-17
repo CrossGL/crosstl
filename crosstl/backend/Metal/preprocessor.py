@@ -54,6 +54,8 @@ MLX_HOST_NAME_DECL_RE = re.compile(
     re.DOTALL,
 )
 DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT = 512
+SOURCE_ANALYSIS_CACHE_LIMIT = 8
+CONTAINING_SPAN_CACHE_LIMIT = 64
 
 
 class MetalStructMethodError(ValueError):
@@ -221,6 +223,14 @@ class _MetalIntegralConstantBinding:
     scope_start: int
     scope_end: int
     value: Optional[str]
+
+
+@dataclass
+class _MetalSourceAnalysis:
+    comment_and_literal_spans: Optional[List[Tuple[int, int]]] = None
+    lexical_brace_scopes: Optional[List[Tuple[int, int]]] = None
+    template_declaration_spans: Optional[List[Tuple[int, int]]] = None
+    namespace_spans: Optional[List[Tuple[int, int, str]]] = None
 
 
 @dataclass(frozen=True)
@@ -512,15 +522,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._int_alias_contract_verified = False
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
-        # Multi-entry cache for `_containing_span`, keyed by `id(spans)`. The
-        # materialization scan alternates between two DIFFERENT span lists
-        # (template-declaration spans and reachable-function spans) at nearly
-        # every source position; a single cache slot thrashed between them and
-        # re-ran the O(len(spans)) sortedness check on every call, making the
-        # scan quadratic. Keeping one entry per span list keeps every lookup on
-        # the precomputed `starts` fast path. Each entry retains a reference to
-        # its span list so an `id` cannot be reused by a different live list
-        # while cached; the stored identity/length/endpoints are still validated.
+        self._source_analysis_cache: Dict[str, _MetalSourceAnalysis] = {}
+        # The materialization scan alternates between multiple span lists at
+        # nearly every source position. Cache their sorted lookup indexes, but
+        # retain only a fixed number of lists as generated source snapshots are
+        # replaced during specialization.
         self._containing_span_cache: Dict[
             int,
             Tuple[
@@ -539,6 +545,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             self.macros.setdefault(name, Macro(name=name, replacement="0"))
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
+        self._source_analysis_cache.clear()
         # Span lists are per-source; drop any cache entries from a previous
         # source so retained references cannot pin freed lists across runs.
         self._containing_span_cache.clear()
@@ -561,6 +568,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         processed = self._lower_struct_member_functions(processed)
         processed = self._materialize_explicit_template_function_calls(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
+
+    def _source_analysis(self, code: str) -> _MetalSourceAnalysis:
+        cache = self._source_analysis_cache
+        analysis = cache.pop(code, None)
+        if analysis is None:
+            analysis = _MetalSourceAnalysis()
+        cache[code] = analysis
+        if len(cache) > SOURCE_ANALYSIS_CACHE_LIMIT:
+            del cache[next(iter(cache))]
+        return analysis
 
     def _strip_leading_compiler_diagnostics(self, code: str) -> str:
         lines = code.splitlines(keepends=True)
@@ -2273,6 +2290,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         return definitions
 
     def _collect_struct_scope_type_aliases(self, body: str) -> Dict[str, str]:
+        if "using" not in body and "typedef" not in body:
+            return {}
         aliases: Dict[str, str] = {}
         ignored_spans = self._find_comment_and_literal_spans(body)
         lexical_scopes = self._find_lexical_brace_scopes(body)
@@ -2310,6 +2329,8 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _collect_struct_scope_type_alias_templates(
         self, body: str
     ) -> Dict[str, _MetalTypeAliasTemplate]:
+        if "template" not in body or "using" not in body:
+            return {}
         templates: Dict[str, _MetalTypeAliasTemplate] = {}
         ignored_spans = self._find_comment_and_literal_spans(body)
         lexical_scopes = self._find_lexical_brace_scopes(body)
@@ -2653,13 +2674,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         self, body: str
     ) -> Dict[str, List[Tuple[int, int, int]]]:
         aliases: Dict[str, List[Tuple[int, int, int]]] = {}
-        ignored_spans = self._find_comment_and_literal_spans(body)
-        lexical_scopes = self._find_lexical_brace_scopes(body)
         declarations: List[Tuple[int, str]] = []
         for match in re.finditer(r"\busing\s+([A-Za-z_]\w*)\s*=\s*[^;{}]+;", body):
             declarations.append((match.start(), match.group(1)))
         for match in re.finditer(r"\btypedef\s+[^;{}]+\s+([A-Za-z_]\w*)\s*;", body):
             declarations.append((match.start(), match.group(1)))
+        if not declarations:
+            return aliases
+        ignored_spans = self._find_comment_and_literal_spans(body)
+        lexical_scopes = self._find_lexical_brace_scopes(body)
         for declaration_position, alias in sorted(declarations):
             if self._containing_span(declaration_position, ignored_spans) is not None:
                 continue
@@ -2679,17 +2702,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         skip_spans: Optional[List[Tuple[int, int]]] = None,
     ) -> Dict[str, List[_MetalTypeAliasBinding]]:
         raw_aliases: List[Tuple[int, str, str]] = []
-        ignored_spans = sorted(
-            [*(skip_spans or []), *self._find_comment_and_literal_spans(code)]
-        )
 
         for match in re.finditer(
             r"\busing\s+(?P<alias>[A-Za-z_]\w*)\s*=\s*" r"(?P<target>[^;{}]+?)\s*;",
             code,
             re.DOTALL,
         ):
-            if self._containing_span(match.start(), ignored_spans) is not None:
-                continue
             if self._containing_span(match.start(), owner_spans) is None:
                 continue
             raw_aliases.append(
@@ -2701,14 +2719,24 @@ class MetalPreprocessor(HLSLPreprocessor):
             code,
             re.DOTALL,
         ):
-            if self._containing_span(match.start(), ignored_spans) is not None:
-                continue
             if self._containing_span(match.start(), owner_spans) is None:
                 continue
             raw_aliases.append(
                 (match.start(), match.group("alias"), match.group("target"))
             )
 
+        if not raw_aliases:
+            return {}
+        ignored_spans = sorted(
+            [*(skip_spans or []), *self._find_comment_and_literal_spans(code)]
+        )
+        raw_aliases = [
+            alias
+            for alias in raw_aliases
+            if self._containing_span(alias[0], ignored_spans) is None
+        ]
+        if not raw_aliases:
+            return {}
         aliases: Dict[str, List[_MetalTypeAliasBinding]] = {}
         lexical_scopes = self._find_lexical_brace_scopes(code)
         for declaration_position, alias, target in sorted(raw_aliases):
@@ -2858,6 +2886,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 seen_declarations.add(declaration_key)
                 raw_declarations.append((declaration_position, name, member))
 
+        if not raw_declarations:
+            return {}
         bindings: Dict[str, List[_MetalIntegralConstantBinding]] = {}
         lexical_scopes = self._find_lexical_brace_scopes(code)
         ignored_type_tokens = {
@@ -10102,6 +10132,14 @@ class MetalPreprocessor(HLSLPreprocessor):
         return aliases
 
     def _find_comment_and_literal_spans(self, code: str) -> List[Tuple[int, int]]:
+        analysis = self._source_analysis(code)
+        if analysis.comment_and_literal_spans is None:
+            analysis.comment_and_literal_spans = self._scan_comment_and_literal_spans(
+                code
+            )
+        return analysis.comment_and_literal_spans
+
+    def _scan_comment_and_literal_spans(self, code: str) -> List[Tuple[int, int]]:
         spans: List[Tuple[int, int]] = []
         i = 0
         while i < len(code):
@@ -10126,6 +10164,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         return spans
 
     def _find_lexical_brace_scopes(self, code: str) -> List[Tuple[int, int]]:
+        analysis = self._source_analysis(code)
+        if analysis.lexical_brace_scopes is None:
+            analysis.lexical_brace_scopes = self._scan_lexical_brace_scopes(code)
+        return analysis.lexical_brace_scopes
+
+    def _scan_lexical_brace_scopes(self, code: str) -> List[Tuple[int, int]]:
         scopes: List[Tuple[int, int]] = [(0, len(code))]
         brace_stack: List[int] = []
         i = 0
@@ -14111,6 +14155,14 @@ class MetalPreprocessor(HLSLPreprocessor):
         return references
 
     def _find_template_declaration_spans(self, code: str) -> List[Tuple[int, int]]:
+        analysis = self._source_analysis(code)
+        if analysis.template_declaration_spans is None:
+            analysis.template_declaration_spans = self._scan_template_declaration_spans(
+                code
+            )
+        return analysis.template_declaration_spans
+
+    def _scan_template_declaration_spans(self, code: str) -> List[Tuple[int, int]]:
         spans: List[Tuple[int, int]] = []
         pos = 0
         while True:
@@ -14209,6 +14261,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
             cached = (spans, len(spans), first, last, starts)
             cache[key] = cached
+            if len(cache) > CONTAINING_SPAN_CACHE_LIMIT:
+                del cache[next(iter(cache))]
 
         starts = cached[4]
         if starts is not None:
@@ -15077,6 +15131,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         return tuple(components), cursor
 
     def _find_namespace_spans(self, code: str) -> List[Tuple[int, int, str]]:
+        analysis = self._source_analysis(code)
+        if analysis.namespace_spans is None:
+            analysis.namespace_spans = self._scan_namespace_spans(code)
+        return analysis.namespace_spans
+
+    def _scan_namespace_spans(self, code: str) -> List[Tuple[int, int, str]]:
         spans: List[Tuple[int, int, str]] = []
         brace_stack: List[Tuple[int, Optional[Tuple[str, ...]], str]] = []
         active_namespace: List[str] = []
