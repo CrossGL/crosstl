@@ -2284,12 +2284,13 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
         )
     )
     issue = "https://github.com/CrossGL/crosstl/issues/1479"
+    dependent_value_issue = "https://github.com/CrossGL/crosstl/issues/1490"
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1807"
 
     status = expected_gaps["fp_quantized_contextual_materialization_status"]
 
     assert status == {
-        "status": "blocked-after-contextual-materialization-progress",
+        "status": "blocked-after-contextual-receiver-resolution",
         "source": "mlx/backend/metal/kernels/fp_quantized.metal",
         "repository_commit": PINNED_MLX_COMMIT,
         "targets": ["directx", "opengl"],
@@ -2301,24 +2302,41 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             "statement-bounded-member-template-parsing",
             "concrete-constructor-preservation",
             "line-wrapped-qualified-struct-receiver-materialization",
+            "contextual-metal-method-receiver-resolution",
         ],
-        "resolved_by_commit": "212f422a73042769cf0cbe41ee54def5b4c70b7e",
+        "resolved_by_commit": "c7a3c61addf9ca523e09bc81252ab76340c3f82c",
         "advanced_past": {
-            "member_call": "mma_op.mma",
-            "receiver_declaration": "mma_t mma_op",
-        },
-        "current_boundary": {
-            "diagnostic_code": "project.translate.metal-struct-method",
             "member_call": "epilogue_op.apply",
             "receiver_declaration": (
                 "thread const TransformNone_float_float& epilogue_op"
             ),
-            "generated_source_location": {
-                "line": 40029,
-                "column": 29,
+        },
+        "current_boundary": {
+            "diagnostic_code": (
+                "project.translate.template-materialization-unsupported"
+            ),
+            "source_location": {
+                "line": 1727,
+                "column": 1,
             },
-            "missing_contract": "contextual-receiver-struct-materialization",
+            "missing_contract": "dependent-template-value-argument-resolution",
+            "residual_specializations": [
+                {
+                    "family": "BlockMMA",
+                    "missing_parameters": ["BK", "BN"],
+                },
+                {
+                    "family": "BlockLoader",
+                    "missing_parameters": ["BK"],
+                },
+                {
+                    "family": "QuantizedBlockLoader",
+                    "missing_parameters": ["BK", "BN"],
+                },
+            ],
+            "dependent_expressions": ["BK_padded", "BN_padded"],
             "blocked_by": issue,
+            "dependent_value_issue": dependent_value_issue,
         },
         "target_results": {
             "directx": {
@@ -2332,7 +2350,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
         },
         "target_artifact_count": 0,
         "resolved_issues": [resolved_issue],
-        "remaining_materialization_blocked_by": [issue],
+        "remaining_materialization_blocked_by": [issue, dependent_value_issue],
         "runtime_integration_included": False,
         "numerical_parity_claimed": False,
         "runtime_parity_claimed": False,
@@ -2343,12 +2361,17 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
 
     readme = MLX_README_PATH.read_text(encoding="utf-8")
     assert PINNED_MLX_COMMIT in readme
-    assert "`mma_op.mma`" in readme
-    assert "CrossTL commit `212f422a7`" in readme
     assert "`epilogue_op.apply`" in readme
     assert "`thread const TransformNone_float_float& epilogue_op`" in readme
-    assert "generated\nsource line 40029, column 29" in readme
+    assert "CrossTL commit\n`c7a3c61ad`" in readme
+    assert "at source line 1727,\ncolumn 1" in readme
+    assert "`BlockMMA`" in readme
+    assert "`BlockLoader`" in readme
+    assert "`QuantizedBlockLoader`" in readme
+    assert "`BK_padded`" in readme
+    assert "`BN_padded`" in readme
     assert "CrossGL/crosstl#1479" in readme
+    assert "CrossGL/crosstl#1490" in readme
     assert "CrossGL/crosstl#1807" in readme
     assert "does not claim runtime integration or numerical parity" in readme
 

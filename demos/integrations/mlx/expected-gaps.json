@@ -918,7 +918,7 @@
     "runtime_integration_included": false
   },
   "fp_quantized_contextual_materialization_status": {
-    "status": "blocked-after-contextual-materialization-progress",
+    "status": "blocked-after-contextual-receiver-resolution",
     "source": "mlx/backend/metal/kernels/fp_quantized.metal",
     "repository_commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
     "targets": [
@@ -932,23 +932,49 @@
       "lexical-receiver-alias-resolution",
       "statement-bounded-member-template-parsing",
       "concrete-constructor-preservation",
-      "line-wrapped-qualified-struct-receiver-materialization"
+      "line-wrapped-qualified-struct-receiver-materialization",
+      "contextual-metal-method-receiver-resolution"
     ],
-    "resolved_by_commit": "212f422a73042769cf0cbe41ee54def5b4c70b7e",
+    "resolved_by_commit": "c7a3c61addf9ca523e09bc81252ab76340c3f82c",
     "advanced_past": {
-      "member_call": "mma_op.mma",
-      "receiver_declaration": "mma_t mma_op"
+      "member_call": "epilogue_op.apply",
+      "receiver_declaration": "thread const TransformNone_float_float& epilogue_op"
     },
     "current_boundary": {
-      "diagnostic_code": "project.translate.metal-struct-method",
-      "member_call": "epilogue_op.apply",
-      "receiver_declaration": "thread const TransformNone_float_float& epilogue_op",
-      "generated_source_location": {
-        "line": 40029,
-        "column": 29
+      "diagnostic_code": "project.translate.template-materialization-unsupported",
+      "source_location": {
+        "line": 1727,
+        "column": 1
       },
-      "missing_contract": "contextual-receiver-struct-materialization",
-      "blocked_by": "https://github.com/CrossGL/crosstl/issues/1479"
+      "missing_contract": "dependent-template-value-argument-resolution",
+      "residual_specializations": [
+        {
+          "family": "BlockMMA",
+          "missing_parameters": [
+            "BK",
+            "BN"
+          ]
+        },
+        {
+          "family": "BlockLoader",
+          "missing_parameters": [
+            "BK"
+          ]
+        },
+        {
+          "family": "QuantizedBlockLoader",
+          "missing_parameters": [
+            "BK",
+            "BN"
+          ]
+        }
+      ],
+      "dependent_expressions": [
+        "BK_padded",
+        "BN_padded"
+      ],
+      "blocked_by": "https://github.com/CrossGL/crosstl/issues/1479",
+      "dependent_value_issue": "https://github.com/CrossGL/crosstl/issues/1490"
     },
     "target_results": {
       "directx": {
@@ -965,7 +991,8 @@
       "https://github.com/CrossGL/crosstl/issues/1807"
     ],
     "remaining_materialization_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1479"
+      "https://github.com/CrossGL/crosstl/issues/1479",
+      "https://github.com/CrossGL/crosstl/issues/1490"
     ],
     "runtime_integration_included": false,
     "numerical_parity_claimed": false,
