@@ -19,6 +19,14 @@ from .dispatch_contracts import (
     load_dispatch_contract,
     parse_dispatch_contract,
 )
+from .dispatch_planning import (
+    DISPATCH_ARTIFACT_PLAN_KIND,
+    DISPATCH_ARTIFACT_PLAN_SCHEMA_VERSION,
+    DispatchArtifactJob,
+    DispatchArtifactPlan,
+    DispatchArtifactPlanError,
+    plan_dispatch_artifacts,
+)
 from .host_reflection import (
     REFLECTION_AMBIGUOUS_BINDING,
     REFLECTION_EMPTY,
@@ -140,10 +148,15 @@ from .test_runner import (
 )
 
 __all__ = [
+    "DISPATCH_ARTIFACT_PLAN_KIND",
+    "DISPATCH_ARTIFACT_PLAN_SCHEMA_VERSION",
     "DISPATCH_CONTRACT_EVALUATION_KIND",
     "DISPATCH_CONTRACT_KIND",
     "DISPATCH_CONTRACT_SCHEMA_VERSION",
     "MAX_DISPATCH_VARIANTS",
+    "DispatchArtifactJob",
+    "DispatchArtifactPlan",
+    "DispatchArtifactPlanError",
     "DispatchCapabilityDeclaration",
     "DispatchContentIdentity",
     "DispatchContract",
@@ -250,6 +263,7 @@ __all__ = [
     "parse_runtime_verification_fixtures",
     "parse_runtime_test_manifest",
     "parse_dispatch_contract",
+    "plan_dispatch_artifacts",
     "plan_runtime_test_manifest",
     "prepare_runtime_execution",
     "reflect_target_host_interface",

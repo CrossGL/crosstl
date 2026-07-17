@@ -543,10 +543,15 @@ class ProjectBytesPathLike:
 
 def test_project_package_exposes_public_api_surface():
     assert set(project_api.__all__) == {
+        "DISPATCH_ARTIFACT_PLAN_KIND",
+        "DISPATCH_ARTIFACT_PLAN_SCHEMA_VERSION",
         "DISPATCH_CONTRACT_EVALUATION_KIND",
         "DISPATCH_CONTRACT_KIND",
         "DISPATCH_CONTRACT_SCHEMA_VERSION",
         "MAX_DISPATCH_VARIANTS",
+        "DispatchArtifactJob",
+        "DispatchArtifactPlan",
+        "DispatchArtifactPlanError",
         "DispatchCapabilityDeclaration",
         "DispatchContentIdentity",
         "DispatchContract",
@@ -653,6 +658,7 @@ def test_project_package_exposes_public_api_surface():
         "parse_runtime_verification_fixtures",
         "parse_runtime_test_manifest",
         "parse_dispatch_contract",
+        "plan_dispatch_artifacts",
         "plan_runtime_test_manifest",
         "prepare_runtime_execution",
         "reflect_target_host_interface",
