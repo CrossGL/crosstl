@@ -1427,6 +1427,12 @@ remain fail-closed with
 ``project.translate.metal-struct-method`` rather than being converted to
 value-returning helpers.
 
+Non-entry Metal ``const`` reference parameters retain their input-only contract
+in the shared representation. DirectX and OpenGL receive value inputs, mutable
+references remain ``inout``, and Metal round-trip generation reconstructs a
+``const`` address-space reference. Stage-entry buffer references continue
+through the resource binding path instead of being rewritten as helper values.
+
 The default materialization work budget is derived from the active template
 specialization limit, so larger finite source-instantiated kernels can complete
 without raising the unique helper specialization cap. Use

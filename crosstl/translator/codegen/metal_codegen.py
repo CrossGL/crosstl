@@ -13584,9 +13584,9 @@ class MetalCodeGen:
 
     def readonly_qualified_address_space(self, address_space, node=None):
         qualifiers = self.parameter_qualifier_names(node)
-        if address_space == "device" and "readonly" in qualifiers:
+        if address_space == "device" and qualifiers & {"in", "readonly"}:
             return "const device"
-        if "const" in qualifiers and address_space not in {None, "constant"}:
+        if qualifiers & {"const", "in"} and address_space not in {None, "constant"}:
             return f"const {address_space}"
         return address_space
 
@@ -13626,6 +13626,8 @@ class MetalCodeGen:
         qualifiers = self.parameter_qualifier_names(node)
         if "const" in qualifiers:
             return "const-qualified"
+        if "in" in qualifiers:
+            return "input-only"
         if "constant" in qualifiers:
             return "constant address space"
         if "readonly" in qualifiers and not self.is_raw_buffer_parameter_type(
@@ -13640,7 +13642,12 @@ class MetalCodeGen:
             or self.is_array_type_node(raw_param_type)
         ):
             return False
-        if self.parameter_qualifier_names(node) & {"const", "constant", "readonly"}:
+        if self.parameter_qualifier_names(node) & {
+            "const",
+            "constant",
+            "in",
+            "readonly",
+        }:
             return False
         return self.readonly_metal_parameter_reason(raw_param_type, node) is None
 
@@ -13653,7 +13660,7 @@ class MetalCodeGen:
         ):
             return False
         qualifiers = self.parameter_qualifier_names(node)
-        if "readonly" in qualifiers:
+        if qualifiers & {"in", "readonly"}:
             return True
         address_space = self.effective_parameter_address_space(
             raw_param_type,

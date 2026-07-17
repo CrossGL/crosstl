@@ -244,7 +244,7 @@ def test_codegen_keeps_dependent_enable_if_return_type_from_tinygrad_metal():
     generated = convert(code)
 
     assert (
-        "type load(inout thread RT dst, threadgroup ST& src, int threadIdx)"
+        "type load(inout thread RT dst, in threadgroup ST src, int threadIdx)"
         in generated
     )
     assert "return;" in generated
@@ -1058,8 +1058,111 @@ def test_codegen_reference_to_array_params_from_spirv_cross_reference():
 
     crossgl = generate_code(ast)
 
-    assert "void spvArrayCopy(inout thread T[N] dst, thread T[N] src)" in crossgl
+    assert "void spvArrayCopy(inout thread T[N] dst, in thread T[N] src)" in crossgl
     parse_crossgl(crossgl)
+
+
+def test_codegen_reference_parameters_preserve_readonly_direction(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Payload { float value; };
+
+    float read_scalar(const thread float& value) { return value; }
+    float2 read_vector(const thread float2& value) { return value; }
+    float read_payload(const thread Payload& value) { return value.value; }
+    float read_temporary() { return read_scalar(1.0); }
+
+    void write_scalar(thread float& value) { value = 1.0; }
+    void write_vector(thread float2& value) { value.x = 1.0; }
+    void write_payload(thread Payload& value) { value.value = 1.0; }
+
+    kernel void apply(
+        device float* output [[buffer(0)]],
+        uint tid [[thread_position_in_grid]]) {
+      float scalar = float(tid);
+      float2 vector = float2(scalar);
+      Payload payload;
+      payload.value = scalar;
+      write_scalar(scalar);
+      write_vector(vector);
+      write_payload(payload);
+      output[tid] = read_scalar(scalar) + read_vector(vector).x
+          + read_payload(payload) + read_temporary();
+    }
+    """
+
+    crossgl = convert(code)
+
+    assert "float read_scalar(in thread float value)" in crossgl
+    assert "vec2 read_vector(in thread vec2 value)" in crossgl
+    assert "float read_payload(in thread Payload value)" in crossgl
+    assert "void write_scalar(inout thread float value)" in crossgl
+    assert "void write_vector(inout thread vec2 value)" in crossgl
+    assert "void write_payload(inout thread Payload value)" in crossgl
+    assert "return read_scalar(1.0);" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    hlsl_source = TranslatorHLSLCodeGen().generate(ast)
+    glsl_source = GLSLCodeGen().generate(ast)
+    metal_source = MetalCodeGen().generate(ast)
+    hlsl = normalize(hlsl_source)
+    glsl = normalize(glsl_source)
+    metal = normalize(metal_source)
+
+    assert "float read_scalar(in float value)" in hlsl
+    assert "float2 read_vector(in float2 value)" in hlsl
+    assert "float read_payload(in Payload value)" in hlsl
+    assert "float read_scalar(float value)" in glsl
+    assert "vec2 read_vector(vec2 value)" in glsl
+    assert "float read_payload(Payload value)" in glsl
+    assert "float read_scalar(const thread float& value)" in metal
+    assert "float2 read_vector(const thread float2& value)" in metal
+    assert "float read_payload(const thread Payload& value)" in metal
+    for generated in (hlsl, glsl):
+        assert "void write_scalar(inout float value)" in generated
+        assert "void write_vector(inout" in generated
+        assert "void write_payload(inout Payload value)" in generated
+        assert "return read_scalar(1.0);" in generated
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "readonly-reference.hlsl"
+        hlsl_path.write_text(hlsl_source, encoding="utf-8")
+        result = subprocess.run(
+            [dxc, "-WX", "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    assert_opengl_compute_validates_if_available(
+        glsl_source, tmp_path, "readonly-reference"
+    )
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        metal_path = tmp_path / "readonly-reference.metal"
+        air_path = tmp_path / "readonly-reference.air"
+        metal_path.write_text(metal_source, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-c",
+                str(metal_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_codegen_writable_c_array_parameter_preserves_aliasing():
@@ -1125,7 +1228,7 @@ def test_codegen_struct_method_receiver_directions_reach_native_targets():
         (GLSLCodeGen().generate(ast), "State_"),
     )
 
-    assert "int State__total(in thread State& self)" in normalize(crossgl)
+    assert "int State__total(in thread State self)" in normalize(crossgl)
 
     for generated, method_prefix in generated_targets:
         generated = normalize(generated)
@@ -1190,7 +1293,7 @@ def test_codegen_rebinds_lowered_struct_sibling_overload_with_resources():
     assert "return post_in(elem);" not in load_body
     assert (
         "float ReadWriter_float2_float2__load(in thread "
-        "ReadWriter_float2_float2& self" in normalize(crossgl)
+        "ReadWriter_float2_float2 self" in normalize(crossgl)
     )
 
 
@@ -6911,7 +7014,7 @@ def test_codegen_preserves_native_address_space_qualifiers():
 
     assert "void update(inout threadgroup Payload scratch" in crossgl
     assert "inout device float[] values" in crossgl
-    assert "constant uint& count" in crossgl
+    assert "in constant uint count" in crossgl
     assert "inout thread float localValue" in crossgl
     assert "threadgroup Payload scratch;" in crossgl
     assert "thread float localValue = buffer_load(inData, tid);" in crossgl
