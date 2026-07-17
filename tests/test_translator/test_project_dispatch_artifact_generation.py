@@ -96,7 +96,12 @@ def _dispatch_manifest(*, subgroup_width=None):
     }
 
 
-def _write_project(tmp_path, *, workgroup_size=None, subgroup_width=None):
+def _write_project(
+    tmp_path,
+    *,
+    workgroup_size=None,
+    subgroup_width=None,
+):
     root = tmp_path / "repo"
     kernels = root / "kernels"
     contracts = root / "contracts"
@@ -290,6 +295,64 @@ def test_report_validation_rejects_tampered_dispatch_artifact_metadata(tmp_path)
         if diagnostic["code"] == "project.validate.invalid-report"
     )
     assert "dispatchArtifact" in invalid_report["message"]
+
+
+def test_validated_dispatch_report_replays_synthetic_variant(tmp_path):
+    root, config = _write_project(tmp_path)
+
+    report = translate_project(
+        config,
+        targets=["directx"],
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+    planned_variant = payload["project"]["dispatchArtifactPlan"]["artifacts"][0][
+        "variant"
+    ]
+    assert payload["project"]["variants"] == {}
+    assert {
+        artifact.get("variant") for artifact in payload["validation"]["artifacts"]
+    } == {None, planned_variant}
+
+    report_path = root / "generated" / "validated-report.json"
+    report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True
+
+
+def test_report_validation_rejects_unknown_validation_artifact_variant(tmp_path):
+    root, config = _write_project(tmp_path)
+    payload = copy.deepcopy(
+        translate_project(
+            config,
+            targets=["directx"],
+            format_output=False,
+            validate=True,
+        ).to_json()
+    )
+    planned_variant = payload["project"]["dispatchArtifactPlan"]["artifacts"][0][
+        "variant"
+    ]
+    validation_artifact = next(
+        artifact
+        for artifact in payload["validation"]["artifacts"]
+        if artifact.get("variant") == planned_variant
+    )
+    validation_artifact["variant"] = "dispatch-unknown"
+    report_path = _write_report(root, payload, "unknown-validation-variant.json")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    invalid_report = next(
+        diagnostic
+        for diagnostic in validation["diagnostics"]
+        if diagnostic["code"] == "project.validate.invalid-report"
+    )
+    assert (
+        "validation.artifacts[0].variant must be listed in project.variants or "
+        "project.dispatchArtifactPlan" in invalid_report["message"]
+    )
 
 
 @pytest.mark.parametrize(

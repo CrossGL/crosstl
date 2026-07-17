@@ -43026,6 +43026,16 @@ def _report_dispatch_artifact_records(
     )
 
 
+def _report_dispatch_variant_names(
+    project: Mapping[str, Any] | None,
+) -> set[str]:
+    return {
+        str(artifact["variant"])
+        for _index, artifact in _report_dispatch_artifact_records(project)
+        if _is_non_empty_string(artifact.get("variant"))
+    }
+
+
 def _report_dispatch_artifacts_for_record(
     record: Mapping[str, Any],
     project: Mapping[str, Any] | None,
@@ -46926,7 +46936,10 @@ def _validation_artifact_contract_reasons(
         if not _is_non_empty_string(variant):
             reasons.append(f"{prefix}.variant must be a string")
         elif declared_variants is not None and variant not in declared_variants:
-            reasons.append(f"{prefix}.variant must be listed in project.variants")
+            reasons.append(
+                f"{prefix}.variant must be listed in project.variants or "
+                "project.dispatchArtifactPlan"
+            )
     if "sourceBackend" in artifact:
         reasons.extend(
             _source_backend_contract_reasons(
@@ -47240,7 +47253,10 @@ def _toolchain_run_contract_reasons(
         if not _is_non_empty_string(variant):
             reasons.append(f"{prefix}.variant must be a string")
         elif declared_variants is not None and variant not in declared_variants:
-            reasons.append(f"{prefix}.variant must be listed in project.variants")
+            reasons.append(
+                f"{prefix}.variant must be listed in project.variants or "
+                "project.dispatchArtifactPlan"
+            )
     if "sourceBackend" in run:
         reasons.extend(
             _source_backend_contract_reasons(
@@ -47422,6 +47438,11 @@ def _validation_contract_reasons(
         if project_has_variants and project_variants_valid
         else None
     )
+    validation_variants = (
+        declared_variants | _report_dispatch_variant_names(project)
+        if declared_variants is not None
+        else None
+    )
     artifacts = report.get("artifacts", [])
     declared_artifacts_by_identity: dict[ArtifactIdentity, DeclaredArtifact] | None = (
         None
@@ -47475,7 +47496,7 @@ def _validation_contract_reasons(
                     index,
                     artifact,
                     declared_targets=declared_targets,
-                    declared_variants=declared_variants,
+                    declared_variants=validation_variants,
                     declared_artifact_identities=declared_artifact_identities,
                     declared_artifacts_by_identity=declared_artifacts_by_identity,
                     require_status_fields=summarized_validation,
@@ -47543,7 +47564,7 @@ def _validation_contract_reasons(
                         run,
                         root_path=root_path,
                         declared_targets=declared_targets,
-                        declared_variants=declared_variants,
+                        declared_variants=validation_variants,
                         declared_artifact_identities=declared_artifact_identities,
                         declared_artifacts_by_identity=declared_artifacts_by_identity,
                         require_closed_fields=require_validation,

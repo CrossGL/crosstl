@@ -96,9 +96,7 @@ def _translate_dispatch_project(
     contracts.mkdir()
     (kernels / "multi.cgl").write_text(source + "\n", encoding="utf-8")
     (contracts / "dispatch.json").write_text(
-        json.dumps(
-            _dispatch_manifest(entry_point, specialization_constants), indent=2
-        )
+        json.dumps(_dispatch_manifest(entry_point, specialization_constants), indent=2)
         + "\n",
         encoding="utf-8",
     )
@@ -109,8 +107,7 @@ def _translate_dispatch_project(
             targets = ["{target}"]
             output_dir = "generated"
             dispatch_contracts = ["contracts/dispatch.json"]
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -152,8 +149,7 @@ def test_directx_second_entry_requires_reachable_specialization_value(tmp_path):
     diagnostic = next(
         diagnostic
         for diagnostic in payload["diagnostics"]
-        if diagnostic["code"]
-        == "project.translate.specialization-value-required"
+        if diagnostic["code"] == "project.translate.specialization-value-required"
     )
     assert diagnostic["details"]["name"] == "second_only"
     assert diagnostic["details"]["id"] == 20
