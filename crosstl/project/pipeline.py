@@ -31,6 +31,22 @@ from crosstl.project.directx_toolchain import (
     dxc_profile_for_source,
     hlsl_requires_native_16bit_types,
 )
+from crosstl.project.dispatch_contracts import (
+    DISPATCH_CONTRACT_EVALUATION_KIND,
+    DISPATCH_CONTRACT_SCHEMA_VERSION,
+    DispatchContractEvaluation,
+    DispatchContractManifest,
+    load_dispatch_contract,
+    parse_dispatch_contract,
+)
+from crosstl.project.dispatch_planning import (
+    DISPATCH_ARTIFACT_PLAN_KIND,
+    DISPATCH_ARTIFACT_PLAN_SCHEMA_VERSION,
+    DispatchArtifactJob,
+    DispatchArtifactPlan,
+    DispatchArtifactPlanError,
+    plan_dispatch_artifacts,
+)
 from crosstl.project.host_reflection import (
     empty_host_interface_record,
     host_interface_record,
@@ -1454,6 +1470,12 @@ REPORT_PROJECT_FIELDS = frozenset(
         "subgroupWidthRules",
         "subgroupWidthRuleCount",
         "selectedVariants",
+        "dispatchContractFiles",
+        "dispatchContractCount",
+        "dispatchVariantCount",
+        "dispatchContracts",
+        "dispatchArtifactCount",
+        "dispatchArtifactPlan",
         "externalCorpusManifest",
     )
 )
@@ -1691,6 +1713,7 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "bfloat16Lowering",
         "entryPoint",
         "execution",
+        "dispatchArtifact",
     )
 )
 REPORT_ARTIFACT_BFLOAT16_LOWERING_FIELDS = frozenset(
@@ -1742,7 +1765,9 @@ REPORT_ARTIFACT_EXECUTION_FIELDS = frozenset(
         "identity",
     )
 )
-REPORT_ARTIFACT_EXECUTION_PROVENANCE_FIELDS = frozenset(("kind", "path", "variant"))
+REPORT_ARTIFACT_EXECUTION_PROVENANCE_FIELDS = frozenset(
+    ("kind", "path", "variant", "artifactId")
+)
 REPORT_ARTIFACT_EXECUTION_ENTRY_FIELDS = frozenset(
     (
         "sourceEntryPoint",
@@ -7355,8 +7380,15 @@ class ProjectConfig:
     )
     subgroup_width_rules: Mapping[str, str | int] = field(default_factory=dict)
     selected_variants: Sequence[str] | str = ()
+    dispatch_contracts: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
     index_range_assertions: Sequence[Any] = ()
+    _dispatch_contract_manifests: tuple[DispatchContractManifest, ...] = field(
+        default=(), init=False, repr=False, compare=False
+    )
+    _dispatch_contract_evaluations: tuple[DispatchContractEvaluation, ...] = field(
+        default=(), init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         root_path = _filesystem_path_arg(self.root, field_name="ProjectConfig.root")
@@ -7377,6 +7409,7 @@ class ProjectConfig:
             "include_patterns",
             "exclude_patterns",
             "include_dirs",
+            "dispatch_contracts",
         ):
             object.__setattr__(
                 self,
@@ -7613,6 +7646,21 @@ class ProjectConfig:
                 field_name="ProjectConfig.subgroup_width_rules",
             ),
         )
+        normalized_contracts = tuple(self.dispatch_contracts)
+        if len(set(normalized_contracts)) != len(normalized_contracts):
+            raise ValueError(
+                "ProjectConfig.dispatch_contracts must not contain duplicate paths"
+            )
+        manifests = tuple(
+            load_dispatch_contract(_project_config_path(self.root, path).resolve())
+            for path in normalized_contracts
+        )
+        object.__setattr__(self, "_dispatch_contract_manifests", manifests)
+        object.__setattr__(
+            self,
+            "_dispatch_contract_evaluations",
+            tuple(manifest.evaluate() for manifest in manifests),
+        )
         if self.external_corpus_manifest is not None:
             external_corpus_manifest = _path_string_arg(
                 self.external_corpus_manifest,
@@ -7635,11 +7683,55 @@ class ProjectConfig:
     def output_path(self) -> Path:
         return _project_output_path(self.root, self.output_dir)
 
+    @property
+    def dispatch_contract_manifests(self) -> tuple[DispatchContractManifest, ...]:
+        return self._dispatch_contract_manifests
+
+    @property
+    def dispatch_contract_evaluations(self) -> tuple[DispatchContractEvaluation, ...]:
+        return self._dispatch_contract_evaluations
+
 
 def _project_config_hash(config: ProjectConfig) -> dict[str, str] | None:
     if config.config_path is None or not config.config_path.is_file():
         return None
     return _source_hash(config.config_path)
+
+
+def _dispatch_contract_report_records(config: ProjectConfig) -> list[dict[str, Any]]:
+    records = []
+    record_counts = {
+        len(config.dispatch_contracts),
+        len(config.dispatch_contract_manifests),
+        len(config.dispatch_contract_evaluations),
+    }
+    if len(record_counts) != 1:
+        raise RuntimeError("Dispatch contract configuration records are inconsistent")
+    for configured_path, manifest, evaluation in zip(
+        config.dispatch_contracts,
+        config.dispatch_contract_manifests,
+        config.dispatch_contract_evaluations,
+    ):
+        records.append(
+            {
+                "path": configured_path,
+                "schemaVersion": manifest.schema_version,
+                "contentIdentity": manifest.content_identity.to_json(),
+                "manifest": manifest.to_json(),
+                "evaluation": evaluation.to_json(),
+            }
+        )
+    return sorted(records, key=lambda record: record["path"])
+
+
+def _dispatch_artifact_plan(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+) -> DispatchArtifactPlan:
+    return plan_dispatch_artifacts(
+        config.dispatch_contract_evaluations,
+        source_units=(unit.relative_path for unit in units),
+    )
 
 
 @dataclass(frozen=True)
@@ -8259,6 +8351,7 @@ class ProjectScan:
     skipped: Sequence[dict[str, Any]] = ()
     native_directives: Sequence[ProjectNativeDirective] = ()
     diagnostics: Sequence[ProjectDiagnostic] = ()
+    dispatch_artifact_plan: DispatchArtifactPlan | None = None
 
     def to_report(
         self, targets: Sequence[str] | str | None = None
@@ -8285,6 +8378,7 @@ class ProjectScan:
             artifact_matrix=_artifact_matrix_report(
                 self.config, self.units, report_targets, self.config.variants, []
             ),
+            dispatch_artifact_plan=self.dispatch_artifact_plan,
         )
 
 
@@ -8302,6 +8396,7 @@ class ProjectPortabilityReport:
     validation: Mapping[str, Any]
     migration_actions: Sequence[dict[str, Any]]
     artifact_matrix: Mapping[str, Any] | None = None
+    dispatch_artifact_plan: DispatchArtifactPlan | None = None
     generated_at: int = field(default_factory=lambda: int(time.time()))
 
     def to_json(self) -> dict[str, Any]:
@@ -8325,6 +8420,11 @@ class ProjectPortabilityReport:
         include_dir_status = _include_dir_status_records(self.config)
         external_corpus = _external_corpus_report(
             self.config, self.units, self.artifacts, self.targets
+        )
+        dispatch_contracts = _dispatch_contract_report_records(self.config)
+        dispatch_artifact_plan = self.dispatch_artifact_plan or _dispatch_artifact_plan(
+            self.config,
+            self.units,
         )
         payload = {
             "schemaVersion": REPORT_SCHEMA_VERSION,
@@ -8421,6 +8521,15 @@ class ProjectPortabilityReport:
                 ),
                 "subgroupWidthRuleCount": len(self.config.subgroup_width_rules),
                 "selectedVariants": list(self.config.selected_variants),
+                "dispatchContractFiles": list(self.config.dispatch_contracts),
+                "dispatchContractCount": len(dispatch_contracts),
+                "dispatchVariantCount": sum(
+                    record["evaluation"]["variantCount"]
+                    for record in dispatch_contracts
+                ),
+                "dispatchContracts": dispatch_contracts,
+                "dispatchArtifactCount": len(dispatch_artifact_plan.artifacts),
+                "dispatchArtifactPlan": dispatch_artifact_plan.to_json(),
                 "externalCorpusManifest": self.config.external_corpus_manifest,
             },
             "summary": {
@@ -8582,6 +8691,13 @@ def load_project_config(
         project.get(SUBGROUP_WIDTH_RULES_CONFIG_KEY),
         field_name=f"crosstl.toml [project.{SUBGROUP_WIDTH_RULES_CONFIG_KEY}]",
     )
+    dispatch_contracts = _normalize_project_relative_paths(
+        _as_str_list(
+            project.get("dispatch_contracts"),
+            field_name="project.dispatch_contracts",
+            allow_pathlike=True,
+        )
+    )
     output_dir = _as_optional_non_empty_str(
         project.get("output_dir"),
         field_name="crosstl.toml project.output_dir",
@@ -8634,6 +8750,7 @@ def load_project_config(
             project.get("selected_variants"),
             field_name="project.selected_variants",
         ),
+        dispatch_contracts=dispatch_contracts,
         external_corpus_manifest=external_corpus_manifest,
         index_range_assertions=index_range_assertions,
     )
@@ -8948,12 +9065,14 @@ def scan_project(
                 missing_capabilities=["repo.scan"],
             )
         )
+    dispatch_artifact_plan = _dispatch_artifact_plan(scan_config, units)
     return ProjectScan(
         config=scan_config,
         units=units,
         skipped=skipped,
         native_directives=native_directives,
         diagnostics=diagnostics,
+        dispatch_artifact_plan=dispatch_artifact_plan,
     )
 
 
@@ -9121,6 +9240,173 @@ def _variant_jobs(
         (name, {**config.defines, **dict(defines)})
         for name, defines in sorted(config.variants.items())
     ]
+
+
+@dataclass(frozen=True)
+class _ProjectArtifactTranslationJob:
+    variant: str | None
+    defines: Mapping[str, str]
+    entry_point: str | None
+    dispatch_artifact: DispatchArtifactJob | None = None
+    specialization_values: Mapping[str, tuple[Any, Mapping[str, Any]]] | None = None
+    configured_workgroup: tuple[tuple[int, int, int], Mapping[str, Any]] | None = None
+    configured_subgroup: tuple[int, Mapping[str, Any]] | None = None
+
+
+def _regular_project_translation_jobs(
+    config: ProjectConfig,
+    relative_path: str,
+) -> list[_ProjectArtifactTranslationJob]:
+    entry_point = _entry_point_for_path(relative_path, config)
+    return [
+        _ProjectArtifactTranslationJob(
+            variant=variant,
+            defines=defines,
+            entry_point=entry_point,
+        )
+        for variant, defines in _variant_jobs(config)
+    ]
+
+
+def _dispatch_artifacts_by_source(
+    plan: DispatchArtifactPlan | None,
+) -> dict[str, tuple[tuple[int, DispatchArtifactJob], ...]]:
+    grouped: dict[str, list[tuple[int, DispatchArtifactJob]]] = {}
+    for index, artifact in enumerate(plan.artifacts if plan is not None else ()):
+        grouped.setdefault(artifact.source, []).append((index, artifact))
+    return {
+        source: tuple(sorted(artifacts, key=lambda item: item[1].artifact_id))
+        for source, artifacts in sorted(grouped.items())
+    }
+
+
+def _dispatch_artifact_provenance(
+    index: int,
+    artifact: DispatchArtifactJob,
+) -> dict[str, Any]:
+    return {
+        "kind": "host-dispatch-contract",
+        "path": f"project.dispatchArtifactPlan.artifacts[{index}]",
+        "variant": artifact.variant_name,
+        "artifactId": artifact.artifact_id,
+    }
+
+
+def _dispatch_project_translation_jobs(
+    config: ProjectConfig,
+    relative_path: str,
+    artifacts: Sequence[tuple[int, DispatchArtifactJob]],
+) -> list[_ProjectArtifactTranslationJob]:
+    if config.variants:
+        raise DispatchArtifactPlanError(
+            "dispatch-project-variant-conflict",
+            "Host dispatch artifacts cannot be combined with global project variants.",
+            details={
+                "source": relative_path,
+                "projectVariants": sorted(config.variants),
+                "dispatchVariants": [
+                    artifact.variant_name for _index, artifact in artifacts
+                ],
+            },
+        )
+    configured_entry_point = _entry_point_for_path(relative_path, config)
+    configured_workgroup_rule = _configured_workgroup_size_rule(config, relative_path)
+    configured_subgroup_rule = _configured_subgroup_width_rule(config, relative_path)
+    if config.workgroup_size is not None or configured_workgroup_rule is not None:
+        raise DispatchArtifactPlanError(
+            "dispatch-workgroup-config-conflict",
+            "Host dispatch artifacts cannot override configured workgroup metadata.",
+            details={"source": relative_path},
+        )
+    if configured_subgroup_rule is not None:
+        raise DispatchArtifactPlanError(
+            "dispatch-subgroup-config-conflict",
+            "Host dispatch artifacts cannot override configured subgroup metadata.",
+            details={"source": relative_path},
+        )
+
+    jobs = []
+    for index, artifact in artifacts:
+        if (
+            configured_entry_point is not None
+            and configured_entry_point != artifact.entry_point
+        ):
+            raise DispatchArtifactPlanError(
+                "dispatch-entry-point-config-conflict",
+                "Host dispatch artifact entry point conflicts with project config.",
+                details={
+                    "source": relative_path,
+                    "configuredEntryPoint": configured_entry_point,
+                    "dispatchEntryPoint": artifact.entry_point,
+                    "artifactId": artifact.artifact_id,
+                },
+            )
+        provenance = _dispatch_artifact_provenance(index, artifact)
+        specialization_values = _variant_specialization_values(config, None)
+        for selector, value in artifact.specialization_constants.items():
+            existing = specialization_values.get(selector)
+            if existing is not None and existing[0] != value:
+                raise DispatchArtifactPlanError(
+                    "dispatch-specialization-config-conflict",
+                    "Host dispatch specialization conflicts with project config.",
+                    details={
+                        "source": relative_path,
+                        "selector": selector,
+                        "configuredValue": existing[0],
+                        "dispatchValue": value,
+                        "artifactId": artifact.artifact_id,
+                    },
+                )
+            specialization_values[selector] = (value, dict(provenance))
+        jobs.append(
+            _ProjectArtifactTranslationJob(
+                variant=artifact.variant_name,
+                defines=dict(config.defines),
+                entry_point=artifact.entry_point,
+                dispatch_artifact=artifact,
+                specialization_values=specialization_values,
+                configured_workgroup=(artifact.workgroup_size, provenance),
+                configured_subgroup=(
+                    (artifact.subgroup_width, provenance)
+                    if artifact.subgroup_width is not None
+                    else None
+                ),
+            )
+        )
+    return jobs
+
+
+def _project_translation_jobs_for_target(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+    dispatch_artifacts: Mapping[str, Sequence[tuple[int, DispatchArtifactJob]]],
+) -> list[_ProjectArtifactTranslationJob]:
+    artifacts = dispatch_artifacts.get(unit.relative_path, ())
+    if target not in WORKGROUP_SIZE_SPECIALIZATION_TARGETS or not artifacts:
+        return _regular_project_translation_jobs(config, unit.relative_path)
+    return _dispatch_project_translation_jobs(config, unit.relative_path, artifacts)
+
+
+def _project_translation_variants_by_source_target(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+    targets: Sequence[str],
+    dispatch_artifacts: Mapping[str, Sequence[tuple[int, DispatchArtifactJob]]],
+) -> dict[tuple[str, str], tuple[str | None, ...]]:
+    variants = {}
+    for unit in units:
+        for target in _normalized_targets(targets):
+            variants[(unit.relative_path, target)] = tuple(
+                job.variant
+                for job in _project_translation_jobs_for_target(
+                    config,
+                    unit,
+                    target,
+                    dispatch_artifacts,
+                )
+            )
+    return variants
 
 
 def _variant_define_sources(
@@ -9548,6 +9834,8 @@ def _target_entry_points_for_crossgl_stages(
     ast: Any,
     target: str,
     stages: Sequence[Any],
+    *,
+    entry_scoped: bool = False,
 ) -> dict[str, str]:
     if target == "opengl":
         return {
@@ -9557,7 +9845,7 @@ def _target_entry_points_for_crossgl_stages(
     if target != "directx":
         return {}
     codegen = get_codegen(target)
-    stage_entry_names = codegen.stage_entry_names(ast)
+    stage_entry_names = {} if entry_scoped else codegen.stage_entry_names(ast)
     result: dict[str, str] = {}
     for stage in stages:
         function = getattr(stage, "entry_point", None)
@@ -9694,6 +9982,7 @@ def _project_workgroup_rule_execution_metadata(
     variant: str | None,
     materialization: Mapping[str, Any] | None,
     source_sizes: Mapping[str, tuple[int, int, int]],
+    entry_scoped: bool,
 ) -> dict[str, Any] | None:
     configured = _configured_workgroup_size_rule(config, unit.relative_path)
     if configured is None:
@@ -9712,7 +10001,12 @@ def _project_workgroup_rule_execution_metadata(
             "components": list(components),
         },
     )
-    target_entry_points = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    target_entry_points = _target_entry_points_for_crossgl_stages(
+        ast,
+        target,
+        stages,
+        entry_scoped=entry_scoped,
+    )
     entries: list[dict[str, Any]] = []
     for stage, record in joined:
         function = getattr(stage, "entry_point", None)
@@ -9885,6 +10179,7 @@ def _project_materialized_workgroup_execution_metadata(
     workgroup_size: Sequence[int],
     provenance: Mapping[str, Any],
     source_sizes: Mapping[str, tuple[int, int, int]],
+    entry_scoped: bool,
 ) -> dict[str, Any] | None:
     if not _has_host_named_template_materializations(materialization):
         return None
@@ -9901,7 +10196,12 @@ def _project_materialized_workgroup_execution_metadata(
             "workgroupSize": list(workgroup_size),
         },
     )
-    target_entry_points = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    target_entry_points = _target_entry_points_for_crossgl_stages(
+        ast,
+        target,
+        stages,
+        entry_scoped=entry_scoped,
+    )
     entries: list[dict[str, Any]] = []
     for stage, record in joined:
         function = getattr(stage, "entry_point", None)
@@ -10062,6 +10362,7 @@ def _project_subgroup_width_rule_execution_metadata(
     target: str,
     variant: str | None,
     materialization: Mapping[str, Any] | None,
+    entry_scoped: bool,
 ) -> dict[str, Any] | None:
     configured = _configured_subgroup_width_rule(config, unit.relative_path)
     if configured is None:
@@ -10096,7 +10397,12 @@ def _project_subgroup_width_rule_execution_metadata(
             materialization_details=exc.materialization_details,
         ) from exc
 
-    target_names = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    target_names = _target_entry_points_for_crossgl_stages(
+        ast,
+        target,
+        stages,
+        entry_scoped=entry_scoped,
+    )
     entries = []
     for stage, record in joined:
         function = getattr(stage, "entry_point", None)
@@ -10220,6 +10526,96 @@ def _project_subgroup_width_rule_execution_metadata(
     return execution
 
 
+def _dispatch_subgroup_width_execution_metadata(
+    *,
+    ast: Any,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    selected_entry_point: str | None,
+    configured_workgroup: tuple[int, int, int],
+    configured_subgroup: tuple[int, Mapping[str, Any]],
+) -> dict[str, Any]:
+    subgroup_width, provenance = configured_subgroup
+    if target != "directx":
+        raise ProjectSubgroupWidthError(
+            "The target cannot enforce an exact host dispatch subgroup width.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-not-enforceable",
+            source_entry_points=(selected_entry_point or "main",),
+            subgroup_width=subgroup_width,
+        )
+    if subgroup_width not in DIRECTX_EXACT_SUBGROUP_WIDTHS:
+        raise ProjectSubgroupWidthError(
+            f"DirectX cannot enforce subgroup width {subgroup_width}.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-width-unsupported",
+            source_entry_points=(selected_entry_point or "main",),
+            subgroup_width=subgroup_width,
+            rule_details={
+                "supportedWidths": sorted(DIRECTX_EXACT_SUBGROUP_WIDTHS),
+                "path": provenance.get("path"),
+            },
+        )
+
+    stages = _crossgl_compute_stages(ast, selected_entry_point)
+    if len(stages) != 1:
+        raise ProjectSubgroupWidthError(
+            "A host dispatch subgroup contract must resolve exactly one compute "
+            "entry point.",
+            code="project.translate.subgroup-width-materialization-invalid",
+            reason="entry-point-cardinality",
+            source_entry_points=(selected_entry_point or "main",),
+            subgroup_width=subgroup_width,
+        )
+    stage = stages[0]
+    function = getattr(stage, "entry_point", None)
+    materialized_entry = str(getattr(function, "name", "main"))
+    source_entry = selected_entry_point or materialized_entry
+    _set_crossgl_stage_subgroup_width(stage, subgroup_width)
+    target_names = _target_entry_points_for_crossgl_stages(
+        ast,
+        target,
+        stages,
+        entry_scoped=True,
+    )
+    target_entry = target_names.get(materialized_entry, materialized_entry)
+    entry = {
+        "sourceEntryPoint": source_entry,
+        "materializedEntryPoint": materialized_entry,
+        "targetEntryPoint": target_entry,
+        "workgroupSize": list(configured_workgroup),
+        "subgroupWidth": subgroup_width,
+    }
+    entry["identity"] = _workgroup_rule_entry_identity(
+        source=unit.relative_path,
+        source_hash=unit.source_hash,
+        target=target,
+        variant=variant,
+        entry=entry,
+    )
+    normalized_provenance = dict(provenance)
+    execution = {
+        "sourceEntryPoints": [source_entry],
+        "entryPoints": [entry],
+        "provenance": normalized_provenance,
+        "subgroupWidthProvenance": normalized_provenance,
+        "subgroupWidthEnforcement": {
+            "mechanism": "hlsl-wave-size-attribute",
+            "minimumShaderModel": "6.6",
+            "entryProfiles": [{"entryPoint": target_entry, "profile": "cs_6_6"}],
+        },
+    }
+    execution["identity"] = _subgroup_rule_execution_identity(
+        source=unit.relative_path,
+        source_hash=unit.source_hash,
+        target=target,
+        variant=variant,
+        execution=execution,
+    )
+    return execution
+
+
 def _merge_subgroup_rule_execution(
     *,
     workgroup: Mapping[str, Any] | None,
@@ -10306,7 +10702,10 @@ def _project_input_requires_workgroup_specialization(
     config: ProjectConfig,
     variant: str | None,
     project_relative_path: str | None = None,
+    configured_workgroup: tuple[tuple[int, int, int], Mapping[str, Any]] | None = None,
 ) -> bool:
+    if configured_workgroup is not None:
+        return True
     if project_relative_path is not None and (
         _configured_workgroup_size_rule(config, project_relative_path) is not None
     ):
@@ -10347,15 +10746,36 @@ def _artifact_matrix_report(
     targets: Sequence[str],
     variants: Mapping[str, Mapping[str, str]],
     artifacts: Sequence[Mapping[str, Any]],
+    *,
+    variants_by_source_target: (
+        Mapping[tuple[str, str], Sequence[str | None]] | None
+    ) = None,
 ) -> dict[str, Any]:
-    variant_count = len(variants)
-    variant_factor = variant_count if variant_count else 1
+    default_variants: tuple[str | None, ...] = (
+        tuple(sorted(variants)) if variants else (None,)
+    )
+    source_scoped = bool(variants_by_source_target) and any(
+        tuple(source_variants) != default_variants
+        for source_variants in variants_by_source_target.values()
+    )
+    if source_scoped and variants_by_source_target is not None:
+        variant_names = {
+            variant
+            for source_variants in variants_by_source_target.values()
+            for variant in source_variants
+            if variant is not None
+        }
+        variant_count = len(variant_names)
+    else:
+        variant_count = len(variants)
     normalized_targets = _normalized_targets(targets)
     payload = {
         "unitCount": len(units),
         "targetCount": len(normalized_targets),
         "variantCount": variant_count,
-        "variantMode": "named" if variant_count else "none",
+        "variantMode": (
+            "source-scoped" if source_scoped else "named" if variant_count else "none"
+        ),
     }
     artifact_identities = {
         identity
@@ -10374,6 +10794,7 @@ def _artifact_matrix_report(
         variant_names,
         preserve_source_suffix,
         artifacts=artifacts,
+        variants_by_source_target=variants_by_source_target,
     )
     payload["expectedArtifactCount"] = len(expected_identities)
     missing_identities = expected_identities - artifact_identities
@@ -17766,6 +18187,7 @@ def _project_template_materialization_for_artifact(
     include_paths: Sequence[str],
     source_options: Mapping[str, Any],
     target_artifact: str | None = None,
+    entry_point: str | None = None,
     source: str | None = None,
     fail_closed: bool = False,
 ) -> ProjectTemplateMaterializedSource | None:
@@ -17779,7 +18201,11 @@ def _project_template_materialization_for_artifact(
             if fail_closed:
                 raise
             return None
-    if "template" not in source and "#include" not in source:
+    if (
+        "template" not in source
+        and "static_assert" not in source
+        and "#include" not in source
+    ):
         return None
 
     from crosstl.backend.Metal.preprocessor import (
@@ -17845,7 +18271,36 @@ def _project_template_materialization_for_artifact(
         *unmaterialized_functor_records,
     ]
     if not source_template_parameters and not unsupported_type_records:
-        return None
+        if "static_assert" not in discovery_source:
+            return None
+        assertion_preprocessor = MetalPreprocessor(
+            **base_preprocessor_kwargs,
+            defines=dict(defines),
+        )
+        assertion_source = _metal_preprocess_without_template_materialization(
+            assertion_preprocessor,
+            source,
+            file_path=str(unit.path),
+        )
+        assertion_preprocessor._configure_integral_constant_contracts(assertion_source)
+        assertion_preprocessor._fail_closed_static_assertions = True
+        assertion_source = assertion_preprocessor._elide_stateless_compile_time_globals(
+            assertion_source
+        )
+        assertion_source = assertion_preprocessor._lower_struct_member_functions(
+            assertion_source
+        )
+        if not assertion_source.endswith("\n"):
+            assertion_source += "\n"
+        return ProjectTemplateMaterializedSource(
+            text=assertion_source,
+            metadata={},
+            defines={},
+            source_options={
+                **_frontend_source_options(source_options),
+                "preprocess": False,
+            },
+        )
 
     configured_parameters = {
         name: str(defines[name])
@@ -17886,8 +18341,17 @@ def _project_template_materialization_for_artifact(
         if fail_closed:
             raise
         return None
-    source_instantiations = preprocessor._find_project_template_instantiations(
+    all_source_instantiations = preprocessor._find_project_template_instantiations(
         preprocessed
+    )
+    source_instantiations = (
+        all_source_instantiations
+        if entry_point is None
+        else [
+            instantiation
+            for instantiation in all_source_instantiations
+            if instantiation.host_name == entry_point
+        ]
     )
     if unsupported_type_records and not source_instantiations:
         metadata = _template_materialization_metadata(
@@ -17948,7 +18412,9 @@ def _project_template_materialization_for_artifact(
     # instantiation was paired with every remaining template-function declaration.
     # Exactly one pair is retained for each unique, concrete host entry; duplicate,
     # unmatched, unsupported, and nonmatching declaration pairs are pruned.
-    source_instantiation_candidate_count = len(source_instantiations) * len(templates)
+    source_instantiation_candidate_count = len(all_source_instantiations) * len(
+        templates
+    )
     selected_source_instantiation_candidate_count = 0
 
     explicit_work_budget = (
@@ -18096,9 +18562,11 @@ def _project_template_materialization_for_artifact(
             ] = materialized_name
     # This path only runs for template-hostile targets (see the guard at the top
     # of `_project_template_materialization_for_artifact`), which cannot emit
-    # residual generic templates. Every explicit project instantiation the source
-    # enumerates must therefore be materialized: honour them all instead of
-    # silently bailing when their count exceeds `max_template_specializations`
+    # residual generic templates. Every explicit project instantiation selected
+    # for the artifact must therefore be materialized: honour the complete source
+    # set for aggregate artifacts and the requested host entry for entry-scoped
+    # artifacts instead of silently bailing when their count exceeds
+    # `max_template_specializations`
     # (that limit still bounds the IMPLICITLY discovered call-site specializations
     # below). Bailing here would leave the kernels — and the helper templates
     # reachable only from them — unmaterialized and mis-reported as
@@ -18106,6 +18574,7 @@ def _project_template_materialization_for_artifact(
     preprocessed = preprocessor._materialize_project_template_instantiations(
         preprocessed,
         enforce_specialization_limit=False,
+        host_names={entry_point} if entry_point is not None else None,
     )
 
     templates = preprocessor._find_template_functions(preprocessed)
@@ -18989,6 +19458,44 @@ def _metal_static_constant_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_static_assertion_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-static-assertion"
+    ):
+        return {}
+
+    assertion = {}
+    fields = {
+        "reason": getattr(exc, "reason", None),
+        "expression": getattr(exc, "expression", None),
+        "resolvedExpression": getattr(exc, "resolved_expression", None),
+        "assertionMessage": getattr(exc, "assertion_message", None),
+        "suggestedAction": getattr(exc, "suggested_action", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            assertion[name] = value
+    unresolved_dependencies = getattr(exc, "unresolved_dependencies", None)
+    if unresolved_dependencies:
+        assertion["unresolvedDependencies"] = [
+            str(dependency)
+            for dependency in unresolved_dependencies
+            if _is_non_empty_string(dependency)
+        ]
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    if assertion:
+        details["staticAssertion"] = dict(sorted(assertion.items()))
+    return dict(sorted(details.items()))
+
+
 def _metal_sizeof_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -19262,6 +19769,39 @@ def _opengl_complex_arithmetic_failure_details(
     return dict(sorted(details.items()))
 
 
+def _compile_time_global_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-compile-time-global-invalid",
+        "project.translate.opengl-compile-time-global-invalid",
+    }:
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    compile_time_global = {}
+    fields = {
+        "variable": getattr(exc, "variable_name", None),
+        "expressionKind": getattr(exc, "expression_kind", None),
+        "reason": getattr(exc, "reason", None),
+        "detail": getattr(exc, "detail", None),
+        "operation": getattr(exc, "operation", None),
+        "operandType": getattr(exc, "operand_type", None),
+        "resultType": getattr(exc, "result_type", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            compile_time_global[name] = value
+    if compile_time_global:
+        details["compileTimeGlobal"] = dict(sorted(compile_time_global.items()))
+    return dict(sorted(details.items()))
+
+
 def _boolean_ordered_intrinsic_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -19290,6 +19830,41 @@ def _boolean_ordered_intrinsic_failure_details(
         intrinsic["reason"] = reason
     if intrinsic:
         details["booleanOrderedIntrinsic"] = dict(sorted(intrinsic.items()))
+    return dict(sorted(details.items()))
+
+
+def _math_intrinsic_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-copysign-unrepresentable",
+        "project.translate.directx-inverse-hyperbolic-unrepresentable",
+        "project.translate.opengl-copysign-unrepresentable",
+    }:
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    intrinsic = {}
+    fields = {
+        "operation": getattr(exc, "operation", None),
+        "operandType": getattr(exc, "operand_type", None),
+        "resultType": getattr(exc, "result_type", None),
+        "targetProfile": getattr(exc, "target_profile", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            intrinsic[name] = value
+    operand_types = getattr(exc, "operand_types", None)
+    if operand_types:
+        intrinsic["operandTypes"] = [str(value) for value in operand_types]
+    if intrinsic:
+        details["mathIntrinsic"] = dict(sorted(intrinsic.items()))
     return dict(sorted(details.items()))
 
 
@@ -19829,6 +20404,70 @@ def _metal_struct_method_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_call_operator_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.metal-call-operator-association-unresolved",
+        "project.translate.metal-out-of-line-call-operator-unresolved",
+    }:
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    call_operator = {}
+    fields = {
+        "owner": getattr(exc, "owner", None),
+        "methodName": getattr(exc, "method_name", None),
+        "signature": getattr(exc, "signature", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            call_operator[name] = value
+
+    candidates = getattr(exc, "candidates", None)
+    if candidates:
+        call_operator["candidates"] = [str(value) for value in candidates]
+
+    definition_location = getattr(exc, "definition_location", None)
+    if definition_location is not None:
+        call_operator["definitionLocation"] = _translation_failure_location(
+            SimpleNamespace(source_location=definition_location), unit
+        ).to_json()
+
+    declaration_locations = list(getattr(exc, "declaration_locations", None) or ())
+    declaration_location = getattr(exc, "declaration_location", None)
+    if declaration_location is not None:
+        declaration_locations.insert(0, declaration_location)
+    if declaration_locations:
+        call_operator["declarationLocations"] = [
+            _translation_failure_location(
+                SimpleNamespace(source_location=location), unit
+            ).to_json()
+            for location in declaration_locations
+            if location is not None
+        ]
+
+    candidate_locations = getattr(exc, "candidate_locations", None)
+    if candidate_locations:
+        call_operator["candidateLocations"] = [
+            _translation_failure_location(
+                SimpleNamespace(source_location=location), unit
+            ).to_json()
+            for location in candidate_locations
+            if location is not None
+        ]
+
+    if call_operator:
+        details["metalCallOperator"] = dict(sorted(call_operator.items()))
+    return dict(sorted(details.items()))
+
+
 def _metal_struct_method_call_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -20027,7 +20666,9 @@ def _translation_failure_details(
         **_opengl_aggregate_initializer_failure_details(exc, unit, artifact_path),
         **_opengl_scalar_conversion_failure_details(exc, unit, artifact_path),
         **_opengl_complex_arithmetic_failure_details(exc, unit, artifact_path),
+        **_compile_time_global_failure_details(exc, unit, artifact_path),
         **_boolean_ordered_intrinsic_failure_details(exc, unit, artifact_path),
+        **_math_intrinsic_failure_details(exc, unit, artifact_path),
         **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
         **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
@@ -20043,10 +20684,12 @@ def _translation_failure_details(
         **_opengl_reference_parameter_failure_details(exc, unit, artifact_path),
         **_pointer_reinterpret_failure_details(exc, unit, artifact_path),
         **_generic_member_call_failure_details(exc, unit, artifact_path),
+        **_metal_call_operator_failure_details(exc, unit, artifact_path),
         **_metal_struct_method_failure_details(exc, unit, artifact_path),
         **_metal_struct_method_call_failure_details(exc, unit, artifact_path),
         **_metal_constructor_failure_details(exc, unit, artifact_path),
         **_metal_stateless_global_failure_details(exc, unit, artifact_path),
+        **_metal_static_assertion_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_template_argument_failure_details(exc, unit, artifact_path),
@@ -21207,8 +21850,13 @@ def _resolved_project_specialization_constants(
     *,
     target: str,
     variant: str | None,
+    configured_values: Mapping[str, tuple[Any, Mapping[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[ProjectDiagnostic]]:
-    configured = _variant_specialization_values(config, variant)
+    configured = (
+        dict(configured_values)
+        if configured_values is not None
+        else _variant_specialization_values(config, variant)
+    )
     deferred = target in DEFERRED_SPECIALIZATION_TARGETS
     diagnostics: list[ProjectDiagnostic] = []
     records: list[dict[str, Any]] = []
@@ -21629,6 +22277,94 @@ def _materialize_crossgl_specialization_constants(
     return materialized
 
 
+def _entry_scoped_specialization_names(
+    unit: ProjectTranslationUnit,
+    source_ast: Any,
+    entry_point: str,
+    target: str,
+) -> set[str] | None:
+    try:
+        if unit.source_backend in {"cgl", "crossgl"}:
+            crossgl_ast = source_ast
+        else:
+            source_spec = SOURCE_REGISTRY.get(unit.source_backend)
+            cgl_spec = SOURCE_REGISTRY.get("cgl")
+            if (
+                source_spec is None
+                or source_spec.reverse_codegen_factory is None
+                or cgl_spec is None
+            ):
+                return None
+            intermediate = source_spec.reverse_codegen_factory().generate(source_ast)
+            crossgl_ast = cgl_spec.parse(
+                intermediate,
+                source_options={
+                    "strict_function_bodies": unit.source_backend != "mojo"
+                },
+            )
+        return _entry_scoped_specialization_names_from_crossgl_ast(
+            crossgl_ast, entry_point, target
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _entry_scoped_specialization_names_from_crossgl_ast(
+    crossgl_ast: Any,
+    entry_point: str,
+    target: str,
+) -> set[str] | None:
+    try:
+        entry_scoped_ast = getattr(get_codegen(target), "entry_scoped_ast", None)
+        if not callable(entry_scoped_ast):
+            return None
+        scoped_ast = entry_scoped_ast(crossgl_ast, entry_point)
+        return {
+            str(getattr(node, "name"))
+            for node, _default_value, _has_default in (
+                _specialization_ast_declaration_items(scoped_ast)
+            )
+            if _is_non_empty_string(getattr(node, "name", None))
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _specialization_reachability_diagnostic(
+    unit: ProjectTranslationUnit,
+    *,
+    target: str,
+    variant: str | None,
+    entry_point: str,
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity="error",
+        code="project.translate.specialization-reachability-unproven",
+        message=(
+            "Specialization-constant reachability could not be proven for "
+            f"entry point '{entry_point}'; entry-scoped metadata was not emitted."
+        ),
+        location=SourceLocation(file=unit.relative_path),
+        target=target,
+        source_backend=unit.source_backend,
+        variant=variant,
+        missing_capabilities=["specialization.constant.reachability"],
+        details={"entryPoint": entry_point},
+    )
+
+
+def _specialization_diagnostic_reaches_entry(
+    diagnostic: ProjectDiagnostic, reachable_names: set[str]
+) -> bool:
+    name = diagnostic.details.get("name")
+    if isinstance(name, str) and name not in reachable_names:
+        return False
+    previous_name = diagnostic.details.get("previousName")
+    if isinstance(previous_name, str) and previous_name not in reachable_names:
+        return False
+    return True
+
+
 def _project_specialization_metadata_for_input(
     config: ProjectConfig,
     unit: ProjectTranslationUnit,
@@ -21639,6 +22375,8 @@ def _project_specialization_metadata_for_input(
     include_paths: Sequence[str],
     defines: Mapping[str, str],
     source_options: Mapping[str, Any],
+    entry_point: str | None = None,
+    configured_values: Mapping[str, tuple[Any, Mapping[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None, list[ProjectDiagnostic]]:
     source = input_path.read_text(encoding="utf-8", errors="replace")
     if not re.search(r"\b(?:function_constant|constant_id)\b", source):
@@ -21660,6 +22398,31 @@ def _project_specialization_metadata_for_input(
     declarations, declaration_diagnostics = _project_specialization_declarations(
         unit, ast, diagnostic_source
     )
+    if entry_point is not None:
+        reachable_names = _entry_scoped_specialization_names(
+            unit, ast, entry_point, target
+        )
+        if reachable_names is None and declarations:
+            declarations = []
+            declaration_diagnostics.append(
+                _specialization_reachability_diagnostic(
+                    unit,
+                    target=target,
+                    variant=variant,
+                    entry_point=entry_point,
+                )
+            )
+        elif reachable_names is not None:
+            declarations = [
+                declaration
+                for declaration in declarations
+                if declaration.name in reachable_names
+            ]
+            declaration_diagnostics = [
+                diagnostic
+                for diagnostic in declaration_diagnostics
+                if _specialization_diagnostic_reaches_entry(diagnostic, reachable_names)
+            ]
     declaration_diagnostics = [
         replace(diagnostic, target=target, variant=variant)
         for diagnostic in declaration_diagnostics
@@ -21673,12 +22436,92 @@ def _project_specialization_metadata_for_input(
             declarations,
             target=target,
             variant=variant,
+            configured_values=configured_values,
         )
     )
     diagnostics = [*declaration_diagnostics, *resolution_diagnostics]
     if any(diagnostic.severity == "error" for diagnostic in diagnostics):
         metadata["status"] = "failed"
     return records, metadata, diagnostics
+
+
+def _scope_artifact_specialization_metadata_for_entry(
+    artifact: dict[str, Any],
+    *,
+    crossgl_ast: Any,
+    entry_point: str,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+) -> None:
+    constants = artifact.get("specializationConstants")
+    if not constants:
+        artifact.pop("specializationConstants", None)
+        artifact.pop("specializationMaterialization", None)
+        return
+    if not isinstance(constants, list) or any(
+        not isinstance(constant, Mapping)
+        or not _is_non_empty_string(constant.get("name"))
+        for constant in constants
+    ):
+        reachable_names = None
+    else:
+        reachable_names = _entry_scoped_specialization_names_from_crossgl_ast(
+            crossgl_ast,
+            entry_point,
+            target,
+        )
+    if reachable_names is None:
+        diagnostic = _specialization_reachability_diagnostic(
+            unit,
+            target=target,
+            variant=variant,
+            entry_point=entry_point,
+        )
+        raise ProjectSpecializationError(
+            diagnostic.message,
+            diagnostics=(diagnostic,),
+        )
+
+    scoped_constants = [
+        dict(constant)
+        for constant in constants
+        if constant.get("name") in reachable_names
+    ]
+    if not scoped_constants:
+        artifact.pop("specializationConstants", None)
+        artifact.pop("specializationMaterialization", None)
+        return
+
+    materialization = artifact.get("specializationMaterialization")
+    if not isinstance(materialization, Mapping):
+        diagnostic = _specialization_reachability_diagnostic(
+            unit,
+            target=target,
+            variant=variant,
+            entry_point=entry_point,
+        )
+        raise ProjectSpecializationError(
+            diagnostic.message,
+            diagnostics=(diagnostic,),
+        )
+    scoped_materialization = dict(materialization)
+    scoped_materialization.update(
+        {
+            "constantCount": len(scoped_constants),
+            "requiredCount": sum(
+                bool(constant.get("required")) for constant in scoped_constants
+            ),
+            "overriddenCount": sum(
+                bool(constant.get("overridden")) for constant in scoped_constants
+            ),
+            "concreteCount": sum(
+                "concreteValue" in constant for constant in scoped_constants
+            ),
+        }
+    )
+    artifact["specializationConstants"] = scoped_constants
+    artifact["specializationMaterialization"] = scoped_materialization
 
 
 def _crossgl_parameter_has_semantic(parameter: Any, semantic: str) -> bool:
@@ -21845,12 +22688,17 @@ def _project_workgroup_execution_metadata(
     variant: str | None,
     selected_entry_point: str | None,
     template_materialization: Mapping[str, Any] | None = None,
+    configured_workgroup: tuple[tuple[int, int, int], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     stages = _crossgl_compute_stages(ast, selected_entry_point)
     if not stages:
         return None
 
-    configured_size, configured_provenance = _configured_workgroup_size(config, variant)
+    configured_size, configured_provenance = (
+        configured_workgroup
+        if configured_workgroup is not None
+        else _configured_workgroup_size(config, variant)
+    )
     consumed_entries: list[str] = []
     source_sizes: dict[str, tuple[int, int, int]] = {}
     source_paths: dict[str, str] = {}
@@ -21899,15 +22747,20 @@ def _project_workgroup_execution_metadata(
             for stage in stages
         }
     )
-    rule_execution = _project_workgroup_rule_execution_metadata(
-        ast=ast,
-        stages=stages,
-        config=config,
-        unit=unit,
-        target=target,
-        variant=variant,
-        materialization=template_materialization,
-        source_sizes=source_sizes,
+    rule_execution = (
+        None
+        if configured_workgroup is not None
+        else _project_workgroup_rule_execution_metadata(
+            ast=ast,
+            stages=stages,
+            config=config,
+            unit=unit,
+            target=target,
+            variant=variant,
+            materialization=template_materialization,
+            source_sizes=source_sizes,
+            entry_scoped=selected_entry_point is not None,
+        )
     )
     if rule_execution is not None:
         return rule_execution
@@ -21940,6 +22793,7 @@ def _project_workgroup_execution_metadata(
             workgroup_size=configured_size,
             provenance=configured_provenance,
             source_sizes=source_sizes,
+            entry_scoped=selected_entry_point is not None,
         )
         if materialized_execution is not None:
             return materialized_execution
@@ -22503,6 +23357,7 @@ def translate_project(
             workgroup_size_rules=config.workgroup_size_rules,
             subgroup_width_rules=config.subgroup_width_rules,
             selected_variants=config.selected_variants,
+            dispatch_contracts=config.dispatch_contracts,
             external_corpus_manifest=config.external_corpus_manifest,
             index_range_assertions=config.index_range_assertions,
         )
@@ -22525,6 +23380,13 @@ def translate_project(
     )
 
     variant_jobs = _variant_jobs(config)
+    dispatch_artifacts = _dispatch_artifacts_by_source(scan.dispatch_artifact_plan)
+    translation_variants = _project_translation_variants_by_source_target(
+        config,
+        scan.units,
+        selected_targets,
+        dispatch_artifacts,
+    )
     max_define_count = max(
         (len(defines) for _variant, defines in variant_jobs), default=0
     )
@@ -22533,7 +23395,6 @@ def translate_project(
     preserve_source_suffix = _artifact_source_suffix_pairs(scan.units, selected_targets)
 
     for unit in scan.units:
-        selected_entry_point = _entry_point_for_path(unit.relative_path, config)
         required_capabilities = _required_capabilities_for_unit(unit)
         source_supports_defines = _source_frontend_supports_lexer_keyword(
             unit.source_backend, "defines"
@@ -22563,7 +23424,16 @@ def translate_project(
             )
             include_path_forwarding_diagnostics.add(unit.source_backend)
         for target in selected_targets:
-            for variant, defines in variant_jobs:
+            translation_jobs = _project_translation_jobs_for_target(
+                config,
+                unit,
+                target,
+                dispatch_artifacts,
+            )
+            for translation_job in translation_jobs:
+                variant = translation_job.variant
+                defines = translation_job.defines
+                selected_entry_point = translation_job.entry_point
                 artifact_include_dependencies = _include_dependencies_for_artifact(
                     unit.include_dependencies,
                     variant,
@@ -22627,6 +23497,10 @@ def translate_project(
                     }
                 if variant is not None:
                     artifact["variant"] = variant
+                if translation_job.dispatch_artifact is not None:
+                    artifact["dispatchArtifact"] = (
+                        translation_job.dispatch_artifact.to_json()
+                    )
                 if output_dir_blocked:
                     artifact["status"] = "failed"
                     artifact["error"] = (
@@ -22675,6 +23549,7 @@ def translate_project(
                             include_paths=include_paths,
                             source_options=source_options,
                             target_artifact=artifact.get("path"),
+                            entry_point=selected_entry_point,
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -22700,9 +23575,10 @@ def translate_project(
                     artifacts.append(artifact)
                     continue
                 if template_materialization is not None:
-                    artifact["templateMaterialization"] = dict(
-                        template_materialization.metadata
-                    )
+                    if template_materialization.metadata:
+                        artifact["templateMaterialization"] = dict(
+                            template_materialization.metadata
+                        )
                     diagnostics.extend(template_materialization.diagnostics)
                     if template_materialization.blocked:
                         artifact["status"] = "failed"
@@ -22752,6 +23628,8 @@ def translate_project(
                         include_paths=include_paths,
                         defines=translation_defines,
                         source_options=translation_source_options,
+                        entry_point=selected_entry_point,
+                        configured_values=translation_job.specialization_values,
                     )
                     if specialization_constants:
                         artifact["specializationConstants"] = specialization_constants
@@ -22875,12 +23753,19 @@ def translate_project(
                             config=config,
                             variant=variant,
                             project_relative_path=unit.relative_path,
+                            configured_workgroup=(translation_job.configured_workgroup),
                         )
                     )
+                    configured_subgroup = translation_job.configured_subgroup
                     requires_subgroup_specialization = (
-                        target == "directx"
-                        and _configured_subgroup_width_rule(config, unit.relative_path)
-                        is not None
+                        configured_subgroup is not None
+                        or (
+                            target == "directx"
+                            and _configured_subgroup_width_rule(
+                                config, unit.relative_path
+                            )
+                            is not None
+                        )
                     )
                     if (
                         requires_workgroup_specialization
@@ -22910,34 +23795,62 @@ def translate_project(
                                 if template_materialization is not None
                                 else None
                             ),
+                            configured_workgroup=(translation_job.configured_workgroup),
                         )
-                        subgroup_execution = (
-                            _project_subgroup_width_rule_execution_metadata(
-                                ast=crossgl_ast,
-                                stages=_crossgl_compute_stages(
-                                    crossgl_ast, selected_entry_point
-                                ),
-                                config=config,
-                                unit=unit,
-                                target=target,
-                                variant=variant,
-                                materialization=(
-                                    template_materialization.metadata
-                                    if template_materialization is not None
-                                    else None
-                                ),
+                        if configured_subgroup is not None:
+                            if translation_job.configured_workgroup is None:
+                                raise DispatchArtifactPlanError(
+                                    "dispatch-subgroup-workgroup-missing",
+                                    "A dispatch subgroup contract requires a planned "
+                                    "workgroup size.",
+                                    details={"source": unit.relative_path},
+                                )
+                            subgroup_execution = (
+                                _dispatch_subgroup_width_execution_metadata(
+                                    ast=crossgl_ast,
+                                    unit=unit,
+                                    target=target,
+                                    variant=variant,
+                                    selected_entry_point=selected_entry_point,
+                                    configured_workgroup=(
+                                        translation_job.configured_workgroup[0]
+                                    ),
+                                    configured_subgroup=configured_subgroup,
+                                )
                             )
-                            if requires_subgroup_specialization
-                            else None
-                        )
+                        elif requires_subgroup_specialization:
+                            subgroup_execution = (
+                                _project_subgroup_width_rule_execution_metadata(
+                                    ast=crossgl_ast,
+                                    stages=_crossgl_compute_stages(
+                                        crossgl_ast, selected_entry_point
+                                    ),
+                                    config=config,
+                                    unit=unit,
+                                    target=target,
+                                    variant=variant,
+                                    materialization=(
+                                        template_materialization.metadata
+                                        if template_materialization is not None
+                                        else None
+                                    ),
+                                    entry_scoped=selected_entry_point is not None,
+                                )
+                            )
+                        else:
+                            subgroup_execution = None
                         execution = workgroup_execution
                         if subgroup_execution is not None:
-                            execution = _merge_subgroup_rule_execution(
-                                workgroup=workgroup_execution,
-                                subgroup=subgroup_execution,
-                                unit=unit,
-                                target=target,
-                                variant=variant,
+                            execution = (
+                                subgroup_execution
+                                if configured_subgroup is not None
+                                else _merge_subgroup_rule_execution(
+                                    workgroup=workgroup_execution,
+                                    subgroup=subgroup_execution,
+                                    unit=unit,
+                                    target=target,
+                                    variant=variant,
+                                )
                             )
                         if execution is not None:
                             split_specs = (
@@ -22994,6 +23907,14 @@ def translate_project(
                                                 ),
                                             )
                                         )
+                                    _scope_artifact_specialization_metadata_for_entry(
+                                        split_artifact,
+                                        crossgl_ast=crossgl_ast,
+                                        entry_point=materialized_entry,
+                                        unit=unit,
+                                        target=target,
+                                        variant=variant,
+                                    )
                                     split_artifact["execution"] = split_execution
                                     try:
                                         split_source = (
@@ -23183,8 +24104,14 @@ def translate_project(
             config, scan.units, selected_targets, artifacts
         ),
         artifact_matrix=_artifact_matrix_report(
-            config, scan.units, selected_targets, config.variants, artifacts
+            config,
+            scan.units,
+            selected_targets,
+            config.variants,
+            artifacts,
+            variants_by_source_target=translation_variants,
         ),
+        dispatch_artifact_plan=scan.dispatch_artifact_plan,
     )
 
 
@@ -25463,7 +26390,7 @@ def inspect_project_report(
 def _runtime_plan_project(project: Any) -> dict[str, Any]:
     project = project if isinstance(project, Mapping) else {}
     targets = project.get("targets", [])
-    return {
+    payload = {
         "root": project.get("root"),
         "targets": (
             [target for target in targets if isinstance(target, str)]
@@ -25472,6 +26399,12 @@ def _runtime_plan_project(project: Any) -> dict[str, Any]:
         ),
         "outputDir": project.get("outputDir"),
     }
+    entry_point_selections = project.get("entryPointSelections")
+    if isinstance(entry_point_selections, Mapping):
+        payload["entryPointSelections"] = dict(entry_point_selections)
+    if _is_non_negative_int(project.get("entryPointSelectionCount")):
+        payload["entryPointSelectionCount"] = project["entryPointSelectionCount"]
+    return payload
 
 
 def _runtime_plan_artifact_counts(
@@ -38486,6 +39419,11 @@ def _inspection_artifact_matrix_identity_sets(
         variant_names,
         preserve_source_suffix,
         artifacts=artifact_records,
+        variants_by_source_target=_report_translation_variants_by_source_target(
+            project,
+            units,
+            targets,
+        ),
     )
 
     emitted_identities = {
@@ -38554,6 +39492,9 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         "defineCount",
         "variantCount",
         "variantDefineCounts",
+        "dispatchContractCount",
+        "dispatchVariantCount",
+        "dispatchArtifactCount",
         "externalCorpusManifest",
     ):
         if field_name in project:
@@ -38593,6 +39534,11 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
     if isinstance(selected_variants, list):
         summary["selectedVariants"] = [
             name for name in selected_variants if isinstance(name, str) and name
+        ]
+    dispatch_contract_files = project.get("dispatchContractFiles")
+    if isinstance(dispatch_contract_files, list):
+        summary["dispatchContractFiles"] = [
+            path for path in dispatch_contract_files if isinstance(path, str) and path
         ]
     return summary
 
@@ -41825,6 +42771,140 @@ def _artifact_entry_point_contract_reasons(
     return reasons
 
 
+def _artifact_dispatch_execution_contract_reasons(
+    prefix: str,
+    record: Mapping[str, Any],
+    execution: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+) -> list[str]:
+    execution_prefix = f"{prefix}.execution"
+    planned = _report_dispatch_artifact_for_record(record, project)
+    if planned is None:
+        return [
+            f"{execution_prefix} host dispatch provenance requires a matching "
+            "planned artifact"
+        ]
+    plan_index, dispatch_artifact = planned
+    expected_provenance = {
+        "kind": "host-dispatch-contract",
+        "path": f"project.dispatchArtifactPlan.artifacts[{plan_index}]",
+        "variant": dispatch_artifact.get("variant"),
+        "artifactId": dispatch_artifact.get("artifactId"),
+    }
+    reasons = []
+    if record.get("target") != "directx":
+        reasons.append(
+            f"{execution_prefix} exact subgroup enforcement requires target directx"
+        )
+    if execution.get("provenance") != expected_provenance:
+        reasons.append(
+            f"{execution_prefix}.provenance must match the planned dispatch artifact"
+        )
+    if execution.get("subgroupWidthProvenance") != expected_provenance:
+        reasons.append(
+            f"{execution_prefix}.subgroupWidthProvenance must match the planned "
+            "dispatch artifact"
+        )
+
+    source_entry = dispatch_artifact.get("entryPoint")
+    expected_sources = [source_entry] if _is_non_empty_string(source_entry) else None
+    if execution.get("sourceEntryPoints") != expected_sources:
+        reasons.append(
+            f"{execution_prefix}.sourceEntryPoints must match the planned dispatch "
+            "artifact"
+        )
+    raw_entries = execution.get("entryPoints")
+    entries = raw_entries if isinstance(raw_entries, list) else []
+    if len(entries) != 1 or not isinstance(entries[0], Mapping):
+        reasons.append(f"{execution_prefix}.entryPoints must contain one object")
+    else:
+        entry = entries[0]
+        entry_prefix = f"{execution_prefix}.entryPoints[0]"
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                entry_prefix,
+                entry,
+                REPORT_ARTIFACT_EXECUTION_ENTRY_FIELDS,
+            )
+        )
+        if entry.get("sourceEntryPoint") != source_entry:
+            reasons.append(
+                f"{entry_prefix}.sourceEntryPoint must match the planned dispatch "
+                "artifact"
+            )
+        for field_name in ("materializedEntryPoint", "targetEntryPoint"):
+            if not _is_non_empty_string(entry.get(field_name)):
+                reasons.append(f"{entry_prefix}.{field_name} must be a string")
+        if entry.get("workgroupSize") != dispatch_artifact.get("workgroupSize"):
+            reasons.append(
+                f"{entry_prefix}.workgroupSize must match the planned dispatch "
+                "artifact"
+            )
+        if entry.get("subgroupWidth") != dispatch_artifact.get("subgroupWidth"):
+            reasons.append(
+                f"{entry_prefix}.subgroupWidth must match the planned dispatch "
+                "artifact"
+            )
+        identity_reasons = _hash_contract_reasons(
+            f"{entry_prefix}.identity",
+            entry.get("identity"),
+            require_closed_fields=True,
+        )
+        reasons.extend(identity_reasons)
+        if (
+            not identity_reasons
+            and _is_non_empty_string(record.get("source"))
+            and isinstance(record.get("sourceHash"), Mapping)
+        ):
+            expected_identity = _workgroup_rule_entry_identity(
+                source=str(record["source"]),
+                source_hash=record["sourceHash"],
+                target="directx",
+                variant=str(record["variant"]),
+                entry=entry,
+            )
+            if entry.get("identity") != expected_identity:
+                reasons.append(
+                    f"{entry_prefix}.identity must match the execution contract"
+                )
+
+        target_entry = entry.get("targetEntryPoint")
+        expected_enforcement = {
+            "mechanism": "hlsl-wave-size-attribute",
+            "minimumShaderModel": "6.6",
+            "entryProfiles": [{"entryPoint": target_entry, "profile": "cs_6_6"}],
+        }
+        if execution.get("subgroupWidthEnforcement") != expected_enforcement:
+            reasons.append(
+                f"{execution_prefix}.subgroupWidthEnforcement must require "
+                "WaveSize and cs_6_6 for the target entry"
+            )
+
+    identity_reasons = _hash_contract_reasons(
+        f"{execution_prefix}.identity",
+        execution.get("identity"),
+        require_closed_fields=True,
+    )
+    reasons.extend(identity_reasons)
+    if (
+        not identity_reasons
+        and _is_non_empty_string(record.get("source"))
+        and isinstance(record.get("sourceHash"), Mapping)
+    ):
+        expected_identity = _subgroup_rule_execution_identity(
+            source=str(record["source"]),
+            source_hash=record["sourceHash"],
+            target="directx",
+            variant=str(record["variant"]),
+            execution=execution,
+        )
+        if execution.get("identity") != expected_identity:
+            reasons.append(
+                f"{execution_prefix}.identity must match the execution contract"
+            )
+    return reasons
+
+
 def _artifact_execution_contract_reasons(
     prefix: str,
     record: Mapping[str, Any],
@@ -41843,6 +42923,19 @@ def _artifact_execution_contract_reasons(
         REPORT_ARTIFACT_EXECUTION_FIELDS,
     )
     if "entryPoints" in execution:
+        provenance = execution.get("provenance")
+        if isinstance(provenance, Mapping) and provenance.get("kind") == (
+            "host-dispatch-contract"
+        ):
+            reasons.extend(
+                _artifact_dispatch_execution_contract_reasons(
+                    prefix,
+                    record,
+                    execution,
+                    project,
+                )
+            )
+            return reasons
         entries = [
             entry
             for entry in _record_sequence(execution.get("entryPoints"))
@@ -41911,10 +43004,11 @@ def _artifact_execution_contract_reasons(
             "project-config",
             "project-variant",
             "source",
+            "host-dispatch-contract",
         }:
             reasons.append(
                 f"{provenance_prefix}.kind must be project-config, "
-                "project-variant, or source"
+                "project-variant, source, or host-dispatch-contract"
             )
         if not _is_non_empty_string(provenance.get("path")):
             reasons.append(f"{provenance_prefix}.path must be a string")
@@ -41990,6 +43084,47 @@ def _artifact_execution_contract_reasons(
                     f"{provenance_prefix}.variant is not allowed for source "
                     "provenance"
                 )
+        elif provenance_kind == "host-dispatch-contract":
+            planned = _report_dispatch_artifact_for_record(record, project)
+            if planned is None:
+                reasons.append(
+                    f"{provenance_prefix} requires a matching planned dispatch "
+                    "artifact"
+                )
+            else:
+                plan_index, dispatch_artifact = planned
+                expected_path = f"project.dispatchArtifactPlan.artifacts[{plan_index}]"
+                if provenance_path != expected_path:
+                    reasons.append(
+                        f"{provenance_prefix}.path must be {expected_path} for "
+                        "host-dispatch-contract provenance"
+                    )
+                if provenance.get("artifactId") != dispatch_artifact.get("artifactId"):
+                    reasons.append(
+                        f"{provenance_prefix}.artifactId must match the planned "
+                        "dispatch artifact"
+                    )
+                if workgroup_size != dispatch_artifact.get("workgroupSize"):
+                    reasons.append(
+                        f"{execution_prefix}.workgroupSize must match the planned "
+                        "dispatch artifact"
+                    )
+                expected_entry_point = dispatch_artifact.get("entryPoint")
+                if (
+                    isinstance(source_entry_points, list)
+                    and _is_non_empty_string(expected_entry_point)
+                    and source_entry_points != [expected_entry_point]
+                ):
+                    reasons.append(
+                        f"{execution_prefix}.sourceEntryPoints must match the "
+                        "planned dispatch artifact entry point"
+                    )
+
+        if provenance_kind != "host-dispatch-contract" and "artifactId" in provenance:
+            reasons.append(
+                f"{provenance_prefix}.artifactId is only allowed for "
+                "host-dispatch-contract provenance"
+            )
 
     identity = execution.get("identity")
     identity_reasons = _hash_contract_reasons(
@@ -42157,6 +43292,9 @@ def _expected_artifact_identities(
     preserve_source_suffix: set[tuple[str, str]],
     *,
     artifacts: Sequence[Mapping[str, Any]] = (),
+    variants_by_source_target: (
+        Mapping[tuple[str, str], Sequence[str | None]] | None
+    ) = None,
 ) -> set[ArtifactIdentity]:
     expected_identities = set()
     for unit in units:
@@ -42168,7 +43306,12 @@ def _expected_artifact_identities(
         if not (_is_non_empty_string(source) and _is_report_identity_path(source)):
             continue
         for target in _normalized_targets(targets):
-            for variant in variants:
+            source_variants = (
+                variants_by_source_target.get((str(source), target), variants)
+                if variants_by_source_target is not None
+                else variants
+            )
+            for variant in source_variants:
                 for entry_point in _expected_entry_points_from_artifacts(
                     artifacts, source, target, variant
                 ):
@@ -42189,6 +43332,227 @@ def _expected_artifact_identities(
                         if identity is not None:
                             expected_identities.add(identity)
     return expected_identities
+
+
+def _report_translation_variants_by_source_target(
+    project: Mapping[str, Any],
+    units: Sequence[Any],
+    targets: Sequence[str],
+) -> dict[tuple[str, str], tuple[str | None, ...]]:
+    project_variants = project.get("variants")
+    default_variants: tuple[str | None, ...] = (
+        tuple(sorted(project_variants))
+        if isinstance(project_variants, Mapping) and project_variants
+        else (None,)
+    )
+    plan = project.get("dispatchArtifactPlan")
+    plan_artifacts = plan.get("artifacts") if isinstance(plan, Mapping) else None
+    dispatch_variants: dict[str, list[str]] = {}
+    for artifact in _record_sequence(plan_artifacts):
+        if not isinstance(artifact, Mapping):
+            continue
+        source = artifact.get("source")
+        variant = artifact.get("variant")
+        if _is_non_empty_string(source) and _is_non_empty_string(variant):
+            dispatch_variants.setdefault(str(source), []).append(str(variant))
+
+    result = {}
+    for unit in units:
+        source = (
+            unit.relative_path
+            if isinstance(unit, ProjectTranslationUnit)
+            else unit.get("path") if isinstance(unit, Mapping) else None
+        )
+        if not _is_non_empty_string(source):
+            continue
+        for target in _normalized_targets(targets):
+            planned = dispatch_variants.get(str(source))
+            result[(str(source), target)] = (
+                tuple(sorted(set(planned)))
+                if planned and target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS
+                else default_variants
+            )
+    return result
+
+
+def _report_dispatch_artifact_records(
+    project: Mapping[str, Any] | None,
+) -> tuple[tuple[int, Mapping[str, Any]], ...]:
+    if not isinstance(project, Mapping):
+        return ()
+    plan = project.get("dispatchArtifactPlan")
+    artifacts = plan.get("artifacts") if isinstance(plan, Mapping) else None
+    return tuple(
+        (index, artifact)
+        for index, artifact in enumerate(_record_sequence(artifacts))
+        if isinstance(artifact, Mapping)
+    )
+
+
+def _report_dispatch_variant_names(
+    project: Mapping[str, Any] | None,
+) -> set[str]:
+    return {
+        str(artifact["variant"])
+        for _index, artifact in _report_dispatch_artifact_records(project)
+        if _is_non_empty_string(artifact.get("variant"))
+    }
+
+
+def _report_dispatch_artifacts_for_record(
+    record: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+) -> tuple[tuple[int, Mapping[str, Any]], ...]:
+    source = record.get("source")
+    target = record.get("target")
+    if not (_is_non_empty_string(source) and _is_non_empty_string(target)):
+        return ()
+    normalized_target = _normalized_targets([str(target)])[0]
+    if normalized_target not in WORKGROUP_SIZE_SPECIALIZATION_TARGETS:
+        return ()
+    return tuple(
+        (index, artifact)
+        for index, artifact in _report_dispatch_artifact_records(project)
+        if artifact.get("source") == source
+    )
+
+
+def _report_dispatch_artifact_for_record(
+    record: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+) -> tuple[int, Mapping[str, Any]] | None:
+    variant = record.get("variant")
+    matches = tuple(
+        (index, artifact)
+        for index, artifact in _report_dispatch_artifacts_for_record(record, project)
+        if artifact.get("variant") == variant
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
+def _artifact_dispatch_artifact_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+) -> list[str]:
+    prefix = f"artifacts[{index}].dispatchArtifact"
+    planned = _report_dispatch_artifacts_for_record(artifact, project)
+    value = artifact.get("dispatchArtifact")
+    if not planned:
+        return (
+            [f"{prefix} must be omitted for an unplanned source and target"]
+            if "dispatchArtifact" in artifact
+            else []
+        )
+
+    variants = sorted(
+        str(record["variant"])
+        for _plan_index, record in planned
+        if _is_non_empty_string(record.get("variant"))
+    )
+    selected = _report_dispatch_artifact_for_record(artifact, project)
+    if selected is None:
+        return [
+            f"artifacts[{index}].variant must select one planned dispatch artifact "
+            f"for this source and target ({', '.join(variants)})"
+        ]
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    plan_index, expected = selected
+    if value != expected:
+        return [f"{prefix} must match project.dispatchArtifactPlan"]
+
+    reasons = []
+    if artifact.get("status") != "translated":
+        return reasons
+    execution = artifact.get("execution")
+    if not isinstance(execution, Mapping):
+        reasons.append(
+            f"artifacts[{index}].execution must record the planned dispatch "
+            "workgroup"
+        )
+    else:
+        execution_entries = [
+            entry
+            for entry in _record_sequence(execution.get("entryPoints"))
+            if isinstance(entry, Mapping)
+        ]
+        workgroup_sizes = (
+            [entry.get("workgroupSize") for entry in execution_entries]
+            if execution_entries
+            else [execution.get("workgroupSize")]
+        )
+        if workgroup_sizes != [expected.get("workgroupSize")]:
+            reasons.append(
+                f"artifacts[{index}].execution must apply the planned dispatch "
+                "workgroup"
+            )
+        planned_subgroup = expected.get("subgroupWidth")
+        if planned_subgroup is not None:
+            subgroup_widths = [
+                entry.get("subgroupWidth") for entry in execution_entries
+            ]
+            if subgroup_widths != [planned_subgroup]:
+                reasons.append(
+                    f"artifacts[{index}].execution must apply the planned dispatch "
+                    "subgroup width"
+                )
+
+    expected_provenance = {
+        "kind": "host-dispatch-contract",
+        "path": f"project.dispatchArtifactPlan.artifacts[{plan_index}]",
+        "variant": expected.get("variant"),
+        "artifactId": expected.get("artifactId"),
+    }
+    planned_constants = expected.get("specializationConstants")
+    if isinstance(planned_constants, Mapping) and planned_constants:
+        constants = artifact.get("specializationConstants")
+        if not isinstance(constants, list):
+            reasons.append(
+                f"artifacts[{index}].specializationConstants must record planned "
+                "dispatch values"
+            )
+        else:
+            matched_indexes = set()
+            for selector, planned_value in planned_constants.items():
+                matches = [
+                    (constant_index, constant)
+                    for constant_index, constant in enumerate(constants)
+                    if isinstance(constant, Mapping)
+                    and (
+                        constant.get("name") == selector
+                        or str(constant.get("id")) == selector
+                    )
+                ]
+                if len(matches) != 1:
+                    reasons.append(
+                        f"artifacts[{index}].specializationConstants must resolve "
+                        f"planned selector {selector} exactly once"
+                    )
+                    continue
+                constant_index, constant = matches[0]
+                matched_indexes.add(constant_index)
+                if constant.get("concreteValue") != planned_value:
+                    reasons.append(
+                        f"artifacts[{index}].specializationConstants[{constant_index}]"
+                        ".concreteValue must match the planned dispatch value"
+                    )
+                if constant.get("valueProvenance") != expected_provenance:
+                    reasons.append(
+                        f"artifacts[{index}].specializationConstants[{constant_index}]"
+                        ".valueProvenance must match the planned dispatch artifact"
+                    )
+            for constant_index, constant in enumerate(constants):
+                if (
+                    isinstance(constant, Mapping)
+                    and constant.get("valueProvenance") == expected_provenance
+                    and constant_index not in matched_indexes
+                ):
+                    reasons.append(
+                        f"artifacts[{index}].specializationConstants[{constant_index}]"
+                        " has unplanned host dispatch provenance"
+                    )
+    return reasons
 
 
 def _artifact_matrix_contract_reasons(
@@ -42222,6 +43586,11 @@ def _artifact_matrix_contract_reasons(
     ):
         return []
     variant_names: list[str | None] = sorted(variants) if variants else [None]
+    variants_by_source_target = _report_translation_variants_by_source_target(
+        project,
+        units,
+        normalized_targets,
+    )
     preserve_source_suffix = _artifact_source_suffix_pairs(units, normalized_targets)
 
     artifact_identities = {
@@ -42239,6 +43608,7 @@ def _artifact_matrix_contract_reasons(
         variant_names,
         preserve_source_suffix,
         artifacts=[artifact for artifact in artifacts if isinstance(artifact, Mapping)],
+        variants_by_source_target=variants_by_source_target,
     )
     reasons = []
     for unit_index, unit in enumerate(units):
@@ -42248,7 +43618,9 @@ def _artifact_matrix_contract_reasons(
         if not (_is_non_empty_string(source) and _is_report_identity_path(source)):
             continue
         for target in normalized_targets:
-            for variant in variant_names:
+            for variant in variants_by_source_target.get(
+                (str(source), target), variant_names
+            ):
                 for identity in (
                     expected
                     for expected in expected_identities
@@ -42288,10 +43660,34 @@ def _expected_artifact_matrix_metadata(
     ):
         return None
 
-    variant_count = len(variants)
-    variant_factor = variant_count if variant_count else 1
     normalized_targets = _normalized_targets(targets)
-    expected_artifact_count = len(units) * len(normalized_targets) * variant_factor
+    variants_by_source_target = _report_translation_variants_by_source_target(
+        project,
+        units,
+        normalized_targets,
+    )
+    default_variants: tuple[str | None, ...] = (
+        tuple(sorted(variants)) if variants else (None,)
+    )
+    source_scoped = any(
+        source_variants != default_variants
+        for source_variants in variants_by_source_target.values()
+    )
+    variant_count = (
+        len(
+            {
+                variant
+                for source_variants in variants_by_source_target.values()
+                for variant in source_variants
+                if variant is not None
+            }
+        )
+        if source_scoped
+        else len(variants)
+    )
+    expected_artifact_count = sum(
+        len(source_variants) for source_variants in variants_by_source_target.values()
+    )
     root = project.get("root")
     output_dir = project.get("outputDir")
     if _is_non_empty_string(root) and _is_non_empty_string(output_dir):
@@ -42311,13 +43707,16 @@ def _expected_artifact_matrix_metadata(
                     for artifact in _record_sequence(artifacts)
                     if isinstance(artifact, Mapping)
                 ],
+                variants_by_source_target=variants_by_source_target,
             )
         )
     return {
         "unitCount": len(units),
         "targetCount": len(normalized_targets),
         "variantCount": variant_count,
-        "variantMode": "named" if variant_count else "none",
+        "variantMode": (
+            "source-scoped" if source_scoped else "named" if variant_count else "none"
+        ),
         "expectedArtifactCount": expected_artifact_count,
     }
 
@@ -44944,6 +46343,234 @@ def _optional_project_field(
     return required or key in project
 
 
+def _dispatch_contract_metadata_reasons(
+    project: Mapping[str, Any], *, require_full_metadata: bool
+) -> list[str]:
+    field_names = (
+        "dispatchContractFiles",
+        "dispatchContractCount",
+        "dispatchVariantCount",
+        "dispatchContracts",
+    )
+    if not require_full_metadata and not any(name in project for name in field_names):
+        return []
+
+    reasons: list[str] = []
+    files = project.get("dispatchContractFiles")
+    records = project.get("dispatchContracts")
+    if not isinstance(files, list) or any(
+        not _is_non_empty_string(path) for path in files
+    ):
+        reasons.append("project.dispatchContractFiles must be an array of strings")
+        files = []
+    elif len(set(files)) != len(files):
+        reasons.append("project.dispatchContractFiles must not contain duplicates")
+
+    if not isinstance(records, list):
+        reasons.append("project.dispatchContracts must be an array")
+        records = []
+
+    count = project.get("dispatchContractCount")
+    if not _is_non_negative_int(count):
+        reasons.append("project.dispatchContractCount must be a non-negative integer")
+    elif count != len(records):
+        reasons.append(
+            "project.dispatchContractCount must match project.dispatchContracts"
+        )
+
+    expected_paths: list[str] = []
+    evaluated_variant_count = 0
+    for index, value in enumerate(records):
+        prefix = f"project.dispatchContracts[{index}]"
+        if not isinstance(value, Mapping):
+            reasons.append(f"{prefix} must be an object")
+            continue
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                prefix,
+                value,
+                frozenset(
+                    (
+                        "path",
+                        "schemaVersion",
+                        "contentIdentity",
+                        "manifest",
+                        "evaluation",
+                    )
+                ),
+            )
+        )
+        path = value.get("path")
+        if not _is_non_empty_string(path):
+            reasons.append(f"{prefix}.path must be a string")
+        else:
+            expected_paths.append(path)
+        if value.get("schemaVersion") != DISPATCH_CONTRACT_SCHEMA_VERSION:
+            reasons.append(
+                f"{prefix}.schemaVersion must be {DISPATCH_CONTRACT_SCHEMA_VERSION}"
+            )
+
+        identity = value.get("contentIdentity")
+        identity_reasons = _hash_contract_reasons(
+            f"{prefix}.contentIdentity",
+            identity,
+            require_closed_fields=True,
+        )
+        reasons.extend(identity_reasons)
+        manifest_payload = value.get("manifest")
+        evaluation_payload = value.get("evaluation")
+        if not isinstance(manifest_payload, Mapping):
+            reasons.append(f"{prefix}.manifest must be an object")
+            continue
+        if not isinstance(evaluation_payload, Mapping):
+            reasons.append(f"{prefix}.evaluation must be an object")
+            continue
+        if evaluation_payload.get("kind") != DISPATCH_CONTRACT_EVALUATION_KIND:
+            reasons.append(
+                f"{prefix}.evaluation.kind must be "
+                f"{DISPATCH_CONTRACT_EVALUATION_KIND}"
+            )
+        manifest_source = evaluation_payload.get("manifestSource")
+        if manifest_source is not None and not _is_non_empty_string(manifest_source):
+            reasons.append(f"{prefix}.evaluation.manifestSource must be a string")
+            continue
+        try:
+            manifest = parse_dispatch_contract(
+                manifest_payload,
+                source=manifest_source,
+            )
+            replay = manifest.evaluate().to_json()
+        except (TypeError, ValueError) as exc:
+            reasons.append(f"{prefix}.manifest is not replayable: {exc}")
+            continue
+        if not identity_reasons and identity != manifest.content_identity.to_json():
+            reasons.append(f"{prefix}.contentIdentity must match the embedded manifest")
+        if value.get("schemaVersion") != manifest.schema_version:
+            reasons.append(f"{prefix}.schemaVersion must match the embedded manifest")
+        if evaluation_payload != replay:
+            reasons.append(
+                f"{prefix}.evaluation must match deterministic manifest replay"
+            )
+        evaluated_variant_count += len(replay["variants"])
+
+    if sorted(expected_paths) != sorted(files):
+        reasons.append(
+            "project.dispatchContracts paths must match project.dispatchContractFiles"
+        )
+    variant_count = project.get("dispatchVariantCount")
+    if not _is_non_negative_int(variant_count):
+        reasons.append("project.dispatchVariantCount must be a non-negative integer")
+    elif variant_count != evaluated_variant_count:
+        reasons.append(
+            "project.dispatchVariantCount must match evaluated dispatch variants"
+        )
+    return reasons
+
+
+def _dispatch_artifact_plan_metadata_reasons(
+    project: Mapping[str, Any],
+    units: Any,
+    *,
+    require_full_metadata: bool,
+) -> list[str]:
+    field_names = ("dispatchArtifactCount", "dispatchArtifactPlan")
+    if not require_full_metadata and not any(name in project for name in field_names):
+        return []
+
+    reasons: list[str] = []
+    count = project.get("dispatchArtifactCount")
+    if not _is_non_negative_int(count):
+        reasons.append("project.dispatchArtifactCount must be a non-negative integer")
+
+    plan = project.get("dispatchArtifactPlan")
+    if not isinstance(plan, Mapping):
+        reasons.append("project.dispatchArtifactPlan must be an object")
+        return reasons
+    if plan.get("kind") != DISPATCH_ARTIFACT_PLAN_KIND:
+        reasons.append(
+            f"project.dispatchArtifactPlan.kind must be {DISPATCH_ARTIFACT_PLAN_KIND}"
+        )
+    if plan.get("schemaVersion") != DISPATCH_ARTIFACT_PLAN_SCHEMA_VERSION:
+        reasons.append(
+            "project.dispatchArtifactPlan.schemaVersion must be "
+            f"{DISPATCH_ARTIFACT_PLAN_SCHEMA_VERSION}"
+        )
+
+    if not isinstance(units, list):
+        reasons.append("project.dispatchArtifactPlan requires report units")
+        return reasons
+    source_units = []
+    for unit in units:
+        path = unit.get("path") if isinstance(unit, Mapping) else None
+        if not _is_non_empty_string(path):
+            reasons.append(
+                "project.dispatchArtifactPlan requires normalized report unit paths"
+            )
+            return reasons
+        source_units.append(str(path))
+
+    records = project.get("dispatchContracts")
+    if not isinstance(records, list):
+        reasons.append(
+            "project.dispatchArtifactPlan requires project.dispatchContracts"
+        )
+        return reasons
+    evaluations = []
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            reasons.append(
+                "project.dispatchArtifactPlan cannot replay a non-object dispatch "
+                f"contract at index {index}"
+            )
+            return reasons
+        manifest_payload = record.get("manifest")
+        evaluation_payload = record.get("evaluation")
+        if not isinstance(manifest_payload, Mapping) or not isinstance(
+            evaluation_payload, Mapping
+        ):
+            reasons.append(
+                "project.dispatchArtifactPlan requires replayable dispatch contract "
+                f"metadata at index {index}"
+            )
+            return reasons
+        manifest_source = evaluation_payload.get("manifestSource")
+        try:
+            manifest = parse_dispatch_contract(
+                manifest_payload,
+                source=(
+                    str(manifest_source)
+                    if _is_non_empty_string(manifest_source)
+                    else None
+                ),
+            )
+            evaluations.append(manifest.evaluate())
+        except (TypeError, ValueError) as exc:
+            reasons.append(
+                "project.dispatchArtifactPlan dispatch contract replay failed at "
+                f"index {index}: {exc}"
+            )
+            return reasons
+
+    try:
+        expected = plan_dispatch_artifacts(
+            tuple(evaluations),
+            source_units=source_units,
+        ).to_json()
+    except (TypeError, ValueError) as exc:
+        reasons.append(f"project.dispatchArtifactPlan replay failed: {exc}")
+        return reasons
+    if plan != expected:
+        reasons.append(
+            "project.dispatchArtifactPlan must match deterministic contract replay"
+        )
+    if _is_non_negative_int(count) and count != expected["artifactCount"]:
+        reasons.append(
+            "project.dispatchArtifactCount must match "
+            "project.dispatchArtifactPlan.artifactCount"
+        )
+    return reasons
+
+
 def _project_metadata_contract_reasons(
     project: Mapping[str, Any], *, require_full_metadata: bool
 ) -> list[str]:
@@ -45434,6 +47061,13 @@ def _project_metadata_contract_reasons(
                 "project.externalCorpusManifest must be a non-empty string or null"
             )
 
+    reasons.extend(
+        _dispatch_contract_metadata_reasons(
+            project,
+            require_full_metadata=require_full_metadata,
+        )
+    )
+
     return reasons
 
 
@@ -45665,7 +47299,10 @@ def _validation_artifact_contract_reasons(
         if not _is_non_empty_string(variant):
             reasons.append(f"{prefix}.variant must be a string")
         elif declared_variants is not None and variant not in declared_variants:
-            reasons.append(f"{prefix}.variant must be listed in project.variants")
+            reasons.append(
+                f"{prefix}.variant must be listed in project.variants or "
+                "project.dispatchArtifactPlan"
+            )
     if "sourceBackend" in artifact:
         reasons.extend(
             _source_backend_contract_reasons(
@@ -45979,7 +47616,10 @@ def _toolchain_run_contract_reasons(
         if not _is_non_empty_string(variant):
             reasons.append(f"{prefix}.variant must be a string")
         elif declared_variants is not None and variant not in declared_variants:
-            reasons.append(f"{prefix}.variant must be listed in project.variants")
+            reasons.append(
+                f"{prefix}.variant must be listed in project.variants or "
+                "project.dispatchArtifactPlan"
+            )
     if "sourceBackend" in run:
         reasons.extend(
             _source_backend_contract_reasons(
@@ -46161,6 +47801,11 @@ def _validation_contract_reasons(
         if project_has_variants and project_variants_valid
         else None
     )
+    validation_variants = (
+        declared_variants | _report_dispatch_variant_names(project)
+        if declared_variants is not None
+        else None
+    )
     artifacts = report.get("artifacts", [])
     declared_artifacts_by_identity: dict[ArtifactIdentity, DeclaredArtifact] | None = (
         None
@@ -46214,7 +47859,7 @@ def _validation_contract_reasons(
                     index,
                     artifact,
                     declared_targets=declared_targets,
-                    declared_variants=declared_variants,
+                    declared_variants=validation_variants,
                     declared_artifact_identities=declared_artifact_identities,
                     declared_artifacts_by_identity=declared_artifacts_by_identity,
                     require_status_fields=summarized_validation,
@@ -46282,7 +47927,7 @@ def _validation_contract_reasons(
                         run,
                         root_path=root_path,
                         declared_targets=declared_targets,
-                        declared_variants=declared_variants,
+                        declared_variants=validation_variants,
                         declared_artifact_identities=declared_artifact_identities,
                         declared_artifacts_by_identity=declared_artifacts_by_identity,
                         require_closed_fields=require_validation,
@@ -48107,6 +49752,15 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 )
             reasons.extend(_duplicate_path_contract_reasons("units", units))
 
+    if isinstance(project, Mapping):
+        reasons.extend(
+            _dispatch_artifact_plan_metadata_reasons(
+                project,
+                units,
+                require_full_metadata=has_summary,
+            )
+        )
+
     skipped = report.get("skipped", [])
     if has_summary and "skipped" not in report:
         reasons.append("skipped must be a list")
@@ -48324,6 +49978,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     f"artifacts[{index}].status must be translated or failed"
                 )
             reasons.extend(
+                _artifact_dispatch_artifact_contract_reasons(
+                    index,
+                    artifact,
+                    project if isinstance(project, Mapping) else None,
+                )
+            )
+            reasons.extend(
                 _artifact_entry_point_contract_reasons(
                     f"artifacts[{index}]",
                     artifact,
@@ -48366,17 +50027,36 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"artifacts[{index}].sourceRemap must be omitted "
                         "for failed artifacts"
                     )
+            dispatch_variants = {
+                str(record["variant"])
+                for _plan_index, record in _report_dispatch_artifacts_for_record(
+                    artifact,
+                    project if isinstance(project, Mapping) else None,
+                )
+                if _is_non_empty_string(record.get("variant"))
+            }
             if "variant" in artifact:
                 if not _is_non_empty_string(variant):
                     reasons.append(f"artifacts[{index}].variant must be a string")
+                elif dispatch_variants and variant not in dispatch_variants:
+                    reasons.append(
+                        f"artifacts[{index}].variant must be listed in "
+                        "project.dispatchArtifactPlan for this source and target"
+                    )
                 elif (
                     has_summary
                     and project_variants_valid
+                    and not dispatch_variants
                     and (variant not in declared_variants)
                 ):
                     reasons.append(
                         f"artifacts[{index}].variant must be listed in project.variants"
                     )
+            elif dispatch_variants:
+                reasons.append(
+                    f"artifacts[{index}].variant must be recorded for a planned "
+                    "dispatch artifact"
+                )
             elif has_summary and project_variants_valid and project_variants:
                 reasons.append(
                     f"artifacts[{index}].variant must be recorded "

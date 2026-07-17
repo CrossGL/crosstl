@@ -28,11 +28,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 14,
-        "endOffset": 247,
+        "endOffset": 252,
         "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
         "length": 27,
         "line": 13,
-        "offset": 220
+        "offset": 225
       },
       "original": {
         "column": 1,
@@ -50,11 +50,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 16,
-        "endOffset": 347,
+        "endOffset": 357,
         "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
-        "length": 83,
+        "length": 88,
         "line": 15,
-        "offset": 264
+        "offset": 269
       },
       "original": {
         "column": 1,

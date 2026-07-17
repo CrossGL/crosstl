@@ -45,6 +45,34 @@ def test_directx_bfloat16_builtin_decodes_and_preserves_return_contract():
     assert f"return __crossgl_bfloat16_to_float(uint({rounded_trunc}));" in generated
 
 
+@pytest.mark.parametrize(
+    ("source_name", "target_name"),
+    [
+        ("exp", "exp"),
+        ("log10", "log10"),
+        ("rint", "round"),
+    ],
+)
+def test_directx_bfloat16_transcendental_builtin_rounds_back_to_bfloat(
+    source_name,
+    target_name,
+):
+    shader = f"""
+    shader ExactBFloatTranscendental {{
+        bfloat16_t transform(bfloat16_t value) {{
+            return {source_name}(value);
+        }}
+    }}
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    decoded = "__crossgl_bfloat16_to_float(uint(value))"
+    assert (
+        "return __crossgl_bfloat16_from_float(float(" f"{target_name}({decoded})));"
+    ) in generated
+
+
 def test_directx_bfloat16_unknown_builtin_still_fails_closed():
     shader = """
     shader UnknownBFloatBuiltin {
@@ -118,11 +146,11 @@ def test_directx_half_and_bfloat_entry_resources_do_not_share_source_type(tmp_pa
     assert payload["summary"]["translatedCount"] == 1
     artifact = payload["artifacts"][0]
     generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
-    assert "StructuredBuffer<half> in_ : register(t0);" in generated
-    assert "RWStructuredBuffer<half> out_ : register(u1);" in generated
+    assert "StructuredBuffer<float16_t> in_ : register(t0);" in generated
+    assert "RWStructuredBuffer<float16_t> out_ : register(u1);" in generated
     assert "StructuredBuffer<uint16_t> copy_bfloat_in : register(t1);" in generated
     assert "RWStructuredBuffer<uint16_t> copy_bfloat_out : register(u2);" in generated
-    assert "void copy_impl_half(StructuredBuffer<half> in_" in generated
+    assert "void copy_impl_half(StructuredBuffer<float16_t> in_" in generated
     assert "void copy_impl_bfloat16_t(StructuredBuffer<uint16_t> in_" in generated
     assert "copy_impl_half(in_, int64_t(0), out_, int64_t(0));" in generated
     assert (

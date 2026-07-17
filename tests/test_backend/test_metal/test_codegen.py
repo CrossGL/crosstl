@@ -19,9 +19,11 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalCallableAliasLoweringError,
     MetalCallableLoweringError,
     MetalIndexedComponentTypeResolutionError,
+    MetalOutOfLineCallOperatorLoweringError,
     MetalSizeofResolutionError,
     MetalSourceOverloadResolutionError,
     MetalStageEntryArrayResourceError,
+    MetalStandardLibraryWrapperLoweringError,
     MetalStaticConstantResolutionError,
     MetalStructMethodCallResolutionError,
     MetalTemplateArgumentResolutionError,
@@ -1307,6 +1309,155 @@ def test_codegen_rebinds_nested_lowered_sibling_calls():
     )
     assert "Reader__post_in(self, crosstl_ptr_input, elem)" in load_body
     assert "post_in(post_in" not in load_body
+
+
+def test_codegen_binds_pinned_mlx_inverse_complex_call_operator_bodies():
+    # Reduced from MLX unary_ops.h at
+    # 4367c73b60541ddd5a266ce4644fd93d20223b6e.
+    source = """
+    struct complex64_t { float real; float imag; };
+    struct Log {};
+    struct Sqrt {};
+
+    struct ArcCos {
+      complex64_t operator()(complex64_t declared_value) const;
+    };
+    struct ArcSin {
+      complex64_t operator()(complex64_t declared_value);
+    };
+    struct ArcTan {
+      complex64_t operator()(complex64_t declared_value);
+    };
+
+    complex64_t ArcCos::operator()(complex64_t x) const {
+      auto i = complex64_t{0.0, 1.0};
+      auto y = Log__operator_call__temporary(
+          x + i * Sqrt__operator_call__temporary(1.0 - x * x));
+      return {y.imag, -y.real};
+    }
+    complex64_t ArcSin::operator()(complex64_t x) {
+      auto i = complex64_t{0.0, 1.0};
+      auto y = Log__operator_call__temporary(
+          i * x + Sqrt__operator_call__temporary(1.0 - x * x));
+      return {y.imag, -y.real};
+    }
+    complex64_t ArcTan::operator()(complex64_t x) {
+      auto i = complex64_t{0.0, 1.0};
+      auto ix = i * x;
+      return (1.0 / complex64_t{0.0, 2.0}) *
+          Log__operator_call__temporary((1.0 + ix) / (1.0 - ix));
+    }
+
+    complex64_t Log__operator_call__temporary(complex64_t x) { return x; }
+    complex64_t Sqrt__operator_call__temporary(complex64_t x) { return x; }
+
+    complex64_t ArcCos__operator_call__complex64_t(
+        thread const ArcCos& self, complex64_t scalar_value) {
+      return metal::precise::acos(scalar_value);
+    }
+    complex64_t ArcSin__operator_call__complex64_t(
+        thread ArcSin& self, complex64_t scalar_value) {
+      return metal::precise::asin(scalar_value);
+    }
+    complex64_t ArcTan__operator_call__complex64_t(
+        thread ArcTan& self, complex64_t scalar_value) {
+      return metal::precise::atan(scalar_value);
+    }
+
+    kernel void inverse_complex(
+        device complex64_t* output [[buffer(0)]], complex64_t value) {
+      ArcCos acos_op;
+      ArcSin asin_op;
+      ArcTan atan_op;
+      output[0] = ArcCos__operator_call__complex64_t(acos_op, value);
+      output[1] = ArcSin__operator_call__complex64_t(asin_op, value);
+      output[2] = ArcTan__operator_call__complex64_t(atan_op, value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source, "mlx-unary-inverse.metal")
+    normalized = normalize(crossgl)
+
+    acos_body = normalized.split("ArcCos__operator_call__complex64_t", 1)[1].split(
+        "}", 1
+    )[0]
+    asin_body = normalized.split("ArcSin__operator_call__complex64_t", 1)[1].split(
+        "}", 1
+    )[0]
+    atan_body = normalized.split("ArcTan__operator_call__complex64_t", 1)[1].split(
+        "}", 1
+    )[0]
+
+    assert "Log__operator_call__temporary" in acos_body
+    assert "Sqrt__operator_call__temporary(1.0 - scalar_value * scalar_value)" in (
+        acos_body
+    )
+    assert "Log__operator_call__temporary" in asin_body
+    assert "Sqrt__operator_call__temporary(1.0 - scalar_value * scalar_value)" in (
+        asin_body
+    )
+    assert "Log__operator_call__temporary" in atan_body
+    assert "acos(scalar_value)" not in crossgl
+    assert "asin(scalar_value)" not in crossgl
+    assert "atan(scalar_value)" not in crossgl
+    assert "ArcCos_u3a_u3aoperator_u28_u29" not in crossgl
+    assert "ArcSin_u3a_u3aoperator_u28_u29" not in crossgl
+    assert "ArcTan_u3a_u3aoperator_u28_u29" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_keeps_out_of_line_call_operator_without_materialized_helper():
+    source = """
+    struct Increment {
+      int operator()(int declared_value) const;
+    };
+
+    int Increment::operator()(int value) const {
+      return value + 1;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source, "increment.metal")
+
+    assert "Increment_u3a_u3aoperator_u28_u29" in crossgl
+    assert "return value + 1;" in crossgl
+    assert "Increment__operator_call" not in crossgl
+
+
+def test_codegen_rejects_ambiguous_out_of_line_call_operator_helpers():
+    source = """struct Increment {
+    int operator()(int value) const;
+};
+
+int Increment::operator()(int value) const {
+    return value + 1;
+}
+
+int Increment__operator_call__int(
+    thread const Increment& self, int value) {
+    return value;
+}
+int Increment__operator_call__int(
+    thread const Increment& self, int value) {
+    return value + 2;
+}
+"""
+    tokens = MetalLexer(source, preprocess=False).tokenize()
+    ast = MetalParser(tokens, file_path="ambiguous-helper.metal").parse()
+
+    with pytest.raises(MetalOutOfLineCallOperatorLoweringError) as exc_info:
+        generate_code(ast)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.metal-out-of-line-call-operator-unresolved"
+    )
+    assert error.owner == "Increment"
+    assert error.reason == "multiple lowered helpers match the declaration contract"
+    assert error.source_location["file"] == "ambiguous-helper.metal"
+    assert error.source_location["line"] == 5
+    assert error.declaration_location["line"] == 2
+    assert [location["line"] for location in error.candidate_locations] == [9, 13]
 
 
 def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
@@ -6963,7 +7114,8 @@ def test_codegen_const_implicit_reference_accessor_reaches_target_backends(tmp_p
             [
                 dxc,
                 "-T",
-                "cs_6_0",
+                "cs_6_2",
+                "-enable-16bit-types",
                 "-E",
                 "CSMain",
                 str(hlsl_path),
@@ -7049,7 +7201,8 @@ def test_codegen_nested_const_reference_alias_reaches_native_targets(tmp_path):
             [
                 dxc,
                 "-T",
-                "cs_6_0",
+                "cs_6_2",
+                "-enable-16bit-types",
                 "-E",
                 "CSMain",
                 str(hlsl_path),
@@ -8145,7 +8298,8 @@ def test_codegen_infers_nested_metal_builtin_results_across_targets(tmp_path):
             [
                 dxc,
                 "-T",
-                "cs_6_0",
+                "cs_6_2",
+                "-enable-16bit-types",
                 "-E",
                 "CSMain",
                 str(hlsl_path),
@@ -8187,8 +8341,14 @@ def test_codegen_prefers_qualified_bfloat_builtin_overload_result():
           bfloat16_t exp(bfloat16_t value) { return value; }
         }
 
+        using namespace metal;
+
         bfloat16_t custom_exp_result(bfloat16_t value) {
           return consume(metal::exp(value));
+        }
+
+        bfloat16_t custom_unqualified_exp_result(bfloat16_t value) {
+          return consume(exp(value));
         }
         """
     reference_source = """
@@ -8216,11 +8376,396 @@ def test_codegen_prefers_qualified_bfloat_builtin_overload_result():
     fast = normalize(convert_without_preprocessing(fast_source))
     assert "return consume__metal_overload_1(exp(value));" in standard
     assert "return consume__metal_overload_2(exp__metal_overload_2(value));" in custom
+    assert (
+        custom.count("return consume__metal_overload_2(exp__metal_overload_2(value));")
+        == 2
+    )
     assert "return consume__metal_overload_1(sincos(value, cosine));" in reference
     assert "return consume__metal_overload_1(exp(value));" in fast
     assert "consume__metal_overload_2(exp(value))" not in fast
     assert "consume__metal_overload_3(exp(value))" not in standard
     assert "consume__metal_overload_3(exp(value))" not in custom
+
+
+def test_codegen_composes_precise_bfloat_extension_with_standard_float_builtin():
+    source = """
+    typedef bfloat bfloat16_t;
+
+    namespace metal {
+    namespace precise {
+      bfloat16_t sqrt(bfloat16_t value) { return value; }
+    }
+    }
+
+    struct complex64_t {
+      float real;
+      float imag;
+
+      template <typename T>
+      complex64_t(T value) : real(float(value)), imag(0.0f) {}
+    };
+
+    bfloat16_t extension_path(bfloat16_t value) {
+      auto result = metal::precise::sqrt(value);
+      return result;
+    }
+
+    complex64_t standard_path(float value) {
+      return (complex64_t)metal::precise::sqrt(value);
+    }
+    """
+
+    normalized = normalize(convert_without_preprocessing(source))
+
+    assert "bfloat16 result = sqrt(value);" in normalized
+    assert "complex64_t crosstl_ctor_complex64_t_1_float(float value)" in normalized
+    assert "return crosstl_ctor_complex64_t_1_float(sqrt(value));" in normalized
+    assert "<unknown>" not in normalized
+
+
+def test_codegen_keeps_metal_stdlib_wrappers_as_non_emitted_builtin_metadata():
+    source = """
+    typedef bfloat bfloat16_t;
+
+    namespace metal {
+    METAL_FUNC bfloat16_t exp(bfloat16_t value) {
+      return bfloat16_t(__metal_exp(float(value)));
+    }
+
+    METAL_FUNC bfloat16_t simd_max(bfloat16_t value) {
+      return bfloat16_t(__metal_simd_max(float(value)));
+    }
+
+    namespace fast {
+    METAL_FUNC bfloat16_t exp(bfloat16_t value) {
+      return bfloat16_t(__metal_fast_math(float(value), __METAL_EXP));
+    }
+    }
+
+    namespace precise {
+    METAL_FUNC bfloat16_t exp(bfloat16_t value) {
+      return bfloat16_t(__metal_precise_math(float(value), __METAL_EXP));
+    }
+    }
+    }
+
+    kernel void wrapper_results(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      bfloat16_t value = bfloat16_t(float(index));
+      auto standard_result = metal::exp(value);
+      auto fast_result = metal::fast::exp(value);
+      auto precise_result = metal::precise::exp(value);
+      auto simd_result = metal::simd_max(value);
+      output[index] = float(
+          standard_result + fast_result + precise_result + simd_result);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    shader = parse_crossgl(crossgl)
+    generated_targets = {
+        "crossgl": crossgl,
+        "directx": TranslatorHLSLCodeGen().generate(shader),
+        "opengl": GLSLCodeGen().generate(shader),
+    }
+    expected_result_types = {
+        "crossgl": "bfloat16",
+        "directx": "uint",
+        "opengl": "float",
+    }
+
+    for target, generated in generated_targets.items():
+        normalized = normalize(generated)
+        result_type = expected_result_types[target]
+        for result_name in (
+            "standard_result",
+            "fast_result",
+            "precise_result",
+            "simd_result",
+        ):
+            assert f"{result_type} {result_name}" in normalized
+        assert generated.count("exp(") == 3
+        assert "simd_max" not in generated
+        assert "__metal_" not in generated
+        assert "__METAL_" not in generated
+        assert "<unknown>" not in generated
+
+    assert "bfloat16 simd_result = bfloat16(WaveActiveMax(float(value)));" in normalize(
+        crossgl
+    )
+    assert (
+        "uint simd_result = __crossgl_bfloat16_from_float("
+        "float(WaveActiveMax(__crossgl_bfloat16_to_float(uint(value)))));"
+        in normalize(generated_targets["directx"])
+    )
+    assert "float simd_result = float(subgroupMax(float(value)));" in normalize(
+        generated_targets["opengl"]
+    )
+
+
+@pytest.mark.parametrize("namespace", ["fast", "precise"])
+def test_codegen_canonicalizes_qualified_log10_stdlib_wrapper(namespace):
+    source = f"""
+    typedef bfloat bfloat16_t;
+
+    namespace metal {{
+    namespace {namespace} {{
+    METAL_FUNC bfloat16_t log10(bfloat16_t value) {{
+      return bfloat16_t(__metal_log10(float(value), true));
+    }}
+    }}
+    }}
+
+    kernel void wrapper_result(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {{
+      bfloat16_t value = bfloat16_t(float(index));
+      auto result = metal::{namespace}::log10(value);
+      output[index] = float(result);
+    }}
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "bfloat16 result = log10(value);" in normalize(crossgl)
+    assert (
+        "uint result = __crossgl_bfloat16_from_float("
+        "float(log10(__crossgl_bfloat16_to_float(uint(value)))));" in normalize(hlsl)
+    )
+    for generated in (crossgl, hlsl):
+        assert generated.count("log10(") == 1
+        assert "__metal_log10" not in generated
+        assert "metal::" not in generated
+        assert "<unknown>" not in generated
+
+
+@pytest.mark.parametrize("namespace", ["fast", "precise"])
+def test_codegen_canonicalizes_qualified_rint_stdlib_wrapper(namespace):
+    source = f"""
+    typedef bfloat bfloat16_t;
+
+    namespace metal {{
+    namespace {namespace} {{
+    METAL_FUNC bfloat16_t rint(bfloat16_t value) {{
+      return bfloat16_t(__metal_rint(float(value), true));
+    }}
+    }}
+    }}
+
+    float4 rounded_values(float4 values, bfloat16_t value) {{
+      auto wrapper_result = metal::{namespace}::rint(value);
+      float4 vector_result = metal::{namespace}::rint(values);
+      return vector_result + float4(float(wrapper_result));
+    }}
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+
+    assert "bfloat16 wrapper_result = rint(value);" in normalize(crossgl)
+    assert "vec4 vector_result = rint(values);" in normalize(crossgl)
+    assert (
+        "uint wrapper_result = __crossgl_bfloat16_from_float("
+        "float(round(__crossgl_bfloat16_to_float(uint(value)))));" in normalize(hlsl)
+    )
+    assert "float4 vector_result = round(values);" in normalize(hlsl)
+    assert "float wrapper_result = roundEven(value);" in normalize(glsl)
+    assert "vec4 vector_result = roundEven(values);" in normalize(glsl)
+    for generated in (crossgl, hlsl, glsl):
+        assert "__metal_rint" not in generated
+        assert "metal::" not in generated
+        assert "<unknown>" not in generated
+
+
+def test_codegen_canonicalizes_qualified_copysign_without_shadowing_user_code():
+    builtin_source = """
+    float4 copy_signs(
+        float magnitude,
+        float sign_source,
+        float4 magnitudes,
+        float4 sign_sources) {
+      auto scalar_result = metal::copysign(magnitude, sign_source);
+      auto vector_result = metal::copysign(magnitudes, sign_sources);
+      return vector_result + float4(scalar_result);
+    }
+    """
+    user_source = """
+    namespace metal {
+    float copysign(float magnitude, float sign_source) {
+      return magnitude + sign_source;
+    }
+    }
+
+    float copy_sign(float magnitude, float sign_source) {
+      return metal::copysign(magnitude, sign_source);
+    }
+    """
+
+    builtin = normalize(convert_without_preprocessing(builtin_source))
+    user = normalize(convert_without_preprocessing(user_source))
+
+    assert "float scalar_result = copysign(magnitude, sign_source);" in builtin
+    assert "vec4 vector_result = copysign(magnitudes, sign_sources);" in builtin
+    assert "float copysign(float magnitude, float sign_source)" in user
+    assert "return magnitude + sign_source;" in user
+    assert "return copysign(magnitude, sign_source);" in user
+
+
+def test_codegen_reports_called_unsupported_metal_stdlib_wrapper():
+    source = """
+    namespace metal {
+    METAL_FUNC float implementation_only(float value) {
+      return __metal_unrepresentable(value);
+    }
+    }
+
+    float use_wrapper(float value) {
+      return metal::implementation_only(value);
+    }
+    """
+
+    with pytest.raises(MetalStandardLibraryWrapperLoweringError) as exc_info:
+        convert_without_preprocessing(
+            source,
+            file_path="unsupported-stdlib-wrapper.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-stdlib-wrapper-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "metal.standard-library-wrapper-lowering",
+    )
+    assert diagnostic.function_name == "metal::implementation_only"
+    assert diagnostic.implementation_intrinsics == ("__metal_unrepresentable",)
+    assert diagnostic.source_location["file"] == "unsupported-stdlib-wrapper.metal"
+    assert diagnostic.source_location["line"] == 9
+
+
+def test_codegen_rejects_mismatched_metal_wave_wrapper_intrinsic():
+    source = """
+    typedef bfloat bfloat16_t;
+
+    namespace metal {
+    METAL_FUNC bfloat16_t simd_max(bfloat16_t value) {
+      return bfloat16_t(__metal_simd_min(float(value)));
+    }
+    }
+
+    bfloat16_t use_wrapper(bfloat16_t value) {
+      return metal::simd_max(value);
+    }
+    """
+
+    with pytest.raises(MetalStandardLibraryWrapperLoweringError) as exc_info:
+        convert_without_preprocessing(
+            source,
+            file_path="mismatched-wave-wrapper.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-stdlib-wrapper-unsupported"
+    )
+    assert diagnostic.function_name == "metal::simd_max"
+    assert diagnostic.implementation_intrinsics == ("__metal_simd_min",)
+    assert diagnostic.source_location["file"] == "mismatched-wave-wrapper.metal"
+    assert diagnostic.source_location["line"] == 11
+
+
+def test_codegen_rejects_metal_wave_wrapper_with_unknown_intrinsic():
+    source = """
+    typedef bfloat bfloat16_t;
+
+    namespace metal {
+    METAL_FUNC bfloat16_t simd_max(bfloat16_t value) {
+      return bfloat16_t(
+          __metal_simd_max(float(value)) + __metal_unrepresentable(float(value)));
+    }
+    }
+
+    bfloat16_t use_wrapper(bfloat16_t value) {
+      return metal::simd_max(value);
+    }
+    """
+
+    with pytest.raises(MetalStandardLibraryWrapperLoweringError) as exc_info:
+        convert_without_preprocessing(
+            source,
+            file_path="unknown-wave-wrapper-intrinsic.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.implementation_intrinsics == (
+        "__metal_simd_max",
+        "__metal_unrepresentable",
+    )
+    assert diagnostic.source_location["file"] == (
+        "unknown-wave-wrapper-intrinsic.metal"
+    )
+    assert diagnostic.source_location["line"] == 12
+
+
+def test_codegen_keeps_unqualified_bfloat_math_user_shadow():
+    source = """
+    typedef bfloat bfloat16_t;
+
+    int abs(float value) {
+      return int(value) + 1;
+    }
+
+    int use_shadow(bfloat16_t value) {
+      auto result = abs(value);
+      return result;
+    }
+    """
+
+    normalized = normalize(convert_without_preprocessing(source))
+
+    assert "int abs(float value)" in normalized
+    assert "int result = abs(value);" in normalized
+    assert "bfloat16 result = abs(value);" not in normalized
+
+
+def test_codegen_reports_ambiguous_unqualified_metal_builtin_result_type():
+    source = """
+    float consume(float value) { return value; }
+    half consume(half value) { return value; }
+
+    float unresolved_builtin(int value) {
+      return consume(exp(value));
+    }
+    """
+
+    with pytest.raises(MetalBuiltinResultTypeResolutionError) as exc_info:
+        convert_without_preprocessing(
+            source,
+            file_path="unqualified-builtin-result.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-builtin-result-unresolved"
+    )
+    assert diagnostic.missing_capabilities == ("metal.builtin-result-type-inference",)
+    assert diagnostic.function_name == "exp"
+    assert diagnostic.argument_types == ("int",)
+    assert diagnostic.reason == (
+        "multiple builtin signatures remain viable after type matching"
+    )
+    assert set(diagnostic.candidates) == {
+        "half exp(half)",
+        "float exp(float)",
+        "double exp(double)",
+    }
+    assert diagnostic.source_location["file"] == "unqualified-builtin-result.metal"
+    assert diagnostic.source_location["line"] == 6
+    assert diagnostic.source_location["column"] == 25
 
 
 @pytest.mark.parametrize(
@@ -8517,7 +9062,7 @@ def test_mlx_distinct_float16_and_bfloat16_overloads_match_project_hlsl(tmp_path
     project = project_path.read_text(encoding="utf-8")
 
     helper_types = {
-        "Divide__operator_call__metal_overload_1": "half",
+        "Divide__operator_call__metal_overload_1": "float16_t",
         "Divide__operator_call__metal_overload_2": "uint",
     }
     for helper, scalar_type in helper_types.items():
@@ -8547,7 +9092,8 @@ def test_mlx_distinct_float16_and_bfloat16_overloads_match_project_hlsl(tmp_path
             [
                 dxc,
                 "-T",
-                "cs_6_0",
+                "cs_6_2",
+                "-enable-16bit-types",
                 "-E",
                 direct_entry_point,
                 str(source_output),
@@ -9229,7 +9775,7 @@ def test_mlx_materialized_collapsed_member_overloads_reach_project_targets(tmp_p
         if target == "directx":
             expected_helpers = source_helpers
             expected_wrappers = source_wrappers
-            helper_types = {half_helper: "half", bfloat_helper: "uint"}
+            helper_types = {half_helper: "float16_t", bfloat_helper: "uint"}
             for helper, scalar_type in helper_types.items():
                 definition_pattern = (
                     rf"{scalar_type} {helper}"
@@ -9268,7 +9814,8 @@ def test_mlx_materialized_collapsed_member_overloads_reach_project_targets(tmp_p
             [
                 dxc,
                 "-T",
-                "cs_6_0",
+                "cs_6_2",
+                "-enable-16bit-types",
                 "-E",
                 "CSMain",
                 str(source_output),

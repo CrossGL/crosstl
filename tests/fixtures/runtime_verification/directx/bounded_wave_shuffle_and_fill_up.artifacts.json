@@ -1,0 +1,84 @@
+{
+  "kind": "crosstl-runtime-artifact-manifest",
+  "project": {
+    "root": ".",
+    "targets": [
+      "directx"
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "directx|tests/fixtures/runtime_verification/directx/bounded_wave_shuffle_and_fill_up.cgl|bounded-segments",
+      "source": "tests/fixtures/runtime_verification/directx/bounded_wave_shuffle_and_fill_up.cgl",
+      "path": "out/directx/bounded_wave_shuffle_and_fill_up.hlsl",
+      "target": "directx",
+      "sourceBackend": "cgl",
+      "stage": "compute",
+      "variant": "bounded-segments",
+      "status": "translated",
+      "entryPoints": [
+        {
+          "name": "CSMain",
+          "stage": "compute",
+          "executionConfig": {
+            "numthreads": [
+              8,
+              1,
+              1
+            ]
+          },
+          "workgroupSize": [
+            8,
+            1,
+            1
+          ]
+        }
+      ],
+      "resourceBindings": [
+        {
+          "id": "buffer|0|values",
+          "name": "values",
+          "kind": "buffer",
+          "type": "StructuredBuffer<uint>",
+          "set": 0,
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "id": "buffer|1|fills",
+          "name": "fills",
+          "kind": "buffer",
+          "type": "StructuredBuffer<uint>",
+          "set": 0,
+          "binding": 1,
+          "access": "read"
+        },
+        {
+          "id": "buffer|0|output",
+          "name": "output",
+          "kind": "buffer",
+          "type": "RWStructuredBuffer<uint>",
+          "set": 0,
+          "binding": 0,
+          "access": "write"
+        }
+      ],
+      "dispatch": {
+        "status": "available",
+        "workgroups": [
+          {
+            "entryPoint": "CSMain",
+            "stage": "compute",
+            "workgroupSize": [
+              8,
+              1,
+              1
+            ],
+            "source": "fixture"
+          }
+        ],
+        "diagnostics": []
+      }
+    }
+  ]
+}

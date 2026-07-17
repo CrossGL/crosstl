@@ -9,7 +9,7 @@ runtime parity, or numerical parity.
 
 ## Evidence Sections
 
-The deterministic `evidence.json` report keeps three results separate.
+The machine-readable `evidence.json` report keeps three results separate.
 Before compilation, it requires and records an `arm64` host architecture.
 
 ### Source Compile And Link
@@ -68,13 +68,18 @@ CMAKE_OSX_DEPLOYMENT_TARGET=26.2
 ```
 
 It builds the `tests` target and runs the aggregate `tests/tests` doctest
-executable once. The gate requires a zero exit status, 260 of 260 cases and
-3,490 of 3,490 assertions passed, and zero skipped cases. Running the aggregate
-executable avoids duplicating per-case process teardown while retaining every
-logical doctest case; this command choice is not a skipped test or coverage
-waiver. The CMake configuration, build, executable hash, aggregate command,
-exit status, counts, and logs are recorded independently from the Python and
-source compile/link evidence.
+executable once. The gate requires a zero exit status, 260 of 260 cases passed,
+zero failed or skipped cases, and every observed assertion to pass. Doctest's
+assertion total counts evaluations performed at runtime rather than a static
+test inventory, and it can differ between otherwise successful executions of
+the pinned suite. The report records that observed total exactly, but the stable
+260-case inventory is the completeness guard. A zero assertion total, any
+failed assertion, or any failed or skipped case fails closed. Running the
+aggregate executable avoids duplicating per-case process teardown while
+retaining every logical doctest case; this command choice is not a skipped test
+or coverage waiver. The CMake configuration, build, executable hash, aggregate
+command, exit status, counts, and logs are recorded independently from the
+Python and source compile/link evidence.
 
 ## Running Locally
 

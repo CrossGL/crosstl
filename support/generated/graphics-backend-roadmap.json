@@ -1621,7 +1621,7 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_vector_constructor_scalar_splats_expand_for_dxc",
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_float16_matrix_ir_aliases_map_to_half_matrices"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_float16_matrix_ir_aliases_map_to_native_matrices"
           ],
           "notes": "",
           "status": "supported"
@@ -2267,6 +2267,62 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_rejects_crossgl_function_like_native_macro_form"
           ],
           "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, selected-variant lists, and per-variant define counts, records report CLI variant metadata, records each artifact applied define map and define-processing status (forwarded, not-requested, or not-supported) with source frontend support metadata, emits warning diagnostics and missing-capability rollups when configured defines cannot be forwarded by a source frontend, emits scan-time diagnostics for active #error and #warning directives scoped by project and selected variant conditionals, emits warning diagnostics when active #define or #undef directives in translation units or resolved include files shadow configured project or selected variant define names while ignoring block-commented directives, inspection summaries and text output expose variant names, selected-variant summaries for scoped runs, and per-variant define counts without define values plus define-processing status, target, source-backend, and variant rollups plus sampled define-processing artifact metadata with define names, deterministic define fingerprints, and without define values, validates malformed define/variant metadata including empty mapping keys, punctuation-bearing variant keys in config/report diagnostics, and forged variant define counts, duplicate selected variant metadata, undeclared artifact and validation-record variants, missing artifact define maps, artifact define maps that do not match base defines merged with the artifact variant, malformed or forged artifact define-processing metadata including unexpected generated processing fields, and define-processing summary rollup mismatches including target and variant rollups, missing define-processing target and variant rollups, rejects malformed define, variant, and selected-variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, verifies define-forwarding metadata for every registered source frontend, applies object-like define expansion and #if/#ifdef/#ifndef/#elif/#else/#endif branch selection in the CrossGL source frontend when defines are provided, applies named-variant define maps through OpenGL/GLSL native preprocessing during project translation, applies named-variant define maps through DirectX/HLSL native preprocessing during project translation, applies named-variant define maps through Metal/MSL native preprocessing during project translation, applies named-variant define maps through CUDA/HIP native preprocessing during project translation, applies named-variant define maps through Slang native preprocessing during project translation, applies named-variant define maps through Vulkan native preprocessing during project translation, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides, and supports configured selected_variants defaults plus API, scan/report CLI, and translation CLI scoped runs for selected declared variants, de-duplicates repeated selections before scan or artifact planning, and does not claim omitted variants as attempted, and sanitizes unsafe variant names into stable output path segments while retaining original variant labels in reports and validation rollups. Project inspection exposes project-level define names and deterministic define fingerprints, variant define names, and deterministic per-variant define fingerprints without define values. Define-processing inspection summaries expose redacted project define names, deterministic define fingerprints, selected variant names, per-variant define records, and artifact effective define fingerprints without define values. Project scanning classifies backend-native macro semantics for project planning: ordinary object-like defines, function-like defines, variadic macros, stringification, token-pasting macros, and preserved directives such as #pragma are accepted without diagnostics for source frontends with native macro expansion, while CrossGL source preprocessing accepts object-like defines and conditionals but rejects function-like native macro forms. Unsupported forms such as __VA_OPT__, charizing macro operators, unknown directives, malformed defines, and native #define/#undef directives on source frontends without define forwarding emit structured project.scan.unsupported-macro-form diagnostics with sourceBackend, variant, location, and macro.native missing-capability metadata across every registered source frontend.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
+      "description": "Load versioned host dispatch manifests, evaluate finite records deterministically, and embed replay-validatable metadata in project reports.",
+      "id": "project.host_dispatch_contract_import",
+      "name": "Bounded host dispatch contract import",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ],
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ],
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ],
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
           "status": "supported"
         }
       }
@@ -4677,12 +4733,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 75,
+    "feature_count": 76,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 73,
+        "supported": 74,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -4690,7 +4746,7 @@
       "metal": {
         "diagnostic": 4,
         "partial": 0,
-        "supported": 68,
+        "supported": 69,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 3
@@ -4698,7 +4754,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 72,
+        "supported": 73,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1

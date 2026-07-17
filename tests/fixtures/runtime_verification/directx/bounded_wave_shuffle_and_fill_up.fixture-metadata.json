@@ -1,0 +1,132 @@
+{
+  "kind": "crosstl-project-runtime-fixture-metadata",
+  "metadata": {
+    "fixtureSet": "directx-wave-runtime-proofs"
+  },
+  "fixtures": [
+    {
+      "id": "directx-bounded-wave-shuffle-and-fill-up-u32",
+      "selector": {
+        "source": "tests/fixtures/runtime_verification/directx/bounded_wave_shuffle_and_fill_up.cgl",
+        "target": "directx",
+        "variant": "bounded-segments"
+      },
+      "inputs": [
+        {
+          "name": "values",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            8
+          ],
+          "values": [
+            11,
+            13,
+            17,
+            19,
+            23,
+            29,
+            31,
+            37
+          ]
+        },
+        {
+          "name": "fills",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            8
+          ],
+          "values": [
+            101,
+            103,
+            107,
+            109,
+            113,
+            127,
+            131,
+            137
+          ]
+        }
+      ],
+      "expectedOutputs": [
+        {
+          "name": "output",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            8
+          ],
+          "values": [
+            103,
+            11,
+            109,
+            17,
+            127,
+            23,
+            137,
+            31
+          ]
+        }
+      ],
+      "runtimeAdapter": {
+        "id": "directx-bounded-wave-shuffle-contract-v1",
+        "entryPoints": [
+          {
+            "name": "CSMain",
+            "stage": "compute",
+            "workgroupSize": [
+              8,
+              1,
+              1
+            ]
+          }
+        ],
+        "resourceBindings": [
+          {
+            "name": "values",
+            "kind": "buffer",
+            "binding": 0,
+            "access": "read",
+            "value": "values"
+          },
+          {
+            "name": "fills",
+            "kind": "buffer",
+            "binding": 1,
+            "access": "read",
+            "value": "fills"
+          },
+          {
+            "name": "output",
+            "kind": "buffer",
+            "binding": 0,
+            "access": "write",
+            "value": "output"
+          }
+        ],
+        "dispatch": {
+          "entryPoint": "CSMain",
+          "globalSize": [
+            8,
+            1,
+            1
+          ]
+        }
+      },
+      "metadata": {
+        "proof": "bounded-wave-shuffle-and-fill-up-segment-values",
+        "testCommand": [
+          "python",
+          "-m",
+          "pytest",
+          "-n",
+          "auto",
+          "tests/test_translator/test_native_runtime_drivers.py",
+          "-k",
+          "directx_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device"
+        ]
+      }
+    }
+  ]
+}

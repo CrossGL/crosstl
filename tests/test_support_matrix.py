@@ -175,6 +175,65 @@ def test_current_supported_rows_have_evidence():
     assert rows == []
 
 
+def test_project_host_dispatch_contract_import_is_bounded_and_evidenced():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    roadmap = json.loads(
+        (ROOT / "support" / "generated" / "project-porting-roadmap.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.host_dispatch_contract_import"]
+    roadmap_ids = {item["id"] for item in roadmap["features"]}
+    expected_evidence = {
+        (
+            "tests/test_translator/test_dispatch_contracts.py::def "
+            "test_loads_normalization_contract_with_sha256_identity_and_provenance"
+        ),
+        (
+            "tests/test_translator/test_dispatch_contracts.py::def "
+            "test_evaluates_mlx_like_normalization_variants_without_guessing_"
+            "device_limits"
+        ),
+        (
+            "tests/test_translator/test_project_dispatch_contract_import.py::def "
+            "test_project_config_loads_and_evaluates_dispatch_contracts"
+        ),
+        (
+            "tests/test_translator/test_project_dispatch_contract_import.py::def "
+            "test_project_report_embeds_replayable_dispatch_contract_metadata"
+        ),
+        (
+            "tests/test_translator/test_project_dispatch_contract_import.py::def "
+            "test_project_report_validation_rejects_tampered_dispatch_metadata"
+        ),
+        (
+            "tests/test_dispatch_contract_cli.py::def "
+            "test_project_commands_accept_repeatable_dispatch_contracts"
+        ),
+    }
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Bounded host dispatch contract import"
+    assert "versioned host dispatch manifests" in feature["description"]
+    assert feature["id"] in roadmap_ids
+
+    for backend in matrix["backends"]:
+        support = feature["support"][backend["id"]]
+        assert support["status"] == "supported"
+        assert expected_evidence <= set(support["evidence"])
+        assert "evaluate finite record sets deterministically" in support["notes"]
+        assert "replays embedded manifests" in support["notes"]
+        assert "does not generate artifact variants" in support["notes"]
+        assert "execute a runtime" in support["notes"]
+        assert "establish numerical parity" in support["notes"]
+        assert "#1793" in support["notes"]
+
+
 def test_generated_target_only_backend_aliases_are_visible_as_target_aliases():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

@@ -104,11 +104,11 @@ def _prepare_reduced_rms_norm_checkout(module, tmp_path, monkeypatch):
     host_entry_points = _load_rms_norm_fixture_metadata()["hostNamedEntryPoints"]
     instantiations = []
     for index, entry_point in enumerate(host_entry_points):
-        template = (
-            "rms_looped_fixture"
-            if "_looped" in entry_point
-            else "rms_single_row_fixture"
+        template_prefix = "vjp_rms" if entry_point.startswith("vjp_rms") else "rms"
+        template_suffix = (
+            "looped_fixture" if "_looped" in entry_point else "single_row_fixture"
         )
+        template = f"{template_prefix}_{template_suffix}"
         instantiations.append(
             f'instantiate_kernel("{entry_point}", {template}, {index})'
         )
@@ -121,16 +121,61 @@ constant bool has_w [[function_constant(20)]];
 template <int TAG>
 [[kernel]] void rms_single_row_fixture(
     device float* output [[buffer(0)]],
-    uint index [[thread_position_in_grid]]) {
-  output[index] = (has_w ? 1.0f : 0.0f) + float(TAG);
+    uint index [[thread_position_in_grid]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
+  constexpr int SIMD_SIZE = 32;
+  float value = float(TAG + SIMD_SIZE);
+  value = simd_sum(value);
+  value = simd_sum(value + float(simd_lane_id + simd_group_id));
+  output[index] = value;
 }
 
 template <int TAG>
 [[kernel]] void rms_looped_fixture(
     device float* output [[buffer(0)]],
     uint index [[thread_position_in_grid]],
-    uint lsize [[threads_per_threadgroup]]) {
-  output[index] = (has_w ? 1.0f : 0.0f) + float(TAG) + float(lsize);
+    uint lsize [[threads_per_threadgroup]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
+  constexpr int SIMD_SIZE = 32;
+  float value = float(TAG + SIMD_SIZE + lsize);
+  value = simd_sum(value);
+  value = simd_sum(value + float(simd_lane_id + simd_group_id));
+  output[index] = value;
+}
+
+template <int TAG>
+[[kernel]] void vjp_rms_single_row_fixture(
+    device float* output [[buffer(0)]],
+    uint index [[thread_position_in_grid]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
+  constexpr int SIMD_SIZE = 32;
+  float value =
+      (has_w ? 1.0f : 0.0f) + float(TAG + SIMD_SIZE + simd_lane_id + simd_group_id);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  output[index] = value;
+}
+
+template <int TAG>
+[[kernel]] void vjp_rms_looped_fixture(
+    device float* output [[buffer(0)]],
+    uint index [[thread_position_in_grid]],
+    uint lsize [[threads_per_threadgroup]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
+  constexpr int SIMD_SIZE = 32;
+  float value = (has_w ? 1.0f : 0.0f) +
+      float(TAG + SIMD_SIZE + lsize + simd_lane_id + simd_group_id);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  output[index] = value;
 }
 
 """ + "\n".join(instantiations) + "\n",
@@ -1918,8 +1963,19 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_frontier["runtime_integration_included"] is False
     assert opengl_frontier["runtime_parity_claimed"] is False
 
+    opengl_quantized = expected_gaps["opengl_quantized_frontier_status"]
+    assert opengl_quantized == module.MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE
+    assert opengl_quantized["artifact_emitted"] is False
+    assert opengl_quantized["native_validation_attempted"] is False
+
     directx = expected_gaps["directx_toolchain_status"]
     assert directx["compiler"] == {"name": "dxc", "version": "v1.9.2602.24"}
+    assert directx["warning_evidence"] == (
+        module.MLX_DIRECTX_TOOLCHAIN_WARNING_EVIDENCE
+    )
+    assert directx["selected_quantized_frontier"] == (
+        module.MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE
+    )
     assert directx["dxc_validated_sources"] == list(
         module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     )
@@ -5965,6 +6021,25 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     directx_toolchain_count = len(module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
     commands = []
 
+    def warning_stderr(source, relative_path):
+        lines = []
+        warning_index = 1
+        for contract in module.MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS:
+            if contract["source"] != source:
+                continue
+            for source_line in contract["sourceLines"]:
+                for _ in range(source_line["occurrencesPerRun"]):
+                    lines.extend(
+                        (
+                            f"{relative_path}:{warning_index}:1: warning: "
+                            f"{contract['message']}",
+                            source_line["text"],
+                            "^",
+                        )
+                    )
+                    warning_index += 1
+        return "\n".join(lines)
+
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         commands.append((name, list(command)))
         returncode = 0
@@ -6011,6 +6086,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
                                     relative_path,
                                 ],
                                 "status": "ok",
+                                "stderr": warning_stderr(source, relative_path),
                             }
                         )
             _write_clean_frontier_report(
@@ -6067,6 +6143,9 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     )
     assert result["semanticReadinessStatus"] == "not-established"
     assert result["directxValidationStatus"] == "validated"
+    assert result["directxToolchainWarningEvidence"] == (
+        module.MLX_DIRECTX_TOOLCHAIN_WARNING_EVIDENCE
+    )
     assert result["bfloat16LoweringEvidence"] == (
         module.MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE
     )
@@ -6091,11 +6170,42 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         assert source in toolchain_config
 
 
+@pytest.mark.parametrize("warning_drift", ("missing", "unexpected"))
+def test_directx_toolchain_warning_contract_rejects_drift(warning_drift):
+    module = _load_harness()
+    warnings = [
+        (contract["message"], source_line["text"])
+        for contract in module.MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS
+        if contract["source"] == module.MLX_ARANGE_SOURCE
+        for source_line in contract["sourceLines"]
+        for _ in range(source_line["occurrencesPerRun"])
+    ]
+    if warning_drift == "missing":
+        warnings.pop()
+    else:
+        warnings.append(("new target warning [-Wconversion]", "value = wider;"))
+    stderr = "\n".join(
+        line
+        for index, (message, source_line) in enumerate(warnings, start=1)
+        for line in (
+            f"generated.hlsl:{index}:1: warning: {message}",
+            source_line,
+            "^",
+        )
+    )
+
+    with pytest.raises(module.PortingCheckError, match="toolchain warnings changed"):
+        module._directx_toolchain_warning_evidence(
+            [{"source": module.MLX_ARANGE_SOURCE, "stderr": stderr}]
+        )
+
+
 def test_directx_bfloat16_lowering_evidence_matches_pinned_report():
     module = _load_harness()
     native_storage_sources = {
         module.MLX_ARANGE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
+        module.MLX_RANDOM_SOURCE,
         module.MLX_ROPE_SOURCE,
         module.MLX_TERNARY_SOURCE,
     }
@@ -6271,7 +6381,20 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
     )
     assert {
         f"https://github.com/CrossGL/crosstl/issues/{issue}"
-        for issue in (1694, 1695, 1701, 1728)
+        for issue in (
+            1474,
+            1694,
+            1695,
+            1701,
+            1726,
+            1728,
+            1750,
+            1784,
+            1787,
+            1789,
+            1790,
+            1792,
+        )
     } <= set(module.RESOLVED_FRONTIER_ISSUES)
     assert set(module.RESOLVED_FRONTIER_ISSUES) <= set(gaps["resolved_issues"])
     assert not set(module.RESOLVED_FRONTIER_ISSUES) & set(gaps["tracked_issues"])
@@ -6298,9 +6421,7 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
     assert "`uint-low-16-bits` register representation" in normalized_readme
     assert "round-to-nearest, ties-to-even conversion" in normalized_readme
     assert "`directx.native-16bit-types` capability" in normalized_readme
-    assert "storage as `not-required` with no required capability" in (
-        normalized_readme
-    )
+    assert "All five emitted sources require" in normalized_readme
     assert "fails closed if either field is missing or changes" in normalized_readme
     assert "storage, conversion, report, and compiler evidence only" in (
         normalized_readme
@@ -6310,12 +6431,137 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
     assert "does not extend the bounded runtime proof to bfloat16" in (
         normalized_readme
     )
-    for issue in (1694, 1695, 1696, 1701, 1728, 1750, 1542, 1537):
+    for issue in (1694, 1695, 1696, 1701, 1728, 1793, 1542, 1537):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
+    assert "https://github.com/CrossGL/crosstl/issues/1750" not in readme
     assert "does not dispatch these kernels or establish numerical parity" in (
         normalized_readme
     )
     assert "DirectX remains outside the DXC gate" not in readme
+
+
+def test_selected_quantized_frontiers_record_current_target_boundaries():
+    module = _load_harness()
+    readme = MLX_README_PATH.read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
+
+    assert "Native 16-bit HLSL emission" in normalized_readme
+    assert "concrete `static_assert` evaluation" in normalized_readme
+    assert "Official DXC validation" in normalized_readme
+    assert "`-enable-16bit-types`, and `-WX` passes" in normalized_readme
+    assert "four pinned warning contracts" in normalized_readme
+    assert "22 warnings across 11 arange runs" in normalized_readme
+    assert "four across two random runs" in normalized_readme
+    assert "108 across 18 rope runs" in normalized_readme
+    assert "exact messages, generated source expressions, and multiplicities" in (
+        normalized_readme
+    )
+    assert "rejects missing, additional, or changed warnings" in normalized_readme
+    assert "not a clean `-WX` contract" in normalized_readme
+    assert "general native-profile helper contract under #1799 remains open" in (
+        normalized_readme
+    )
+    assert "general destination-conversion contract remains open" in (normalized_readme)
+    assert "cross-version compiler invariant" in normalized_readme
+    assert (
+        "`out_[uint((out_index + 4))] = " "uint(((output & 1095216660480ull) >> 32));`"
+    ) in normalized_readme
+    assert "advances through the logical `static_assert`" in normalized_readme
+    assert "`affine_gather_qmv_fast_float_gs_32_b_2`" in readme
+    assert "`directx.private-pointer-parameter-lowering`" in readme
+    assert "`missing-fixed-array-extent`" in readme
+    assert "`values_per_thread = 2`" in readme
+    assert "No target artifact is emitted" in normalized_readme
+    assert "`project.translate.opengl-index-type-unsupported`" in readme
+    assert "`w[in_index + i]`" in readme
+    assert "source index is `uint64_t`" in normalized_readme
+    assert "legal target index is `uint`" in normalized_readme
+    assert "source range is unproven" in normalized_readme
+    assert "No OpenGL target artifact is emitted" in normalized_readme
+    assert "native validation is not run" in normalized_readme
+    for issue in (1497, 1515, 1799, 1800, 1801, 1802):
+        assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
+
+    directx = module.MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE
+    assert directx["status"] == "translated-dxc-validated"
+    assert directx["artifact_count"] == 1
+    assert directx["translation_diagnostic_count"] == 0
+    assert directx["generated_hlsl"] == {
+        "sha256": "c2737b9d324578209c15899cb9a1dad94697b041c0bcfd0c1276a809d36f8f88",
+        "size_bytes": 5737,
+    }
+    assert directx["concrete_static_assertion_evaluation"] == {
+        "status": "resolved-for-selected-entry",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1800",
+        "remaining_static_assertion_count": 0,
+    }
+    assert directx["compiler_validation"] == {
+        "compiler": "dxc",
+        "profile": "cs_6_2",
+        "compiler_arguments": ["-enable-16bit-types"],
+        "warnings_as_errors": True,
+        "status": "passed",
+        "observed_failure_count": 0,
+        "contextual_narrowing": {
+            "status": "resolved-for-selected-entry",
+            "issue": "https://github.com/CrossGL/crosstl/issues/1801",
+            "resource": "out_",
+            "resource_element_type": "uint",
+            "value_type": "uint64_t",
+            "generated_store": (
+                "out_[uint((out_index + 4))] = "
+                "uint(((output & 1095216660480ull) >> 32));"
+            ),
+        },
+    }
+    assert directx["runtime_execution_attempted"] is False
+    assert directx["numerical_parity_claimed"] is False
+
+    adjacent = module.MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE
+    assert adjacent["selected_entry_point"] == (
+        "affine_gather_qmv_fast_float_gs_32_b_2"
+    )
+    assert adjacent["project_translation"] == {
+        "unit_count": 1,
+        "artifact_record_count": 1,
+        "translated_count": 0,
+        "failed_count": 1,
+        "emitted_target_file_count": 0,
+        "project_diagnostic_count": 1,
+    }
+    assert adjacent["diagnostic"] == {
+        "code": "project.translate.directx-private-pointer-unsupported",
+        "missing_capability": "directx.private-pointer-parameter-lowering",
+        "private_pointer": {
+            "function": "load_vector_float_float_values_per_thread_2",
+            "parameter": "x_thread",
+            "reason": "missing-fixed-array-extent",
+        },
+        "message": (
+            "DirectX private pointer parameter "
+            "'load_vector_float_float_values_per_thread_2.x_thread' has no "
+            "provable bounded span"
+        ),
+    }
+    assert adjacent["source_contract"] == {
+        "helper": "load_vector<T, U, values_per_thread, bits>",
+        "caller_array": "thread U x_thread[values_per_thread]",
+        "specialized_extent": 2,
+    }
+    assert adjacent["artifact_emitted"] is False
+    assert adjacent["native_validation_attempted"] is False
+    assert adjacent["runtime_execution_attempted"] is False
+    assert adjacent["numerical_parity_claimed"] is False
+
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (
+        gaps["directx_toolchain_status"]["selected_quantized_private_pointer_boundary"]
+        == adjacent
+    )
 
 
 def test_opengl_index_range_contract_is_documented_as_a_portability_precondition():
@@ -6345,16 +6591,32 @@ def test_opengl_index_range_contract_is_documented_as_a_portability_precondition
             assert f"`{expression}`" in readme
 
 
-def test_binary_resource_relocation_issue_is_full_corpus_only():
+def test_closed_project_blockers_are_recorded_as_resolved():
     module = _load_harness()
-    issue = "https://github.com/CrossGL/crosstl/issues/1659"
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    resolved_issues = {
+        f"https://github.com/CrossGL/crosstl/issues/{number}"
+        for number in (1312, 1472, 1476, 1516, 1659, 1672, 1800)
+    }
 
-    assert issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
-    assert issue not in module.FRONTIER_VALIDATION_TRACKED_ISSUES
-    assert issue not in module.RUNTIME_READINESS_TRACKED_ISSUES
+    assert resolved_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
+    assert resolved_issues <= set(gaps["resolved_issues"])
+    assert resolved_issues.isdisjoint(module.FULL_CORPUS_TRACKED_ISSUES)
+    assert resolved_issues.isdisjoint(gaps["tracked_issues"])
+    assert resolved_issues.isdisjoint(gaps["runtime_readiness_status"]["blocked_by"])
+    for blocker_kind in (
+        "translation_blocked_by",
+        "validation_blocked_by",
+        "semantic_blocked_by",
+    ):
+        assert resolved_issues.isdisjoint(gaps["full_corpus_scout"][blocker_kind])
 
 
-def test_new_pin_resource_profile_and_workgroup_contracts_are_tracked():
+def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked():
     module = _load_harness()
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -6364,27 +6626,101 @@ def test_new_pin_resource_profile_and_workgroup_contracts_are_tracked():
     resource_issue = "https://github.com/CrossGL/crosstl/issues/1669"
     profile_issue = "https://github.com/CrossGL/crosstl/issues/1670"
     workgroup_issue = "https://github.com/CrossGL/crosstl/issues/1671"
-    struct_constant_issue = "https://github.com/CrossGL/crosstl/issues/1672"
+    checkpoint_issue = "https://github.com/CrossGL/crosstl/issues/1576"
+    resolved_validation_issues = {"https://github.com/CrossGL/crosstl/issues/1800"}
+    native_profile_issue = "https://github.com/CrossGL/crosstl/issues/1799"
+    narrowing_issue = "https://github.com/CrossGL/crosstl/issues/1801"
+    arithmetic_conversion_issue = "https://github.com/CrossGL/crosstl/issues/1802"
+    static_assertion_issue = "https://github.com/CrossGL/crosstl/issues/1800"
+    private_pointer_issue = "https://github.com/CrossGL/crosstl/issues/1497"
+    opengl_index_issue = module.OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE
 
     assert resource_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert resource_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert profile_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert workgroup_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert workgroup_issue in module.FULL_CORPUS_TRACKED_ISSUES
-    assert struct_constant_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
-    assert struct_constant_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert checkpoint_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert checkpoint_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert module.FULL_CORPUS_VALIDATION_TRACKED_ISSUES == (profile_issue,)
+    assert native_profile_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert narrowing_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert arithmetic_conversion_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert static_assertion_issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert private_pointer_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert private_pointer_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert opengl_index_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert opengl_index_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert resolved_validation_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
+    assert resolved_validation_issues.isdisjoint(module.FULL_CORPUS_TRACKED_ISSUES)
     assert resource_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert profile_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert workgroup_issue not in module.RESOLVED_FRONTIER_ISSUES
-    assert struct_constant_issue not in module.RESOLVED_FRONTIER_ISSUES
+    assert native_profile_issue not in module.RESOLVED_FRONTIER_ISSUES
+    assert narrowing_issue not in module.RESOLVED_FRONTIER_ISSUES
+    assert arithmetic_conversion_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert resource_issue in gaps["tracked_issues"]
     assert profile_issue in gaps["tracked_issues"]
     assert workgroup_issue in gaps["tracked_issues"]
-    assert struct_constant_issue in gaps["tracked_issues"]
+    assert checkpoint_issue in gaps["tracked_issues"]
+    assert native_profile_issue in gaps["tracked_issues"]
+    assert narrowing_issue in gaps["tracked_issues"]
+    assert arithmetic_conversion_issue in gaps["tracked_issues"]
+    assert native_profile_issue not in gaps["resolved_issues"]
+    assert narrowing_issue not in gaps["resolved_issues"]
+    assert arithmetic_conversion_issue not in gaps["resolved_issues"]
+    assert static_assertion_issue not in gaps["tracked_issues"]
+    assert static_assertion_issue in module.RESOLVED_FRONTIER_ISSUES
+    assert static_assertion_issue in gaps["resolved_issues"]
+    assert private_pointer_issue in gaps["tracked_issues"]
+    assert opengl_index_issue in gaps["tracked_issues"]
+    assert resolved_validation_issues <= set(gaps["resolved_issues"])
+    assert resolved_validation_issues.isdisjoint(gaps["tracked_issues"])
     assert resource_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert profile_issue in gaps["full_corpus_scout"]["validation_blocked_by"]
     assert workgroup_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
-    assert struct_constant_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert checkpoint_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert native_profile_issue in gaps["full_corpus_scout"]["semantic_blocked_by"]
+    assert narrowing_issue in gaps["full_corpus_scout"]["semantic_blocked_by"]
+    assert (
+        arithmetic_conversion_issue in gaps["full_corpus_scout"]["semantic_blocked_by"]
+    )
+    assert gaps["full_corpus_scout"]["validation_blocked_by"] == [
+        profile_issue,
+    ]
+    assert private_pointer_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert opengl_index_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert resolved_validation_issues.isdisjoint(
+        gaps["full_corpus_scout"]["validation_blocked_by"]
+    )
+
+
+def test_latest_full_corpus_attempt_records_interruption_without_coordinate_claim():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    attempt = gaps["full_corpus_scout"]["latest_attempt"]
+    assert attempt == {
+        "commit": module.MLX_COMMIT,
+        "outcome": "timeout-before-report",
+        "timeout_seconds": module.FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS,
+        "return_code": 124,
+        "report_produced": False,
+        "generated_file_count": 8,
+        "active_coordinate_claimed": False,
+        "completed_target_artifacts": {
+            module.MLX_ARANGE_SOURCE: ["directx", "opengl", "vulkan"]
+        },
+        "partial_target_artifacts": {module.MLX_ARG_REDUCE_SOURCE: ["vulkan"]},
+        "blocked_by": [
+            "https://github.com/CrossGL/crosstl/issues/1376",
+            "https://github.com/CrossGL/crosstl/issues/1576",
+        ],
+    }
 
 
 def test_fft_opengl_evidence_records_provenance_without_artifact_claims():
@@ -6962,7 +7298,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     )
 
 
-def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
+def test_rms_norm_contract_fixture_matches_pinned_translation_scope():
     module = _load_rms_norm_harness()
     metadata = _load_rms_norm_fixture_metadata()
 
@@ -6970,12 +7306,32 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
     assert module.MLX_RMS_NORM_SHA256 == (
         "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee"
     )
+    assert module.RMS_NORM_SUBGROUP_WIDTH == 32
+    assert module.RMS_NORM_DIRECTX_PROFILE == "cs_6_6"
     assert metadata["upstreamSourceReplacement"] is False
     assert metadata["functionConstant"] == {
         "name": module.RMS_NORM_FUNCTION_CONSTANT_NAME,
         "id": module.RMS_NORM_FUNCTION_CONSTANT_ID,
         "required": True,
+        "requiredByEntryPoints": list(module.RMS_NORM_VJP_ENTRY_POINTS),
+        "absentFromEntryPoints": list(module.RMS_NORM_FORWARD_ENTRY_POINTS),
     }
+    assert module.RMS_NORM_FORWARD_ENTRY_POINTS == (
+        "rms_loopedbfloat16",
+        "rms_loopedfloat16",
+        "rms_loopedfloat32",
+        "rmsbfloat16",
+        "rmsfloat16",
+        "rmsfloat32",
+    )
+    assert module.RMS_NORM_VJP_ENTRY_POINTS == (
+        "vjp_rms_loopedbfloat16",
+        "vjp_rms_loopedfloat16",
+        "vjp_rms_loopedfloat32",
+        "vjp_rmsbfloat16",
+        "vjp_rmsfloat16",
+        "vjp_rmsfloat32",
+    )
     assert module.RMS_NORM_HOST_ENTRY_POINTS == (
         "rms_loopedbfloat16",
         "rms_loopedfloat16",
@@ -7011,8 +7367,12 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
     }
     assert metadata["directx"] == {
         "profile": module.RMS_NORM_DIRECTX_PROFILE,
+        "minimumShaderModel": "6.6",
+        "requiredSubgroupWidth": 32,
+        "subgroupWidthEnforcement": "WaveSize(32)",
         "libraryArtifactCount": 2,
         "hostNamedEntryCountPerArtifact": 12,
+        "generatedWaveSizeCountPerArtifact": 12,
         "compiledEntryPointCountPerVariant": 1,
         "compilerRunCount": 2,
         "variants": list(module.RMS_NORM_DIRECTX_VARIANTS),
@@ -7022,6 +7382,10 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
         "constantId": 20,
         "standaloneArtifactCount": 24,
         "standaloneArtifactCountPerVariant": 12,
+        "deferredEntryPointCountPerVariant": 6,
+        "constantFreeEntryPointCountPerVariant": 6,
+        "deferredArtifactCount": 12,
+        "constantFreeArtifactCount": 12,
         "compiledArtifactCount": 24,
         "validatedArtifactCount": 24,
         "variants": list(module.RMS_NORM_OPENGL_VARIANTS),
@@ -7042,7 +7406,15 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
     status = expected_gaps["rms_norm_specialization_status"]
     assert status["source"] == module.MLX_RMS_NORM_SOURCE
     assert status["source_sha256"] == module.MLX_RMS_NORM_SHA256
+    assert status["source_required_subgroup_width"] == 32
     assert status["host_named_entry_count"] == 12
+    assert status["function_constant"] == {
+        "name": module.RMS_NORM_FUNCTION_CONSTANT_NAME,
+        "id": module.RMS_NORM_FUNCTION_CONSTANT_ID,
+        "required": True,
+        "required_by_entry_points": list(module.RMS_NORM_VJP_ENTRY_POINTS),
+        "absent_from_entry_points": list(module.RMS_NORM_FORWARD_ENTRY_POINTS),
+    }
     assert status["representative_workgroup_contract"] == {
         "host_source": "mlx/backend/metal/normalization.cpp",
         "host_lines": "52-91,137-197",
@@ -7063,10 +7435,14 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
         for variant in module.RMS_NORM_DIRECTX_VARIANTS
     ]
     assert status["directx"]["native_compilation"] == ("required-on-windows-ci")
-    assert status["directx"]["profile"] == "cs_6_2"
+    assert status["directx"]["profile"] == "cs_6_6"
+    assert status["directx"]["minimum_shader_model"] == "6.6"
+    assert status["directx"]["required_subgroup_width"] == 32
+    assert status["directx"]["subgroup_width_enforcement"] == "WaveSize(32)"
     assert status["directx"]["compiler_arguments"] == ["-enable-16bit-types"]
     assert status["directx"]["library_artifact_count"] == 2
     assert status["directx"]["execution_entry_count_per_artifact"] == 12
+    assert status["directx"]["generated_wave_size_count_per_artifact"] == 12
     assert status["directx"]["generated_numthreads_count_per_artifact"] == 12
     assert status["directx"]["compiled_entry_count_per_variant"] == 1
     assert status["directx"]["compiler_run_count"] == 2
@@ -7077,9 +7453,19 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
         }
         for variant in module.RMS_NORM_OPENGL_VARIANTS
     ]
+    assert status["opengl"]["subgroup_width_rule_configured"] is False
+    assert status["opengl"]["subgroup_width_enforcement_claimed"] is False
+    assert status["opengl"]["subgroup_semantic_parity_claimed"] is False
     assert status["opengl"]["native_compilation"] == "required-on-linux-ci"
+    assert status["opengl"]["specialization_materialization"] == (
+        "deferred-for-vjp-entries"
+    )
     assert status["opengl"]["standalone_artifact_count"] == 24
     assert status["opengl"]["standalone_artifact_count_per_variant"] == 12
+    assert status["opengl"]["deferred_entry_point_count_per_variant"] == 6
+    assert status["opengl"]["constant_free_entry_point_count_per_variant"] == 6
+    assert status["opengl"]["deferred_artifact_count"] == 12
+    assert status["opengl"]["constant_free_artifact_count"] == 12
     assert status["opengl"]["compiled_artifact_count"] == 24
     assert status["opengl"]["validated_artifact_count"] == 24
     assert status["numerical_execution_included"] is False
@@ -7117,6 +7503,32 @@ def test_rms_norm_checkout_verifies_revision_and_source_hash(tmp_path, monkeypat
         "algorithm": "sha256",
         "value": module.MLX_RMS_NORM_SHA256,
     }
+    assert identity["sourceSubgroupContract"] == {
+        "status": "passed",
+        "requiredSubgroupWidth": 32,
+        "widthDeclaration": "constexpr int SIMD_SIZE = 32;",
+        "widthDeclarationCount": 4,
+        "laneBuiltin": "thread_index_in_simdgroup",
+        "laneBuiltinCount": 4,
+        "groupBuiltin": "simdgroup_index_in_threadgroup",
+        "groupBuiltinCount": 4,
+        "reductionBuiltin": "simd_sum",
+        "reductionCallCount": 12,
+        "requiredDirectXEnforcement": {
+            "attribute": "WaveSize(32)",
+            "minimumShaderModel": "6.6",
+            "profile": "cs_6_6",
+        },
+    }
+
+    source = (mlx_root / module.MLX_RMS_NORM_SOURCE).read_text(encoding="utf-8")
+    with pytest.raises(
+        module.MlxRmsNormProofError,
+        match="exactly four SIMD_SIZE = 32",
+    ):
+        module._verify_source_subgroup_contract(
+            source.replace("constexpr int SIMD_SIZE = 32;", "", 1)
+        )
 
     (mlx_root / module.MLX_RMS_NORM_SOURCE).write_text(
         "modified source\n", encoding="utf-8"
@@ -7143,9 +7555,15 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
     assert result["runtimeBlockedBy"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
     assert result["artifactCount"] == 2
     assert result["executionEntryCountPerArtifact"] == 12
+    assert result["sourceRequiredSubgroupWidth"] == 32
+    assert result["subgroupWidthEnforced"] is True
     assert result["runtimeParityClaimed"] is False
     assert result["numericalExecutionIncluded"] is False
     assert result["nativeCompilation"]["status"] == "not-required"
+    assert result["nativeCompilation"]["profile"] == "cs_6_6"
+    assert result["nativeCompilation"]["minimumShaderModel"] == "6.6"
+    assert result["nativeCompilation"]["subgroupWidth"] == 32
+    assert result["nativeCompilation"]["subgroupWidthEnforcement"] == ("WaveSize(32)")
     assert result["nativeCompilation"]["compiledArtifactCount"] == 0
     assert result["nativeCompilation"]["runs"] == []
     variants = {variant["name"]: variant for variant in result["variants"]}
@@ -7176,6 +7594,25 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
         assert execution["hostNamedMaterializationCount"] == 12
         assert execution["executionEntryCount"] == 12
         assert execution["generatedNumthreadsContractCount"] == 12
+        assert execution["sourceRequiredSubgroupWidth"] == 32
+        assert execution["subgroupWidthRule"] == {
+            "expression": "32",
+            "sourcePattern": module.MLX_RMS_NORM_SOURCE,
+            "path": f'project.subgroup_width_rules["{module.MLX_RMS_NORM_SOURCE}"]',
+        }
+        assert execution["subgroupWidthProvenance"] == {
+            "kind": "materialized-template-rule",
+            "path": f'project.subgroup_width_rules["{module.MLX_RMS_NORM_SOURCE}"]',
+        }
+        subgroup_enforcement = execution["subgroupWidthEnforcement"]
+        assert subgroup_enforcement["mechanism"] == "hlsl-wave-size-attribute"
+        assert subgroup_enforcement["minimumShaderModel"] == "6.6"
+        assert len(subgroup_enforcement["entryProfiles"]) == 12
+        assert all(
+            profile["profile"] == "cs_6_6"
+            for profile in subgroup_enforcement["entryProfiles"]
+        )
+        assert execution["generatedWaveSizeContractCount"] == 12
         assert execution["consumedWorkgroupProjectionCount"] == 6
         assert execution["sourceEntryPoints"] == list(module.RMS_NORM_HOST_ENTRY_POINTS)
         assert execution["executionIdentity"]["algorithm"] == "sha256"
@@ -7187,6 +7624,8 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
         variant["name"]: variant["workgroupSize"]
         for variant in module.RMS_NORM_DIRECTX_VARIANTS
     }
+    assert report["project"]["subgroupWidthRules"] == {module.MLX_RMS_NORM_SOURCE: "32"}
+    assert report["project"]["subgroupWidthRuleCount"] == 1
     assert report["project"]["variantWorkgroupSizes"] == expected_workgroup_sizes
     assert report["summary"]["artifactsByVariant"] == {
         variant_name: {
@@ -7212,12 +7651,42 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
             entry["workgroupSize"] == workgroup_size
             for entry in execution["entryPoints"]
         )
+        subgroup_rule_path = (
+            f'project.subgroup_width_rules["{module.MLX_RMS_NORM_SOURCE}"]'
+        )
+        assert execution["subgroupWidthProvenance"] == {
+            "kind": "materialized-template-rule",
+            "path": subgroup_rule_path,
+        }
+        assert execution["subgroupWidthEnforcement"] == {
+            "mechanism": "hlsl-wave-size-attribute",
+            "minimumShaderModel": "6.6",
+            "entryProfiles": [
+                {
+                    "entryPoint": entry["targetEntryPoint"],
+                    "profile": "cs_6_6",
+                }
+                for entry in execution["entryPoints"]
+            ],
+        }
+        assert all(
+            entry["subgroupWidth"] == 32
+            and entry["subgroupWidthRule"]
+            == {
+                "expression": "32",
+                "sourcePattern": module.MLX_RMS_NORM_SOURCE,
+                "path": subgroup_rule_path,
+            }
+            for entry in execution["entryPoints"]
+        )
         generated = (mlx_root / artifact["path"]).read_text(encoding="utf-8")
         attribute = (
             f"[numthreads({workgroup_size[0]}, {workgroup_size[1]}, "
             f"{workgroup_size[2]})]"
         )
         assert generated.count(attribute) == 12
+        assert generated.count("[WaveSize(32)]") == 12
+        assert len(re.findall(r"\[\s*WaveSize\s*\(", generated)) == 12
         assert generated.count(variants[variant_name]["generatedStaticConst"]) == 1
 
 
@@ -7238,8 +7707,20 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
     )
 
     assert result["status"] == "passed"
+    assert (
+        result["report"]
+        == (report_dir / "rms-norm-opengl-deferred.json")
+        .relative_to(mlx_root)
+        .as_posix()
+    )
     assert result["artifactCount"] == 24
     assert result["artifactCountPerVariant"] == 12
+    assert result["subgroupWidthContract"] == {
+        "sourceRequiredWidth": 32,
+        "projectRuleConfigured": False,
+        "targetEnforcementClaimed": False,
+        "semanticParityClaimed": False,
+    }
     assert result["runtimeParityClaimed"] is False
     assert result["numericalExecutionIncluded"] is False
     assert result["runtimeBlockedBy"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
@@ -7253,6 +7734,14 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
     assert specialization["required"] is True
     assert specialization["deferred"] is True
     assert specialization["valueProvenance"] == {"kind": "runtime-override-required"}
+    assert specialization["deferredEntryPoints"] == list(
+        module.RMS_NORM_VJP_ENTRY_POINTS
+    )
+    assert specialization["absentEntryPoints"] == list(
+        module.RMS_NORM_FORWARD_ENTRY_POINTS
+    )
+    assert specialization["deferredArtifactCount"] == 12
+    assert specialization["constantFreeArtifactCount"] == 12
     assert specialization["generatedContract"] == (
         "layout(constant_id = 20) const bool has_w = false;"
     )
@@ -7267,6 +7756,8 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         assert variant["artifactCount"] == 12
         assert variant["executionEntryCount"] == 12
         assert variant["generatedLocalSizeContractCount"] == 12
+        assert variant["deferredSpecializationArtifactCount"] == 6
+        assert variant["constantFreeArtifactCount"] == 6
         artifacts = variant["artifacts"]
         assert [artifact["sourceEntryPoint"] for artifact in artifacts] == list(
             module.RMS_NORM_HOST_ENTRY_POINTS
@@ -7283,6 +7774,22 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
             assert artifact["consumedWorkgroupProjectionCount"] == (
                 1 if "_looped" in artifact["sourceEntryPoint"] else 0
             )
+            if artifact["sourceEntryPoint"] in module.RMS_NORM_VJP_ENTRY_POINTS:
+                assert artifact["specializationConstant"] == {
+                    "name": "has_w",
+                    "id": 20,
+                    "required": True,
+                    "deferred": True,
+                    "valueProvenance": {"kind": "runtime-override-required"},
+                    "specializationMaterialization": specialization[
+                        "specializationMaterialization"
+                    ],
+                }
+            else:
+                assert artifact["sourceEntryPoint"] in (
+                    module.RMS_NORM_FORWARD_ENTRY_POINTS
+                )
+                assert artifact["specializationConstant"] is None
             for identity_key in ("executionIdentity", "executionEntryIdentity"):
                 assert artifact[identity_key]["algorithm"] == "sha256"
                 assert re.fullmatch(r"[0-9a-f]{64}", artifact[identity_key]["value"])
@@ -7293,6 +7800,8 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         variant["name"]: variant["workgroupSize"]
         for variant in module.RMS_NORM_OPENGL_VARIANTS
     }
+    assert report["project"]["subgroupWidthRules"] == {}
+    assert report["project"]["subgroupWidthRuleCount"] == 0
     assert report["project"]["variantWorkgroupSizes"] == expected_workgroup_sizes
     assert report["summary"]["artifactsByVariant"] == {
         variant_name: {
@@ -7319,6 +7828,8 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         }
         execution = artifact["execution"]
         assert execution["sourceEntryPoints"] == [source_entry]
+        assert "subgroupWidthProvenance" not in execution
+        assert "subgroupWidthEnforcement" not in execution
         assert execution["provenance"] == {
             "kind": "project-variant",
             "path": f"project.variants.{variant_name}.workgroup_size",
@@ -7328,15 +7839,36 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         assert execution["entryPoints"][0]["workgroupSize"] == (
             expected_workgroup_sizes[variant_name]
         )
-        constant = artifact["specializationConstants"][0]
-        assert constant["valueProvenance"] == {"kind": "runtime-override-required"}
-        assert "concreteValue" not in constant
+        assert "subgroupWidth" not in execution["entryPoints"][0]
+        assert "subgroupWidthRule" not in execution["entryPoints"][0]
+        materialization = artifact["templateMaterialization"]
+        assert materialization["specializationCount"] == 12
+        assert len(materialization["specializations"]) == 12
+        assert {
+            record["hostName"] for record in materialization["specializations"]
+        } == set(module.RMS_NORM_HOST_ENTRY_POINTS)
         generated = (mlx_root / artifact["path"]).read_text(encoding="utf-8")
         local_size = variants[variant_name]["artifacts"][
             list(module.RMS_NORM_HOST_ENTRY_POINTS).index(source_entry)
         ]["generatedLocalSizeContract"]
         assert generated.count(local_size) == 1
-        assert generated.count(specialization["generatedContract"]) == 1
+        if source_entry in module.RMS_NORM_VJP_ENTRY_POINTS:
+            constant = artifact["specializationConstants"][0]
+            assert constant["valueProvenance"] == {"kind": "runtime-override-required"}
+            assert "concreteValue" not in constant
+            assert (
+                artifact["specializationMaterialization"]
+                == specialization["specializationMaterialization"]
+            )
+            assert generated.count(specialization["generatedContract"]) == 1
+            assert re.search(r"\bhas_w\b", generated)
+        else:
+            assert source_entry in module.RMS_NORM_FORWARD_ENTRY_POINTS
+            assert artifact.get("specializationConstants", []) == []
+            assert "specializationMaterialization" not in artifact
+            assert generated.count(specialization["generatedContract"]) == 0
+            assert re.search(r"\bhas_w\b", generated) is None
+        assert "WaveSize" not in generated
     assert artifact_identities == {
         (variant["name"], source_entry)
         for variant in module.RMS_NORM_OPENGL_VARIANTS
@@ -7356,7 +7888,18 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
     for variant in module.RMS_NORM_DIRECTX_VARIANTS:
         artifact_path = work_dir / "artifacts" / f"{variant['name']}.hlsl"
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        artifact_path.write_text("float16_t generated_value;\n", encoding="utf-8")
+        generated_entries = []
+        for index in range(module.RMS_NORM_EXPECTED_ENTRY_POINT_COUNT):
+            entry_point = "CSMain" if index == 0 else f"CSMain_{index + 1}"
+            generated_entries.append(
+                f"[numthreads({variant['workgroupSize'][0]}, 1, 1)]\n"
+                f"[WaveSize({module.RMS_NORM_SUBGROUP_WIDTH})]\n"
+                f"void {entry_point}() {{}}"
+            )
+        artifact_path.write_text(
+            "float16_t generated_value;\n" + "\n".join(generated_entries) + "\n",
+            encoding="utf-8",
+        )
         artifacts_by_variant[variant["name"]] = {
             "path": artifact_path.relative_to(mlx_root).as_posix()
         }
@@ -7423,9 +7966,11 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
 
     assert directx["status"] == "compiled"
     assert directx["compiledArtifactCount"] == 2
-    assert directx["profile"] == "cs_6_2"
+    assert directx["profile"] == "cs_6_6"
     assert directx["compilerArguments"] == ["-enable-16bit-types"]
-    assert directx["minimumShaderModel"] == "6.2"
+    assert directx["minimumShaderModel"] == "6.6"
+    assert directx["subgroupWidth"] == 32
+    assert directx["subgroupWidthEnforcement"] == "WaveSize(32)"
     assert len(directx["runs"]) == 2
     assert [run["entryPoint"] for run in directx["runs"]] == [
         "CSMain",
@@ -7441,16 +7986,19 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
         if name.startswith("compile-rmsnorm-directx")
     ]
     assert len(dxc_commands) == 2
+    assert all(command[1] == "-WX" for command in dxc_commands)
     assert all(command[command.index("-E") + 1] == "CSMain" for command in dxc_commands)
     assert all(
         command[command.index("-T") + 1 : command.index("-E")]
-        == ["cs_6_2", "-enable-16bit-types"]
+        == ["cs_6_6", "-enable-16bit-types"]
         for command in dxc_commands
     )
     assert all(
-        run["profile"] == "cs_6_2"
+        run["profile"] == "cs_6_6"
         and run["compilerArguments"] == ["-enable-16bit-types"]
-        and run["minimumShaderModel"] == "6.2"
+        and run["minimumShaderModel"] == "6.6"
+        and run["subgroupWidth"] == 32
+        and run["subgroupWidthEnforcement"] == "WaveSize(32)"
         for run in directx["runs"]
     )
 

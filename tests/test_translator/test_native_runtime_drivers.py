@@ -1,4 +1,6 @@
+import copy
 import json
+import math
 import os
 import shutil
 import struct
@@ -56,6 +58,399 @@ from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
 ROOT = Path(__file__).resolve().parents[2]
+
+_COPYSIGN_MAGNITUDE_BITS = (
+    0x00000000,
+    0x80000000,
+    0x7F800000,
+    0xFF800000,
+    0x7FC12345,
+    0xFFC54321,
+    0x3F800001,
+    0xBF123456,
+)
+_COPYSIGN_SIGN_BITS = (
+    0x80000000,
+    0x00000000,
+    0x80000000,
+    0x00000000,
+    0x80000000,
+    0x00000000,
+    0x80000000,
+    0x00000000,
+)
+_COPYSIGN_OUTPUT_BITS = tuple(
+    (magnitude & 0x7FFFFFFF) | (sign_source & 0x80000000)
+    for magnitude, sign_source in zip(_COPYSIGN_MAGNITUDE_BITS, _COPYSIGN_SIGN_BITS)
+)
+
+_INVERSE_HYPERBOLIC_CASE_BITS = {
+    "acosh": (
+        0x7FC00000,
+        0xFF800000,
+        0x00000000,
+        0x3F7FFFFF,
+        0x3F800000,
+        0x3F800001,
+        0x3FC00000,
+        0x40000000,
+        0x40800000,
+        0x45800000,
+        0x45800001,
+        0x4F000000,
+        0x7149F2CA,
+        0x7F000000,
+        0x7F7FFFFF,
+        0x7F800000,
+    ),
+    "asinh": (
+        0x7FC00000,
+        0xFF800000,
+        0xFF7FFFFF,
+        0xF149F2CA,
+        0xC5800001,
+        0xC5800000,
+        0xBF800000,
+        0xB9800000,
+        0xB22BCC77,
+        0x80000000,
+        0x00000000,
+        0x322BCC77,
+        0x39800000,
+        0x3F800000,
+        0x7149F2CA,
+        0x7F800000,
+    ),
+    "atanh": (
+        0x7FC00000,
+        0xFF800000,
+        0xBFC00000,
+        0xBF800001,
+        0xBF800000,
+        0xBF7FFFFF,
+        0xBF000000,
+        0xB22BCC77,
+        0x80000000,
+        0x00000000,
+        0x322BCC77,
+        0x3F000000,
+        0x3F7FFFFF,
+        0x3F800000,
+        0x3F800001,
+        0x7F800000,
+    ),
+}
+_INVERSE_HYPERBOLIC_MAX_ULP = {"acosh": 2, "asinh": 2, "atanh": 3}
+
+
+def _float32_from_bits(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
+
+
+def _float32_bits(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _inverse_hyperbolic_host_reference(operation: str, value: float) -> float:
+    if math.isnan(value):
+        return math.nan
+    try:
+        return getattr(math, operation)(value)
+    except ValueError:
+        if operation == "atanh" and abs(value) == 1.0:
+            return math.copysign(math.inf, value)
+        return math.nan
+
+
+def _inverse_hyperbolic_reference_bits(operation: str):
+    return tuple(
+        _float32_bits(
+            _inverse_hyperbolic_host_reference(
+                operation,
+                _float32_from_bits(input_bits),
+            )
+        )
+        for input_bits in _INVERSE_HYPERBOLIC_CASE_BITS[operation]
+    )
+
+
+def _ordered_float32_bits(bits: int) -> int:
+    if bits & 0x80000000:
+        return (~bits) & 0xFFFFFFFF
+    return bits | 0x80000000
+
+
+def _assert_inverse_hyperbolic_result_bits(
+    operation: str,
+    actual_bits,
+) -> int:
+    input_bits = _INVERSE_HYPERBOLIC_CASE_BITS[operation]
+    assert len(actual_bits) == len(input_bits)
+    maximum_ulp = _INVERSE_HYPERBOLIC_MAX_ULP[operation]
+    worst_ulp = 0
+    for index, (input_word, actual_word) in enumerate(zip(input_bits, actual_bits)):
+        value = _float32_from_bits(input_word)
+        expected = _inverse_hyperbolic_host_reference(operation, value)
+        actual = _float32_from_bits(actual_word)
+        case = f"{operation}[{index}] input=0x{input_word:08x}"
+        if math.isnan(expected):
+            assert math.isnan(actual), f"{case}: expected NaN, got 0x{actual_word:08x}"
+            continue
+        expected_word = _float32_bits(expected)
+        if math.isinf(expected):
+            assert actual_word == expected_word, (
+                f"{case}: expected signed infinity 0x{expected_word:08x}, "
+                f"got 0x{actual_word:08x}"
+            )
+            continue
+        if expected == 0.0:
+            assert actual_word == expected_word, (
+                f"{case}: expected signed zero 0x{expected_word:08x}, "
+                f"got 0x{actual_word:08x}"
+            )
+            continue
+        assert math.isfinite(
+            actual
+        ), f"{case}: expected finite value, got 0x{actual_word:08x}"
+        ulp_distance = abs(
+            _ordered_float32_bits(actual_word) - _ordered_float32_bits(expected_word)
+        )
+        worst_ulp = max(worst_ulp, ulp_distance)
+        assert ulp_distance <= maximum_ulp, (
+            f"{case}: expected 0x{expected_word:08x}, got 0x{actual_word:08x}; "
+            f"distance {ulp_distance} ULP exceeds {maximum_ulp}"
+        )
+    return worst_ulp
+
+
+class _CapturingDirectXComputeRuntime(DirectXComputeRuntime):
+    def __init__(self):
+        super().__init__()
+        self.outputs = None
+
+    def dispatch(self, adapter, state, request):
+        outputs = super().dispatch(adapter, state, request)
+        self.outputs = outputs
+        return outputs
+
+
+def _prepare_copysign_runtime_fixture(tmp_path: Path, target: str):
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / target
+    source_path = fixture_dir / "copysign_bit_patterns.cgl"
+    artifact_report = json.loads(
+        (fixture_dir / "copysign_bit_patterns.artifacts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    generated = translate(
+        str(source_path),
+        backend=target,
+        format_output=False,
+    )
+
+    assert "copysign(" not in generated
+    assert "0x7fffffffu" in generated
+    assert "0x80000000u" in generated
+    if target == "directx":
+        assert "[numthreads(1, 1, 1)]" in generated
+        assert "asfloat(((asuint(magnitude) & 0x7fffffffu)" in generated
+        assert "(asuint(sign_source) & 0x80000000u)" in generated
+    else:
+        assert target == "opengl"
+        assert (
+            "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;"
+            in generated
+        )
+        assert (
+            "uintBitsToFloat(((floatBitsToUint(magnitude) & 0x7fffffffu)" in generated
+        )
+        assert "(floatBitsToUint(sign_source) & 0x80000000u)" in generated
+
+    artifact_report["project"]["root"] = str(tmp_path)
+    artifact_path = tmp_path / artifact_report["artifacts"][0]["path"]
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(generated, encoding="utf-8")
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "copysign_bit_patterns.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    assert manifest["success"] is True, json.dumps(manifest, indent=2)
+    inputs = {item["name"]: item for item in manifest["tests"][0]["inputs"]}
+    assert inputs["magnitude_bits"]["values"] == list(_COPYSIGN_MAGNITUDE_BITS)
+    assert inputs["sign_bits"]["values"] == list(_COPYSIGN_SIGN_BITS)
+    expected_output = manifest["tests"][0]["expectedOutputs"][0]
+    assert expected_output["dtype"] == "uint32"
+    assert expected_output["shape"] == [8]
+    assert expected_output["values"] == list(_COPYSIGN_OUTPUT_BITS)
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        project_root=tmp_path,
+    )
+    assert plan["success"] is True, json.dumps(plan, indent=2)
+    case = plan["testCases"][0]
+    entry_point = "CSMain" if target == "directx" else "main"
+    assert case["runtimeExecution"]["dispatch"] == {
+        "entryPoint": entry_point,
+        "workgroupSize": [1, 1, 1],
+        "workgroupCount": [8, 1, 1],
+        "globalSize": [8, 1, 1],
+        "metadata": {
+            "stage": "compute",
+            "source": "fixture",
+            "status": "available",
+        },
+    }
+    assert [
+        (
+            item["binding"]["name"],
+            item["binding"]["binding"],
+            item["source"],
+        )
+        for item in case["runtimeExecution"]["resourceBindings"]
+        if "id" in item["binding"]
+    ] == [
+        ("magnitude_bits", 0, "input"),
+        ("sign_bits", 1, "input"),
+        ("output_bits", 0 if target == "directx" else 2, "expectedOutput"),
+    ]
+    return artifact_report, manifest
+
+
+def _prepare_inverse_hyperbolic_runtime_fixture(tmp_path: Path):
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "directx"
+    source_path = fixture_dir / "inverse_hyperbolic_float32.cgl"
+    artifact_report = json.loads(
+        (fixture_dir / "inverse_hyperbolic_float32.artifacts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    generated = translate(
+        str(source_path),
+        backend="directx",
+        format_output=False,
+    )
+
+    assert "[numthreads(1, 1, 1)]" in generated
+    for operation in _INVERSE_HYPERBOLIC_CASE_BITS:
+        assert generated.count(f"float __crossgl_{operation}_float(float value)") == 1
+        assert f"return {operation}(" not in generated
+        assert f"= {operation}(" not in generated
+        assert f"__crossgl_{operation}_float(" in generated
+
+    artifact_report["project"]["root"] = str(tmp_path)
+    artifact_path = tmp_path / artifact_report["artifacts"][0]["path"]
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(generated, encoding="utf-8")
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "inverse_hyperbolic_float32.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    assert manifest["success"] is True, json.dumps(manifest, indent=2)
+    test_case = manifest["tests"][0]
+    assert test_case["id"] == "directx-inverse-hyperbolic-float32-domain-boundaries"
+    inputs = {item["name"]: item for item in test_case["inputs"]}
+    outputs = {item["name"]: item for item in test_case["expectedOutputs"]}
+    for operation, input_bits in _INVERSE_HYPERBOLIC_CASE_BITS.items():
+        input_value = inputs[f"{operation}_input_bits"]
+        assert input_value["dtype"] == "uint32"
+        assert input_value["shape"] == [16]
+        assert input_value["values"] == list(input_bits)
+
+        expected_output = outputs[f"{operation}_output_bits"]
+        assert expected_output["dtype"] == "uint32"
+        assert expected_output["shape"] == [16]
+        assert expected_output["values"] == list(
+            _inverse_hyperbolic_reference_bits(operation)
+        )
+        assert (
+            _assert_inverse_hyperbolic_result_bits(
+                operation,
+                expected_output["values"],
+            )
+            == 0
+        )
+        assert expected_output["tolerance"] == {
+            "absolute": float(_INVERSE_HYPERBOLIC_MAX_ULP[operation]),
+            "relative": 0.0,
+        }
+        assert expected_output["metadata"] == {
+            "operation": operation,
+            "representation": "ieee-754-binary32-bits",
+            "maximumUlp": _INVERSE_HYPERBOLIC_MAX_ULP[operation],
+        }
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        project_root=tmp_path,
+    )
+    assert plan["success"] is True, json.dumps(plan, indent=2)
+    case = plan["testCases"][0]
+    assert case["runtimeExecution"]["dispatch"] == {
+        "entryPoint": "CSMain",
+        "workgroupSize": [1, 1, 1],
+        "workgroupCount": [16, 1, 1],
+        "globalSize": [16, 1, 1],
+        "metadata": {
+            "stage": "compute",
+            "source": "fixture",
+            "status": "available",
+        },
+    }
+    assert [
+        (
+            item["binding"]["name"],
+            item["binding"]["binding"],
+            item["source"],
+        )
+        for item in case["runtimeExecution"]["resourceBindings"]
+        if "id" in item["binding"]
+    ] == [
+        ("acosh_input_bits", 0, "input"),
+        ("asinh_input_bits", 1, "input"),
+        ("atanh_input_bits", 2, "input"),
+        ("acosh_output_bits", 0, "expectedOutput"),
+        ("asinh_output_bits", 1, "expectedOutput"),
+        ("atanh_output_bits", 2, "expectedOutput"),
+    ]
+    return artifact_report, manifest
+
+
+def _assert_copysign_runtime_report(report):
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
+    assert report["summary"]["passedCount"] == 1, failure_context
+    assert report["summary"]["skippedCount"] == 0, failure_context
+    assert report["summary"]["unavailableCount"] == 0, failure_context
+    assert report["summary"]["failedCount"] == 0, failure_context
+    result = report["results"][0]
+    assert result["status"] == "passed", failure_context
+    assert result["comparisons"] == [
+        {
+            "name": "output_bits",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [8]},
+            "actual": {"dtype": "uint32", "shape": [8]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_copysign_bit_patterns_translation_and_manifest_plan(tmp_path, target):
+    _prepare_copysign_runtime_fixture(tmp_path, target)
+
+
+def test_directx_inverse_hyperbolic_translation_and_manifest_plan(tmp_path):
+    _prepare_inverse_hyperbolic_runtime_fixture(tmp_path)
 
 
 def _runtime_request(tmp_path: Path) -> RuntimeExecutionRequest:
@@ -901,6 +1296,168 @@ def test_directx_compute_runtime_executes_mlx_file_scope_lookup_on_device(tmp_pa
             "maxRelativeError": 0.0,
         }
     ]
+
+
+def test_directx_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device(
+    tmp_path,
+):
+    if os.environ.get("CROSTL_RUN_DIRECTX_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_DIRECTX_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST=1 to run "
+            "the bounded Direct3D wave shuffle test"
+        )
+    if not sys.platform.startswith("win32"):
+        pytest.fail("Bounded Direct3D wave shuffle runtime proof requires Windows")
+    if shutil.which("dxc") is None:
+        pytest.fail("DXC is required for the bounded Direct3D wave shuffle proof")
+    try:
+        __import__("compushady")
+    except ImportError as exc:
+        pytest.fail(f"Direct3D wave shuffle runtime dependency is unavailable: {exc}")
+
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "directx"
+    source_path = fixture_dir / "bounded_wave_shuffle_and_fill_up.cgl"
+    artifact_report = json.loads(
+        (fixture_dir / "bounded_wave_shuffle_and_fill_up.artifacts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    generated = translate(
+        str(source_path),
+        backend="directx",
+        format_output=False,
+    )
+    assert "[numthreads(8, 1, 1)]" in generated
+    assert "__crossgl_wave_shuffle_and_fill_up_uint(value, fill, 1u, 2u)" in generated
+    assert "WaveReadLaneAt(value, valueSourceLane)" in generated
+    assert "WaveReadLaneAt(fill, fillSourceLane)" in generated
+    assert "return useValue ? shuffled : shuffledFill;" in generated
+    assert "WaveShuffleAndFillUp" not in generated
+
+    artifact_report["project"]["root"] = str(tmp_path)
+    artifact_path = tmp_path / artifact_report["artifacts"][0]["path"]
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(generated, encoding="utf-8")
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "bounded_wave_shuffle_and_fill_up.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    assert manifest["success"] is True, json.dumps(manifest, indent=2)
+
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={
+            "directx": DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+        },
+    )
+
+    assert report["success"] is True, json.dumps(report, indent=2)
+    assert report["summary"]["passedCount"] == 1, json.dumps(report, indent=2)
+    assert report["summary"]["skippedCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["unavailableCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["failedCount"] == 0, json.dumps(report, indent=2)
+    result = report["results"][0]
+    assert result["status"] == "passed", json.dumps(report, indent=2)
+    assert result["comparisons"] == [
+        {
+            "name": "output",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [8]},
+            "actual": {"dtype": "uint32", "shape": [8]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
+
+
+def test_directx_compute_runtime_executes_copysign_bit_patterns_on_device(tmp_path):
+    if os.environ.get("CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST=1 to run the exact "
+            "Direct3D copysign test"
+        )
+    if not sys.platform.startswith("win32"):
+        pytest.fail("Exact Direct3D copysign runtime proof requires Windows")
+    if shutil.which("dxc") is None:
+        pytest.fail("DXC is required for the exact Direct3D copysign proof")
+    try:
+        __import__("compushady")
+    except ImportError as exc:
+        pytest.fail(f"Direct3D copysign runtime dependency is unavailable: {exc}")
+
+    artifact_report, manifest = _prepare_copysign_runtime_fixture(tmp_path, "directx")
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={
+            "directx": DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+        },
+    )
+
+    _assert_copysign_runtime_report(report)
+
+
+def test_directx_compute_runtime_executes_inverse_hyperbolic_numerics_on_device(
+    tmp_path,
+):
+    if os.environ.get("CROSTL_RUN_DIRECTX_INVERSE_HYPERBOLIC_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_DIRECTX_INVERSE_HYPERBOLIC_DEVICE_TEST=1 to run "
+            "the Direct3D inverse-hyperbolic numerical proof"
+        )
+    if not sys.platform.startswith("win32"):
+        pytest.fail("Direct3D inverse-hyperbolic runtime proof requires Windows")
+    if shutil.which("dxc") is None:
+        pytest.fail("DXC is required for the Direct3D inverse-hyperbolic proof")
+    try:
+        __import__("compushady")
+    except ImportError as exc:
+        pytest.fail(
+            f"Direct3D inverse-hyperbolic runtime dependency is unavailable: {exc}"
+        )
+
+    artifact_report, manifest = _prepare_inverse_hyperbolic_runtime_fixture(tmp_path)
+    runtime = _CapturingDirectXComputeRuntime()
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={"directx": DirectXRuntimeParityAdapter(runtime=runtime)},
+    )
+
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
+    assert report["summary"]["passedCount"] == 1, failure_context
+    assert report["summary"]["skippedCount"] == 0, failure_context
+    assert report["summary"]["unavailableCount"] == 0, failure_context
+    assert report["summary"]["failedCount"] == 0, failure_context
+    assert {
+        comparison["name"]: comparison["status"]
+        for comparison in report["results"][0]["comparisons"]
+    } == {
+        "acosh_output_bits": "passed",
+        "asinh_output_bits": "passed",
+        "atanh_output_bits": "passed",
+    }
+
+    assert runtime.outputs is not None
+    assert set(runtime.outputs) == {
+        "acosh_output_bits",
+        "asinh_output_bits",
+        "atanh_output_bits",
+    }
+    for operation in _INVERSE_HYPERBOLIC_CASE_BITS:
+        output = runtime.outputs[f"{operation}_output_bits"]
+        assert output["dtype"] == "uint32"
+        assert output["shape"] == [16]
+        assert (
+            _assert_inverse_hyperbolic_result_bits(operation, output["values"])
+            <= _INVERSE_HYPERBOLIC_MAX_ULP[operation]
+        )
 
 
 def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device():
@@ -2090,6 +2647,333 @@ def test_opengl_compute_runtime_rejects_short_output_readback(tmp_path):
 
 def test_opengl_compute_runtime_is_exported_from_project_api():
     assert project_api.OpenGLComputeRuntime is OpenGLComputeRuntime
+
+
+def _prepare_opengl_bounded_wave_shuffle_runtime_fixture(tmp_path):
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "opengl"
+    source_path = fixture_dir / "bounded_wave_shuffle_and_fill_up.cgl"
+    artifact_report = json.loads(
+        (fixture_dir / "bounded_wave_shuffle_and_fill_up.artifacts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    generated = translate(
+        str(source_path),
+        backend="opengl",
+        format_output=False,
+    )
+
+    assert (
+        "layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;" in generated
+    )
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_shuffle : require" in generated
+    assert (
+        "uint crossglWaveShuffleAndFillUp(uint value, uint fill, uint delta, "
+        "uint modulo)" in generated
+    )
+    assert "uint segmentLane = lane % modulo;" in generated
+    assert "uint segmentBase = lane - segmentLane;" in generated
+    assert "uint valueSourceLane = useValue ? (lane - delta) : lane;" in generated
+    assert "subgroupShuffle(fill, fillSourceLane)" in generated
+    assert "return useValue ? shuffledValue : shuffledFill;" in generated
+    assert (
+        "uint result = crossglWaveShuffleAndFillUp(value, fill, 1u, 2u);" in generated
+    )
+    assert "uint result = WaveShuffleAndFillUp(" not in generated
+
+    artifact_report["project"]["root"] = str(tmp_path)
+    artifact_path = tmp_path / artifact_report["artifacts"][0]["path"]
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(generated, encoding="utf-8")
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "bounded_wave_shuffle_and_fill_up.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    assert manifest["success"] is True, json.dumps(manifest, indent=2)
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        project_root=tmp_path,
+    )
+    assert plan["success"] is True, json.dumps(plan, indent=2)
+    case = plan["testCases"][0]
+    if shutil.which("glslangValidator") is None:
+        assert plan["summary"]["skippedCount"] == 1, json.dumps(plan, indent=2)
+        assert case["status"] == "skipped", json.dumps(plan, indent=2)
+        assert case["failurePhase"] == "platform-requirements"
+        assert case["diagnostics"][-1]["missingTools"] == ["glslangValidator"]
+    else:
+        assert plan["summary"]["plannedCount"] == 1, json.dumps(plan, indent=2)
+        assert case["status"] == "planned", json.dumps(plan, indent=2)
+    assert case["runtimeExecution"]["dispatch"] == {
+        "entryPoint": "main",
+        "workgroupSize": [8, 1, 1],
+        "workgroupCount": [1, 1, 1],
+        "globalSize": [8, 1, 1],
+        "metadata": {
+            "stage": "compute",
+            "source": "fixture",
+            "status": "available",
+        },
+    }
+    reflected_bindings = [
+        item
+        for item in case["runtimeExecution"]["resourceBindings"]
+        if "id" in item["binding"]
+    ]
+    assert [
+        (
+            item["binding"]["name"],
+            item["binding"]["binding"],
+            item["source"],
+        )
+        for item in reflected_bindings
+    ] == [
+        ("values", 0, "input"),
+        ("fills", 1, "input"),
+        ("output", 2, "expectedOutput"),
+    ]
+    return artifact_report, manifest
+
+
+def test_opengl_bounded_wave_shuffle_and_fill_up_translation_and_manifest_plan(
+    tmp_path,
+):
+    _prepare_opengl_bounded_wave_shuffle_runtime_fixture(tmp_path)
+
+
+def test_opengl_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device(
+    tmp_path,
+):
+    if os.environ.get("CROSTL_RUN_OPENGL_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_OPENGL_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST=1 to run "
+            "the bounded OpenGL wave shuffle test"
+        )
+    if not sys.platform.startswith("linux"):
+        pytest.fail("Bounded OpenGL wave shuffle runtime proof requires Linux")
+    if shutil.which("glslangValidator") is None:
+        pytest.fail("glslangValidator is required for the OpenGL wave shuffle proof")
+    try:
+        __import__("moderngl")
+    except ImportError as exc:
+        pytest.fail(f"OpenGL wave shuffle runtime dependency is unavailable: {exc}")
+
+    artifact_report, manifest = _prepare_opengl_bounded_wave_shuffle_runtime_fixture(
+        tmp_path
+    )
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={
+            "opengl": OpenGLRuntimeParityAdapter(
+                runtime=OpenGLComputeRuntime(context_backends=("egl",))
+            )
+        },
+    )
+
+    assert report["success"] is True, json.dumps(report, indent=2)
+    assert report["summary"]["passedCount"] == 1, json.dumps(report, indent=2)
+    assert report["summary"]["skippedCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["unavailableCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["failedCount"] == 0, json.dumps(report, indent=2)
+    result = report["results"][0]
+    assert result["status"] == "passed", json.dumps(report, indent=2)
+    assert result["comparisons"] == [
+        {
+            "name": "output",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [8]},
+            "actual": {"dtype": "uint32", "shape": [8]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
+
+
+def test_opengl_compute_runtime_executes_copysign_bit_patterns_on_device(tmp_path):
+    if os.environ.get("CROSTL_RUN_OPENGL_COPYSIGN_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_OPENGL_COPYSIGN_DEVICE_TEST=1 to run the exact "
+            "OpenGL copysign test"
+        )
+    if not sys.platform.startswith("linux"):
+        pytest.fail("Exact OpenGL copysign runtime proof requires Linux")
+    if shutil.which("glslangValidator") is None:
+        pytest.fail("glslangValidator is required for the exact OpenGL copysign proof")
+    try:
+        __import__("moderngl")
+    except ImportError as exc:
+        pytest.fail(f"OpenGL copysign runtime dependency is unavailable: {exc}")
+
+    artifact_report, manifest = _prepare_copysign_runtime_fixture(tmp_path, "opengl")
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={
+            "opengl": OpenGLRuntimeParityAdapter(
+                runtime=OpenGLComputeRuntime(context_backends=("egl",))
+            )
+        },
+    )
+
+    _assert_copysign_runtime_report(report)
+
+
+def test_opengl_glsl_wave_shuffle_executes_via_vulkan_on_device(tmp_path):
+    enabled = os.environ.get("CROSTL_RUN_OPENGL_GLSL_VULKAN_DEVICE_TEST")
+    if enabled != "1":
+        pytest.skip(
+            "set CROSTL_RUN_OPENGL_GLSL_VULKAN_DEVICE_TEST=1 to run generated "
+            "OpenGL GLSL through Vulkan"
+        )
+    if not sys.platform.startswith("linux"):
+        pytest.fail("OpenGL GLSL Vulkan runtime proof requires Linux")
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.fail(
+            "glslangValidator is required for the OpenGL GLSL Vulkan runtime proof"
+        )
+    spirv_val = shutil.which("spirv-val")
+    if spirv_val is None:
+        pytest.fail("spirv-val is required for the OpenGL GLSL Vulkan runtime proof")
+    try:
+        __import__("vulkan")
+    except ImportError as exc:
+        pytest.fail(f"Vulkan runtime dependency is unavailable: {exc}")
+
+    artifact_report, manifest = _prepare_opengl_bounded_wave_shuffle_runtime_fixture(
+        tmp_path
+    )
+    opengl_artifact = artifact_report["artifacts"][0]
+    generated_glsl_path = tmp_path / opengl_artifact["path"]
+    spirv_path = tmp_path / "out" / "vulkan" / "bounded_wave_shuffle_and_fill_up.spv"
+    spirv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    compile_result = subprocess.run(
+        [
+            glslang,
+            "--target-env",
+            "vulkan1.1",
+            "-S",
+            "comp",
+            "-o",
+            str(spirv_path),
+            str(generated_glsl_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert compile_result.returncode == 0, json.dumps(
+        {
+            "action": "compile-generated-opengl-glsl-for-vulkan-runtime",
+            "returncode": compile_result.returncode,
+            "stdout": compile_result.stdout,
+            "stderr": compile_result.stderr,
+        },
+        indent=2,
+    )
+
+    validation_result = subprocess.run(
+        [spirv_val, "--target-env", "vulkan1.1", str(spirv_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert validation_result.returncode == 0, json.dumps(
+        {
+            "action": "validate-generated-opengl-glsl-vulkan-spirv",
+            "returncode": validation_result.returncode,
+            "stdout": validation_result.stdout,
+            "stderr": validation_result.stderr,
+        },
+        indent=2,
+    )
+
+    execution_boundary = "generated-opengl-glsl-compiled-to-vulkan-spirv"
+    vulkan_artifact_report = copy.deepcopy(artifact_report)
+    vulkan_artifact_report["project"]["targets"] = ["vulkan"]
+    vulkan_artifact = vulkan_artifact_report["artifacts"][0]
+    vulkan_artifact["id"] = f"vulkan-execution|{opengl_artifact['id']}"
+    vulkan_artifact["path"] = spirv_path.relative_to(tmp_path).as_posix()
+    vulkan_artifact["target"] = "vulkan"
+    vulkan_artifact["metadata"] = {
+        **vulkan_artifact.get("metadata", {}),
+        "executionBoundary": execution_boundary,
+        "generatedArtifactPath": opengl_artifact["path"],
+        "generatedArtifactTarget": "opengl",
+    }
+
+    adapter_id = "opengl-glsl-via-vulkan-runtime"
+    vulkan_manifest = copy.deepcopy(manifest)
+    vulkan_manifest["adapters"] = [
+        {
+            "id": adapter_id,
+            "target": "vulkan",
+            "executor": "vulkan",
+            "adapterKind": "vulkan-native-runtime",
+            "platformRequirements": {
+                "platformClass": "linux",
+                "requiredTools": ["glslangValidator", "spirv-val"],
+            },
+            "metadata": {"executionBoundary": execution_boundary},
+        }
+    ]
+    vulkan_test = vulkan_manifest["tests"][0]
+    vulkan_test["selector"]["target"] = "vulkan"
+    vulkan_test["executor"] = "vulkan"
+    vulkan_test["adapter"] = adapter_id
+    vulkan_test["platformRequirements"] = {
+        "platformClass": "linux",
+        "requiredTools": ["glslangValidator", "spirv-val"],
+    }
+    vulkan_test["metadata"] = {
+        **vulkan_test.get("metadata", {}),
+        "executionBoundary": execution_boundary,
+    }
+
+    report = verify_runtime_test_manifest(
+        vulkan_artifact_report,
+        vulkan_manifest,
+        executors={
+            "vulkan": VulkanRuntimeParityAdapter(
+                runtime=VulkanComputeRuntime(),
+                required_tools=("spirv-val",),
+            )
+        },
+    )
+
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
+    assert report["summary"]["passedCount"] == 1, failure_context
+    assert report["summary"]["skippedCount"] == 0, failure_context
+    assert report["summary"]["unavailableCount"] == 0, failure_context
+    assert report["summary"]["failedCount"] == 0, failure_context
+    result = report["results"][0]
+    assert result["status"] == "passed", failure_context
+    runtime_adapter = report["runtimeTestPlan"]["adapters"][0]
+    assert runtime_adapter["metadata"]["executionBoundary"] == execution_boundary
+    assert result["comparisons"] == [
+        {
+            "name": "output",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [8]},
+            "actual": {"dtype": "uint32", "shape": [8]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
 
 
 def test_opengl_compute_runtime_executes_vector_scale_on_device(tmp_path):

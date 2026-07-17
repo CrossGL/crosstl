@@ -445,6 +445,64 @@ def test_build_report_scans_project_feature_roots_independently_of_backend_paths
     assert report["issues"] == []
 
 
+def test_build_report_scans_focused_host_dispatch_contract_evidence():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "missing/directx_codegen.py",
+                "native_backend": "missing/directx_backend",
+                "tests": ["missing/directx_tests.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "project.host_dispatch_contract_import",
+                "category": "project",
+                "name": "Bounded host dispatch contract import",
+                "description": (
+                    "Load versioned host dispatch manifests, evaluate finite "
+                    "records deterministically, and embed replayable report metadata."
+                ),
+                "support": {
+                    "directx": {
+                        "status": "supported",
+                        "evidence": ["focused dispatch contract tests"],
+                    }
+                },
+            }
+        ]
+    }
+
+    feature = features["features"][0]
+    backend = backends["backends"][0]
+    assert module.feature_test_paths(feature, backend) == [
+        "tests/test_translator/test_dispatch_contracts.py",
+        "tests/test_translator/test_project_dispatch_contract_import.py",
+        "tests/test_dispatch_contract_cli.py",
+    ]
+
+    report = module.build_report(backends, features)
+    support = report["features"][0]["support"]["directx"]
+
+    assert support["state"] == "tested"
+    assert {hit["path"] for hit in support["implementation"]} == {
+        "crosstl/_crosstl.py",
+        "crosstl/project/dispatch_contracts.py",
+        "crosstl/project/pipeline.py",
+    }
+    test_paths = {hit["path"] for hit in support["tests"]}
+    assert "tests/test_dispatch_contract_cli.py" in test_paths
+    assert (
+        "tests/test_translator/test_project_dispatch_contract_import.py" in test_paths
+    )
+    assert report["issues"] == []
+
+
 def test_build_report_counts_test_class_names_as_evidence():
     module = load_signals_module()
     backends = {

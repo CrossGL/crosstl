@@ -1,0 +1,132 @@
+{
+  "kind": "crosstl-project-runtime-fixture-metadata",
+  "metadata": {
+    "fixtureSet": "opengl-math-runtime-proofs"
+  },
+  "fixtures": [
+    {
+      "id": "opengl-copysign-ieee-payloads-u32",
+      "selector": {
+        "source": "tests/fixtures/runtime_verification/opengl/copysign_bit_patterns.cgl",
+        "target": "opengl",
+        "variant": "ieee-payloads"
+      },
+      "inputs": [
+        {
+          "name": "magnitude_bits",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            8
+          ],
+          "values": [
+            0,
+            2147483648,
+            2139095040,
+            4286578688,
+            2143363909,
+            4291117857,
+            1065353217,
+            3205641302
+          ]
+        },
+        {
+          "name": "sign_bits",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            8
+          ],
+          "values": [
+            2147483648,
+            0,
+            2147483648,
+            0,
+            2147483648,
+            0,
+            2147483648,
+            0
+          ]
+        }
+      ],
+      "expectedOutputs": [
+        {
+          "name": "output_bits",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            8
+          ],
+          "values": [
+            2147483648,
+            0,
+            4286578688,
+            2139095040,
+            4290847557,
+            2143634209,
+            3212836865,
+            1058157654
+          ]
+        }
+      ],
+      "runtimeAdapter": {
+        "id": "opengl-copysign-ieee-payloads-contract-v1",
+        "entryPoints": [
+          {
+            "name": "main",
+            "stage": "compute",
+            "workgroupSize": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "resourceBindings": [
+          {
+            "name": "magnitude_bits",
+            "kind": "buffer",
+            "binding": 0,
+            "access": "read",
+            "value": "magnitude_bits"
+          },
+          {
+            "name": "sign_bits",
+            "kind": "buffer",
+            "binding": 1,
+            "access": "read",
+            "value": "sign_bits"
+          },
+          {
+            "name": "output_bits",
+            "kind": "buffer",
+            "binding": 2,
+            "access": "write",
+            "value": "output_bits"
+          }
+        ],
+        "dispatch": {
+          "entryPoint": "main",
+          "globalSize": [
+            8,
+            1,
+            1
+          ]
+        }
+      },
+      "metadata": {
+        "proof": "copysign-preserves-ieee-754-payload-bits",
+        "testCommand": [
+          "python",
+          "-m",
+          "pytest",
+          "-n",
+          "auto",
+          "tests/test_translator/test_native_runtime_drivers.py",
+          "-k",
+          "opengl_compute_runtime_executes_copysign_bit_patterns_on_device"
+        ]
+      }
+    }
+  ]
+}

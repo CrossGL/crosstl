@@ -44,6 +44,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLCompileTimeGlobalError,
     OpenGLCompoundAssignmentError,
     OpenGLCooperativeMatrixError,
+    OpenGLCopySignError,
     OpenGLEntryPointSelectionError,
     OpenGLFixedArrayResourceError,
     OpenGLForInIterableError,
@@ -160,6 +161,201 @@ def glsl_expression_depends_on(generated_code, expression, expected_token):
         for identifier in re.findall(r"\b[A-Za-z_]\w*\b", candidate):
             pending.extend(initializers.get(identifier, ()))
     return False
+
+
+def test_glsl_rint_lowers_to_round_even(tmp_path):
+    source = """
+    shader NearestEvenRint {
+        StructuredBuffer<vec4> input_values @ binding(0);
+        RWStructuredBuffer<vec4> output_values @ binding(1);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                vec4 halfway = vec4(0.5, 1.5, -0.5, -1.5);
+                float negative_halfway = -0.5;
+                output_values[0] = metal_u3a_u3arint(input_values[0] + halfway)
+                    + vec4(rint(input_values[0].x + negative_halfway));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+
+    assert generated.count("roundEven(") == 2
+    assert re.search(r"\b(?:rint|round)\(", generated) is None
+    assert "vec4 halfway = vec4(0.5, 1.5, (-0.5), (-1.5));" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "nearest_even_rint",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_copysign_preserves_ieee_payload_bits_and_validates(tmp_path):
+    source = """
+    shader ExactCopySign {
+        RWStructuredBuffer<uvec4> output_bits @ binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uvec4 magnitude_bits = uvec4(
+                    0u, 2147483648u, 2139095040u, 2143363909u
+                );
+                uvec4 sign_bits = uvec4(
+                    2147483648u, 0u, 2147483648u, 2147483648u
+                );
+                vec4 magnitudes = asfloat(magnitude_bits);
+                vec4 signs = asfloat(sign_bits);
+                output_bits[0] = asuint(
+                    metal_u3a_u3acopysign(magnitudes, signs));
+                vec2 copied2 = copysign(magnitudes.xy, signs.xy);
+                vec3 copied3 = copysign(magnitudes.xyz, signs.xyz);
+                output_bits[1] = uvec4(
+                    asuint(copied2), asuint(copied3.x), asuint(copied3.y)
+                );
+                output_bits[2].x = asuint(copysign(magnitudes.x, signs.x));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+
+    vector_expression = (
+        "uintBitsToFloat(((floatBitsToUint(magnitudes) & "
+        "uvec4(0x7fffffffu)) | (floatBitsToUint(signs) & "
+        "uvec4(0x80000000u))))"
+    )
+    scalar_expression = (
+        "uintBitsToFloat(((floatBitsToUint(magnitudes.x) & 0x7fffffffu) | "
+        "(floatBitsToUint(signs.x) & 0x80000000u)))"
+    )
+    vector2_expression = (
+        "uintBitsToFloat(((floatBitsToUint(magnitudes.xy) & "
+        "uvec2(0x7fffffffu)) | (floatBitsToUint(signs.xy) & "
+        "uvec2(0x80000000u))))"
+    )
+    vector3_expression = (
+        "uintBitsToFloat(((floatBitsToUint(magnitudes.xyz) & "
+        "uvec3(0x7fffffffu)) | (floatBitsToUint(signs.xyz) & "
+        "uvec3(0x80000000u))))"
+    )
+    assert vector_expression in generated
+    assert vector2_expression in generated
+    assert vector3_expression in generated
+    assert scalar_expression in generated
+    assert "copysign(" not in generated
+    assert "metal_u3a_u3acopysign(" not in generated
+    for payload in ("2147483648u", "2139095040u", "2143363909u"):
+        assert payload in generated
+    assert [
+        ((value & 0x7FFFFFFF) | (sign & 0x80000000))
+        for value, sign in zip(
+            (0, 2147483648, 2139095040, 2143363909),
+            (2147483648, 0, 2147483648, 2147483648),
+        )
+    ] == [2147483648, 0, 4286578688, 4290847557]
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "exact_copysign",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("left_type", "right_type", "reason"),
+    [
+        ("double", "double", "unsupported-operand-type"),
+        ("vec2", "vec3", "operand-shape-mismatch"),
+    ],
+)
+def test_glsl_copysign_rejects_unrepresentable_shapes_with_metadata(
+    left_type,
+    right_type,
+    reason,
+):
+    source = f"""
+    shader InvalidCopySign {{
+        {left_type} invalid({left_type} magnitude, {right_type} sign_source) {{
+            return copysign(magnitude, sign_source);
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(source)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(OpenGLCopySignError) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-copysign-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.copysign-lowering",)
+    assert diagnostic.operation == "copysign"
+    assert diagnostic.operand_types == (left_type, right_type)
+    assert diagnostic.target_profile == "glsl-460"
+    assert diagnostic.reason == reason
+    assert diagnostic.source_location == source_location
+
+
+def test_glsl_user_defined_copysign_remains_an_ordinary_call():
+    source = """
+    shader UserCopySign {
+        float copysign(float magnitude, float sign_source) {
+            return magnitude + sign_source;
+        }
+
+        float apply(float value) {
+            return copysign(value, -1.0);
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "float copysign(float magnitude, float sign_source)" in generated
+    assert "return copysign(value, (-1.0));" in generated
+    assert "0x7fffffffu" not in generated
+    assert "0x80000000u" not in generated
+
+
+def test_glsl_user_defined_qualified_copysign_name_remains_an_ordinary_call():
+    source = """
+    shader UserQualifiedCopySign {
+        float metal_u3a_u3acopysign(float magnitude, float sign_source) {
+            return magnitude + sign_source;
+        }
+
+        float apply(float value) {
+            return metal_u3a_u3acopysign(value, -1.0);
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert (
+        "float metal_u3a_u3acopysign(float magnitude, float sign_source)" in generated
+    )
+    assert "return metal_u3a_u3acopysign(value, (-1.0));" in generated
+    assert "0x7fffffffu" not in generated
+    assert "0x80000000u" not in generated
 
 
 def test_glsl_reserved_identifiers_are_sanitized_consistently():
@@ -2086,6 +2282,106 @@ def test_opengl_specialized_helper_local_array_stays_shared(tmp_path):
     assert re.search(rf"\b{re.escape(backing_name)}\s*\[", helper_body), generated
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "specialized_helper_shared_array"
+    )
+
+
+def test_opengl_resource_specialized_helper_preserves_private_pointer_extent(tmp_path):
+    shader = """
+    shader SpecializedHelperPrivatePointer {
+        void accumulate(
+            thread float* values,
+            threadgroup float* scratch,
+            uint index
+        ) {
+            values[0] += scratch[index];
+            values[2] += scratch[index];
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                float values[3] = {1.0, 2.0, 3.0};
+                threadgroup float scratch[8];
+                accumulate(values, scratch, lid);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    helper = re.search(
+        r"\bvoid\s+(?P<name>accumulate_glsl_[A-Za-z0-9_]+)\s*"
+        r"\(inout float values\[3\], int values_base, uint index, "
+        r"int [A-Za-z_]\w*\)\s*"
+        r"\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert "values[(values_base + int(0))] +=" in helper.group("body")
+    assert "values[(values_base + int(2))] +=" in helper.group("body")
+    assert re.search(r"\bmain_scratch\s*\[", helper.group("body")), generated
+    assert re.search(
+        rf"\b{re.escape(helper.group('name'))}\s*"
+        r"\(values, 0, gl_LocalInvocationIndex, int\(0\)\)\s*;",
+        generated,
+    ), generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "specialized_helper_private_pointer"
+    )
+
+
+def test_opengl_resource_specialization_preserves_private_pointer_variant_order(
+    tmp_path,
+):
+    shader = """
+    shader SpecializedHelperPrivatePointerOrder {
+        void accumulate(
+            thread float* left,
+            threadgroup float* scratch,
+            thread float* right,
+            uint index
+        ) {
+            left[2] += scratch[index];
+            right[4] += scratch[index];
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                float left[3] = {1.0, 2.0, 3.0};
+                float right[5] = {4.0, 5.0, 6.0, 7.0, 8.0};
+                threadgroup float scratch[8];
+                accumulate(left, scratch, right, lid);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    helper = re.search(
+        r"\bvoid\s+(?P<name>accumulate_glsl_[A-Za-z0-9_]+)\s*"
+        r"\(inout float left\[3\], int left_base, "
+        r"inout float right\[5\], int right_base, uint index, "
+        r"int [A-Za-z_]\w*\)\s*"
+        r"\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert "left[(left_base + int(2))] +=" in helper.group("body")
+    assert "right[(right_base + int(4))] +=" in helper.group("body")
+    assert re.search(
+        rf"\b{re.escape(helper.group('name'))}\s*"
+        r"\(left, 0, right, 0, gl_LocalInvocationIndex, int\(0\)\)\s*;",
+        generated,
+    ), generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "specialized_helper_private_pointer_order"
     )
 
 
@@ -10694,6 +10990,169 @@ def test_glsl_compile_time_global_values_emit_const_and_validate(tmp_path):
     )
 
 
+def test_glsl_compile_time_bitcasts_preserve_ieee_payloads_and_validate(tmp_path):
+    code = """
+    shader CompileTimeBitcasts {
+        constant float positiveInfinity = asfloat(2139095040u);
+        constant float negativeInfinity = asfloat(4286578688u);
+        constant float nanPayload = asfloat(2143363909u);
+        constant float negativeZero = asfloat(2147483648u);
+        constant float finitePayload = asfloat(1065353217u);
+        constant vec2 vectorPayload = as_type<vec2>(uvec2(1u, 2147483649u));
+
+        compute {
+            void main(RWStructuredBuffer<uint> output @binding(0)) {
+                output[0] = asuint(positiveInfinity);
+                output[1] = asuint(negativeInfinity);
+                output[2] = asuint(nanPayload);
+                output[3] = asuint(negativeZero);
+                output[4] = asuint(finitePayload);
+                output[5] = asuint(vectorPayload.x);
+                output[6] = asuint(vectorPayload.y);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    for name in (
+        "positiveInfinity",
+        "negativeInfinity",
+        "nanPayload",
+        "negativeZero",
+        "finitePayload",
+        "vectorPayload",
+    ):
+        assert not re.search(rf"\bconst\s+\w+\s+{name}\b", generated)
+    for payload in (
+        "2139095040u",
+        "4286578688u",
+        "2143363909u",
+        "2147483648u",
+        "1065353217u",
+    ):
+        assert f"uintBitsToFloat({payload})" in generated
+    assert "uintBitsToFloat(uvec2(1u, 2147483649u))" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "compile_time_bitcasts",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_compile_time_bitcast_substitution_is_transitive_and_scope_aware(tmp_path):
+    code = """
+    shader CompileTimeBitcastSubstitution {
+        constant float payload = asfloat(2147483648u);
+        constant vec2 payloadPair = vec2(payload, asfloat(1065353217u));
+
+        float shadow(float payload) {
+            return payload;
+        }
+
+        compute {
+            void main(RWStructuredBuffer<uint> output @binding(0)) {
+                output[0] = asuint(payloadPair.x);
+                output[1] = asuint(payloadPair.y);
+                output[2] = asuint(shadow(2.0));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert not re.search(r"\bconst\s+float\s+payload\b", generated)
+    assert not re.search(r"\bconst\s+vec2\s+payloadPair\b", generated)
+    assert "float shadow(float payload)" in generated
+    assert "return payload;" in generated
+    assert "uintBitsToFloat(2147483648u)" in generated
+    assert "uintBitsToFloat(1065353217u)" in generated
+    assert "shadow(2.0)" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "compile_time_bitcast_substitution",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_compile_time_bitcast_rejects_mismatched_shape():
+    code = """
+    shader InvalidCompileTimeBitcast {
+        constant vec2 invalidPayload = as_type<vec2>(1u);
+    }
+    """
+
+    with pytest.raises(OpenGLCompileTimeGlobalError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "bitcast-shape-unsupported"
+    assert diagnostic.operation == "as_type<vec2>"
+    assert diagnostic.operand_type == "uint"
+    assert diagnostic.result_type == "vec2"
+
+
+def test_glsl_compile_time_bitcast_rejects_runtime_operand_with_metadata():
+    code = """
+    shader RuntimeCompileTimeBitcast {
+        uint runtimeBits;
+        constant float invalidPayload = asfloat(runtimeBits);
+    }
+    """
+
+    with pytest.raises(OpenGLCompileTimeGlobalError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "bitcast-operand-runtime-value"
+    assert diagnostic.detail == "runtimeBits"
+    assert diagnostic.operation == "asfloat"
+    assert diagnostic.operand_type == "uint"
+    assert diagnostic.result_type == "float"
+
+
+@pytest.mark.parametrize(
+    ("function_name", "function_declaration", "constant_declaration"),
+    [
+        (
+            "asfloat",
+            "float asfloat(uint value) { return float(value); }",
+            "constant float invalidPayload = asfloat(1u);",
+        ),
+        (
+            "asuint",
+            "uint asuint(float value) { return uint(value); }",
+            "constant uint invalidPayload = asuint(1.0);",
+        ),
+    ],
+)
+def test_glsl_compile_time_global_preserves_user_defined_bitcast_names(
+    function_name, function_declaration, constant_declaration
+):
+    code = f"""
+    shader UserCompileTimeBitcast {{
+        {function_declaration}
+        {constant_declaration}
+    }}
+    """
+
+    with pytest.raises(OpenGLCompileTimeGlobalError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "function-call"
+    assert diagnostic.detail == function_name
+    assert diagnostic.operation is None
+    assert diagnostic.operand_type is None
+    assert diagnostic.result_type is None
+
+
 def test_glsl_constant_address_space_runtime_resources_remain_uniforms():
     code = """
     shader ConstantAddressSpaceResources {
@@ -11260,6 +11719,55 @@ def test_opengl_complex64_struct_operators_lower_to_helpers(tmp_path):
         )
     )
     assert "crossgl_complex64_" not in reused
+
+
+def test_opengl_explicit_complex64_to_scalar_uses_real_component(tmp_path):
+    shader = """
+    shader Complex64ScalarConversion {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        StructuredBuffer<complex64_t> source @ binding(0);
+        RWStructuredBuffer<float> floatOutput @ binding(1);
+        RWStructuredBuffer<int> narrowOutput @ binding(2);
+
+        complex64_t nextValue(inout uint counter) {
+            counter += 1u;
+            return complex64_t(float(counter), -1.0);
+        }
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main(uint3 dispatchId @ SV_DispatchThreadID) {
+                uint index = dispatchId.x;
+                uint counter = 0u;
+                buffer_store(
+                    floatOutput,
+                    index,
+                    float(buffer_load(source, index))
+                );
+                buffer_store(narrowOutput, index, int8(nextValue(counter)));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "floatOutput[index] = (source[index]).real;" in generated
+    assert (
+        "narrowOutput[index] = "
+        "bitfieldExtract(int((nextValue(counter)).real), 0, 8);" in generated
+    )
+    assert generated.count("nextValue(counter)") == 1
+    assert "float(source[index])" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "complex64_scalar_conversion",
+    )
 
 
 def test_opengl_contextual_scalar_to_complex_return_conversion(tmp_path):
@@ -17318,6 +17826,39 @@ def test_glsl_wave_and_mesh_intrinsics():
     assert "SetMeshOutputCounts" not in generated
 
 
+def test_glsl_subgroup_builtin_inputs_request_basic_extension(tmp_path):
+    code = """
+    shader GLSLSubgroupBuiltinInputs {
+        compute {
+            void main(
+                uint subgroupId @gl_SubgroupID,
+                uint laneId @gl_SubgroupInvocationID,
+                uint subgroupCount @gl_NumSubgroups,
+                uint subgroupSize @gl_SubgroupSize,
+                RWStructuredBuffer<uint> outputValues @buffer(0)
+            ) {
+                outputValues[0] = subgroupId + laneId + subgroupCount + subgroupSize;
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated.count("#extension GL_KHR_shader_subgroup_basic : require") == 1
+    assert "gl_SubgroupID" in generated
+    assert "gl_SubgroupInvocationID" in generated
+    assert "gl_NumSubgroups" in generated
+    assert "gl_SubgroupSize" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "subgroup_builtin_inputs",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
 def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
     code = """
     shader GLSLWaveIntrinsics {
@@ -17466,6 +18007,9 @@ def test_glsl_wave_shuffle_and_fill_up_lowers_scalar_vector_and_bool(tmp_path):
                 int delta = 2;
                 vec3 vectorResult = WaveShuffleAndFillUp(
                     vectorValue, vectorFill, delta);
+                int modulo = 8;
+                float segmentedResult = WaveShuffleAndFillUp(
+                    scalarValue, scalarFill, delta, modulo);
 
                 bool boolValue = true;
                 bool boolFill = false;
@@ -17478,33 +18022,75 @@ def test_glsl_wave_shuffle_and_fill_up_lowers_scalar_vector_and_bool(tmp_path):
     generated = generate_code(parse_code(tokenize_code(code)))
 
     assert generated.count("#extension GL_KHR_shader_subgroup_basic : require") == 1
+    assert generated.count("#extension GL_KHR_shader_subgroup_shuffle : require") == 1
     assert (
-        generated.count("#extension GL_KHR_shader_subgroup_shuffle_relative : require")
-        == 1
+        "#extension GL_KHR_shader_subgroup_shuffle_relative : require" not in generated
     )
-    assert "#extension GL_KHR_shader_subgroup_shuffle : require" not in generated
     for signature in (
-        "float crossglWaveShuffleAndFillUp(float value, float fill, uint delta)",
-        "vec3 crossglWaveShuffleAndFillUp(vec3 value, vec3 fill, uint delta)",
-        "bool crossglWaveShuffleAndFillUp(bool value, bool fill, uint delta)",
+        "float crossglWaveShuffleAndFillUp(float value, float fill, uint delta, "
+        "uint modulo)",
+        "vec3 crossglWaveShuffleAndFillUp(vec3 value, vec3 fill, uint delta, "
+        "uint modulo)",
+        "bool crossglWaveShuffleAndFillUp(bool value, bool fill, uint delta, "
+        "uint modulo)",
     ):
         assert signature in generated
-    assert generated.count("subgroupShuffleUp(value, delta);") == len(
-        GLSLCodeGen.GLSL_WAVE_HELPER_VALUE_TYPES
-    )
-    assert generated.count(
-        "return gl_SubgroupInvocationID >= delta ? shuffled : fill;"
-    ) == len(GLSLCodeGen.GLSL_WAVE_HELPER_VALUE_TYPES)
+    helper_count = len(GLSLCodeGen.GLSL_WAVE_HELPER_VALUE_TYPES)
+    for semantic_formula in (
+        "uint lane = gl_SubgroupInvocationID;",
+        "uint segmentLane = lane % modulo;",
+        "uint segmentBase = lane - segmentLane;",
+        "bool useValue = segmentLane >= delta;",
+        "uint valueSourceLane = useValue ? (lane - delta) : lane;",
+        (
+            "uint fillSourceLane = useValue\n"
+            "        ? lane\n"
+            "        : (segmentBase + modulo + segmentLane - delta);"
+        ),
+        "subgroupShuffle(value, valueSourceLane);",
+        "subgroupShuffle(fill, fillSourceLane);",
+        "return useValue ? shuffledValue : shuffledFill;",
+    ):
+        assert generated.count(semantic_formula) == helper_count
+    assert "subgroupShuffleUp" not in generated
     for call in (
         "float scalarResult = crossglWaveShuffleAndFillUp("
-        "scalarValue, scalarFill, 1u);",
+        "scalarValue, scalarFill, 1u, gl_SubgroupSize);",
         "vec3 vectorResult = crossglWaveShuffleAndFillUp("
-        "vectorValue, vectorFill, uint(delta));",
-        "bool boolResult = crossglWaveShuffleAndFillUp(" "boolValue, boolFill, 1u);",
+        "vectorValue, vectorFill, uint(delta), gl_SubgroupSize);",
+        "float segmentedResult = crossglWaveShuffleAndFillUp("
+        "scalarValue, scalarFill, uint(delta), uint(modulo));",
+        "bool boolResult = crossglWaveShuffleAndFillUp("
+        "boolValue, boolFill, 1u, gl_SubgroupSize);",
     ):
         assert call in generated
     assert not re.search(r"(?<!crossgl)WaveShuffleAndFillUp\(", generated)
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "wave_shuffle_and_fill_up_overloads",
+        spirv_target="spirv1.3",
+    )
 
+
+def test_glsl_wave_shuffle_and_fill_up_validates_with_glslang(tmp_path):
+    code = """
+    shader GLSLWaveShuffleAndFillUpValidation {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint value = lane + 1u;
+                uint fill = lane + 100u;
+                uint fullSubgroup = WaveShuffleAndFillUp(value, fill, 1u);
+                uint segmented = WaveShuffleAndFillUp(value, fill, 2u, 8u);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "crossglWaveShuffleAndFillUp(value, fill, 1u, gl_SubgroupSize)" in generated
+    assert "crossglWaveShuffleAndFillUp(value, fill, 2u, 8u)" in generated
     assert_glsl_compute_validates_if_available(
         generated,
         tmp_path,
@@ -17526,8 +18112,12 @@ def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
                 mat2 matrixValue = mat2(1.0);
                 float floatDelta = 1.0;
                 vec2 vectorDelta = vec2(1.0);
+                float floatModulo = 8.0;
+                uvec2 vectorModulo = uvec2(8u);
 
                 float badArity = WaveShuffleAndFillUp(scalarValue, scalarFill);
+                float badHighArity = WaveShuffleAndFillUp(
+                    scalarValue, scalarFill, 1u, 8u, 16u);
                 mat2 badValue = WaveShuffleAndFillUp(
                     matrixValue, matrixValue, 1u);
                 vec2 badFill = WaveShuffleAndFillUp(
@@ -17540,6 +18130,10 @@ def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
                     scalarValue, scalarFill, floatDelta);
                 vec2 badDeltaShape = WaveShuffleAndFillUp(
                     vectorValue, vec2(0.0), vectorDelta);
+                float badModulo = WaveShuffleAndFillUp(
+                    scalarValue, scalarFill, 1u, floatModulo);
+                float badModuloShape = WaveShuffleAndFillUp(
+                    scalarValue, scalarFill, 1u, vectorModulo);
             }
         }
     }
@@ -17547,7 +18141,8 @@ def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
     generated = generate_code(parse_code(tokenize_code(code)))
 
     expected_diagnostics = (
-        "WaveShuffleAndFillUp expects 3 arguments, got 2",
+        "WaveShuffleAndFillUp expects 3 or 4 arguments, got 2",
+        "WaveShuffleAndFillUp expects 3 or 4 arguments, got 5",
         (
             "WaveShuffleAndFillUp requires a scalar or vector value argument: "
             "matrixValue has type mat2"
@@ -17572,6 +18167,14 @@ def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
         (
             "WaveShuffleAndFillUp requires a scalar integer delta argument: "
             "vectorDelta has type vec2"
+        ),
+        (
+            "WaveShuffleAndFillUp requires a scalar integer modulo argument: "
+            "floatModulo has type float"
+        ),
+        (
+            "WaveShuffleAndFillUp requires a scalar integer modulo argument: "
+            "vectorModulo has type uvec2"
         ),
     )
     for diagnostic in expected_diagnostics:
@@ -36334,6 +36937,44 @@ def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helper
         spirv_target="spirv1.3",
         validate_spirv=True,
     )
+
+
+def test_opengl_entry_scoped_generation_prunes_unreachable_global_declarations():
+    source = """
+    shader EntryScopedGlobals {
+        constant uint selectedConstant @constant_id(3) = 7;
+        constant uint unselectedConstant @constant_id(4) = 11;
+        uniform uint selectedDirect @location(0);
+        uniform uint selectedThroughHelper @location(1);
+        uniform uint unselectedGlobal @location(2);
+
+        uint selected_helper(uint value) {
+            return value + selectedConstant + selectedThroughHelper;
+        }
+
+        compute first {
+            void main(RWStructuredBuffer<uint> outputValues @buffer(0)) {
+                outputValues[0] = unselectedConstant + unselectedGlobal;
+            }
+        }
+
+        compute second {
+            void main(RWStructuredBuffer<uint> outputValues @buffer(0)) {
+                outputValues[0] = selectedDirect + selected_helper(1u);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(source))
+
+    generated = GLSLCodeGen().generate_entry(ast, "second")
+
+    assert "layout(constant_id = 3) const uint selectedConstant = 7;" in generated
+    assert "layout(location = 0) uniform uint selectedDirect;" in generated
+    assert "layout(location = 1) uniform uint selectedThroughHelper;" in generated
+    assert "selected_helper" in generated
+    assert "unselectedConstant" not in generated
+    assert "unselectedGlobal" not in generated
 
 
 def test_opengl_entry_scoped_generation_reports_available_entries():

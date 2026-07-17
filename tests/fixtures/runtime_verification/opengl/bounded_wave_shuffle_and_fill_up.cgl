@@ -1,0 +1,16 @@
+shader OpenGLBoundedWaveShuffleRuntime {
+    StructuredBuffer<uint> values @ binding(0);
+    StructuredBuffer<uint> fills @ binding(1);
+    RWStructuredBuffer<uint> output @ binding(2);
+
+    compute {
+        layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+        void main(uint3 tid @ gl_GlobalInvocationID) {
+            uint value = buffer_load(values, tid.x);
+            uint fill = buffer_load(fills, tid.x);
+            uint result = WaveShuffleAndFillUp(value, fill, 1u, 2u);
+            buffer_store(output, tid.x, result);
+        }
+    }
+}

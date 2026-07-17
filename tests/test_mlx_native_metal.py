@@ -11,6 +11,7 @@ HELPER_PATH = ROOT / "demos" / "integrations" / "mlx" / "run_mlx_native_metal.py
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "mlx-native-metal.yml"
 DOCUMENTATION_PATH = ROOT / "demos" / "integrations" / "mlx" / "NATIVE_METAL.md"
 README_PATH = ROOT / "demos" / "integrations" / "mlx" / "README.md"
+DEFAULT_FAKE_CPP_ASSERTION_COUNT = 3490
 
 
 def _load_helper():
@@ -66,8 +67,14 @@ class FakeRunner:
             if python_skipped is None
             else python_skipped
         )
-        self.cpp_cases = cpp_cases or module.EXPECTED_CPP_TEST_CASE_COUNT
-        self.cpp_assertions = cpp_assertions or module.EXPECTED_CPP_ASSERTION_COUNT
+        self.cpp_cases = (
+            module.EXPECTED_CPP_TEST_CASE_COUNT if cpp_cases is None else cpp_cases
+        )
+        self.cpp_assertions = (
+            DEFAULT_FAKE_CPP_ASSERTION_COUNT
+            if cpp_assertions is None
+            else cpp_assertions
+        )
         self.architecture = architecture
         self.sdk_path = (tmp_path / "MacOSX.sdk").resolve()
         self.metal_path = (tmp_path / "toolchain" / "metal").resolve()
@@ -551,14 +558,33 @@ def test_ci_python_skip_count_drift_fails_closed(tmp_path, monkeypatch):
         )
 
 
-def test_cpp_test_count_drift_fails_closed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("assertion_count", [3490, 3488])
+def test_successful_cpp_assertion_count_is_recorded(
+    tmp_path, monkeypatch, assertion_count
+):
+    module = _load_helper()
+    payload, _runner, _metal_root, _test_root, _output_dir = _run_fake_proof(
+        module,
+        tmp_path,
+        monkeypatch,
+        cpp_assertions=assertion_count,
+    )
+
+    assert payload["upstreamCppTests"]["aggregateTests"]["counts"]["assertions"] == {
+        "total": assertion_count,
+        "passed": assertion_count,
+        "failed": 0,
+    }
+
+
+def test_cpp_test_case_count_drift_fails_closed(tmp_path, monkeypatch):
     module = _load_helper()
     metal_root, test_root, output_dir = _prepare_checkouts(
         module, tmp_path, monkeypatch
     )
-    runner = FakeRunner(module, tmp_path, cpp_assertions=3489)
+    runner = FakeRunner(module, tmp_path, cpp_cases=259)
 
-    with pytest.raises(module.MlxNativeMetalProofError, match="assertion accounting"):
+    with pytest.raises(module.MlxNativeMetalProofError, match="case accounting"):
         module.run_proof(
             metal_root,
             test_root,
@@ -567,6 +593,38 @@ def test_cpp_test_count_drift_fails_closed(tmp_path, monkeypatch):
             runner=runner,
             jobs=1,
         )
+
+
+@pytest.mark.parametrize(
+    ("summary", "message"),
+    [
+        (
+            "[doctest] test cases: 260 | 259 passed | 1 failed | 0 skipped\n"
+            "[doctest] assertions: 3488 | 3488 passed | 0 failed |\n",
+            "case accounting",
+        ),
+        (
+            "[doctest] test cases: 260 | 259 passed | 0 failed | 1 skipped\n"
+            "[doctest] assertions: 3488 | 3488 passed | 0 failed |\n",
+            "case accounting",
+        ),
+        (
+            "[doctest] test cases: 260 | 260 passed | 0 failed | 0 skipped\n"
+            "[doctest] assertions: 3488 | 3487 passed | 1 failed |\n",
+            "assertion accounting",
+        ),
+        (
+            "[doctest] test cases: 260 | 260 passed | 0 failed | 0 skipped\n"
+            "[doctest] assertions: 0 | 0 passed | 0 failed |\n",
+            "assertion accounting",
+        ),
+    ],
+)
+def test_cpp_unsuccessful_or_incomplete_summary_fails_closed(summary, message):
+    module = _load_helper()
+
+    with pytest.raises(module.MlxNativeMetalProofError, match=message):
+        module._parse_doctest_summary(summary)
 
 
 def test_workflow_uses_macos_26_arm64_and_uploads_only_report_and_logs():
@@ -597,10 +655,13 @@ def test_native_baseline_documentation_keeps_claims_and_results_separate():
     assert "required count is 46" in normalized_text
     assert "Any other skip count fails closed" in normalized_text
     assert "260 of 260 cases" in text
-    assert "3,490 of 3,490 assertions" in text
+    assert "every observed assertion to pass" in normalized_text
+    assert "assertion total counts evaluations performed at runtime" in normalized_text
+    assert "zero assertion total" in normalized_text
+    assert "any failed or skipped case fails closed" in normalized_text
     assert "aggregate `tests/tests` doctest" in text
     assert "executable once" in text
-    assert "not a skipped test or coverage" in text
+    assert "not a skipped test or coverage" in normalized_text
     assert "does not establish translated-target correctness" in text
     assert "Torch is intentionally not installed" in text
 

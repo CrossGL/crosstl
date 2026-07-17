@@ -30,7 +30,10 @@ from crosstl.backend.Metal.MetalAst import (
     TypeAliasNode,
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
-from crosstl.backend.Metal.MetalParser import MetalParser
+from crosstl.backend.Metal.MetalParser import (
+    MetalCallOperatorAssociationError,
+    MetalParser,
+)
 
 
 def tokenize_code(code: str) -> List:
@@ -1696,6 +1699,98 @@ def test_parse_scoped_call_operator_definition_from_mlx_unary_ops():
     assert function.params[0].name == "x"
 
 
+def test_parse_associates_declared_out_of_line_call_operator_with_trailing_const():
+    source = """struct complex64_t { float real; float imag; };
+struct ArcCos {
+    complex64_t operator()(complex64_t declared_value) const;
+};
+
+complex64_t ArcCos::operator()(complex64_t x) const {
+    return x;
+}
+"""
+    tokens = MetalLexer(
+        source, preprocess=False, file_path="mlx-unary-const.metal"
+    ).tokenize()
+    ast = MetalParser(tokens, file_path="mlx-unary-const.metal").parse()
+    owner = next(struct for struct in ast.structs if struct.name == "ArcCos")
+    declaration = owner.call_operator_declarations[0]
+    definition = ast.functions[0]
+
+    assert declaration.name == "operator()"
+    assert declaration.body is None
+    assert declaration.method_qualifiers == ["const"]
+    assert declaration.owner_name == "ArcCos"
+    assert declaration.declaration_source_location["line"] == 3
+    assert definition.name == "ArcCos::operator()"
+    assert definition.method_qualifiers == ["const"]
+    assert definition.out_of_line_call_operator_owner == "ArcCos"
+    assert definition.out_of_line_call_operator_declaration == {
+        "owner": "ArcCos",
+        "signature": "operator()(complex64_t) const",
+        "source_location": declaration.declaration_source_location,
+    }
+    assert declaration not in definition.__dict__.values()
+    assert owner not in definition.__dict__.values()
+    assert len(list(iter_ast_nodes(ast))) < 40
+
+
+def test_parse_rejects_missing_out_of_line_call_operator_declaration_with_location():
+    source = """struct complex64_t { float real; float imag; };
+struct ArcCos {
+    float operator()(float x);
+};
+
+complex64_t ArcCos::operator()(complex64_t x) {
+    return x;
+}
+"""
+    tokens = MetalLexer(
+        source, preprocess=False, file_path="mlx-unary-missing.metal"
+    ).tokenize()
+
+    with pytest.raises(MetalCallOperatorAssociationError) as exc_info:
+        MetalParser(tokens, file_path="mlx-unary-missing.metal").parse()
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.metal-call-operator-association-unresolved"
+    )
+    assert error.owner == "ArcCos"
+    assert error.reason == "no declaration matches the definition contract"
+    assert error.source_location["file"] == "mlx-unary-missing.metal"
+    assert error.source_location["line"] == 6
+    assert error.declaration_locations[0]["line"] == 3
+    assert error.candidates == ("operator()(float)",)
+
+
+def test_parse_rejects_ambiguous_out_of_line_call_operator_declaration():
+    source = """struct ArcCos {
+    float operator()(float first) const;
+    float operator()(float second) const;
+};
+
+float ArcCos::operator()(float x) const {
+    return x;
+}
+"""
+    tokens = MetalLexer(
+        source, preprocess=False, file_path="mlx-unary-ambiguous.metal"
+    ).tokenize()
+
+    with pytest.raises(MetalCallOperatorAssociationError) as exc_info:
+        MetalParser(tokens, file_path="mlx-unary-ambiguous.metal").parse()
+
+    error = exc_info.value
+    assert error.reason == "multiple declarations match the definition contract"
+    assert error.source_location["line"] == 6
+    assert [location["line"] for location in error.declaration_locations] == [2, 3]
+    assert error.candidates == (
+        "operator()(float) const",
+        "operator()(float) const",
+    )
+
+
 def test_skip_struct_builtin_conversion_operators_from_mlx_fp4_header():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
@@ -3174,7 +3269,14 @@ def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
     """
     ast = parse_ok(code)
 
-    assert [func.name for func in ast.functions] == ["real_kernel"]
+    assert [func.name for func in ast.functions] == ["abs", "real_kernel"]
+    wrapper = ast.functions[0]
+    assert wrapper.namespace == "metal"
+    assert wrapper.return_type == "bfloat16_t"
+    assert wrapper.declaration_qualifiers == ["METAL_FUNC"]
+    assert [(param.vtype, param.name) for param in wrapper.params] == [
+        ("bfloat16_t", "x")
+    ]
 
 
 def test_parse_metal_mesh_scoped_type_from_public_samples():

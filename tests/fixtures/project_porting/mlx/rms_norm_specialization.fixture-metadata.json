@@ -7,7 +7,23 @@
   "functionConstant": {
     "name": "has_w",
     "id": 20,
-    "required": true
+    "required": true,
+    "requiredByEntryPoints": [
+      "vjp_rms_loopedbfloat16",
+      "vjp_rms_loopedfloat16",
+      "vjp_rms_loopedfloat32",
+      "vjp_rmsbfloat16",
+      "vjp_rmsfloat16",
+      "vjp_rmsfloat32"
+    ],
+    "absentFromEntryPoints": [
+      "rms_loopedbfloat16",
+      "rms_loopedfloat16",
+      "rms_loopedfloat32",
+      "rmsbfloat16",
+      "rmsfloat16",
+      "rmsfloat32"
+    ]
   },
   "hostNamedEntryPoints": [
     "rms_loopedbfloat16",
@@ -44,9 +60,13 @@
     "completeRuntimeCoverage": false
   },
   "directx": {
-    "profile": "cs_6_0",
+    "profile": "cs_6_6",
+    "minimumShaderModel": "6.6",
+    "requiredSubgroupWidth": 32,
+    "subgroupWidthEnforcement": "WaveSize(32)",
     "libraryArtifactCount": 2,
     "hostNamedEntryCountPerArtifact": 12,
+    "generatedWaveSizeCountPerArtifact": 12,
     "compiledEntryPointCountPerVariant": 1,
     "compilerRunCount": 2,
     "variants": [
@@ -79,6 +99,10 @@
     "constantId": 20,
     "standaloneArtifactCount": 24,
     "standaloneArtifactCountPerVariant": 12,
+    "deferredEntryPointCountPerVariant": 6,
+    "constantFreeEntryPointCountPerVariant": 6,
+    "deferredArtifactCount": 12,
+    "constantFreeArtifactCount": 12,
     "compiledArtifactCount": 24,
     "validatedArtifactCount": 24,
     "variants": [

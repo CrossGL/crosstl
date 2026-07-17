@@ -87,13 +87,13 @@ def test_directx_bfloat16_numeric_and_bitcast_helpers_are_exact():
 
     assert "uint from_float(float value)" in generated
     assert "float to_float(uint value)" in generated
-    assert "uint from_bits(min16uint bits)" in generated
-    assert "min16uint to_bits(uint value)" in generated
+    assert "uint from_bits(uint16_t bits)" in generated
+    assert "uint16_t to_bits(uint value)" in generated
     assert "uint roundingBias = 0x7fffu + (upperBits & 1u);" in generated
     assert "absoluteBits > 0x7f800000u" in generated
     assert "(upperBits | 0x40u) & 0xffffu" in generated
     assert "asfloat((value & 0xffffu) << 16u)" in generated
-    assert "__crossgl_bfloat16_from_uint16(min16uint(bits))" in generated
+    assert "__crossgl_bfloat16_from_uint16(uint16_t(bits))" in generated
     assert "__crossgl_bfloat16_to_uint16(uint(value))" in generated
     assert "half" not in generated
 

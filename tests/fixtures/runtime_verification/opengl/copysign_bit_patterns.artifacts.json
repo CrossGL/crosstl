@@ -1,0 +1,84 @@
+{
+  "kind": "crosstl-runtime-artifact-manifest",
+  "project": {
+    "root": ".",
+    "targets": [
+      "opengl"
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "opengl|tests/fixtures/runtime_verification/opengl/copysign_bit_patterns.cgl|ieee-payloads",
+      "source": "tests/fixtures/runtime_verification/opengl/copysign_bit_patterns.cgl",
+      "path": "out/opengl/copysign_bit_patterns.glsl",
+      "target": "opengl",
+      "sourceBackend": "cgl",
+      "stage": "compute",
+      "variant": "ieee-payloads",
+      "status": "translated",
+      "entryPoints": [
+        {
+          "name": "main",
+          "stage": "compute",
+          "executionConfig": {
+            "numthreads": [
+              1,
+              1,
+              1
+            ]
+          },
+          "workgroupSize": [
+            1,
+            1,
+            1
+          ]
+        }
+      ],
+      "resourceBindings": [
+        {
+          "id": "buffer|0|magnitude_bits",
+          "name": "magnitude_bits",
+          "kind": "buffer",
+          "type": "StructuredBuffer<uint>",
+          "set": 0,
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "id": "buffer|1|sign_bits",
+          "name": "sign_bits",
+          "kind": "buffer",
+          "type": "StructuredBuffer<uint>",
+          "set": 0,
+          "binding": 1,
+          "access": "read"
+        },
+        {
+          "id": "buffer|2|output_bits",
+          "name": "output_bits",
+          "kind": "buffer",
+          "type": "RWStructuredBuffer<uint>",
+          "set": 0,
+          "binding": 2,
+          "access": "write"
+        }
+      ],
+      "dispatch": {
+        "status": "available",
+        "workgroups": [
+          {
+            "entryPoint": "main",
+            "stage": "compute",
+            "workgroupSize": [
+              1,
+              1,
+              1
+            ],
+            "source": "fixture"
+          }
+        ],
+        "diagnostics": []
+      }
+    }
+  ]
+}

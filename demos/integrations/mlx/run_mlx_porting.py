@@ -50,6 +50,8 @@ MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
 MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
 MLX_RANDOM_SOURCE = "mlx/backend/metal/kernels/random.metal"
+MLX_QUANTIZED_SOURCE = "mlx/backend/metal/kernels/quantized.metal"
+MLX_QUANTIZED_SELECTED_ENTRY_POINT = "affine_quantize_float_gs_32_b_2"
 MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
 MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
@@ -108,6 +110,7 @@ MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES = tuple(
 MLX_DIRECTX_NATIVE_BFLOAT16_STORAGE_SOURCES = (
     MLX_ARANGE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
+    MLX_RANDOM_SOURCE,
     MLX_ROPE_SOURCE,
     MLX_TERNARY_SOURCE,
 )
@@ -230,6 +233,116 @@ MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT = sum(
     MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
 )
+MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS = (
+    {
+        "classification": "native-int16-destination-conversion",
+        "source": MLX_ARANGE_SOURCE,
+        "issue": "https://github.com/CrossGL/crosstl/issues/1801",
+        "message": (
+            "conversion from larger type 'unsigned int' to smaller type "
+            "'int16_t', possible loss of data [-Wconversion]"
+        ),
+        "sourceLines": [
+            {
+                "text": (
+                    "arangeint16_out[index] = (arangeint16_start + "
+                    "(index * arangeint16_step));"
+                ),
+                "occurrencesPerRun": 1,
+            }
+        ],
+        "warningsPerRun": 1,
+    },
+    {
+        "classification": "native-half-arithmetic-conversion",
+        "source": MLX_ARANGE_SOURCE,
+        "issue": "https://github.com/CrossGL/crosstl/issues/1802",
+        "message": (
+            "conversion from larger type 'uint' to smaller type 'half', "
+            "possible loss of data [-Wconversion]"
+        ),
+        "sourceLines": [
+            {
+                "text": (
+                    "arangefloat16_out[index] = (arangefloat16_start + "
+                    "(index * arangefloat16_step));"
+                ),
+                "occurrencesPerRun": 1,
+            }
+        ],
+        "warningsPerRun": 1,
+    },
+    {
+        "classification": "native-bfloat-helper-promotion",
+        "source": MLX_RANDOM_SOURCE,
+        "issue": "https://github.com/CrossGL/crosstl/issues/1799",
+        "message": "'min16uint' is promoted to 'uint16_t' [-Wconversion]",
+        "sourceLines": [
+            {
+                "text": "uint __crossgl_bfloat16_from_uint16(min16uint value)",
+                "occurrencesPerRun": 1,
+            },
+            {
+                "text": "min16uint __crossgl_bfloat16_to_uint16(uint value)",
+                "occurrencesPerRun": 1,
+            },
+        ],
+        "warningsPerRun": 2,
+    },
+    {
+        "classification": "uint64-local-destination-conversion",
+        "source": MLX_ROPE_SOURCE,
+        "issue": "https://github.com/CrossGL/crosstl/issues/1801",
+        "message": (
+            "conversion from larger type 'unsigned long long' to smaller type "
+            "'uint', possible loss of data [-Wconversion]"
+        ),
+        "sourceLines": [
+            {
+                "text": "index_1 = ((2 * pos.x) + (pos.y * stride));",
+                "occurrencesPerRun": 3,
+            },
+            {
+                "text": "index_1 = (pos.x + (pos.y * stride));",
+                "occurrencesPerRun": 3,
+            },
+        ],
+        "warningsPerRun": 6,
+    },
+)
+DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1799",
+    "https://github.com/CrossGL/crosstl/issues/1801",
+    "https://github.com/CrossGL/crosstl/issues/1802",
+)
+_MLX_DIRECTX_TOOLCHAIN_WARNING_SOURCES = tuple(
+    dict.fromkeys(
+        contract["source"] for contract in MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS
+    )
+)
+MLX_DIRECTX_TOOLCHAIN_WARNING_EVIDENCE = {
+    "status": "validated-with-tracked-warnings",
+    "warningRunCount": sum(
+        MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[source]
+        for source in _MLX_DIRECTX_TOOLCHAIN_WARNING_SOURCES
+    ),
+    "observedWarningCount": sum(
+        MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[contract["source"]]
+        * contract["warningsPerRun"]
+        for contract in MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS
+    ),
+    "uniqueContractCount": len(MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS),
+    "contracts": [
+        {
+            **contract,
+            "observedCount": (
+                MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[contract["source"]]
+                * contract["warningsPerRun"]
+            ),
+        }
+        for contract in MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS
+    ],
+}
 MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS = {
     source: MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
     for source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
@@ -242,7 +355,7 @@ MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE = (
     "emitted entry points do not declare a shared source size. Select one entry "
     "point or emit independently specialized artifacts."
 )
-MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues/1750"
+MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues/1793"
 MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
     MLX_ARG_REDUCE_SOURCE: {
         "specializationCount": 51,
@@ -494,24 +607,170 @@ FFT_OPENGL_EXPECTED_POINTER_EVIDENCE = {
     "parameter": "crosstl_ptr_buf",
     "reason": "unprovable-view-access",
 }
+OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE = (
+    "https://github.com/CrossGL/crosstl/issues/1515"
+)
+OPENGL_QUANTIZED_EXPECTED_DIAGNOSTIC_CODE = (
+    "project.translate.opengl-index-type-unsupported"
+)
+OPENGL_QUANTIZED_EXPECTED_MISSING_CAPABILITY = "opengl.index-width-normalization"
+OPENGL_QUANTIZED_EXPECTED_MESSAGE = (
+    "OpenGL cannot preserve subscript index type 'uint64_t' for 'w': "
+    "index range unproven"
+)
+MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
+    "status": "translated-dxc-validated",
+    "commit": MLX_COMMIT,
+    "source": MLX_QUANTIZED_SOURCE,
+    "target": "directx",
+    "selected_entry_point": MLX_QUANTIZED_SELECTED_ENTRY_POINT,
+    "artifact_status": "translated",
+    "artifact_count": 1,
+    "translation_diagnostic_count": 0,
+    "generated_hlsl": {
+        "sha256": "c2737b9d324578209c15899cb9a1dad94697b041c0bcfd0c1276a809d36f8f88",
+        "size_bytes": 5737,
+    },
+    "materialization": {
+        "reachable_specialization_count": 6,
+        "concrete_specialization_count": 3,
+        "pruned_candidate_count": 110861,
+    },
+    "native_16_bit_emission": {
+        "status": "resolved-for-selected-entry",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1799",
+        "required_capability": "directx.native-16bit-types",
+        "profile": "cs_6_2",
+        "compiler_arguments": ["-enable-16bit-types"],
+        "minimum_precision_diagnostic_count": 0,
+    },
+    "concrete_static_assertion_evaluation": {
+        "status": "resolved-for-selected-entry",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1800",
+        "remaining_static_assertion_count": 0,
+    },
+    "compiler_validation": {
+        "compiler": "dxc",
+        "profile": "cs_6_2",
+        "compiler_arguments": ["-enable-16bit-types"],
+        "warnings_as_errors": True,
+        "status": "passed",
+        "observed_failure_count": 0,
+        "contextual_narrowing": {
+            "status": "resolved-for-selected-entry",
+            "issue": "https://github.com/CrossGL/crosstl/issues/1801",
+            "resource": "out_",
+            "resource_element_type": "uint",
+            "value_type": "uint64_t",
+            "generated_store": (
+                "out_[uint((out_index + 4))] = "
+                "uint(((output & 1095216660480ull) >> 32));"
+            ),
+        },
+    },
+    "runtime_execution_attempted": False,
+    "numerical_parity_claimed": False,
+}
+MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
+    "status": "blocked-as-expected",
+    "commit": MLX_COMMIT,
+    "source": MLX_QUANTIZED_SOURCE,
+    "target": "directx",
+    "selected_entry_point": "affine_gather_qmv_fast_float_gs_32_b_2",
+    "project_translation": {
+        "unit_count": 1,
+        "artifact_record_count": 1,
+        "translated_count": 0,
+        "failed_count": 1,
+        "emitted_target_file_count": 0,
+        "project_diagnostic_count": 1,
+    },
+    "diagnostic": {
+        "code": "project.translate.directx-private-pointer-unsupported",
+        "missing_capability": "directx.private-pointer-parameter-lowering",
+        "private_pointer": {
+            "function": "load_vector_float_float_values_per_thread_2",
+            "parameter": "x_thread",
+            "reason": "missing-fixed-array-extent",
+        },
+        "message": (
+            "DirectX private pointer parameter "
+            "'load_vector_float_float_values_per_thread_2.x_thread' has no "
+            "provable bounded span"
+        ),
+    },
+    "source_contract": {
+        "helper": "load_vector<T, U, values_per_thread, bits>",
+        "caller_array": "thread U x_thread[values_per_thread]",
+        "specialized_extent": 2,
+    },
+    "artifact_emitted": False,
+    "native_validation_attempted": False,
+    "native_validation_status": "not-run-no-artifact",
+    "blocked_by": ["https://github.com/CrossGL/crosstl/issues/1497"],
+    "runtime_execution_attempted": False,
+    "numerical_parity_claimed": False,
+}
+MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
+    "status": "blocked-as-expected",
+    "commit": MLX_COMMIT,
+    "source": MLX_QUANTIZED_SOURCE,
+    "target": "opengl",
+    "selected_entry_point": MLX_QUANTIZED_SELECTED_ENTRY_POINT,
+    "project_translation": {
+        "unit_count": 1,
+        "artifact_record_count": 1,
+        "translated_count": 0,
+        "failed_count": 1,
+        "emitted_target_file_count": 0,
+        "project_diagnostic_count": 1,
+    },
+    "materialization": {
+        "reachable_specialization_count": 6,
+        "concrete_specialization_count": 3,
+        "pruned_candidate_count": 110861,
+    },
+    "diagnostic": {
+        "code": OPENGL_QUANTIZED_EXPECTED_DIAGNOSTIC_CODE,
+        "missing_capability": OPENGL_QUANTIZED_EXPECTED_MISSING_CAPABILITY,
+        "message": OPENGL_QUANTIZED_EXPECTED_MESSAGE,
+        "index_conversion": {
+            "indexed_value": "w",
+            "index_expression": "in_index + i",
+            "source_type": "uint64_t",
+            "target_type": "uint",
+            "range_status": "unproven",
+            "reason": "index-range-unproven",
+        },
+    },
+    "artifact_emitted": False,
+    "native_validation_attempted": False,
+    "native_validation_status": "not-run-no-artifact",
+    "blocked_by": [OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE],
+    "runtime_execution_attempted": False,
+    "numerical_parity_claimed": False,
+}
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1376",
+    "https://github.com/CrossGL/crosstl/issues/1576",
     "https://github.com/CrossGL/crosstl/issues/1676",
-    "https://github.com/CrossGL/crosstl/issues/1476",
     "https://github.com/CrossGL/crosstl/issues/1479",
     "https://github.com/CrossGL/crosstl/issues/1490",
+    "https://github.com/CrossGL/crosstl/issues/1497",
+    OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE,
     "https://github.com/CrossGL/crosstl/issues/1544",
     "https://github.com/CrossGL/crosstl/issues/1546",
     "https://github.com/CrossGL/crosstl/issues/1554",
     "https://github.com/CrossGL/crosstl/issues/1559",
     "https://github.com/CrossGL/crosstl/issues/1562",
-    "https://github.com/CrossGL/crosstl/issues/1659",
     "https://github.com/CrossGL/crosstl/issues/1669",
     "https://github.com/CrossGL/crosstl/issues/1671",
-    "https://github.com/CrossGL/crosstl/issues/1672",
+)
+FULL_CORPUS_VALIDATION_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1670",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",
@@ -577,10 +836,10 @@ RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES = frozenset(
 )
 FULL_CORPUS_TRACKED_ISSUES = (
     *FRONTIER_VALIDATION_TRACKED_ISSUES,
+    *DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES,
     MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
-    "https://github.com/CrossGL/crosstl/issues/1312",
-    "https://github.com/CrossGL/crosstl/issues/1670",
     *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
+    *FULL_CORPUS_VALIDATION_TRACKED_ISSUES,
     *OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES,
     *OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES,
     *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
@@ -592,6 +851,21 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1800",
+    "https://github.com/CrossGL/crosstl/issues/1672",
+    "https://github.com/CrossGL/crosstl/issues/1659",
+    "https://github.com/CrossGL/crosstl/issues/1516",
+    "https://github.com/CrossGL/crosstl/issues/1476",
+    "https://github.com/CrossGL/crosstl/issues/1472",
+    "https://github.com/CrossGL/crosstl/issues/1312",
+    "https://github.com/CrossGL/crosstl/issues/1792",
+    "https://github.com/CrossGL/crosstl/issues/1790",
+    "https://github.com/CrossGL/crosstl/issues/1789",
+    "https://github.com/CrossGL/crosstl/issues/1787",
+    "https://github.com/CrossGL/crosstl/issues/1784",
+    "https://github.com/CrossGL/crosstl/issues/1750",
+    "https://github.com/CrossGL/crosstl/issues/1726",
+    "https://github.com/CrossGL/crosstl/issues/1474",
     "https://github.com/CrossGL/crosstl/issues/1728",
     "https://github.com/CrossGL/crosstl/issues/1701",
     "https://github.com/CrossGL/crosstl/issues/1694",
@@ -2814,6 +3088,84 @@ def _directx_toolchain_entry_point(run: Mapping[str, Any]) -> str | None:
     return entry_point
 
 
+_DXC_REPORT_WARNING_PATTERN = re.compile(
+    r"^.+:\d+:\d+:\s+warning:\s+(?P<message>.+)$", re.IGNORECASE
+)
+
+
+def _dxc_report_warnings(run: Mapping[str, Any]) -> list[tuple[str, str]]:
+    stderr = run.get("stderr", "")
+    _require(
+        isinstance(stderr, str),
+        "DirectX toolchain validation recorded non-text stderr",
+    )
+    warnings: list[tuple[str, str]] = []
+    lines = stderr.splitlines()
+    for index, line in enumerate(lines):
+        if "warning:" not in line.lower():
+            continue
+        match = _DXC_REPORT_WARNING_PATTERN.match(line)
+        _require(match is not None, f"DXC emitted an unrecognized warning: {line}")
+        _require(
+            index + 1 < len(lines) and lines[index + 1].strip(),
+            f"DXC warning omitted its generated source line: {line}",
+        )
+        warnings.append((match.group("message"), lines[index + 1].strip()))
+    return warnings
+
+
+def _directx_toolchain_warning_evidence(
+    runs: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    contracts_by_source: dict[str, list[Mapping[str, Any]]] = {}
+    for contract in MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS:
+        contracts_by_source.setdefault(contract["source"], []).append(contract)
+
+    observed_counts: Counter[str] = Counter()
+    warning_run_count = 0
+    for run in runs:
+        source = run.get("source")
+        _require(
+            isinstance(source, str),
+            "DirectX toolchain validation omitted a source path",
+        )
+        warnings = Counter(_dxc_report_warnings(run))
+        expected_contracts = contracts_by_source.get(source, [])
+        expected_warnings: Counter[tuple[str, str]] = Counter()
+        for contract in expected_contracts:
+            for source_line in contract["sourceLines"]:
+                expected_warnings[
+                    (contract["message"], source_line["text"])
+                ] += source_line["occurrencesPerRun"]
+        _require(
+            warnings == expected_warnings,
+            f"DirectX toolchain warnings changed for {source}: "
+            f"expected {dict(expected_warnings)}, observed {dict(warnings)}",
+        )
+        if warnings:
+            warning_run_count += 1
+        for contract in expected_contracts:
+            observed_counts[contract["classification"]] += sum(
+                warnings[(contract["message"], source_line["text"])]
+                for source_line in contract["sourceLines"]
+            )
+
+    contracts = [
+        {
+            **contract,
+            "observedCount": observed_counts[contract["classification"]],
+        }
+        for contract in MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS
+    ]
+    return {
+        "status": "validated-with-tracked-warnings" if runs else "not-run",
+        "warningRunCount": warning_run_count,
+        "observedWarningCount": sum(observed_counts.values()),
+        "uniqueContractCount": len(contracts),
+        "contracts": contracts,
+    }
+
+
 def _require_frontier_project_join(
     payload: Mapping[str, Any],
     *,
@@ -3437,6 +3789,7 @@ def _translate_directx_frontier(
             == MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
             "DirectX toolchain did not validate every generated compute entry point",
         )
+    warning_evidence = _directx_toolchain_warning_evidence(directx_runs)
     return {
         "name": "directx-frontier",
         "status": "passed-with-expected-workgroup-blockers",
@@ -3472,12 +3825,14 @@ def _translate_directx_frontier(
         "directxValidationStatus": (
             "validated" if run_toolchains and directx_runs else "not-required"
         ),
+        "directxToolchainWarningEvidence": warning_evidence,
         "bfloat16LoweringEvidence": bfloat16_lowering_evidence,
         "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
         "semanticReadinessStatus": "not-established",
         "trackedIssues": [
             MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
             *FRONTIER_VALIDATION_TRACKED_ISSUES,
+            *DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES,
         ],
         "runtimeParityClaimed": False,
     }

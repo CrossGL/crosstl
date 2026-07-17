@@ -401,36 +401,22 @@ jobs:
           source support/generated/demo-failure-summary.sh
           out_dir="${RUNNER_TEMP}/demo-directx-dxil"
           mkdir -p "$out_dir"
-          compile_hlsl() {
-            local shader="$1"
-            local entry="$2"
-            local profile="$3"
-            local output
-            output="$(printf '%s_%s_%s' "$shader" "$entry" "$profile" | tr '/.:' '____').dxil"
-            command=(dxc -T "$profile" -E "$entry" "$shader" -Fo "$out_dir/$output")
-            failed_command="$(command_text "${command[@]}")"
-            if ! "${command[@]}"; then
-              write_demo_failure_summary \
-                open-source-porting-demo-windows-directx-compile \
-                "Windows DirectX compile references" \
-                "$(demo_case_from_artifact_path "$shader")" \
-                directx \
-                demo_toolchain \
-                "$failed_command" \
-                "" \
-                "$shader"
-              return 1
-            fi
-          }
-          while read -r shader entry profile; do
-            shader="${shader%$'\r'}"
-            entry="${entry%$'\r'}"
-            profile="${profile%$'\r'}"
-            compile_hlsl "$shader" "$entry" "$profile"
-          done < <(
+          command=(
             python demos/open-source-porting/run_demo.py \
-              --emit-directx-compile-jobs
+              --compile-directx-references \
+              --compiler-output-dir "$out_dir"
           )
+          failed_command="$(command_text "${command[@]}")"
+          if ! "${command[@]}"; then
+            write_demo_failure_summary \
+              open-source-porting-demo-windows-directx-compile \
+              "Windows DirectX compile references" \
+              all \
+              directx \
+              demo_toolchain \
+              "$failed_command"
+            exit 1
+          fi
         shell: bash
 
       - name: Upload demo reports

@@ -1,0 +1,17 @@
+shader OpenGLCopySignRuntime {
+    StructuredBuffer<uint> magnitude_bits @ binding(0);
+    StructuredBuffer<uint> sign_bits @ binding(1);
+    RWStructuredBuffer<uint> output_bits @ binding(2);
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main(uint3 tid @ gl_GlobalInvocationID) {
+            uint index = tid.x;
+            float magnitude = asfloat(buffer_load(magnitude_bits, index));
+            float sign_source = asfloat(buffer_load(sign_bits, index));
+            float result = copysign(magnitude, sign_source);
+            buffer_store(output_bits, index, asuint(result));
+        }
+    }
+}

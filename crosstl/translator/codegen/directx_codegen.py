@@ -377,6 +377,30 @@ class DirectXBFloat16UnsupportedError(ValueError):
         self.source_location = source_location
 
 
+class DirectXNative16BitUnsupportedError(ValueError):
+    """Raised when a DirectX profile cannot preserve exact 16-bit types."""
+
+    project_diagnostic_code = "project.translate.directx-native-16bit-unsupported"
+    missing_capabilities = ("directx.native-16bit-types",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        target_profile,
+        source_type,
+        mapped_type,
+        reason,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.target_profile = target_profile
+        self.source_type = source_type
+        self.mapped_type = mapped_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXWorkgroupSizeError(ValueError):
     """Raised when an HLSL compute workgroup size is not representable."""
 
@@ -542,6 +566,9 @@ class DirectXCompileTimeGlobalError(ValueError):
         variable_name=None,
         expression_kind=None,
         detail=None,
+        operation=None,
+        operand_type=None,
+        result_type=None,
         reason=None,
         source_location=None,
     ):
@@ -549,6 +576,9 @@ class DirectXCompileTimeGlobalError(ValueError):
         self.variable_name = variable_name
         self.expression_kind = expression_kind
         self.detail = detail
+        self.operation = operation
+        self.operand_type = operand_type
+        self.result_type = result_type
         self.reason = reason
         self.source_location = source_location
 
@@ -737,6 +767,60 @@ class DirectXBooleanOrderedIntrinsicError(ValueError):
         super().__init__(message)
         self.operation = operation
         self.operand_types = tuple(operand_types or ())
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXCopySignError(ValueError):
+    """Raised when ``copysign`` has no exact 32-bit HLSL lowering."""
+
+    project_diagnostic_code = "project.translate.directx-copysign-unrepresentable"
+    missing_capabilities = ("directx.copysign-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation="copysign",
+        operand_types=None,
+        result_type=None,
+        target_profile=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_types = tuple(operand_types or ())
+        self.result_type = result_type
+        self.target_profile = target_profile
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXInverseHyperbolicError(ValueError):
+    """Raised when an inverse-hyperbolic call has no faithful HLSL lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-inverse-hyperbolic-unrepresentable"
+    )
+    missing_capabilities = ("directx.inverse-hyperbolic-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation=None,
+        operand_type=None,
+        result_type=None,
+        target_profile=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_type = operand_type
+        self.result_type = result_type
+        self.target_profile = target_profile
         self.reason = reason
         self.source_location = source_location
 
@@ -1092,12 +1176,15 @@ class HLSLCodeGen:
     HLSL_BFLOAT16_BUILTIN_CONTRACTS = {
         "abs": ("abs", 1, "bfloat"),
         "ceil": ("ceil", 1, "bfloat"),
+        "exp": ("exp", 1, "bfloat"),
         "fabs": ("abs", 1, "bfloat"),
         "floor": ("floor", 1, "bfloat"),
         "fmod": ("fmod", 2, "bfloat"),
         "isfinite": ("isfinite", 1, "bool"),
         "isinf": ("isinf", 1, "bool"),
         "isnan": ("isnan", 1, "bool"),
+        "log10": ("log10", 1, "bfloat"),
+        "rint": ("round", 1, "bfloat"),
         "trunc": ("trunc", 1, "bfloat"),
     }
     HLSL_NATIVE_16_BIT_STORAGE_RESOURCES = frozenset(
@@ -1113,6 +1200,40 @@ class HLSLCodeGen:
         }
     )
     HLSL_CANONICAL_NARROW_FLOAT_CONSTRUCTORS = frozenset({"bfloat", "bfloat16"})
+    HLSL_COPYSIGN_NAMES = frozenset(
+        {"copysign", "metal::copysign", "metal_u3a_u3acopysign"}
+    )
+    HLSL_INVERSE_HYPERBOLIC_NAMES = frozenset({"acosh", "asinh", "atanh"})
+    HLSL_INVERSE_HYPERBOLIC_ALIASES = {
+        "acosh": "acosh",
+        "asinh": "asinh",
+        "atanh": "atanh",
+        "metal::acosh": "acosh",
+        "metal::asinh": "asinh",
+        "metal::atanh": "atanh",
+        "metal_u3a_u3aacosh": "acosh",
+        "metal_u3a_u3aasinh": "asinh",
+        "metal_u3a_u3aatanh": "atanh",
+    }
+    HLSL_INVERSE_HYPERBOLIC_FLOAT_TYPES = frozenset(
+        {"float", "float2", "float3", "float4"}
+    )
+    HLSL_INVERSE_HYPERBOLIC_NARROW_TYPES = frozenset(
+        {
+            "half",
+            "half2",
+            "half3",
+            "half4",
+            "float16_t",
+            "float16_t2",
+            "float16_t3",
+            "float16_t4",
+            "min16float",
+            "min16float2",
+            "min16float3",
+            "min16float4",
+        }
+    )
     HLSL_CANONICAL_64_BIT_VECTOR_CONSTRUCTORS = frozenset(
         {
             "i64vec2",
@@ -1299,6 +1420,9 @@ class HLSLCodeGen:
         "QuadAny": 1,
         "QuadAll": 1,
     }
+    HLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES = {
+        "WaveShuffleAndFillUp": (3, 4),
+    }
     HLSL_WAVE_BOOL_ARGUMENT_INTRINSICS = {
         "WaveActiveAllTrue",
         "WaveActiveAnyTrue",
@@ -1384,6 +1508,7 @@ class HLSLCodeGen:
     )
     HLSL_WAVE_NUMERIC_COMPONENT_TYPES = {
         "float",
+        "float16_t",
         "half",
         "min16float",
         "min10float",
@@ -1620,6 +1745,8 @@ class HLSLCodeGen:
         self.required_hlsl_explicit_bitcast_helpers = set()
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
+        self.required_hlsl_inverse_hyperbolic_helpers = set()
+        self.hlsl_inverse_hyperbolic_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.hlsl_lowered_struct_resource_members = {}
         self.generic_struct_definitions = {}
@@ -1929,6 +2056,9 @@ class HLSLCodeGen:
             "inversesqrt": "rsqrt",
             "intBitsToFloat": "asfloat",
             "mix": "lerp",
+            "metal::rint": "round",
+            "metal_u3a_u3arint": "round",
+            "rint": "round",
             "uintBitsToFloat": "asfloat",
         }
 
@@ -1985,6 +2115,11 @@ class HLSLCodeGen:
 
         normalized = str(target_profile).strip().lower().replace("_", "-")
         aliases = {
+            "dx-10": "dx10",
+            "d3d-10": "dx10",
+            "d3d10": "dx10",
+            "direct3d-10": "dx10",
+            "directx-10": "dx10",
             "dx-11": "dx11",
             "d3d-11": "dx11",
             "d3d11": "dx11",
@@ -1997,10 +2132,10 @@ class HLSLCodeGen:
             "directx-12": "dx12",
         }
         normalized = aliases.get(normalized, normalized)
-        if normalized not in {"dx11", "dx12"}:
+        if normalized not in {"dx10", "dx11", "dx12"}:
             raise ValueError(
-                "DirectX target profile must be one of: dx11, dx12, "
-                "directx-11, directx-12"
+                "DirectX target profile must be one of: dx10, dx11, dx12, "
+                "directx-10, directx-11, directx-12"
             )
         return normalized
 
@@ -2500,6 +2635,8 @@ class HLSLCodeGen:
         self.required_hlsl_explicit_bitcast_helpers = set()
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
+        self.required_hlsl_inverse_hyperbolic_helpers = set()
+        self.hlsl_inverse_hyperbolic_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
@@ -2683,6 +2820,7 @@ class HLSLCodeGen:
             functions
         )
         self.prepare_hlsl_trailing_zero_helper_names(functions)
+        self.prepare_hlsl_inverse_hyperbolic_helper_names(functions)
         self.vertex_entry_output_struct_names = (
             self.collect_hlsl_vertex_entry_output_struct_names(ast, target_stage)
         )
@@ -3756,6 +3894,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_fragment_shading_rate_helper()
         code += self.generate_hlsl_wave_shuffle_and_fill_up_helpers()
         code += self.generate_hlsl_trailing_zero_helpers()
+        code += self.generate_hlsl_inverse_hyperbolic_helpers()
         code += self.generate_hlsl_complex64_helpers()
         code += self.generate_hlsl_bfloat16_helpers()
         code += self.generate_hlsl_explicit_bitcast_helpers()
@@ -3786,7 +3925,7 @@ class HLSLCodeGen:
             declarations += declaration
         return declarations
 
-    def prepare_hlsl_trailing_zero_helper_names(self, functions):
+    def hlsl_helper_reserved_names(self, functions):
         used_names = set(self.global_variable_types)
         used_names.update(self.structs_by_name)
         used_names.update(getattr(self, "enum_type_names", set()))
@@ -3799,6 +3938,10 @@ class HLSLCodeGen:
         used_names.update(self.hlsl_function_name_aliases.values())
         for func in functions or []:
             used_names.update(self.collect_hlsl_function_identifier_names(func))
+        return used_names
+
+    def prepare_hlsl_trailing_zero_helper_names(self, functions):
+        used_names = self.hlsl_helper_reserved_names(functions)
 
         self.hlsl_trailing_zero_helper_names = {}
         for operand_type in ("uint", "uint64_t"):
@@ -3847,6 +3990,195 @@ class HLSLCodeGen:
 """)
         return "\n".join(helpers) + ("\n" if helpers else "")
 
+    def prepare_hlsl_inverse_hyperbolic_helper_names(self, functions):
+        used_names = self.hlsl_helper_reserved_names(functions)
+        used_names.update(self.hlsl_trailing_zero_helper_names.values())
+        self.hlsl_inverse_hyperbolic_helper_names = {}
+
+        helper_keys = [("log1p", "float")]
+        helper_types = sorted(
+            self.HLSL_INVERSE_HYPERBOLIC_FLOAT_TYPES
+            | self.HLSL_INVERSE_HYPERBOLIC_NARROW_TYPES
+        )
+        helper_keys.extend(
+            (operation, value_type)
+            for operation in sorted(self.HLSL_INVERSE_HYPERBOLIC_NAMES)
+            for value_type in helper_types
+        )
+        for operation, value_type in helper_keys:
+            base_name = f"__crossgl_{operation}_{value_type}"
+            helper_name = base_name
+            while helper_name in used_names:
+                helper_name += "_"
+            self.hlsl_inverse_hyperbolic_helper_names[(operation, value_type)] = (
+                helper_name
+            )
+            used_names.add(helper_name)
+
+    def hlsl_inverse_hyperbolic_helper_name(self, operation, value_type):
+        key = (operation, value_type)
+        helper_name = self.hlsl_inverse_hyperbolic_helper_names.get(key)
+        if helper_name is not None:
+            return helper_name
+
+        used_names = set(getattr(self, "function_return_types", {}))
+        used_names.update(getattr(self, "global_variable_types", {}))
+        used_names.update(getattr(self, "local_variable_types", {}))
+        used_names.update(self.hlsl_trailing_zero_helper_names.values())
+        used_names.update(self.hlsl_inverse_hyperbolic_helper_names.values())
+        helper_name = f"__crossgl_{operation}_{value_type}"
+        while helper_name in used_names:
+            helper_name += "_"
+        self.hlsl_inverse_hyperbolic_helper_names[key] = helper_name
+        return helper_name
+
+    def hlsl_inverse_hyperbolic_log1p_helper(self):
+        helper_name = self.hlsl_inverse_hyperbolic_helper_name("log1p", "float")
+        return f"""float {helper_name}(float value) {{
+    if (value > 0.5f) {{
+        return log(1.0f + value);
+    }}
+    float reduced = value / (2.0f + value);
+    float reduced_squared = reduced * reduced;
+    float series = 1.0f + reduced_squared * (
+        0.33333333333333333333f + reduced_squared * (
+            0.2f + reduced_squared * (
+                0.14285714285714285714f + reduced_squared * (
+                    0.11111111111111111111f
+                    + reduced_squared * 0.09090909090909090909f
+                )
+            )
+        )
+    );
+    return (2.0f * reduced) * series;
+}}
+"""
+
+    def hlsl_inverse_hyperbolic_scalar_helper(self, operation):
+        helper_name = self.hlsl_inverse_hyperbolic_helper_name(operation, "float")
+        log1p_name = self.hlsl_inverse_hyperbolic_helper_name("log1p", "float")
+        if operation == "acosh":
+            return f"""float {helper_name}(float value) {{
+    if (isnan(value)) {{
+        return value;
+    }}
+    if (value < 1.0f) {{
+        return asfloat(0x7fc00000u);
+    }}
+    if (value == 1.0f) {{
+        return 0.0f;
+    }}
+    if (value > 4096.0f) {{
+        return log(value) + 0.69314718055994530942f;
+    }}
+    float offset = value - 1.0f;
+    if (offset <= 0.0625f) {{
+        float series = 0.00189887152777777778f;
+        series = -0.00558035714285714286f + offset * series;
+        series = 0.01875f + offset * series;
+        series = -0.08333333333333333333f + offset * series;
+        series = 1.0f + offset * series;
+        return sqrt(2.0f * offset) * series;
+    }}
+    return {log1p_name}(offset + sqrt(offset * (value + 1.0f)));
+}}
+"""
+        if operation == "asinh":
+            return f"""float {helper_name}(float value) {{
+    if (isnan(value)) {{
+        return value;
+    }}
+    float magnitude = abs(value);
+    if (magnitude < 0.000244140625f) {{
+        return value;
+    }}
+    float result;
+    if (magnitude > 4096.0f) {{
+        result = log(magnitude) + 0.69314718055994530942f;
+    }} else {{
+        float squared = magnitude * magnitude;
+        result = {log1p_name}(
+            magnitude + squared / (1.0f + sqrt(1.0f + squared))
+        );
+    }}
+    return asfloat(
+        (asuint(result) & 0x7fffffffu) | (asuint(value) & 0x80000000u)
+    );
+}}
+"""
+        if operation == "atanh":
+            return f"""float {helper_name}(float value) {{
+    if (isnan(value)) {{
+        return value;
+    }}
+    float magnitude = abs(value);
+    if (magnitude > 1.0f) {{
+        return asfloat(0x7fc00000u);
+    }}
+    if (magnitude == 1.0f) {{
+        return asfloat(0x7f800000u | (asuint(value) & 0x80000000u));
+    }}
+    if (magnitude < 0.000244140625f) {{
+        return value;
+    }}
+    float result = 0.5f * {log1p_name}(
+        (2.0f * magnitude) / (1.0f - magnitude)
+    );
+    return asfloat(
+        (asuint(result) & 0x7fffffffu) | (asuint(value) & 0x80000000u)
+    );
+}}
+"""
+        raise ValueError(f"Unsupported inverse-hyperbolic operation: {operation}")
+
+    def hlsl_inverse_hyperbolic_wrapper_helper(self, operation, value_type):
+        helper_name = self.hlsl_inverse_hyperbolic_helper_name(operation, value_type)
+        scalar_helper = self.hlsl_inverse_hyperbolic_helper_name(operation, "float")
+        match = re.fullmatch(r"(float16_t|float|half|min16float)([234]?)", value_type)
+        if match is None or value_type == "float":
+            raise ValueError(
+                f"Unsupported inverse-hyperbolic helper type: {value_type}"
+            )
+        scalar_type, lane_text = match.groups()
+        lanes = int(lane_text) if lane_text else 1
+        if lanes == 1:
+            return (
+                f"{value_type} {helper_name}({value_type} value) {{\n"
+                f"    return ({value_type}){scalar_helper}((float)value);\n"
+                "}\n"
+            )
+
+        components = "xyzw"[:lanes]
+        arguments = ",\n        ".join(
+            f"({scalar_type}){scalar_helper}((float)value.{component})"
+            for component in components
+        )
+        return (
+            f"{value_type} {helper_name}({value_type} value) {{\n"
+            f"    return {value_type}(\n        {arguments}\n    );\n"
+            "}\n"
+        )
+
+    def generate_hlsl_inverse_hyperbolic_helpers(self):
+        required_helpers = getattr(
+            self, "required_hlsl_inverse_hyperbolic_helpers", set()
+        )
+        if not required_helpers:
+            return ""
+
+        operations = sorted(operation for operation, _value_type in required_helpers)
+        helpers = [self.hlsl_inverse_hyperbolic_log1p_helper()]
+        helpers.extend(
+            self.hlsl_inverse_hyperbolic_scalar_helper(operation)
+            for operation in sorted(set(operations))
+        )
+        helpers.extend(
+            self.hlsl_inverse_hyperbolic_wrapper_helper(operation, value_type)
+            for operation, value_type in sorted(required_helpers)
+            if value_type != "float"
+        )
+        return "".join(helpers) + "\n"
+
     def hlsl_wave_shuffle_and_fill_up_helper_name(self, value_type):
         type_suffix = re.sub(r"[^A-Za-z0-9_]", "_", self.map_type(value_type))
         return f"__crossgl_wave_shuffle_and_fill_up_{type_suffix}"
@@ -3859,9 +4191,16 @@ class HLSLCodeGen:
             helper_name = self.hlsl_wave_shuffle_and_fill_up_helper_name(value_type)
             code += (
                 f"{value_type} {helper_name}("
-                f"{value_type} value, {value_type} fill, uint delta) {{\n"
+                f"{value_type} value, {value_type} fill, uint delta, "
+                "uint modulo) {\n"
                 "    uint lane = WaveGetLaneIndex();\n"
-                "    uint sourceLane = (lane >= delta) ? (lane - delta) : 0u;\n"
+                "    uint segmentLane = lane % modulo;\n"
+                "    uint segmentBase = lane - segmentLane;\n"
+                "    bool useValue = segmentLane >= delta;\n"
+                "    uint valueSourceLane = useValue ? (lane - delta) : lane;\n"
+                "    uint fillSourceLane = useValue\n"
+                "        ? lane\n"
+                "        : (segmentBase + modulo + segmentLane - delta);\n"
             )
 
             if self.hlsl_result_component_type(value_type) == "bool":
@@ -3871,6 +4210,7 @@ class HLSLCodeGen:
                 )
                 if component_count == 1:
                     payload = "value ? 1u : 0u"
+                    fill_payload = "fill ? 1u : 0u"
                     zero = "0u"
                 else:
                     fields = "xyzw"[:component_count]
@@ -3879,20 +4219,32 @@ class HLSLCodeGen:
                         + ", ".join(f"value.{field} ? 1u : 0u" for field in fields)
                         + ")"
                     )
+                    fill_payload = (
+                        f"{payload_type}("
+                        + ", ".join(f"fill.{field} ? 1u : 0u" for field in fields)
+                        + ")"
+                    )
                     zero = f"{payload_type}({', '.join(['0u'] * component_count)})"
                 code += (
                     f"    {payload_type} payload = {payload};\n"
+                    f"    {payload_type} fillPayload = {fill_payload};\n"
                     f"    {payload_type} shuffledBits = "
-                    "WaveReadLaneAt(payload, sourceLane);\n"
+                    "WaveReadLaneAt(payload, valueSourceLane);\n"
+                    f"    {payload_type} shuffledFillBits = "
+                    "WaveReadLaneAt(fillPayload, fillSourceLane);\n"
                     f"    {value_type} shuffled = (shuffledBits != {zero});\n"
+                    f"    {value_type} shuffledFill = "
+                    f"(shuffledFillBits != {zero});\n"
                 )
             else:
                 code += (
                     f"    {value_type} shuffled = "
-                    "WaveReadLaneAt(value, sourceLane);\n"
+                    "WaveReadLaneAt(value, valueSourceLane);\n"
+                    f"    {value_type} shuffledFill = "
+                    "WaveReadLaneAt(fill, fillSourceLane);\n"
                 )
 
-            code += "    return (lane >= delta) ? shuffled : fill;\n}\n\n"
+            code += "    return useValue ? shuffled : shuffledFill;\n}\n\n"
 
         return code
 
@@ -5785,13 +6137,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not var_name:
             return False
         type_name = self.type_name_string(vtype)
+        type_key = str(type_name or "").rsplit("::", 1)[-1]
+        if var_name == "float16_t" and type_key in {"f16", "float16", "half"}:
+            return True
+        if var_name == "bfloat16_t" and type_key in {
+            "bfloat",
+            "bfloat16",
+            "f16",
+            "half",
+        }:
+            return True
         mapped_type = self.map_type(type_name)
         if var_name in self.METAL_TYPE_ALIAS_GLOBALS and (
-            mapped_type == self.type_mapping.get(var_name)
+            mapped_type == self.map_type(var_name)
             or (var_name == "bfloat16_t" and mapped_type == self.map_type("half"))
         ):
             return True
-        type_key = str(type_name or "").rsplit("::", 1)[-1]
         return type_key == "thread_scope" and str(var_name).startswith("thread_scope")
 
     def directx_specialization_constant_attributes(self, node):
@@ -6048,6 +6409,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         *,
         reason,
         detail=None,
+        operation=None,
+        operand_type=None,
+        result_type=None,
     ):
         name = getattr(node, "name", getattr(node, "variable_name", "<unnamed>"))
         explanation = detail or reason.replace("-", " ")
@@ -6061,6 +6425,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 expression.__class__.__name__ if expression is not None else None
             ),
             detail=detail,
+            operation=operation,
+            operand_type=operand_type,
+            result_type=result_type,
             reason=reason,
             source_location=source_location,
         )
@@ -6257,6 +6624,80 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return mapped_type
         return None
 
+    def directx_compile_time_bitcast_contract(self, node, expression):
+        function_name = self.function_call_name(expression)
+        if function_name in self.function_return_types:
+            return None
+
+        arguments = list(
+            getattr(expression, "arguments", getattr(expression, "args", [])) or []
+        )
+        explicit_target = self.hlsl_metal_as_type_target_type(function_name)
+        is_bitcast = (
+            function_name in self.HLSL_BITCAST_FUNCTION_TARGETS
+            or explicit_target is not None
+        )
+        if not is_bitcast:
+            return None
+        if len(arguments) != 1:
+            self.directx_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-arity",
+                detail=f"{function_name} expects exactly one operand",
+                operation=function_name,
+            )
+
+        operand = arguments[0]
+        operand_type = self.map_type(self.expression_result_type(operand))
+        result_type = explicit_target
+        if result_type is None:
+            result_type = self.hlsl_bitcast_result_type(function_name, arguments)
+        result_type = self.map_type(result_type)
+        operand_info = self.hlsl_explicit_bitcast_type_info(operand_type)
+        result_info = self.hlsl_explicit_bitcast_type_info(result_type)
+        if operand_info is None or result_info is None:
+            self.directx_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-type-unresolved",
+                detail=(
+                    f"{function_name} cannot resolve an exact bitcast from "
+                    f"'{operand_type}' to '{result_type}'"
+                ),
+                operation=function_name,
+                operand_type=operand_type,
+                result_type=result_type,
+            )
+
+        identity = operand_info["type"] == result_info["type"]
+        native_shape = (
+            operand_info["component_width"] == 32
+            and result_info["component_width"] == 32
+            and operand_info["lanes"] == result_info["lanes"]
+            and operand_info["width"] == result_info["width"]
+        )
+        if not identity and not native_shape:
+            self.directx_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-shape-unsupported",
+                detail=(
+                    f"{function_name} cannot preserve the {operand_info['width']}-bit "
+                    f"'{operand_info['type']}' payload as '{result_info['type']}' "
+                    "in an HLSL constant initializer"
+                ),
+                operation=function_name,
+                operand_type=operand_info["type"],
+                result_type=result_info["type"],
+            )
+        return {
+            "operation": function_name,
+            "operand": operand,
+            "operand_type": operand_info["type"],
+            "result_type": result_info["type"],
+        }
+
     def validate_directx_compile_time_global_expression(
         self,
         node,
@@ -6343,6 +6784,27 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return
             if isinstance(current, FunctionCallNode):
                 function_name = self.function_call_name(current)
+                bitcast = self.directx_compile_time_bitcast_contract(node, current)
+                if bitcast is not None:
+                    try:
+                        validate(bitcast["operand"])
+                    except DirectXCompileTimeGlobalError as error:
+                        if error.reason not in {
+                            "forward-reference",
+                            "function-call",
+                            "runtime-value",
+                        }:
+                            raise
+                        self.directx_compile_time_global_error(
+                            node,
+                            current,
+                            reason=f"bitcast-operand-{error.reason}",
+                            detail=error.detail,
+                            operation=bitcast["operation"],
+                            operand_type=bitcast["operand_type"],
+                            result_type=bitcast["result_type"],
+                        )
+                    return
                 if self.directx_compile_time_constructor_type(function_name) is None:
                     reject("function-call", current, function_name)
                 for argument in (
@@ -8640,6 +9102,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_bfloat16_conversion_expression(
         self, rendered, expected_type, source_type, *, source_location=None
     ):
+        complex_conversion = self.hlsl_complex64_scalar_conversion_expression(
+            rendered,
+            expected_type,
+            source_type,
+        )
+        if complex_conversion is not None:
+            return complex_conversion
+
         expected_is_bfloat = self.is_hlsl_bfloat16_type(expected_type)
         source_is_bfloat = self.is_hlsl_bfloat16_type(source_type)
         if not expected_is_bfloat and not source_is_bfloat:
@@ -8684,6 +9154,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         source_name = self.type_name_string(source_type)
         if not rendered or not expected_name or not source_name:
             return rendered
+
+        complex_conversion = self.hlsl_complex64_scalar_conversion_expression(
+            rendered,
+            expected_name,
+            source_name,
+        )
+        if complex_conversion is not None:
+            return complex_conversion
 
         bfloat_conversion = self.hlsl_bfloat16_conversion_expression(
             rendered,
@@ -8744,6 +9222,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         return self.map_type(vtype) in {
             "float",
+            "float16_t",
             "half",
             "min16float",
             "min10float",
@@ -8768,6 +9247,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "float2",
             "float3",
             "float4",
+            "float16_t2",
+            "float16_t3",
+            "float16_t4",
             "half2",
             "half3",
             "half4",
@@ -8814,6 +9296,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def vector_component_type(self, vtype):
         mapped_type = self.map_type(vtype)
+        if mapped_type.startswith("float16_t"):
+            return "float16_t"
         if mapped_type.startswith("float"):
             return "float"
         if mapped_type.startswith("half"):
@@ -8858,6 +9342,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "int64_t",
             "uint16_t",
             "int16_t",
+            "float16_t",
             "double",
             "float",
             "half",
@@ -8939,6 +9424,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return component_type in {
             "double",
             "float",
+            "float16_t",
             "half",
             "min10float",
             "min16float",
@@ -9274,6 +9760,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if base_type not in {
             "double",
             "float",
+            "float16_t",
             "half",
             "min16float",
             "min10float",
@@ -9695,6 +10182,41 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def is_hlsl_complex64_type(self, type_text):
         return self.map_type(type_text) == "complex64_t"
 
+    def hlsl_complex64_scalar_conversion_expression(
+        self, rendered, expected_type, source_type
+    ):
+        if not self.is_hlsl_complex64_type(source_type):
+            return None
+
+        real_component = f"({rendered}).real"
+        if self.is_hlsl_bfloat16_type(expected_type):
+            return self.hlsl_float_to_bfloat16_expression(real_component)
+
+        mapped_target = self.map_type(expected_type)
+        if not self.is_scalar_value_type(mapped_target):
+            return None
+        if mapped_target == "bool":
+            return f"({real_component} != 0.0)"
+        return f"{mapped_target}({real_component})"
+
+    def hlsl_complex64_scalar_constructor_call(self, func_name, args):
+        if (
+            not isinstance(func_name, str)
+            or func_name in getattr(self, "function_return_types", {})
+            or len(args) != 1
+        ):
+            return None
+
+        source_type = self.hlsl_source_expression_type(args[0])
+        if not self.is_hlsl_complex64_type(source_type):
+            return None
+        rendered = self.generate_expression_with_expected(args[0], None)
+        return self.hlsl_complex64_scalar_conversion_expression(
+            rendered,
+            func_name,
+            source_type,
+        )
+
     def hlsl_complex64_operand(self, rendered, type_text):
         if self.is_hlsl_complex64_type(type_text):
             return rendered
@@ -9957,6 +10479,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"bool{rows}x{columns}"
         return "bool"
 
+    def hlsl_literal_result_type(self, expr):
+        literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
+        value = getattr(expr, "value", None)
+        if not isinstance(value, int) or isinstance(value, bool):
+            return literal_type
+
+        mapped_type = self.map_type(literal_type) if literal_type else None
+        if mapped_type in {"int64_t", "uint64_t"}:
+            return mapped_type
+        if mapped_type == "uint":
+            return mapped_type
+        if value > 0xFFFFFFFF:
+            return "uint64_t"
+        if value > 0x7FFFFFFF:
+            return "uint"
+        if value < -0x80000000:
+            return "int64_t"
+        return literal_type
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
@@ -10210,6 +10751,30 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
+            if func_name in self.HLSL_INVERSE_HYPERBOLIC_ALIASES:
+                resolved_inverse_hyperbolic = self.resolve_hlsl_function_overload(
+                    func_name,
+                    args,
+                    call_node=expr,
+                )
+                if resolved_inverse_hyperbolic is not None:
+                    return self.type_name_string(
+                        getattr(resolved_inverse_hyperbolic, "return_type", None)
+                    )
+                if args:
+                    return self.expression_result_type(args[0])
+            if func_name in self.HLSL_COPYSIGN_NAMES:
+                resolved_copysign = self.resolve_hlsl_function_overload(
+                    func_name,
+                    args,
+                    call_node=expr,
+                )
+                if resolved_copysign is not None:
+                    return self.type_name_string(
+                        getattr(resolved_copysign, "return_type", None)
+                    )
+                if args:
+                    return self.expression_result_type(args[0])
             if func_name == "inverse" and args:
                 return self.expression_result_type(args[0])
             if func_name == "transpose" and args:
@@ -10539,9 +11104,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             }:
                 return str(func_name)
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
-            literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
-            if literal_type:
-                return literal_type
+            return self.hlsl_literal_result_type(expr)
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             return self.variable_type_by_name(getattr(expr, "name", None))
         return None
@@ -12199,6 +12762,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return f"{lhs} = {rounded}"
 
+    def hlsl_assignment_target_type(self, target):
+        inferred_type = self.expression_result_type(target)
+        if not isinstance(target, ArrayAccessNode):
+            return inferred_type
+        if self.is_hlsl_bfloat16_type(inferred_type):
+            return inferred_type
+
+        resource_types = {
+            "RWBuffer",
+            "RWStructuredBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+        }
+        array_expression = target.array
+        resource_type = self.hlsl_struct_buffer_expression_resource_type(target)
+        if resource_type is None:
+            binding = self.hlsl_resource_pointer_binding(array_expression)
+            if binding is not None:
+                resource_type = binding.get("resource_type")
+        if resource_type is None:
+            resource_type = self.expression_result_type(array_expression)
+        if resource_type is None:
+            return inferred_type
+        physical_resource_type = self.map_type(
+            self.directx_resource_declaration_type(resource_type)
+        )
+        element_type = self.hlsl_typed_buffer_element_type(
+            physical_resource_type, resource_types
+        )
+        return element_type or inferred_type
+
     def generate_assignment(self, node, *, statement_context=False):
         if hasattr(node, "target") and hasattr(node, "value"):
             target = node.target
@@ -12209,7 +12803,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = node.right
             op = getattr(node, "operator", "=")
 
-        target_type = self.expression_result_type(target)
+        target_type = self.hlsl_assignment_target_type(target)
         boolean_compound_assignment = self.generate_hlsl_boolean_compound_assignment(
             node,
             target,
@@ -12309,7 +12903,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return unsupported_store
 
         atomic_assignment = self.generate_hlsl_typed_buffer_atomic_statement(
-            value, target, self.expression_result_type(target)
+            value, target, target_type
         )
         if atomic_assignment is not None and op == "=":
             return atomic_assignment
@@ -12353,9 +12947,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return compound_assignment
 
         lhs = self.generate_expression(target)
-        rhs = self.generate_expression_with_expected(
-            value, self.expression_result_type(target)
-        )
+        rhs = self.generate_expression_with_expected(value, target_type)
         rhs = self.hlsl_bfloat16_storage_assignment_expression(
             target,
             rhs,
@@ -13460,6 +14052,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if complex64_constructor is not None:
                 return complex64_constructor
 
+            complex64_scalar_constructor = self.hlsl_complex64_scalar_constructor_call(
+                func_name, args
+            )
+            if complex64_scalar_constructor is not None:
+                return complex64_scalar_constructor
+
             struct_constructor = self.generate_hlsl_struct_constructor_call(
                 func_name,
                 args,
@@ -13502,6 +14100,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             metal_as_type_call = self.generate_hlsl_metal_as_type_call(func_name, args)
             if metal_as_type_call is not None:
                 return metal_as_type_call
+
+            copysign_call = self.generate_hlsl_copysign_call(
+                func_name,
+                args,
+                call_node=expr,
+            )
+            if copysign_call is not None:
+                return copysign_call
+
+            inverse_hyperbolic_call = self.generate_hlsl_inverse_hyperbolic_call(
+                func_name,
+                args,
+                call_node=expr,
+            )
+            if inverse_hyperbolic_call is not None:
+                return inverse_hyperbolic_call
 
             bitcast_call = self.generate_hlsl_bitcast_call(func_name, args)
             if bitcast_call is not None:
@@ -14751,6 +15365,254 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"(({expression}) != 0)"
         return expression
 
+    def hlsl_copysign_type_info(self, type_name):
+        if type_name is None:
+            return None
+        mapped_type = self.map_type(type_name)
+        match = re.fullmatch(r"float([234]?)", mapped_type or "")
+        if match is None:
+            return None
+        lanes = int(match.group(1)) if match.group(1) else 1
+        return {"type": mapped_type, "lanes": lanes}
+
+    def hlsl_copysign_error(
+        self,
+        message,
+        *,
+        operand_types,
+        result_type=None,
+        reason,
+        source_location=None,
+    ):
+        return DirectXCopySignError(
+            message,
+            operand_types=operand_types,
+            result_type=result_type,
+            target_profile=self.target_profile or "default",
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_hlsl_copysign_call(
+        self,
+        func_name,
+        args,
+        *,
+        call_node=None,
+    ):
+        if func_name not in self.HLSL_COPYSIGN_NAMES:
+            return None
+
+        resolved_overload = self.resolve_hlsl_function_overload(
+            func_name,
+            args,
+            call_node=call_node,
+        )
+        if resolved_overload is not None:
+            return None
+
+        source_location = getattr(call_node, "source_location", None)
+        if len(args) != 2:
+            raise self.hlsl_copysign_error(
+                "DirectX copysign requires exactly two operands",
+                operand_types=(),
+                reason="invalid-arity",
+                source_location=source_location,
+            )
+
+        source_types = tuple(self.hlsl_source_expression_type(arg) for arg in args)
+        display_types = tuple(
+            self.type_name_string(source_type) if source_type is not None else None
+            for source_type in source_types
+        )
+        if any(source_type is None for source_type in source_types):
+            raise self.hlsl_copysign_error(
+                "DirectX copysign requires statically known operand types",
+                operand_types=display_types,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        operand_info = tuple(
+            self.hlsl_copysign_type_info(source_type) for source_type in source_types
+        )
+        if any(info is None for info in operand_info):
+            raise self.hlsl_copysign_error(
+                "DirectX copysign supports only 32-bit float scalar and vector "
+                f"operands, got {display_types[0]} and {display_types[1]}",
+                operand_types=display_types,
+                reason="unsupported-operand-type",
+                source_location=source_location,
+            )
+
+        magnitude_info, sign_info = operand_info
+        if magnitude_info["type"] != sign_info["type"]:
+            raise self.hlsl_copysign_error(
+                "DirectX copysign operands must have identical scalar or vector "
+                f"shapes, got {display_types[0]} and {display_types[1]}",
+                operand_types=display_types,
+                result_type=magnitude_info["type"],
+                reason="operand-shape-mismatch",
+                source_location=source_location,
+            )
+
+        value_type = magnitude_info["type"]
+        magnitude = self.generate_expression_with_expected(args[0], value_type)
+        sign_source = self.generate_expression_with_expected(args[1], value_type)
+        lanes = magnitude_info["lanes"]
+        mask_type = "uint" if lanes == 1 else f"uint{lanes}"
+        magnitude_mask = "0x7fffffffu"
+        sign_mask = "0x80000000u"
+        if lanes != 1:
+            magnitude_mask = f"{mask_type}({', '.join(['0x7fffffffu'] * lanes)})"
+            sign_mask = f"{mask_type}({', '.join(['0x80000000u'] * lanes)})"
+        return (
+            "asfloat(((asuint({magnitude}) & {magnitude_mask}) | "
+            "(asuint({sign_source}) & {sign_mask})))"
+        ).format(
+            magnitude=magnitude,
+            magnitude_mask=magnitude_mask,
+            sign_source=sign_source,
+            sign_mask=sign_mask,
+        )
+
+    def hlsl_inverse_hyperbolic_type_info(self, type_name):
+        if type_name is None:
+            return None
+        mapped_type = self.map_type(type_name)
+        match = re.fullmatch(
+            r"(float16_t|float|half|min16float|min10float|double)([234]?)",
+            mapped_type or "",
+        )
+        if match is None:
+            return {"type": mapped_type, "precision": None, "lanes": None}
+        precision, lane_text = match.groups()
+        return {
+            "type": mapped_type,
+            "precision": precision,
+            "lanes": int(lane_text) if lane_text else 1,
+        }
+
+    def hlsl_inverse_hyperbolic_error(
+        self,
+        message,
+        *,
+        operation,
+        operand_type=None,
+        result_type=None,
+        reason,
+        source_location=None,
+    ):
+        return DirectXInverseHyperbolicError(
+            message,
+            operation=operation,
+            operand_type=operand_type,
+            result_type=result_type,
+            target_profile=self.target_profile or "default",
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_hlsl_inverse_hyperbolic_call(
+        self,
+        func_name,
+        args,
+        *,
+        call_node=None,
+    ):
+        operation = self.HLSL_INVERSE_HYPERBOLIC_ALIASES.get(func_name)
+        if operation is None:
+            return None
+
+        resolved_overload = self.resolve_hlsl_function_overload(
+            func_name,
+            args,
+            call_node=call_node,
+        )
+        if resolved_overload is not None:
+            return None
+
+        source_location = getattr(call_node, "source_location", None)
+        if len(args) != 1:
+            raise self.hlsl_inverse_hyperbolic_error(
+                f"DirectX {operation} requires exactly one operand",
+                operation=operation,
+                reason="invalid-arity",
+                source_location=source_location,
+            )
+
+        source_type = self.hlsl_source_expression_type(args[0])
+        display_type = (
+            self.type_name_string(source_type) if source_type is not None else None
+        )
+        if source_type is None:
+            raise self.hlsl_inverse_hyperbolic_error(
+                f"DirectX {operation} requires a statically known operand type",
+                operation=operation,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        type_info = self.hlsl_inverse_hyperbolic_type_info(source_type)
+        mapped_type = type_info["type"]
+        precision = type_info["precision"]
+        if precision == "double":
+            if self.target_profile == "dx10":
+                reason = "double-precision-profile-unsupported"
+                detail = "DirectX 10 cannot represent the required double precision"
+            else:
+                reason = "double-transcendental-contract-unavailable"
+                detail = (
+                    "the selected DirectX profile has no portable double-precision "
+                    "transcendental contract"
+                )
+            raise self.hlsl_inverse_hyperbolic_error(
+                f"DirectX {operation} cannot lower {display_type}: {detail}",
+                operation=operation,
+                operand_type=display_type,
+                result_type=mapped_type,
+                reason=reason,
+                source_location=source_location,
+            )
+
+        if precision == "min10float":
+            raise self.hlsl_inverse_hyperbolic_error(
+                f"DirectX {operation} cannot preserve exceptional-value behavior "
+                f"for {display_type}",
+                operation=operation,
+                operand_type=display_type,
+                result_type=mapped_type,
+                reason="minimum-precision-contract-unsupported",
+                source_location=source_location,
+            )
+
+        if mapped_type in self.HLSL_INVERSE_HYPERBOLIC_NARROW_TYPES:
+            if precision == "min16float" and self.target_profile == "dx10":
+                raise self.hlsl_inverse_hyperbolic_error(
+                    f"DirectX {operation} cannot use {display_type} with the "
+                    "DirectX 10 profile",
+                    operation=operation,
+                    operand_type=display_type,
+                    result_type=mapped_type,
+                    reason="minimum-precision-profile-unsupported",
+                    source_location=source_location,
+                )
+        elif mapped_type not in self.HLSL_INVERSE_HYPERBOLIC_FLOAT_TYPES:
+            raise self.hlsl_inverse_hyperbolic_error(
+                f"DirectX {operation} supports only scalar and 2/3/4-component "
+                f"floating operands, got {display_type}",
+                operation=operation,
+                operand_type=display_type,
+                result_type=mapped_type,
+                reason="unsupported-operand-type",
+                source_location=source_location,
+            )
+
+        self.required_hlsl_inverse_hyperbolic_helpers.add((operation, mapped_type))
+        helper_name = self.hlsl_inverse_hyperbolic_helper_name(operation, mapped_type)
+        argument = self.generate_expression_with_expected(args[0], mapped_type)
+        return f"{helper_name}({argument})"
+
     def hlsl_bitcast_result_type(self, func_name, args):
         if (
             not func_name
@@ -15180,11 +16042,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.generate_hlsl_wave_intrinsic_call(operation, expr.arguments)
 
     def validate_directx_wave_intrinsic_profile(self, operation):
-        if self.target_profile != "dx11":
+        if self.target_profile not in {"dx10", "dx11"}:
             return
 
         raise ValueError(
-            f"DirectX profile dx11 does not support wave intrinsic '{operation}'; "
+            f"DirectX profile {self.target_profile} does not support wave intrinsic "
+            f"'{operation}'; "
             "wave intrinsics require DirectX 12 / Shader Model 6.0"
         )
 
@@ -15222,7 +16085,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         delta_type = self.map_type(self.expression_result_type(args[2]))
         if delta_type in {"int16_t", "uint16_t", "min16int", "min16uint"}:
             delta = f"uint({delta})"
-        result = f"{helper_name}({value}, {fill}, {delta})"
+        if len(args) == 4:
+            modulo = self.generate_expression_with_expected(args[3], "uint")
+            modulo_type = self.map_type(self.expression_result_type(args[3]))
+            if modulo_type in {"int16_t", "uint16_t", "min16int", "min16uint"}:
+                modulo = f"uint({modulo})"
+        else:
+            modulo = "WaveGetLaneCount()"
+        result = f"{helper_name}({value}, {fill}, {delta}, {modulo})"
         return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
 
     def generate_hlsl_wave_intrinsic_call(self, operation, args):
@@ -15232,10 +16102,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.validate_directx_wave_intrinsic_profile(operation)
 
         actual_args = len(args)
-        if actual_args != expected_args:
+        accepted_arities = self.HLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES.get(
+            operation, (expected_args,)
+        )
+        if actual_args not in accepted_arities:
+            expected = " or ".join(str(arity) for arity in accepted_arities)
             raise ValueError(
                 f"DirectX wave intrinsic '{operation}' requires "
-                f"{expected_args} argument(s), got {actual_args}"
+                f"{expected} argument(s), got {actual_args}"
             )
 
         if operation in self.HLSL_WAVE_BITWISE_VALUE_INTRINSICS:
@@ -15505,6 +16379,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
         self.validate_hlsl_wave_scalar_int_uint_argument(operation, args[2], "delta")
+        if len(args) == 4:
+            self.validate_hlsl_wave_scalar_int_uint_argument(
+                operation, args[3], "modulo"
+            )
 
     def validate_hlsl_wave_intrinsic_arguments(self, operation, args):
         if operation in self.HLSL_WAVE_BOOL_ARGUMENT_INTRINSICS:
@@ -15939,7 +16817,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
             index = self.hlsl_resource_pointer_offset_index(buffer, index)
-            value = self.generate_expression(args[2])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
             source_element_type = self.hlsl_typed_buffer_element_type(
                 resource_type,
@@ -15977,12 +16854,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 },
             )
             if logical_bfloat_type is not None and physical_element_type == "uint16_t":
+                value = self.generate_expression(args[2])
                 storage_type = self.hlsl_bfloat16_storage_type(
                     logical_bfloat_type,
                     operation="buffer store",
                     source_location=getattr(args[2], "source_location", None),
                 )
                 value = f"{storage_type}({value})"
+            else:
+                value = self.generate_expression_with_expected(
+                    args[2], physical_element_type or source_element_type
+                )
             index = self.hlsl_resource_index_expression(
                 args[0],
                 args[1],
@@ -16926,23 +17808,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.hlsl_bfloat16_scalar_type_name(element_type)
 
         mapped_type = self.map_type(element_type)
-        if mapped_type in {
-            "bool",
-            "double",
-            "float",
-            "half",
-            "int",
-            "int64_t",
-            "int16_t",
-            "min10float",
-            "min12int",
-            "min16float",
-            "min16int",
-            "min16uint",
-            "uint",
-            "uint64_t",
-            "uint16_t",
-        }:
+        if self.is_scalar_value_type(element_type):
             return mapped_type
         return None
 
@@ -30111,6 +30977,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.vector_component_type,
             scalar_types={
                 "float",
+                "float16_t",
                 "half",
                 "min16float",
                 "min10float",
@@ -30138,6 +31005,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.vector_component_type,
             scalar_types={
                 "float",
+                "float16_t",
                 "half",
                 "min16float",
                 "min10float",
@@ -36809,17 +37677,35 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.map_type(vtype)
 
     def hlsl_native_16_bit_source_type(self, source_type, mapped_type):
-        if not getattr(self, "requires_hlsl_bfloat16_storage", False):
-            return mapped_type
         source_name = str(self.type_name_string(source_type) or "").strip()
-        if source_name.startswith(("min16int", "min16uint")):
+        if source_name.startswith(
+            ("min10float", "min12int", "min16float", "min16int", "min16uint")
+        ):
             return mapped_type
         for minimum_type, native_type in (
+            ("half", "float16_t"),
             ("min16int", "int16_t"),
             ("min16uint", "uint16_t"),
         ):
-            if str(mapped_type).startswith(minimum_type):
-                return native_type + str(mapped_type)[len(minimum_type) :]
+            type_match = re.fullmatch(
+                rf"{re.escape(minimum_type)}(?P<shape>[234](?:x[234])?)?",
+                str(mapped_type),
+            )
+            if type_match is not None:
+                native_mapped_type = native_type + (type_match.group("shape") or "")
+                if self.target_profile == "dx11":
+                    raise DirectXNative16BitUnsupportedError(
+                        "DirectX profile dx11 cannot preserve exact 16-bit source "
+                        f"type '{source_name}'; use directx-12 with Shader Model "
+                        "6.2 and dxc -enable-16bit-types, or declare an explicit "
+                        "minimum-precision min16 type",
+                        target_profile=self.target_profile,
+                        source_type=source_name,
+                        mapped_type=native_mapped_type,
+                        reason="target-profile-lacks-native-16bit-types",
+                        source_location=getattr(source_type, "source_location", None),
+                    )
+                return native_mapped_type
         return mapped_type
 
     @staticmethod

@@ -15,6 +15,11 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
+      - "tests/test_mlx_copy_opengl_proof.py"
+      - "tests/test_mlx_copy_directx_proof.py"
+      - "tests/test_mlx_dispatch_contract_fixture.py"
+      - "tests/test_mlx_layer_norm_directx_proof.py"
+      - "tests/test_mlx_quantized_directx_proof.py"
       - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
       - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
@@ -34,6 +39,11 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
+      - "tests/test_mlx_copy_opengl_proof.py"
+      - "tests/test_mlx_copy_directx_proof.py"
+      - "tests/test_mlx_dispatch_contract_fixture.py"
+      - "tests/test_mlx_layer_norm_directx_proof.py"
+      - "tests/test_mlx_quantized_directx_proof.py"
       - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
       - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
@@ -75,7 +85,10 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
+          python -m pip install -e . pytest-xdist
+
+      - name: Validate bounded MLX dispatch contract
+        run: python -m pytest -q -n auto tests/test_mlx_dispatch_contract_fixture.py
 
       - name: Install Linux SPIR-V tools
         if: runner.os == 'Linux'
@@ -92,9 +105,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python -m pip install pytest
-          python -m pytest -q tests/test_translator/test_codegen/test_GLSL_codegen.py \
+          python -m pytest -q -n auto tests/test_translator/test_codegen/test_GLSL_codegen.py \
             -k "opengl_lowers_expected_scalar_and_vector_conversions or opengl_preserves_metal_arithmetic_conversion_order or opengl_helper_parameters_preserve_out_and_inout_qualifiers or glsl_atomic_thread_fence"
-          python -m pytest -q tests/test_translator/test_project_translation.py \
+          python -m pytest -q -n auto tests/test_translator/test_project_translation.py \
             -k "translate_project_reports_unrepresentable_atomic_fence_contract"
 
       - name: Install Windows DirectX Shader Compiler
@@ -195,11 +208,68 @@ jobs:
               --work-dir .crosstl-mlx-porting/rms-norm-specialization
           fi
 
+      - name: Prove pinned MLX LayerNorm DirectX entries
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/prove_layer_norm_directx.py \
+            --mlx-root mlx-upstream \
+            --work-dir .crosstl-mlx-porting/layer-norm-directx \
+            --require-directx-toolchain
+
+      - name: Prove pinned MLX complex copy DirectX lowering
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/prove_copy_directx.py \
+            --mlx-root mlx-upstream \
+            --work-dir .crosstl-mlx-porting/copy-directx \
+            --require-toolchain
+
+      - name: Prove pinned MLX quantized DirectX lowering
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/prove_quantized_directx.py \
+            --mlx-root mlx-upstream \
+            --work-dir .crosstl-mlx-porting/quantized-directx \
+            --require-directx-toolchain
+
+      - name: Prove pinned MLX complex copy OpenGL lowering
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/prove_copy_opengl.py \
+            --mlx-root mlx-upstream \
+            --work-dir .crosstl-mlx-porting/copy-opengl
+
       - name: Prove Direct3D immutable lookup numerical execution
         if: runner.os == 'Windows'
         env:
           CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST: "1"
         run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_mlx_file_scope_lookup_on_device"
+
+      - name: Validate Direct3D wave shuffle runtime contract
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_RUN_DIRECTX_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST: "1"
+        run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device"
+
+      - name: Validate Direct3D copysign runtime contract
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST: "1"
+        run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_copysign_bit_patterns_on_device"
+
+      - name: Validate Direct3D inverse-hyperbolic runtime contract
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_RUN_DIRECTX_INVERSE_HYPERBOLIC_DEVICE_TEST: "1"
+        run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_inverse_hyperbolic_numerics_on_device"
 
       - name: Prove translated MLX arange Direct3D numerical execution
         if: runner.os == 'Windows'
@@ -219,6 +289,55 @@ jobs:
           python -m pytest -q -n auto \
             tests/test_translator/test_native_runtime_drivers.py \
             -k "opengl_compute_runtime_specializes_generated_spirv_on_device"
+
+      - name: Validate OpenGL copysign runtime contract
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_RUN_OPENGL_COPYSIGN_DEVICE_TEST: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          python -m pytest -q -n auto \
+            tests/test_translator/test_native_runtime_drivers.py \
+            -k "opengl_compute_runtime_executes_copysign_bit_patterns_on_device"
+
+      - name: Validate generated OpenGL subgroup contract through Vulkan
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_RUN_OPENGL_GLSL_VULKAN_DEVICE_TEST: "1"
+        run: |
+          set -euo pipefail
+
+          lavapipe_icd=""
+          for icd_dir in /usr/share/vulkan/icd.d /etc/vulkan/icd.d; do
+            if [ ! -d "$icd_dir" ]; then
+              continue
+            fi
+            lavapipe_icd="$(
+              find "$icd_dir" \
+                -maxdepth 1 \
+                -type f \
+                -name 'lvp_icd*.json' \
+                -print \
+                -quit
+            )"
+            if [ -n "$lavapipe_icd" ]; then
+              break
+            fi
+          done
+          if [ -z "$lavapipe_icd" ]; then
+            echo "::error::Lavapipe Vulkan ICD manifest was not found." >&2
+            exit 1
+          fi
+          export VK_DRIVER_FILES="$lavapipe_icd"
+          export VK_ICD_FILENAMES="$lavapipe_icd"
+          echo "Lavapipe Vulkan ICD: $lavapipe_icd"
+          vulkaninfo --summary
+
+          python -m pytest -q -n auto \
+            tests/test_translator/test_native_runtime_drivers.py \
+            -k "opengl_glsl_wave_shuffle_executes_via_vulkan_on_device"
 
       - name: Verify MLX frontier accounting
         shell: bash

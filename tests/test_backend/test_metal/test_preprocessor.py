@@ -5,8 +5,12 @@ import pytest
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
+    CONTAINING_SPAN_CACHE_LIMIT,
+    SOURCE_ANALYSIS_CACHE_LIMIT,
+    MetalMacroExpansionError,
     MetalPreprocessor,
     MetalStatelessGlobalElisionError,
+    MetalStaticAssertionError,
     MetalStructMethodError,
     MetalTemplateSpecializationError,
 )
@@ -57,6 +61,112 @@ def test_containing_span_caches_multiple_span_lists_without_thrashing():
     # A single-slot cache could only retain the most recent list; the per-list
     # cache retains both so the alternating lookups never rebuild.
     assert len(preprocessor._containing_span_cache) == 2
+
+
+def test_containing_span_cache_retention_is_bounded():
+    preprocessor = MetalPreprocessor()
+    span_lists = [
+        [(index * 3, index * 3 + 2)] for index in range(CONTAINING_SPAN_CACHE_LIMIT + 5)
+    ]
+
+    for spans in span_lists:
+        assert preprocessor._containing_span(spans[0][0], spans) == spans[0]
+
+    assert len(preprocessor._containing_span_cache) == CONTAINING_SPAN_CACHE_LIMIT
+    assert id(span_lists[0]) not in preprocessor._containing_span_cache
+    assert id(span_lists[-1]) in preprocessor._containing_span_cache
+
+
+def test_source_analysis_cache_reuses_equal_snapshots_and_is_bounded(monkeypatch):
+    preprocessor = MetalPreprocessor()
+    scan_names = (
+        "_scan_comment_and_literal_spans",
+        "_scan_lexical_brace_scopes",
+        "_scan_template_declaration_spans",
+        "_scan_namespace_spans",
+    )
+    scan_counts = {name: 0 for name in scan_names}
+
+    for scan_name in scan_names:
+        original = getattr(preprocessor, scan_name)
+
+        def counted(code, *, _name=scan_name, _original=original):
+            scan_counts[_name] += 1
+            return _original(code)
+
+        monkeypatch.setattr(preprocessor, scan_name, counted)
+
+    source = """
+    namespace example {
+    template <typename T>
+    T identity(T value) {
+        const char* brace = "}";
+        return value;
+    }
+    }
+    """
+    equal_source = "".join((source[: len(source) // 2], source[len(source) // 2 :]))
+    assert equal_source == source
+    assert equal_source is not source
+
+    finders = (
+        preprocessor._find_comment_and_literal_spans,
+        preprocessor._find_lexical_brace_scopes,
+        preprocessor._find_template_declaration_spans,
+        preprocessor._find_namespace_spans,
+    )
+    for finder in finders:
+        first = finder(source)
+        assert finder(equal_source) is first
+
+    assert scan_counts == {name: 1 for name in scan_names}
+
+    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+        preprocessor._find_namespace_spans(
+            f"namespace generated_{index} {{ int value_{index}; }}"
+        )
+
+    assert len(preprocessor._source_analysis_cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert source not in preprocessor._source_analysis_cache
+
+
+def test_alias_free_struct_families_skip_detailed_scope_scans(monkeypatch):
+    preprocessor = MetalPreprocessor()
+    scan_counts = {"comments": 0, "scopes": 0}
+    original_comment_scan = preprocessor._scan_comment_and_literal_spans
+    original_scope_scan = preprocessor._scan_lexical_brace_scopes
+
+    def counted_comment_scan(code):
+        scan_counts["comments"] += 1
+        return original_comment_scan(code)
+
+    def counted_scope_scan(code):
+        scan_counts["scopes"] += 1
+        return original_scope_scan(code)
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_scan_comment_and_literal_spans",
+        counted_comment_scan,
+    )
+    monkeypatch.setattr(
+        preprocessor,
+        "_scan_lexical_brace_scopes",
+        counted_scope_scan,
+    )
+    source = "\n".join(
+        [
+            *(f"struct Plain{index} {{ float value; }};" for index in range(256)),
+            "struct WithAlias { using scalar_t = float; scalar_t value; };",
+        ]
+    )
+
+    definitions = preprocessor._find_concrete_struct_definitions(source)
+
+    assert len(definitions) == 257
+    with_alias = next(item for item in definitions if item.name == "WithAlias")
+    assert with_alias.type_aliases == {"scalar_t": "float"}
+    assert scan_counts == {"comments": 1, "scopes": 1}
 
 
 def test_preprocessor_conditional_expansion():
@@ -117,6 +227,35 @@ def test_preprocessor_materializes_mlx_instantiate_kernel_macros():
     assert "void arangefloat16(" in output
     assert "device half* out" in output
     assert "out[gid] = half(gid + 3);" in output
+
+
+def test_preprocessor_materializes_multiline_project_instantiation_macro():
+    code = """
+    #define instantiate_copy(name, type) \\
+        instantiate_kernel("copy_" #name, copy, type)
+
+    template <typename T>
+    [[kernel]] void copy(
+        device const T* src [[buffer(0)]],
+        device T* dst [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        dst[gid] = src[gid];
+    }
+
+    instantiate_copy(
+        float32,
+        float)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "instantiate_copy" not in output
+    assert "instantiate_kernel" not in output
+    assert "template <typename T>" not in output
+    assert '[[host_name("copy_float32")]]' in output
+    assert "void copy_float32(" in output
+    assert "device const float* src" in output
+    assert "device float* dst" in output
 
 
 def test_preprocessor_materializes_mlx_instantiations_with_template_defaults():
@@ -595,6 +734,320 @@ def test_preprocessor_materialized_numeric_specialization_preserves_member_names
     ]
 
 
+def test_preprocessor_removes_proven_static_assertion_after_specialization():
+    code = """
+    inline int checked_simd_size() {
+        constexpr int simd_size = 32;
+        static_assert(simd_size == 32, "Expected a 32-lane simdgroup.");
+        return simd_size;
+    }
+
+    template <typename T, const int group_size>
+    [[kernel]] void quantize(
+        const device T* in [[buffer(0)]],
+        device T* out [[buffer(1)]]) {
+        constexpr int simd_size = 32;
+        static_assert(
+            group_size % simd_size == 0,
+            "Group size must be divisible by simd size.");
+        out[0] = in[0];
+    }
+
+    template [[host_name("quantize_float_gs_32")]] [[kernel]]
+    decltype(quantize<float, 32>) quantize<float, 32>;
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "int checked_simd_size()" in output
+    assert "void quantize_float_gs_32(" in output
+    assert "static_assert" not in output
+    assert "constexpr int simd_size = 32;" in output
+
+
+def test_preprocessor_removes_proven_static_assertion_with_logical_chain():
+    code = """
+    kernel void supported_group_size(device float* out [[buffer(0)]]) {
+        constexpr int group_size = 2;
+        static_assert(
+            group_size == 2 || group_size == 3 || group_size == 4 ||
+                group_size == 5 || group_size == 6 || group_size == 8,
+            "Unsupported group size.");
+        out[0] = 0.0;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "static_assert" not in output
+    assert "kernel void supported_group_size" in output
+
+
+def test_preprocessor_removes_proven_static_assertion_for_concrete_struct_layout():
+    code = """
+    struct ScalarPair {
+        float first;
+        float second;
+    };
+
+    struct TaggedPair {
+        uchar tag;
+        ScalarPair value;
+        half weights[2];
+    };
+
+    kernel void valid_layout(device float* out [[buffer(0)]]) {
+        static_assert(sizeof(ScalarPair) == 8, "Unexpected pair layout.");
+        static_assert(sizeof(TaggedPair) == 16, "Unexpected tagged layout.");
+        out[0] = 1.0f;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "static_assert" not in output
+    assert "struct ScalarPair" in output
+    assert "struct TaggedPair" in output
+
+
+def test_preprocessor_rejects_false_static_assertion_for_padded_struct_layout():
+    code = """
+    struct PaddedValue {
+        uchar tag;
+        float3 value;
+    };
+
+    kernel void invalid_layout(device float* out [[buffer(0)]]) {
+        static_assert(sizeof(PaddedValue) == 16, "Unexpected padded layout.");
+        out[0] = 0.0f;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.reason == "assertion-failed"
+    assert error.expression == "sizeof(PaddedValue) == 16"
+    assert error.resolved_expression == "32 == 16"
+    assert error.unresolved_dependencies == ()
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "device float* value;",
+        "float first, second;",
+        "alignas(16) float value;",
+    ),
+)
+def test_preprocessor_keeps_unsupported_struct_layout_assertions_fail_closed(
+    declaration,
+):
+    code = f"""
+    struct UnsupportedLayout {{
+        {declaration}
+    }};
+
+    kernel void unresolved_layout(device float* out [[buffer(0)]]) {{
+        static_assert(sizeof(UnsupportedLayout) == 8, "Layout must be known.");
+        out[0] = 0.0f;
+    }}
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.reason == "condition-unresolved"
+    assert error.resolved_expression == "sizeof(UnsupportedLayout) == 8"
+    assert error.unresolved_dependencies == ("UnsupportedLayout",)
+
+
+def test_preprocessor_rejects_false_static_assertion_with_source_context():
+    code = """
+    kernel void invalid_specialization(device float* out [[buffer(0)]]) {
+        constexpr int group_size = 31;
+        static_assert(
+            group_size % 32 == 0,
+            "Group size must be divisible by 32.");
+        out[0] = 0.0;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == "project.translate.metal-static-assertion"
+    assert error.missing_capabilities == ("compile-time.static-assertion",)
+    assert error.reason == "assertion-failed"
+    assert error.expression == "group_size % 32 == 0"
+    assert error.resolved_expression == "31 % 32 == 0"
+    assert error.assertion_message == "Group size must be divisible by 32."
+    assert error.unresolved_dependencies == ()
+    assert error.source_location["line"] == 4
+    assert error.source_location["column"] == 9
+    assert "evaluated to false" in str(error)
+    assert "select specialization values" in error.suggested_action
+
+
+def test_preprocessor_rejects_false_static_assertion_logical_chain():
+    code = """
+    kernel void unsupported_group_size(device float* out [[buffer(0)]]) {
+        constexpr int group_size = 7;
+        static_assert(
+            group_size == 2 || group_size == 4 || group_size == 8,
+            "Group size must be a supported tile width.");
+        out[0] = 0.0;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.reason == "assertion-failed"
+    assert error.resolved_expression == "7 == 2 || 7 == 4 || 7 == 8"
+    assert error.assertion_message == "Group size must be a supported tile width."
+    assert error.unresolved_dependencies == ()
+    assert error.source_location["line"] == 4
+    assert error.source_location["column"] == 9
+
+
+def test_preprocessor_rejects_unresolved_static_assertion_with_dependencies():
+    code = """
+    kernel void unresolved_constraint(
+        device float* out [[buffer(0)]],
+        uint runtime_width [[threads_per_grid]]) {
+        static_assert(
+            runtime_width == 32,
+            "Runtime width must be specialized.");
+        out[0] = 0.0;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == "project.translate.metal-static-assertion"
+    assert error.reason == "condition-unresolved"
+    assert error.expression == "runtime_width == 32"
+    assert error.resolved_expression == "runtime_width == 32"
+    assert error.assertion_message == "Runtime width must be specialized."
+    assert error.unresolved_dependencies == ("runtime_width",)
+    assert error.source_location["line"] == 5
+    assert error.source_location["column"] == 9
+    assert "unresolved dependencies: runtime_width" in str(error)
+    assert "constexpr integral values" in error.suggested_action
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    (
+        (
+            "2 == 2 || 2 == 3 || 2 == 4 || 2 == 5 || 2 == 6 || 2 == 8",
+            (True, 1),
+        ),
+        ("2 != 2 || 2 != 3", (True, 1)),
+        ("2 != 2 && 3 != 3", (True, 0)),
+        ("1 == 1 || 2 == 3 && 4 == 5", (True, 1)),
+        ("(1 == 1 || 2 == 3) && 4 == 5", (True, 0)),
+    ),
+)
+def test_preprocessor_folds_logical_comparison_chains(expression, expected):
+    assert (
+        MetalPreprocessor()._evaluate_static_integral_expression(expression) == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    (
+        ("true || runtime_width == 32", (True, 1)),
+        ("false && runtime_width != 32", (True, 0)),
+        ("false || runtime_width == 32", (False, None)),
+        ("true && runtime_width != 32", (False, None)),
+    ),
+)
+def test_preprocessor_short_circuits_unresolved_logical_operands(expression, expected):
+    assert (
+        MetalPreprocessor()._evaluate_static_integral_expression(expression) == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    (
+        "static_assert(true)",
+        "static_assert();",
+    ),
+)
+def test_preprocessor_rejects_malformed_static_assertion(assertion):
+    code = f"""
+    kernel void malformed_assertion(device float* out [[buffer(0)]]) {{
+        {assertion}
+        out[0] = 0.0;
+    }}
+    """
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == "project.translate.metal-static-assertion"
+    assert error.reason == "assertion-malformed"
+    assert error.source_location["line"] == 3
+    assert error.source_location["column"] == 9
+    assert "well-formed static_assert" in error.suggested_action
+
+
 def test_preprocessor_materializes_explicit_template_helper_calls():
     code = """
     template <typename T, typename IdxT, int Offset>
@@ -617,6 +1070,24 @@ def test_preprocessor_materializes_explicit_template_helper_calls():
     assert "device const float* src" in output
     assert "uint index" in output
     assert "return src[index] + float(7);" in output
+
+
+def test_preprocessor_does_not_treat_function_pointer_aliases_as_functor_calls():
+    code = """
+    typedef void (im2col_t)(thread float*, int);
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+    using Transform = void (*)(thread float*, int);
+
+    struct Helper {
+      int value() { return 1; }
+    };
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "typedef void (im2col_t)(thread float*, int);" in output
+    assert "typedef void (*RadixFunc)(thread float2*, thread float2*);" in output
+    assert "using Transform = void (*)(thread float*, int);" in output
 
 
 def test_preprocessor_materializes_callable_non_type_template_arguments():
@@ -754,6 +1225,36 @@ def test_preprocessor_materializes_all_project_instantiations_when_limit_not_enf
     assert "template <typename T>" not in materialized
     for index in range(4):
         assert f"void kernel{index}(" in materialized
+
+
+def test_preprocessor_materializes_only_selected_project_host_names():
+    declarations = "\n".join(
+        f'template [[host_name("kernel" "{index}")]] [[kernel]] '
+        f"decltype(arange<uint>) arange<uint>;"
+        for index in range(4)
+    )
+    code = f"""
+    template <typename T>
+    [[kernel]] void arange(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {{
+        out[gid] = T(gid);
+    }}
+
+    {declarations}
+    """
+
+    materialized = MetalPreprocessor()._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+        host_names={"kernel2"},
+    )
+
+    assert "decltype(arange<uint>)" not in materialized
+    assert "template <typename T>" not in materialized
+    assert "void kernel2(" in materialized
+    for index in (0, 1, 3):
+        assert f"void kernel{index}(" not in materialized
 
 
 def test_preprocessor_materializes_nested_explicit_template_helper_calls():
@@ -997,7 +1498,7 @@ def test_preprocessor_reports_template_specialization_limit_details():
     assert "Suggested action:" in str(error)
 
 
-def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation():
+def test_preprocessor_expands_multiline_function_macro_invocation():
     code = """
     #define DECLARE_TYPED(name, type) type name;
     DECLARE_TYPED(
@@ -1007,8 +1508,112 @@ def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation()
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "DECLARE_TYPED(" in output
-    assert "float value" not in output
+    assert "DECLARE_TYPED(" not in output
+    assert "float value;" in output
+
+
+def test_preprocessor_preserves_ordinary_multiline_function_call():
+    code = """
+    float make_value(float value) { return value; }
+    float result = make_value(
+        1.0f);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float result = make_value(\n        1.0f);" in output
+
+
+def test_preprocessor_preserves_directives_inside_ordinary_multiline_call():
+    code = """
+    #define USE_FIRST 1
+    float choose(float left, float right) { return left + right; }
+    float result = choose(
+    #if USE_FIRST
+        1.0f,
+    #else
+        2.0f,
+    #endif
+        3.0f);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float result = choose(\n        1.0f,\n        3.0f);" in output
+    assert "2.0f" not in output
+
+
+def test_preprocessor_multiline_macro_matches_single_line_macro_semantics():
+    definitions = r"""
+    #define ADD(left, right) ((left) + (right))
+    #define JOIN(left, right) left ## right
+    #define NAME(value) #value
+    #define DECLARE(name, expression, ...) \
+        float JOIN(name, _value) = ADD(expression, __VA_ARGS__); \
+        constant char* JOIN(name, _name) = NAME(name);
+    """
+    single_line = definitions + r"""
+    DECLARE(sample, ADD(1.0f, 2.0f), 3.0f)
+    """
+    multiline = definitions + r"""
+    DECLARE(
+        sample,
+        ADD(1.0f, 2.0f),
+        3.0f)
+    """
+
+    single_output = MetalPreprocessor().preprocess(single_line)
+    multiline_output = MetalPreprocessor().preprocess(multiline)
+
+    def normalize_whitespace(text):
+        return re.sub(r"\s+", " ", text).strip()
+
+    assert normalize_whitespace(multiline_output) == normalize_whitespace(single_output)
+    assert "float sample_value" in multiline_output
+    assert 'constant char* sample_name = "sample";' in multiline_output
+
+
+def test_preprocessor_multiline_macro_ignores_argument_comment_and_literal_parens():
+    code = r"""
+    #define PASS(value) value
+    #define ADD(left, right) ((left) + (right))
+    constant char* text = PASS(
+        "literal ),( text");
+    float value = ADD(
+        PASS(1.0f /* unmatched ) and , */), // unmatched (
+        2.0f);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert 'constant char* text = "literal ),( text";' in output
+    assert "float value = ((1.0f) + (2.0f));" in output
+    assert "PASS(" not in output
+    assert "ADD(" not in output
+
+
+def test_preprocessor_reports_unterminated_multiline_function_macro_call():
+    code = """
+    #define DECLARE_TYPED(name, type) type name;
+    DECLARE_TYPED(
+        value,
+        float
+    """
+
+    with pytest.raises(MetalMacroExpansionError) as exc_info:
+        MetalPreprocessor().preprocess(code, file_path="unterminated.metal")
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.metal-macro-expansion-invalid"
+    )
+    assert error.missing_capabilities == ("metal.function-macro-expansion",)
+    assert error.macro_name == "DECLARE_TYPED"
+    assert error.reason == "unterminated-function-macro-invocation"
+    assert error.source_location["file"] == "unterminated.metal"
+    assert error.source_location["line"] == 3
+    assert error.source_location["column"] == 5
+    assert error.source_location["length"] == len("DECLARE_TYPED")
 
 
 def test_preprocessor_include_with_search_path(tmp_path):
@@ -5249,11 +5854,139 @@ def test_preprocessor_lowers_temporary_functor_call_with_arithmetic_and_functor_
     # no dangling `Log{}(` temporary and no un-inferred failure survive.
     assert "Log__operator_call__temporary(" in output
     assert "Log{}(" not in output
+    assert "Sqrt{}(" not in output
     assert "could not be inferred" not in output
+    assert (
+        "Log__operator_call__temporary("
+        "x + i * Sqrt__operator_call__temporary(1.0 - x * x))"
+    ) in output
+    assert output.count("Sqrt__operator_call__temporary(1.0 - x * x)") == 1
     # The complex `Sqrt`/`Log` operator() overloads were emitted as free
     # functions (the argument resolved to the concrete complex overload).
     assert "complex64_t Log__operator_call(thread Log& self, complex64_t x)" in output
     assert "complex64_t Sqrt__operator_call(thread Sqrt& self, complex64_t x)" in output
+
+
+def test_preprocessor_defers_temporaries_for_declared_out_of_line_call_operators():
+    code = """
+    struct complex64_t { float real; float imag; };
+
+    struct Sqrt {
+      complex64_t operator()(complex64_t x);
+    };
+
+    struct Log {
+      complex64_t operator()(complex64_t x);
+    };
+
+    complex64_t Sqrt::operator()(complex64_t x) { return x; }
+    complex64_t Log::operator()(complex64_t x) { return Sqrt{}(x); }
+
+    complex64_t nested(complex64_t x) {
+      return Log{}(Sqrt{}(x));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "complex64_t operator()(complex64_t x);" in output
+    assert "return Log{}(Sqrt{}(x));" in output
+
+
+def test_preprocessor_lowers_const_template_operator_on_stateless_temporary():
+    code = """
+    struct Identity {
+      template <typename T>
+      T operator()(T value) const { return value; }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      values[0] = Identity{}(values[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "float Identity__operator_call__float("
+        "thread const Identity& self, float value)"
+    ) in output
+    assert "Identity__operator_call__float__temporary(values[0])" in output
+    assert "Identity{}(" not in output
+
+
+def test_preprocessor_rejects_stateful_temporary_without_dropping_side_effects():
+    code = """
+    int next_state();
+    int next_value();
+
+    struct AddState {
+      int state;
+      AddState(int value) : state(value) { observe(value); }
+      int operator()(int value) const { return state + value; }
+    };
+
+    kernel void k(device int* values [[buffer(0)]]) {
+      values[0] = AddState{next_state()}(next_value());
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == "AddState"
+    assert error.method_name == "operator()"
+    assert error.reason == "temporary-functor-constructor-stateful"
+    assert error.requested_signature == "AddState{next_state()}(next_value())"
+    assert error.source_location["length"] == len(error.requested_signature)
+    assert "next_state()" in str(error)
+    assert "next_value()" in str(error)
+
+
+@pytest.mark.parametrize("functor_name", ["Op", "missing_functor"])
+def test_preprocessor_rejects_unresolved_temporary_functor_structured(functor_name):
+    code = f"""
+    kernel void k(device float* values [[buffer(0)]]) {{
+      values[0] = {functor_name}()(values[0]);
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == functor_name
+    assert error.method_name == "operator()"
+    assert error.reason == "temporary-functor-type-unresolved"
+    assert error.requested_signature == f"{functor_name}()(values[0])"
+    assert error.source_location["length"] == len(error.requested_signature)
+
+
+def test_preprocessor_rejects_ambiguous_temporary_operator_overload_structured():
+    code = """
+    struct Convert {
+      short operator()(short value) const { return value; }
+      long operator()(long value) const { return value; }
+    };
+
+    kernel void k(device int* values [[buffer(0)]]) {
+      values[0] = Convert{}(values[0]);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == "Convert"
+    assert error.method_name == "operator()"
+    assert error.reason == "concrete-overload-ambiguous"
+    assert error.requested_signature == "Convert::operator()(values[0])"
+    assert error.source_location["length"] == len("(values[0])")
 
 
 def test_preprocessor_skips_calls_inside_residual_template_declarations():
@@ -7547,9 +8280,15 @@ def test_sfinae_simd_reduce_recognized_as_template_methods():
     # constraints captured and the return-type SFINAE unwrapped to the value type.
     pp = MetalPreprocessor()
     body = _SFINAE_SIMD_REDUCE_STRUCT.split("struct Red {", 1)[1].rsplit("};", 1)[0]
-    _names, _types, concrete, templates, _members, _ctors = pp._split_struct_body(
-        "Red", body, 0
-    )
+    (
+        _names,
+        _types,
+        concrete,
+        templates,
+        _members,
+        _ctors,
+        _layout_supported,
+    ) = pp._split_struct_body("Red", body, 0)
     by_name = {}
     for method in templates:
         by_name.setdefault(method.name, []).append(method)

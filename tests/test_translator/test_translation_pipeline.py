@@ -510,10 +510,10 @@ def test_metal_vertex_struct_return_preserves_view_dir_outputs(tmp_path):
     assert "f16vec3" not in opengl
 
     _assert_generated_output_is_usable(directx)
-    assert "half3 viewDir: TEXCOORD0;" in directx
-    assert "out_.viewDir = half3(normalize" in directx
+    assert "float16_t3 viewDir: TEXCOORD0;" in directx
+    assert "out_.viewDir = float16_t3(normalize" in directx
     assert "return out_;" in directx
-    assert "return Output(half3(0));" not in directx
+    assert "return Output(float16_t3(0));" not in directx
 
     _assert_generated_output_is_usable(spirv)
     output_match = re.search(
@@ -797,14 +797,17 @@ def test_metal_scalar_vector_constructor_lowers_to_directx_splat(tmp_path):
 
     _assert_generated_output_is_usable(generated)
     assert "Output literalValue;" in generated
-    assert "literalValue.viewDir = half3(0, 0, 0);" in generated
+    assert "literalValue.viewDir = float16_t3(0, 0, 0);" in generated
     assert "Output scalarValue;" in generated
-    assert "scalarValue.viewDir = half3(scalar, scalar, scalar);" in generated
+    assert "scalarValue.viewDir = float16_t3(scalar, scalar, scalar);" in generated
     assert "Output nestedValue;" in generated
-    assert "nestedValue.viewDir = half3(half(0), half(0), half(0));" in generated
-    assert "half3(0))" not in generated
-    assert "half3(scalar))" not in generated
-    assert "half3(half(0)))" not in generated
+    assert (
+        "nestedValue.viewDir = float16_t3("
+        "float16_t(0), float16_t(0), float16_t(0));" in generated
+    )
+    assert "float16_t3(0))" not in generated
+    assert "float16_t3(scalar))" not in generated
+    assert "float16_t3(float16_t(0)))" not in generated
 
 
 def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):

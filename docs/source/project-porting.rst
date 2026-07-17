@@ -1595,6 +1595,104 @@ configured define names, deterministic define fingerprints, variant names,
 per-variant define counts, variant define names, and deterministic per-variant
 define fingerprints without printing define values.
 
+Bounded Host Dispatch Contract Import
+-------------------------------------
+
+Projects can import versioned JSON host dispatch contracts through
+``project.dispatch_contracts`` in ``crosstl.toml``:
+
+.. code-block:: toml
+
+   [project]
+   dispatch_contracts = [
+     "contracts/layer-norm.dispatch.json",
+     "contracts/copy.dispatch.json",
+   ]
+
+The ``scan``, ``report``, and ``translate-project`` commands also accept a
+repeatable ``--dispatch-contract PATH`` option. Command-line imports augment
+the configured contract list for that invocation:
+
+.. code-block:: bash
+
+   python -m crosstl scan /path/to/repo \
+     --dispatch-contract contracts/layer-norm.dispatch.json
+
+   python -m crosstl report /path/to/repo \
+     --dispatch-contract contracts/layer-norm.dispatch.json \
+     --dispatch-contract contracts/copy.dispatch.json \
+     --output crosstl-out/portability-report.json
+
+   python -m crosstl translate-project /path/to/repo \
+     --dispatch-contract contracts/layer-norm.dispatch.json \
+     --output-dir crosstl-out
+
+Contract expressions are evaluated over finite declared domains in a
+deterministic order. The resulting project metadata includes:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Report field
+     - Contents
+   * - ``dispatchContractFiles``
+     - Ordered configured and command-line contract paths.
+   * - ``dispatchContractCount``
+     - Number of imported contract manifests.
+   * - ``dispatchVariantCount``
+     - Total number of deterministically evaluated dispatch variants.
+   * - ``dispatchContracts``
+     - Embedded normalized manifests, content identities, provenance, and
+       evaluated variant records.
+
+The embedded manifests and evaluations are machine-readable and self-contained
+for project report validation, including deterministic replay without the
+external contract files. During scanning, evaluated records are converted into
+a deterministic source-scoped artifact plan. Compile-equivalent records share
+one artifact job while their distinct dispatch geometries remain available as
+dispatch variants. A contract that names an undiscovered source, an unknown
+entry point, or a conflicting artifact identity fails before target emission.
+
+``translate-project`` applies each planned job only to its referenced source
+unit. The job selects the source entry point and carries its workgroup size,
+required subgroup width, specialization constants, stable artifact identity,
+and contract provenance into target generation. Unreferenced source units retain
+their ordinary project configuration. Generated reports expose this contract
+through:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Report field
+     - Contents
+   * - ``project.dispatchArtifactCount``
+     - Number of source-scoped compile jobs in the deterministic plan.
+   * - ``project.dispatchArtifactPlan``
+     - Planned artifacts, dispatch variants, source units, stable identities,
+       entry points, execution specialization, and provenance.
+   * - ``artifacts[*].dispatchArtifact``
+     - The exact planned job applied to an emitted or failed artifact record.
+   * - ``artifacts[*].execution.provenance``
+     - A closed reference back to the matching artifact-plan record.
+   * - ``artifactMatrix.variantMode``
+     - ``source-scoped`` when dispatch-derived and ordinary artifacts coexist.
+
+Report validation deterministically rebuilds the plan from the embedded
+contracts and discovered units, rejects unknown or tampered dispatch variants,
+and checks emitted execution metadata against the planned entry point and
+specialization. DirectX and OpenGL can emit source-scoped artifacts when their
+target contracts are representable. Requirements such as an exact subgroup
+width still fail closed on a target that cannot enforce them.
+
+Named project variants cannot yet be composed with dispatch-derived variants;
+that work remains tracked in `GitHub issue #1798
+<https://github.com/CrossGL/crosstl/issues/1798>`_. Imported contracts do not
+execute the host dispatch path, allocate or bind runtime resources, or establish
+numerical parity. Those responsibilities remain with repository integration and
+runtime adapters.
+
 Report Shape
 ------------
 
