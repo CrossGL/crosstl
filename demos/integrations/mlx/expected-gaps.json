@@ -931,16 +931,22 @@
       "specialized-struct-constexpr-assertion-evaluation",
       "lexical-receiver-alias-resolution",
       "statement-bounded-member-template-parsing",
-      "concrete-constructor-preservation"
+      "concrete-constructor-preservation",
+      "line-wrapped-qualified-struct-receiver-materialization"
     ],
+    "resolved_by_commit": "212f422a73042769cf0cbe41ee54def5b4c70b7e",
     "advanced_past": {
-      "member_call": "loader_w.load_safe",
-      "receiver_declaration": "loader_w_t loader_w"
+      "member_call": "mma_op.mma",
+      "receiver_declaration": "mma_t mma_op"
     },
     "current_boundary": {
       "diagnostic_code": "project.translate.metal-struct-method",
-      "member_call": "mma_op.mma",
-      "receiver_declaration": "mma_t mma_op",
+      "member_call": "epilogue_op.apply",
+      "receiver_declaration": "thread const TransformNone_float_float& epilogue_op",
+      "generated_source_location": {
+        "line": 40029,
+        "column": 29
+      },
       "missing_contract": "contextual-receiver-struct-materialization",
       "blocked_by": "https://github.com/CrossGL/crosstl/issues/1479"
     },

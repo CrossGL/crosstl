@@ -2300,15 +2300,23 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             "lexical-receiver-alias-resolution",
             "statement-bounded-member-template-parsing",
             "concrete-constructor-preservation",
+            "line-wrapped-qualified-struct-receiver-materialization",
         ],
+        "resolved_by_commit": "212f422a73042769cf0cbe41ee54def5b4c70b7e",
         "advanced_past": {
-            "member_call": "loader_w.load_safe",
-            "receiver_declaration": "loader_w_t loader_w",
+            "member_call": "mma_op.mma",
+            "receiver_declaration": "mma_t mma_op",
         },
         "current_boundary": {
             "diagnostic_code": "project.translate.metal-struct-method",
-            "member_call": "mma_op.mma",
-            "receiver_declaration": "mma_t mma_op",
+            "member_call": "epilogue_op.apply",
+            "receiver_declaration": (
+                "thread const TransformNone_float_float& epilogue_op"
+            ),
+            "generated_source_location": {
+                "line": 40029,
+                "column": 29,
+            },
             "missing_contract": "contextual-receiver-struct-materialization",
             "blocked_by": issue,
         },
@@ -2335,9 +2343,11 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
 
     readme = MLX_README_PATH.read_text(encoding="utf-8")
     assert PINNED_MLX_COMMIT in readme
-    assert "`loader_w.load_safe`" in readme
     assert "`mma_op.mma`" in readme
-    assert "`mma_t mma_op`" in readme
+    assert "CrossTL commit `212f422a7`" in readme
+    assert "`epilogue_op.apply`" in readme
+    assert "`thread const TransformNone_float_float& epilogue_op`" in readme
+    assert "generated\nsource line 40029, column 29" in readme
     assert "CrossGL/crosstl#1479" in readme
     assert "CrossGL/crosstl#1807" in readme
     assert "does not claim runtime integration or numerical parity" in readme

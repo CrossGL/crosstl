@@ -892,17 +892,20 @@ structured diagnostic instead of losing the generic suffix or computation.
 At pinned MLX commit
 `4367c73b60541ddd5a266ce4644fd93d20223b6e`, exact high-budget project
 translations of the complete `fp_quantized.metal` source now advance past
-`loader_w.load_safe` for both DirectX and OpenGL. This frontier combines helper
+`mma_op.mma` for both DirectX and OpenGL. This frontier combines helper
 array-decay deduction, specialized struct constexpr assertion evaluation,
 lexical receiver alias resolution, statement-bounded member-template parsing,
-and concrete constructor preservation. Specialized struct constexpr assertion
-evaluation resolves CrossGL/crosstl#1807 for this path.
+concrete constructor preservation, and line-wrapped qualified struct receiver
+materialization. CrossTL commit `212f422a7` preserves namespace identity across
+whitespace around `::` for this path. Specialized struct constexpr assertion
+evaluation resolves CrossGL/crosstl#1807.
 
 Both target runs still fail closed with
-`project.translate.metal-struct-method` at `mma_op.mma` on receiver declaration
-`mma_t mma_op`. CrossGL/crosstl#1479 tracks the remaining general contextual
-receiver materialization contract. Neither run emits a target artifact, and
-this evidence does not claim runtime integration or numerical parity.
+`project.translate.metal-struct-method` at `epilogue_op.apply` on receiver
+declaration `thread const TransformNone_float_float& epilogue_op`, at generated
+source line 40029, column 29. CrossGL/crosstl#1479 tracks the remaining general
+contextual receiver materialization contract. Neither run emits a target
+artifact. This evidence does not claim runtime integration or numerical parity.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.
