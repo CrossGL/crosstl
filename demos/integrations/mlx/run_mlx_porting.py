@@ -273,23 +273,6 @@ MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS = (
         "warningsPerRun": 1,
     },
     {
-        "classification": "native-bfloat-helper-promotion",
-        "source": MLX_RANDOM_SOURCE,
-        "issue": "https://github.com/CrossGL/crosstl/issues/1799",
-        "message": "'min16uint' is promoted to 'uint16_t' [-Wconversion]",
-        "sourceLines": [
-            {
-                "text": "uint __crossgl_bfloat16_from_uint16(min16uint value)",
-                "occurrencesPerRun": 1,
-            },
-            {
-                "text": "min16uint __crossgl_bfloat16_to_uint16(uint value)",
-                "occurrencesPerRun": 1,
-            },
-        ],
-        "warningsPerRun": 2,
-    },
-    {
         "classification": "uint64-local-destination-conversion",
         "source": MLX_ROPE_SOURCE,
         "issue": "https://github.com/CrossGL/crosstl/issues/1801",
@@ -311,7 +294,6 @@ MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS = (
     },
 )
 DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1801",
     "https://github.com/CrossGL/crosstl/issues/1802",
 )
@@ -851,6 +833,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1800",
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1659",

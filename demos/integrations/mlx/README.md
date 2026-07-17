@@ -269,13 +269,14 @@ representation, and round-to-nearest, ties-to-even conversion. All five emitted
 sources require native `uint16` storage declarations and report the
 `directx.native-16bit-types` capability. The harness compares each artifact's
 `bfloat16Lowering` and `requiredCapabilities` fields with this pinned contract
-and fails closed if either field is missing or changes. DXC currently reports
-four pinned warning contracts across `arange.metal`, `random.metal`, and
-`rope.metal`. Whole-artifact compilation repeats those warnings for each selected
-entry: 22 warnings across 11 arange runs, four across two random runs, and 108
-across 18 rope runs. The random bfloat helper promotion remains tracked by
-[#1799](https://github.com/CrossGL/crosstl/issues/1799); native `int16_t` and
-`uint64_t` destination conversions remain tracked by
+and fails closed if either field is missing or changes. Native-profile bfloat
+helpers now use exact `uint16_t` boundaries, and the two selected
+`random.metal` entries compile without the promotion warnings tracked by
+[#1799](https://github.com/CrossGL/crosstl/issues/1799). DXC currently reports
+three pinned warning contracts across `arange.metal` and `rope.metal`.
+Whole-artifact compilation repeats those warnings for each selected entry: 22
+warnings across 11 arange runs and 108 across 18 rope runs. Native `int16_t`
+and `uint64_t` destination conversions remain tracked by
 [#1801](https://github.com/CrossGL/crosstl/issues/1801); and mixed-width
 native-half arithmetic remains tracked by
 [#1802](https://github.com/CrossGL/crosstl/issues/1802). The harness requires the
@@ -438,8 +439,8 @@ emission under
 [#1799](https://github.com/CrossGL/crosstl/issues/1799) and concrete
 `static_assert` evaluation under
 [#1800](https://github.com/CrossGL/crosstl/issues/1800) are resolved for this
-selected entry. The general native-profile helper contract under #1799 remains
-open. Contextual narrowing under
+selected entry. The native-profile helper contract under #1799 is also resolved
+across the pinned bfloat frontier. Contextual narrowing under
 [#1801](https://github.com/CrossGL/crosstl/issues/1801) is also resolved for this
 selected entry; the general destination-conversion contract remains open. The
 artifact requires the

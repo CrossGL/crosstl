@@ -926,9 +926,9 @@
     },
     "warning_evidence": {
       "status": "validated-with-tracked-warnings",
-      "warningRunCount": 31,
-      "observedWarningCount": 134,
-      "uniqueContractCount": 4,
+      "warningRunCount": 29,
+      "observedWarningCount": 130,
+      "uniqueContractCount": 3,
       "contracts": [
         {
           "classification": "native-int16-destination-conversion",
@@ -957,24 +957,6 @@
           ],
           "warningsPerRun": 1,
           "observedCount": 11
-        },
-        {
-          "classification": "native-bfloat-helper-promotion",
-          "source": "mlx/backend/metal/kernels/random.metal",
-          "issue": "https://github.com/CrossGL/crosstl/issues/1799",
-          "message": "'min16uint' is promoted to 'uint16_t' [-Wconversion]",
-          "sourceLines": [
-            {
-              "text": "uint __crossgl_bfloat16_from_uint16(min16uint value)",
-              "occurrencesPerRun": 1
-            },
-            {
-              "text": "min16uint __crossgl_bfloat16_to_uint16(uint value)",
-              "occurrencesPerRun": 1
-            }
-          ],
-          "warningsPerRun": 2,
-          "observedCount": 4
         },
         {
           "classification": "uint64-local-destination-conversion",
@@ -1470,7 +1452,6 @@
       "https://github.com/CrossGL/crosstl/issues/1671"
     ],
     "semantic_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1799",
       "https://github.com/CrossGL/crosstl/issues/1801",
       "https://github.com/CrossGL/crosstl/issues/1802",
       "https://github.com/CrossGL/crosstl/issues/1491",
@@ -1534,7 +1515,6 @@
     }
   },
   "tracked_issues": [
-    "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1801",
     "https://github.com/CrossGL/crosstl/issues/1802",
     "https://github.com/CrossGL/crosstl/issues/1669",
@@ -1581,6 +1561,7 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1800",
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1659",

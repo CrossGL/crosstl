@@ -6449,16 +6449,16 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "concrete `static_assert` evaluation" in normalized_readme
     assert "Official DXC validation" in normalized_readme
     assert "`-enable-16bit-types`, and `-WX` passes" in normalized_readme
-    assert "four pinned warning contracts" in normalized_readme
+    assert "three pinned warning contracts" in normalized_readme
     assert "22 warnings across 11 arange runs" in normalized_readme
-    assert "four across two random runs" in normalized_readme
+    assert "two selected `random.metal` entries compile without" in normalized_readme
     assert "108 across 18 rope runs" in normalized_readme
     assert "exact messages, generated source expressions, and multiplicities" in (
         normalized_readme
     )
     assert "rejects missing, additional, or changed warnings" in normalized_readme
     assert "not a clean `-WX` contract" in normalized_readme
-    assert "general native-profile helper contract under #1799 remains open" in (
+    assert "native-profile helper contract under #1799 is also resolved" in (
         normalized_readme
     )
     assert "general destination-conversion contract remains open" in (normalized_readme)
@@ -6627,7 +6627,10 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     profile_issue = "https://github.com/CrossGL/crosstl/issues/1670"
     workgroup_issue = "https://github.com/CrossGL/crosstl/issues/1671"
     checkpoint_issue = "https://github.com/CrossGL/crosstl/issues/1576"
-    resolved_validation_issues = {"https://github.com/CrossGL/crosstl/issues/1800"}
+    resolved_frontier_issues = {
+        "https://github.com/CrossGL/crosstl/issues/1799",
+        "https://github.com/CrossGL/crosstl/issues/1800",
+    }
     native_profile_issue = "https://github.com/CrossGL/crosstl/issues/1799"
     narrowing_issue = "https://github.com/CrossGL/crosstl/issues/1801"
     arithmetic_conversion_issue = "https://github.com/CrossGL/crosstl/issues/1802"
@@ -6643,7 +6646,7 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert checkpoint_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert checkpoint_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert module.FULL_CORPUS_VALIDATION_TRACKED_ISSUES == (profile_issue,)
-    assert native_profile_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert native_profile_issue not in module.FULL_CORPUS_TRACKED_ISSUES
     assert narrowing_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert arithmetic_conversion_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert static_assertion_issue not in module.FULL_CORPUS_TRACKED_ISSUES
@@ -6651,22 +6654,22 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert private_pointer_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert opengl_index_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert opengl_index_issue in module.FULL_CORPUS_TRACKED_ISSUES
-    assert resolved_validation_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
-    assert resolved_validation_issues.isdisjoint(module.FULL_CORPUS_TRACKED_ISSUES)
+    assert resolved_frontier_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
+    assert resolved_frontier_issues.isdisjoint(module.FULL_CORPUS_TRACKED_ISSUES)
     assert resource_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert profile_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert workgroup_issue not in module.RESOLVED_FRONTIER_ISSUES
-    assert native_profile_issue not in module.RESOLVED_FRONTIER_ISSUES
+    assert native_profile_issue in module.RESOLVED_FRONTIER_ISSUES
     assert narrowing_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert arithmetic_conversion_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert resource_issue in gaps["tracked_issues"]
     assert profile_issue in gaps["tracked_issues"]
     assert workgroup_issue in gaps["tracked_issues"]
     assert checkpoint_issue in gaps["tracked_issues"]
-    assert native_profile_issue in gaps["tracked_issues"]
+    assert native_profile_issue not in gaps["tracked_issues"]
     assert narrowing_issue in gaps["tracked_issues"]
     assert arithmetic_conversion_issue in gaps["tracked_issues"]
-    assert native_profile_issue not in gaps["resolved_issues"]
+    assert native_profile_issue in gaps["resolved_issues"]
     assert narrowing_issue not in gaps["resolved_issues"]
     assert arithmetic_conversion_issue not in gaps["resolved_issues"]
     assert static_assertion_issue not in gaps["tracked_issues"]
@@ -6674,13 +6677,13 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert static_assertion_issue in gaps["resolved_issues"]
     assert private_pointer_issue in gaps["tracked_issues"]
     assert opengl_index_issue in gaps["tracked_issues"]
-    assert resolved_validation_issues <= set(gaps["resolved_issues"])
-    assert resolved_validation_issues.isdisjoint(gaps["tracked_issues"])
+    assert resolved_frontier_issues <= set(gaps["resolved_issues"])
+    assert resolved_frontier_issues.isdisjoint(gaps["tracked_issues"])
     assert resource_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert profile_issue in gaps["full_corpus_scout"]["validation_blocked_by"]
     assert workgroup_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert checkpoint_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
-    assert native_profile_issue in gaps["full_corpus_scout"]["semantic_blocked_by"]
+    assert native_profile_issue not in gaps["full_corpus_scout"]["semantic_blocked_by"]
     assert narrowing_issue in gaps["full_corpus_scout"]["semantic_blocked_by"]
     assert (
         arithmetic_conversion_issue in gaps["full_corpus_scout"]["semantic_blocked_by"]
@@ -6690,7 +6693,7 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     ]
     assert private_pointer_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert opengl_index_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
-    assert resolved_validation_issues.isdisjoint(
+    assert resolved_frontier_issues.isdisjoint(
         gaps["full_corpus_scout"]["validation_blocked_by"]
     )
 

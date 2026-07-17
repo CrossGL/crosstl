@@ -1742,6 +1742,7 @@ class HLSLCodeGen:
         self.required_hlsl_bfloat16_helpers = set()
         self.hlsl_bfloat16_storage_resource_source_types = {}
         self.requires_hlsl_bfloat16_storage = False
+        self.requires_hlsl_native_16_bit_types = False
         self.required_hlsl_explicit_bitcast_helpers = set()
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
@@ -2632,6 +2633,7 @@ class HLSLCodeGen:
         self.required_hlsl_bfloat16_helpers = set()
         self.hlsl_bfloat16_storage_resource_source_types = {}
         self.requires_hlsl_bfloat16_storage = False
+        self.requires_hlsl_native_16_bit_types = False
         self.required_hlsl_explicit_bitcast_helpers = set()
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
@@ -4251,16 +4253,20 @@ class HLSLCodeGen:
     def generate_hlsl_bfloat16_helpers(self):
         required = getattr(self, "required_hlsl_bfloat16_helpers", set())
         requires_storage = getattr(self, "requires_hlsl_bfloat16_storage", False)
+        requires_native_16_bit_types = getattr(
+            self, "requires_hlsl_native_16_bit_types", False
+        )
         if not required and not requires_storage:
             return ""
-        uint16_type = "uint16_t" if requires_storage else "min16uint"
+        native_16_bit_mode = requires_storage or requires_native_16_bit_types
+        uint16_type = "uint16_t" if native_16_bit_mode else "min16uint"
 
         code = [
             "// CrossGL exact bfloat16 lowering: register payloads use uint low bits.\n"
         ]
-        if requires_storage:
+        if native_16_bit_mode:
             code.append(
-                "// Native 16-bit storage requires Shader Model 6.2 and "
+                "// Native 16-bit types require Shader Model 6.2 and "
                 "dxc -enable-16bit-types.\n"
             )
 
@@ -15790,7 +15796,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return argument_code
         if target_is_bfloat and source_is_uint16:
             self.require_hlsl_bfloat16_helper("from_uint16")
-            uint16_type = self.map_type("uint16_t")
+            uint16_type = self.map_type(source_type)
             return f"__crossgl_bfloat16_from_uint16({uint16_type}({argument_code}))"
         if target_is_uint16 and source_is_bfloat:
             self.require_hlsl_bfloat16_helper("to_uint16")
@@ -37705,6 +37711,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         reason="target-profile-lacks-native-16bit-types",
                         source_location=getattr(source_type, "source_location", None),
                     )
+                self.requires_hlsl_native_16_bit_types = True
                 return native_mapped_type
         return mapped_type
 
