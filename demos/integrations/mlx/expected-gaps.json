@@ -514,6 +514,7 @@
     "status": "translation-and-native-compilation-validated",
     "source": "mlx/backend/metal/kernels/rms_norm.metal",
     "source_sha256": "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee",
+    "source_required_subgroup_width": 32,
     "function_constant": {
       "name": "has_w",
       "id": 20,
@@ -567,19 +568,26 @@
         }
       ],
       "native_compilation": "required-on-windows-ci",
-      "profile": "cs_6_2",
+      "profile": "cs_6_6",
+      "minimum_shader_model": "6.6",
+      "required_subgroup_width": 32,
+      "subgroup_width_enforcement": "WaveSize(32)",
       "compiler_arguments": [
         "-enable-16bit-types"
       ],
       "library_artifact_count": 2,
       "execution_entry_count_per_artifact": 12,
       "generated_numthreads_count_per_artifact": 12,
+      "generated_wave_size_count_per_artifact": 12,
       "compiled_entry_count_per_variant": 1,
       "compiler_run_count": 2
     },
     "opengl": {
       "specialization_materialization": "deferred",
       "constant_id": 20,
+      "subgroup_width_rule_configured": false,
+      "subgroup_width_enforcement_claimed": false,
+      "subgroup_semantic_parity_claimed": false,
       "variants": [
         {
           "name": "workgroup_32",

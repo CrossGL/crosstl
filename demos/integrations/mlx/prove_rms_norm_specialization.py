@@ -48,7 +48,8 @@ RMS_NORM_EXPECTED_ENTRY_POINT_COUNT = len(RMS_NORM_HOST_ENTRY_POINTS)
 RMS_NORM_LOOPED_ENTRY_POINT_COUNT = sum(
     "_looped" in entry_point for entry_point in RMS_NORM_HOST_ENTRY_POINTS
 )
-RMS_NORM_DIRECTX_PROFILE = "cs_6_0"
+RMS_NORM_SUBGROUP_WIDTH = 32
+RMS_NORM_DIRECTX_PROFILE = "cs_6_6"
 RMS_NORM_RUNTIME_BLOCKERS = (
     "https://github.com/CrossGL/crosstl/issues/1462",
     "https://github.com/CrossGL/crosstl/issues/1735",
@@ -205,6 +206,9 @@ def _verify_mlx_checkout(
         "pinned MLX rms_norm.metal SHA-256 mismatch: "
         f"expected {MLX_RMS_NORM_SHA256}, found {source_sha256}",
     )
+    source_subgroup_contract = _verify_source_subgroup_contract(
+        source_path.read_text(encoding="utf-8")
+    )
     return {
         "name": "pinned-source-identity",
         "status": "passed",
@@ -214,6 +218,54 @@ def _verify_mlx_checkout(
         "sourceHash": {
             "algorithm": "sha256",
             "value": source_sha256,
+        },
+        "sourceSubgroupContract": source_subgroup_contract,
+    }
+
+
+def _verify_source_subgroup_contract(source: str) -> dict[str, Any]:
+    width_declarations = [
+        int(width)
+        for width in re.findall(
+            r"\bconstexpr\s+int\s+SIMD_SIZE\s*=\s*(\d+)\s*;",
+            source,
+        )
+    ]
+    lane_builtin_count = len(
+        re.findall(r"\[\[\s*thread_index_in_simdgroup\s*\]\]", source)
+    )
+    group_builtin_count = len(
+        re.findall(r"\[\[\s*simdgroup_index_in_threadgroup\s*\]\]", source)
+    )
+    simd_sum_call_count = len(re.findall(r"\bsimd_sum\s*\(", source))
+    _require(
+        width_declarations == [RMS_NORM_SUBGROUP_WIDTH] * 4,
+        "pinned RMSNorm source must declare exactly four SIMD_SIZE = 32 contracts",
+    )
+    _require(
+        lane_builtin_count == group_builtin_count == len(width_declarations),
+        "pinned RMSNorm source must retain lane and simdgroup index builtins on "
+        "all four kernels",
+    )
+    _require(
+        simd_sum_call_count == 12,
+        "pinned RMSNorm source must retain all 12 simd_sum reductions",
+    )
+    return {
+        "status": "passed",
+        "requiredSubgroupWidth": RMS_NORM_SUBGROUP_WIDTH,
+        "widthDeclaration": "constexpr int SIMD_SIZE = 32;",
+        "widthDeclarationCount": len(width_declarations),
+        "laneBuiltin": "thread_index_in_simdgroup",
+        "laneBuiltinCount": lane_builtin_count,
+        "groupBuiltin": "simdgroup_index_in_threadgroup",
+        "groupBuiltinCount": group_builtin_count,
+        "reductionBuiltin": "simd_sum",
+        "reductionCallCount": simd_sum_call_count,
+        "requiredDirectXEnforcement": {
+            "attribute": f"WaveSize({RMS_NORM_SUBGROUP_WIDTH})",
+            "minimumShaderModel": "6.6",
+            "profile": RMS_NORM_DIRECTX_PROFILE,
         },
     }
 
@@ -244,6 +296,9 @@ def _project_config(
             for variant in RMS_NORM_DIRECTX_VARIANTS
         }
         common["variant_specialization_constants"] = variant_specializations
+        common["subgroup_width_rules"] = {
+            MLX_RMS_NORM_SOURCE: str(RMS_NORM_SUBGROUP_WIDTH)
+        }
     else:
         configured_variants = RMS_NORM_OPENGL_VARIANTS
     variants = {
@@ -374,6 +429,16 @@ def _validate_project_variants(
         and project.get("specializationConstantCount") == 0
         and project.get("variantSpecializationConstants") == expected_specializations,
         f"{target} report specialization-variant configuration changed",
+    )
+    expected_subgroup_width_rules = (
+        {MLX_RMS_NORM_SOURCE: str(RMS_NORM_SUBGROUP_WIDTH)}
+        if target == "directx"
+        else {}
+    )
+    _require(
+        project.get("subgroupWidthRules") == expected_subgroup_width_rules
+        and project.get("subgroupWidthRuleCount") == len(expected_subgroup_width_rules),
+        f"{target} report subgroup-width configuration changed",
     )
 
 
@@ -529,8 +594,26 @@ def _execution_entries(
     execution = artifact.get("execution")
     entries = execution.get("entryPoints") if isinstance(execution, Mapping) else None
     expected_size = list(workgroup_size)
+    requires_exact_subgroup_width = target.lower() == "directx"
+    subgroup_rule_path = f'project.subgroup_width_rules["{MLX_RMS_NORM_SOURCE}"]'
+    expected_subgroup_rule = {
+        "expression": str(RMS_NORM_SUBGROUP_WIDTH),
+        "sourcePattern": MLX_RMS_NORM_SOURCE,
+        "path": subgroup_rule_path,
+    }
+    expected_execution_keys = {
+        "sourceEntryPoints",
+        "entryPoints",
+        "provenance",
+        "identity",
+    }
+    if requires_exact_subgroup_width:
+        expected_execution_keys.update(
+            {"subgroupWidthProvenance", "subgroupWidthEnforcement"}
+        )
     _require(
         isinstance(execution, Mapping)
+        and set(execution) == expected_execution_keys
         and execution.get("provenance")
         == {
             "kind": "project-variant",
@@ -585,6 +668,19 @@ def _execution_entries(
             f"{target} variant {variant_name} execution contract changed for "
             f"{source_entry}",
         )
+        if requires_exact_subgroup_width:
+            _require(
+                entry.get("subgroupWidth") == RMS_NORM_SUBGROUP_WIDTH
+                and entry.get("subgroupWidthRule") == expected_subgroup_rule,
+                f"DirectX variant {variant_name} subgroup-width contract changed "
+                f"for {source_entry}",
+            )
+        else:
+            _require(
+                "subgroupWidth" not in entry and "subgroupWidthRule" not in entry,
+                f"OpenGL variant {variant_name} must not report an unenforceable "
+                f"subgroup-width contract for {source_entry}",
+            )
         source_identities.add(source_identity)
         entries_by_target[target_entry] = entry
     _require(
@@ -592,6 +688,32 @@ def _execution_entries(
         == set(expected_source_entry_points),
         f"{target} variant {variant_name} execution source identities changed",
     )
+    if requires_exact_subgroup_width:
+        expected_subgroup_provenance = {
+            "kind": "materialized-template-rule",
+            "path": subgroup_rule_path,
+        }
+        expected_enforcement = {
+            "mechanism": "hlsl-wave-size-attribute",
+            "minimumShaderModel": "6.6",
+            "entryProfiles": [
+                {"entryPoint": entry_point, "profile": RMS_NORM_DIRECTX_PROFILE}
+                for entry_point in entries_by_target
+            ],
+        }
+        _require(
+            execution.get("subgroupWidthProvenance") == expected_subgroup_provenance
+            and execution.get("subgroupWidthEnforcement") == expected_enforcement,
+            f"DirectX variant {variant_name} subgroup-width provenance or "
+            "enforcement metadata changed",
+        )
+    else:
+        _require(
+            "subgroupWidthProvenance" not in execution
+            and "subgroupWidthEnforcement" not in execution,
+            f"OpenGL variant {variant_name} must not report DirectX subgroup-width "
+            "enforcement metadata",
+        )
     return execution, entries_by_target
 
 
@@ -617,18 +739,22 @@ def _directx_execution_evidence(
     generated_entry_pattern = re.compile(
         r"(?m)^[ \t]*\[numthreads\(\s*(?P<x>\d+)\s*,\s*(?P<y>\d+)\s*,\s*"
         r"(?P<z>\d+)\s*\)\][ \t]*\r?\n"
+        r"[ \t]*\[WaveSize\(\s*(?P<wave>\d+)\s*\)\][ \t]*\r?\n"
         r"[ \t]*void[ \t]+(?P<target_entry>[A-Za-z_]\w*)[ \t]*\("
     )
-    generated_entries_by_target: dict[str, list[int]] = {}
+    generated_entries_by_target: dict[str, dict[str, Any]] = {}
     for match in generated_entry_pattern.finditer(generated):
         target_entry = match.group("target_entry")
         _require(
             target_entry not in generated_entries_by_target,
             f"DirectX variant {variant_name} generated duplicate target entries",
         )
-        generated_entries_by_target[target_entry] = [
-            int(match.group(component)) for component in ("x", "y", "z")
-        ]
+        generated_entries_by_target[target_entry] = {
+            "workgroupSize": [
+                int(match.group(component)) for component in ("x", "y", "z")
+            ],
+            "subgroupWidth": int(match.group("wave")),
+        }
     all_numthreads_sizes = [
         [int(component) for component in match]
         for match in re.findall(
@@ -636,6 +762,14 @@ def _directx_execution_evidence(
             generated,
         )
     ]
+    all_wave_size_widths = [
+        int(width)
+        for width in re.findall(
+            r"\[\s*WaveSize\s*\(\s*(\d+)\s*\)\s*\]",
+            generated,
+        )
+    ]
+    all_wave_size_attribute_count = len(re.findall(r"\[\s*WaveSize\s*\(", generated))
     _require(
         len(generated_entries_by_target) == RMS_NORM_EXPECTED_ENTRY_POINT_COUNT
         and set(generated_entries_by_target) == set(report_entries_by_target),
@@ -646,12 +780,27 @@ def _directx_execution_evidence(
         and all(size == workgroup_size for size in all_numthreads_sizes),
         f"DirectX variant {variant_name} generated an extra numthreads contract",
     )
+    _require(
+        all_wave_size_attribute_count
+        == len(all_wave_size_widths)
+        == RMS_NORM_EXPECTED_ENTRY_POINT_COUNT
+        and all(width == RMS_NORM_SUBGROUP_WIDTH for width in all_wave_size_widths),
+        f"DirectX variant {variant_name} must emit exactly one WaveSize(32) "
+        "contract per generated entry",
+    )
     for target_entry, report_entry in report_entries_by_target.items():
         _require(
-            generated_entries_by_target[target_entry]
+            generated_entries_by_target[target_entry]["workgroupSize"]
             == report_entry.get("workgroupSize")
             == workgroup_size,
             f"DirectX variant {variant_name} numthreads contract changed for "
+            f"{target_entry}",
+        )
+        _require(
+            generated_entries_by_target[target_entry]["subgroupWidth"]
+            == report_entry.get("subgroupWidth")
+            == RMS_NORM_SUBGROUP_WIDTH,
+            f"DirectX variant {variant_name} WaveSize contract changed for "
             f"{target_entry}",
         )
     projection_pattern = re.compile(
@@ -676,6 +825,13 @@ def _directx_execution_evidence(
         "executionIdentity": dict(execution["identity"]),
         "executionEntryCount": len(report_entries_by_target),
         "generatedNumthreadsContractCount": len(generated_entries_by_target),
+        "sourceRequiredSubgroupWidth": RMS_NORM_SUBGROUP_WIDTH,
+        "subgroupWidthRule": dict(
+            next(iter(report_entries_by_target.values()))["subgroupWidthRule"]
+        ),
+        "subgroupWidthProvenance": dict(execution["subgroupWidthProvenance"]),
+        "subgroupWidthEnforcement": dict(execution["subgroupWidthEnforcement"]),
+        "generatedWaveSizeContractCount": len(all_wave_size_widths),
         "consumedWorkgroupProjectionCount": len(projected_sizes),
         "sourceEntryPoints": list(RMS_NORM_HOST_ENTRY_POINTS),
     }
@@ -824,6 +980,9 @@ def _compile_directx_variants(
             "platform": sys.platform,
             "compiler": "dxc",
             "profile": RMS_NORM_DIRECTX_PROFILE,
+            "minimumShaderModel": "6.6",
+            "subgroupWidth": RMS_NORM_SUBGROUP_WIDTH,
+            "subgroupWidthEnforcement": f"WaveSize({RMS_NORM_SUBGROUP_WIDTH})",
             "compiledArtifactCount": 0,
             "runs": [],
         }
@@ -841,7 +1000,20 @@ def _compile_directx_variants(
         variant_name = str(variant["name"])
         artifact_path = _artifact_path(artifacts_by_variant[variant_name], mlx_root)
         generated = artifact_path.read_text(encoding="utf-8")
+        _require(
+            generated.count(f"[WaveSize({RMS_NORM_SUBGROUP_WIDTH})]")
+            == RMS_NORM_EXPECTED_ENTRY_POINT_COUNT
+            and len(re.findall(r"\[\s*WaveSize\s*\(", generated))
+            == RMS_NORM_EXPECTED_ENTRY_POINT_COUNT,
+            f"DirectX RMSNorm variant {variant_name} must contain exactly one "
+            "WaveSize(32) contract per generated entry before DXC validation",
+        )
         profile = dxc_profile_for_source(RMS_NORM_DIRECTX_PROFILE, generated)
+        _require(
+            profile == RMS_NORM_DIRECTX_PROFILE,
+            f"DirectX RMSNorm variant {variant_name} must compile with "
+            f"{RMS_NORM_DIRECTX_PROFILE}",
+        )
         compiler_arguments = dxc_compiler_arguments_for_source(generated)
         entry_point = _representative_directx_entry_point(artifact_path)
         output_path = output_dir / f"{variant_name}.dxil"
@@ -850,6 +1022,7 @@ def _compile_directx_variants(
             f"compile-rmsnorm-directx-{variant_name}",
             [
                 dxc,
+                "-WX",
                 "-T",
                 profile,
                 *compiler_arguments,
@@ -876,14 +1049,10 @@ def _compile_directx_variants(
                 "status": "compiled",
                 "entryPoint": entry_point,
                 "profile": profile,
-                **(
-                    {
-                        "compilerArguments": list(compiler_arguments),
-                        "minimumShaderModel": "6.2",
-                    }
-                    if compiler_arguments
-                    else {}
-                ),
+                "compilerArguments": list(compiler_arguments),
+                "minimumShaderModel": "6.6",
+                "subgroupWidth": RMS_NORM_SUBGROUP_WIDTH,
+                "subgroupWidthEnforcement": f"WaveSize({RMS_NORM_SUBGROUP_WIDTH})",
                 "artifact": _relpath(artifact_path, mlx_root),
                 "compiledArtifact": _relpath(output_path, mlx_root),
                 "stdout": _relpath(result["stdoutPath"], mlx_root),
@@ -897,18 +1066,20 @@ def _compile_directx_variants(
         "status": "compiled",
         "platform": sys.platform,
         "compiler": "dxc",
+        "profile": RMS_NORM_DIRECTX_PROFILE,
+        "minimumShaderModel": "6.6",
+        "subgroupWidth": RMS_NORM_SUBGROUP_WIDTH,
+        "subgroupWidthEnforcement": f"WaveSize({RMS_NORM_SUBGROUP_WIDTH})",
         "compiledArtifactCount": len(runs),
         "runs": runs,
     }
-    if len(profiles) == 1:
-        result["profile"] = next(iter(profiles))
-    else:
-        result["profiles"] = sorted(profiles)
+    _require(
+        profiles == {RMS_NORM_DIRECTX_PROFILE},
+        "DirectX RMSNorm variants did not use the required cs_6_6 profile",
+    )
     if len(compiler_argument_sets) == 1:
         compiler_arguments = next(iter(compiler_argument_sets))
-        if compiler_arguments:
-            result["compilerArguments"] = list(compiler_arguments)
-            result["minimumShaderModel"] = "6.2"
+        result["compilerArguments"] = list(compiler_arguments)
     return result
 
 
@@ -967,6 +1138,8 @@ def _check_directx(
         "report": _relpath(report_path, mlx_root),
         "artifactCount": len(artifacts),
         "executionEntryCountPerArtifact": RMS_NORM_EXPECTED_ENTRY_POINT_COUNT,
+        "sourceRequiredSubgroupWidth": RMS_NORM_SUBGROUP_WIDTH,
+        "subgroupWidthEnforced": True,
         "variants": variant_evidence,
         "nativeCompilation": native_compilation,
         "runtimeParityClaimed": False,
@@ -1327,6 +1500,12 @@ def _check_opengl(
         "report": _relpath(report_path, mlx_root),
         "artifactCount": len(artifacts),
         "artifactCountPerVariant": RMS_NORM_EXPECTED_ENTRY_POINT_COUNT,
+        "subgroupWidthContract": {
+            "sourceRequiredWidth": RMS_NORM_SUBGROUP_WIDTH,
+            "projectRuleConfigured": False,
+            "targetEnforcementClaimed": False,
+            "semanticParityClaimed": False,
+        },
         "specializationConstant": {
             "name": RMS_NORM_FUNCTION_CONSTANT_NAME,
             "id": RMS_NORM_FUNCTION_CONSTANT_ID,
@@ -1388,6 +1567,7 @@ def run_proof(args: argparse.Namespace) -> dict[str, Any]:
             "sourceSha256": MLX_RMS_NORM_SHA256,
             "targets": ["directx", "opengl"],
             "projectTranslationApi": "crosstl.project.translate_project",
+            "sourceRequiredSubgroupWidth": RMS_NORM_SUBGROUP_WIDTH,
             "translationClaimed": True,
             "nativeCompilationClaimed": bool(
                 args.require_directx_toolchain or args.require_opengl_toolchain

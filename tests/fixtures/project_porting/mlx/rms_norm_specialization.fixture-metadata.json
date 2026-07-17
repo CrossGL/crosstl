@@ -44,9 +44,13 @@
     "completeRuntimeCoverage": false
   },
   "directx": {
-    "profile": "cs_6_0",
+    "profile": "cs_6_6",
+    "minimumShaderModel": "6.6",
+    "requiredSubgroupWidth": 32,
+    "subgroupWidthEnforcement": "WaveSize(32)",
     "libraryArtifactCount": 2,
     "hostNamedEntryCountPerArtifact": 12,
+    "generatedWaveSizeCountPerArtifact": 12,
     "compiledEntryPointCountPerVariant": 1,
     "compilerRunCount": 2,
     "variants": [

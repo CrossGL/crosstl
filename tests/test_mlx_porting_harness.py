@@ -104,11 +104,11 @@ def _prepare_reduced_rms_norm_checkout(module, tmp_path, monkeypatch):
     host_entry_points = _load_rms_norm_fixture_metadata()["hostNamedEntryPoints"]
     instantiations = []
     for index, entry_point in enumerate(host_entry_points):
-        template = (
-            "rms_looped_fixture"
-            if "_looped" in entry_point
-            else "rms_single_row_fixture"
+        template_prefix = "vjp_rms" if entry_point.startswith("vjp_rms") else "rms"
+        template_suffix = (
+            "looped_fixture" if "_looped" in entry_point else "single_row_fixture"
         )
+        template = f"{template_prefix}_{template_suffix}"
         instantiations.append(
             f'instantiate_kernel("{entry_point}", {template}, {index})'
         )
@@ -121,16 +121,59 @@ constant bool has_w [[function_constant(20)]];
 template <int TAG>
 [[kernel]] void rms_single_row_fixture(
     device float* output [[buffer(0)]],
-    uint index [[thread_position_in_grid]]) {
-  output[index] = (has_w ? 1.0f : 0.0f) + float(TAG);
+    uint index [[thread_position_in_grid]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
+  constexpr int SIMD_SIZE = 32;
+  float value = (has_w ? 1.0f : 0.0f) + float(TAG + SIMD_SIZE);
+  value = simd_sum(value);
+  value = simd_sum(value + float(simd_lane_id + simd_group_id));
+  output[index] = value;
 }
 
 template <int TAG>
 [[kernel]] void rms_looped_fixture(
     device float* output [[buffer(0)]],
     uint index [[thread_position_in_grid]],
-    uint lsize [[threads_per_threadgroup]]) {
-  output[index] = (has_w ? 1.0f : 0.0f) + float(TAG) + float(lsize);
+    uint lsize [[threads_per_threadgroup]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
+  constexpr int SIMD_SIZE = 32;
+  float value = (has_w ? 1.0f : 0.0f) + float(TAG + SIMD_SIZE + lsize);
+  value = simd_sum(value);
+  value = simd_sum(value + float(simd_lane_id + simd_group_id));
+  output[index] = value;
+}
+
+template <int TAG>
+[[kernel]] void vjp_rms_single_row_fixture(
+    device float* output [[buffer(0)]],
+    uint index [[thread_position_in_grid]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
+  constexpr int SIMD_SIZE = 32;
+  float value = float(TAG + SIMD_SIZE + simd_lane_id + simd_group_id);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  output[index] = value;
+}
+
+template <int TAG>
+[[kernel]] void vjp_rms_looped_fixture(
+    device float* output [[buffer(0)]],
+    uint index [[thread_position_in_grid]],
+    uint lsize [[threads_per_threadgroup]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
+  constexpr int SIMD_SIZE = 32;
+  float value = float(TAG + SIMD_SIZE + lsize + simd_lane_id + simd_group_id);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  value = simd_sum(value);
+  output[index] = value;
 }
 
 """ + "\n".join(instantiations) + "\n",
@@ -6976,7 +7019,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     )
 
 
-def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
+def test_rms_norm_contract_fixture_matches_pinned_translation_scope():
     module = _load_rms_norm_harness()
     metadata = _load_rms_norm_fixture_metadata()
 
@@ -6984,6 +7027,8 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
     assert module.MLX_RMS_NORM_SHA256 == (
         "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee"
     )
+    assert module.RMS_NORM_SUBGROUP_WIDTH == 32
+    assert module.RMS_NORM_DIRECTX_PROFILE == "cs_6_6"
     assert metadata["upstreamSourceReplacement"] is False
     assert metadata["functionConstant"] == {
         "name": module.RMS_NORM_FUNCTION_CONSTANT_NAME,
@@ -7025,8 +7070,12 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
     }
     assert metadata["directx"] == {
         "profile": module.RMS_NORM_DIRECTX_PROFILE,
+        "minimumShaderModel": "6.6",
+        "requiredSubgroupWidth": 32,
+        "subgroupWidthEnforcement": "WaveSize(32)",
         "libraryArtifactCount": 2,
         "hostNamedEntryCountPerArtifact": 12,
+        "generatedWaveSizeCountPerArtifact": 12,
         "compiledEntryPointCountPerVariant": 1,
         "compilerRunCount": 2,
         "variants": list(module.RMS_NORM_DIRECTX_VARIANTS),
@@ -7056,6 +7105,7 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
     status = expected_gaps["rms_norm_specialization_status"]
     assert status["source"] == module.MLX_RMS_NORM_SOURCE
     assert status["source_sha256"] == module.MLX_RMS_NORM_SHA256
+    assert status["source_required_subgroup_width"] == 32
     assert status["host_named_entry_count"] == 12
     assert status["representative_workgroup_contract"] == {
         "host_source": "mlx/backend/metal/normalization.cpp",
@@ -7077,10 +7127,14 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
         for variant in module.RMS_NORM_DIRECTX_VARIANTS
     ]
     assert status["directx"]["native_compilation"] == ("required-on-windows-ci")
-    assert status["directx"]["profile"] == "cs_6_2"
+    assert status["directx"]["profile"] == "cs_6_6"
+    assert status["directx"]["minimum_shader_model"] == "6.6"
+    assert status["directx"]["required_subgroup_width"] == 32
+    assert status["directx"]["subgroup_width_enforcement"] == "WaveSize(32)"
     assert status["directx"]["compiler_arguments"] == ["-enable-16bit-types"]
     assert status["directx"]["library_artifact_count"] == 2
     assert status["directx"]["execution_entry_count_per_artifact"] == 12
+    assert status["directx"]["generated_wave_size_count_per_artifact"] == 12
     assert status["directx"]["generated_numthreads_count_per_artifact"] == 12
     assert status["directx"]["compiled_entry_count_per_variant"] == 1
     assert status["directx"]["compiler_run_count"] == 2
@@ -7091,6 +7145,9 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
         }
         for variant in module.RMS_NORM_OPENGL_VARIANTS
     ]
+    assert status["opengl"]["subgroup_width_rule_configured"] is False
+    assert status["opengl"]["subgroup_width_enforcement_claimed"] is False
+    assert status["opengl"]["subgroup_semantic_parity_claimed"] is False
     assert status["opengl"]["native_compilation"] == "required-on-linux-ci"
     assert status["opengl"]["standalone_artifact_count"] == 24
     assert status["opengl"]["standalone_artifact_count_per_variant"] == 12
@@ -7131,6 +7188,32 @@ def test_rms_norm_checkout_verifies_revision_and_source_hash(tmp_path, monkeypat
         "algorithm": "sha256",
         "value": module.MLX_RMS_NORM_SHA256,
     }
+    assert identity["sourceSubgroupContract"] == {
+        "status": "passed",
+        "requiredSubgroupWidth": 32,
+        "widthDeclaration": "constexpr int SIMD_SIZE = 32;",
+        "widthDeclarationCount": 4,
+        "laneBuiltin": "thread_index_in_simdgroup",
+        "laneBuiltinCount": 4,
+        "groupBuiltin": "simdgroup_index_in_threadgroup",
+        "groupBuiltinCount": 4,
+        "reductionBuiltin": "simd_sum",
+        "reductionCallCount": 12,
+        "requiredDirectXEnforcement": {
+            "attribute": "WaveSize(32)",
+            "minimumShaderModel": "6.6",
+            "profile": "cs_6_6",
+        },
+    }
+
+    source = (mlx_root / module.MLX_RMS_NORM_SOURCE).read_text(encoding="utf-8")
+    with pytest.raises(
+        module.MlxRmsNormProofError,
+        match="exactly four SIMD_SIZE = 32",
+    ):
+        module._verify_source_subgroup_contract(
+            source.replace("constexpr int SIMD_SIZE = 32;", "", 1)
+        )
 
     (mlx_root / module.MLX_RMS_NORM_SOURCE).write_text(
         "modified source\n", encoding="utf-8"
@@ -7157,9 +7240,15 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
     assert result["runtimeBlockedBy"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
     assert result["artifactCount"] == 2
     assert result["executionEntryCountPerArtifact"] == 12
+    assert result["sourceRequiredSubgroupWidth"] == 32
+    assert result["subgroupWidthEnforced"] is True
     assert result["runtimeParityClaimed"] is False
     assert result["numericalExecutionIncluded"] is False
     assert result["nativeCompilation"]["status"] == "not-required"
+    assert result["nativeCompilation"]["profile"] == "cs_6_6"
+    assert result["nativeCompilation"]["minimumShaderModel"] == "6.6"
+    assert result["nativeCompilation"]["subgroupWidth"] == 32
+    assert result["nativeCompilation"]["subgroupWidthEnforcement"] == ("WaveSize(32)")
     assert result["nativeCompilation"]["compiledArtifactCount"] == 0
     assert result["nativeCompilation"]["runs"] == []
     variants = {variant["name"]: variant for variant in result["variants"]}
@@ -7190,6 +7279,25 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
         assert execution["hostNamedMaterializationCount"] == 12
         assert execution["executionEntryCount"] == 12
         assert execution["generatedNumthreadsContractCount"] == 12
+        assert execution["sourceRequiredSubgroupWidth"] == 32
+        assert execution["subgroupWidthRule"] == {
+            "expression": "32",
+            "sourcePattern": module.MLX_RMS_NORM_SOURCE,
+            "path": f'project.subgroup_width_rules["{module.MLX_RMS_NORM_SOURCE}"]',
+        }
+        assert execution["subgroupWidthProvenance"] == {
+            "kind": "materialized-template-rule",
+            "path": f'project.subgroup_width_rules["{module.MLX_RMS_NORM_SOURCE}"]',
+        }
+        subgroup_enforcement = execution["subgroupWidthEnforcement"]
+        assert subgroup_enforcement["mechanism"] == "hlsl-wave-size-attribute"
+        assert subgroup_enforcement["minimumShaderModel"] == "6.6"
+        assert len(subgroup_enforcement["entryProfiles"]) == 12
+        assert all(
+            profile["profile"] == "cs_6_6"
+            for profile in subgroup_enforcement["entryProfiles"]
+        )
+        assert execution["generatedWaveSizeContractCount"] == 12
         assert execution["consumedWorkgroupProjectionCount"] == 6
         assert execution["sourceEntryPoints"] == list(module.RMS_NORM_HOST_ENTRY_POINTS)
         assert execution["executionIdentity"]["algorithm"] == "sha256"
@@ -7201,6 +7309,8 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
         variant["name"]: variant["workgroupSize"]
         for variant in module.RMS_NORM_DIRECTX_VARIANTS
     }
+    assert report["project"]["subgroupWidthRules"] == {module.MLX_RMS_NORM_SOURCE: "32"}
+    assert report["project"]["subgroupWidthRuleCount"] == 1
     assert report["project"]["variantWorkgroupSizes"] == expected_workgroup_sizes
     assert report["summary"]["artifactsByVariant"] == {
         variant_name: {
@@ -7226,12 +7336,42 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
             entry["workgroupSize"] == workgroup_size
             for entry in execution["entryPoints"]
         )
+        subgroup_rule_path = (
+            f'project.subgroup_width_rules["{module.MLX_RMS_NORM_SOURCE}"]'
+        )
+        assert execution["subgroupWidthProvenance"] == {
+            "kind": "materialized-template-rule",
+            "path": subgroup_rule_path,
+        }
+        assert execution["subgroupWidthEnforcement"] == {
+            "mechanism": "hlsl-wave-size-attribute",
+            "minimumShaderModel": "6.6",
+            "entryProfiles": [
+                {
+                    "entryPoint": entry["targetEntryPoint"],
+                    "profile": "cs_6_6",
+                }
+                for entry in execution["entryPoints"]
+            ],
+        }
+        assert all(
+            entry["subgroupWidth"] == 32
+            and entry["subgroupWidthRule"]
+            == {
+                "expression": "32",
+                "sourcePattern": module.MLX_RMS_NORM_SOURCE,
+                "path": subgroup_rule_path,
+            }
+            for entry in execution["entryPoints"]
+        )
         generated = (mlx_root / artifact["path"]).read_text(encoding="utf-8")
         attribute = (
             f"[numthreads({workgroup_size[0]}, {workgroup_size[1]}, "
             f"{workgroup_size[2]})]"
         )
         assert generated.count(attribute) == 12
+        assert generated.count("[WaveSize(32)]") == 12
+        assert len(re.findall(r"\[\s*WaveSize\s*\(", generated)) == 12
         assert generated.count(variants[variant_name]["generatedStaticConst"]) == 1
 
 
@@ -7254,6 +7394,12 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
     assert result["status"] == "passed"
     assert result["artifactCount"] == 24
     assert result["artifactCountPerVariant"] == 12
+    assert result["subgroupWidthContract"] == {
+        "sourceRequiredWidth": 32,
+        "projectRuleConfigured": False,
+        "targetEnforcementClaimed": False,
+        "semanticParityClaimed": False,
+    }
     assert result["runtimeParityClaimed"] is False
     assert result["numericalExecutionIncluded"] is False
     assert result["runtimeBlockedBy"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
@@ -7307,6 +7453,8 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         variant["name"]: variant["workgroupSize"]
         for variant in module.RMS_NORM_OPENGL_VARIANTS
     }
+    assert report["project"]["subgroupWidthRules"] == {}
+    assert report["project"]["subgroupWidthRuleCount"] == 0
     assert report["project"]["variantWorkgroupSizes"] == expected_workgroup_sizes
     assert report["summary"]["artifactsByVariant"] == {
         variant_name: {
@@ -7333,6 +7481,8 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         }
         execution = artifact["execution"]
         assert execution["sourceEntryPoints"] == [source_entry]
+        assert "subgroupWidthProvenance" not in execution
+        assert "subgroupWidthEnforcement" not in execution
         assert execution["provenance"] == {
             "kind": "project-variant",
             "path": f"project.variants.{variant_name}.workgroup_size",
@@ -7342,6 +7492,8 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         assert execution["entryPoints"][0]["workgroupSize"] == (
             expected_workgroup_sizes[variant_name]
         )
+        assert "subgroupWidth" not in execution["entryPoints"][0]
+        assert "subgroupWidthRule" not in execution["entryPoints"][0]
         constant = artifact["specializationConstants"][0]
         assert constant["valueProvenance"] == {"kind": "runtime-override-required"}
         assert "concreteValue" not in constant
@@ -7351,6 +7503,7 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         ]["generatedLocalSizeContract"]
         assert generated.count(local_size) == 1
         assert generated.count(specialization["generatedContract"]) == 1
+        assert "WaveSize" not in generated
     assert artifact_identities == {
         (variant["name"], source_entry)
         for variant in module.RMS_NORM_OPENGL_VARIANTS
@@ -7370,7 +7523,18 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
     for variant in module.RMS_NORM_DIRECTX_VARIANTS:
         artifact_path = work_dir / "artifacts" / f"{variant['name']}.hlsl"
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        artifact_path.write_text("float16_t generated_value;\n", encoding="utf-8")
+        generated_entries = []
+        for index in range(module.RMS_NORM_EXPECTED_ENTRY_POINT_COUNT):
+            entry_point = "CSMain" if index == 0 else f"CSMain_{index + 1}"
+            generated_entries.append(
+                f"[numthreads({variant['workgroupSize'][0]}, 1, 1)]\n"
+                f"[WaveSize({module.RMS_NORM_SUBGROUP_WIDTH})]\n"
+                f"void {entry_point}() {{}}"
+            )
+        artifact_path.write_text(
+            "float16_t generated_value;\n" + "\n".join(generated_entries) + "\n",
+            encoding="utf-8",
+        )
         artifacts_by_variant[variant["name"]] = {
             "path": artifact_path.relative_to(mlx_root).as_posix()
         }
@@ -7437,9 +7601,11 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
 
     assert directx["status"] == "compiled"
     assert directx["compiledArtifactCount"] == 2
-    assert directx["profile"] == "cs_6_2"
+    assert directx["profile"] == "cs_6_6"
     assert directx["compilerArguments"] == ["-enable-16bit-types"]
-    assert directx["minimumShaderModel"] == "6.2"
+    assert directx["minimumShaderModel"] == "6.6"
+    assert directx["subgroupWidth"] == 32
+    assert directx["subgroupWidthEnforcement"] == "WaveSize(32)"
     assert len(directx["runs"]) == 2
     assert [run["entryPoint"] for run in directx["runs"]] == [
         "CSMain",
@@ -7455,16 +7621,19 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
         if name.startswith("compile-rmsnorm-directx")
     ]
     assert len(dxc_commands) == 2
+    assert all(command[1] == "-WX" for command in dxc_commands)
     assert all(command[command.index("-E") + 1] == "CSMain" for command in dxc_commands)
     assert all(
         command[command.index("-T") + 1 : command.index("-E")]
-        == ["cs_6_2", "-enable-16bit-types"]
+        == ["cs_6_6", "-enable-16bit-types"]
         for command in dxc_commands
     )
     assert all(
-        run["profile"] == "cs_6_2"
+        run["profile"] == "cs_6_6"
         and run["compilerArguments"] == ["-enable-16bit-types"]
-        and run["minimumShaderModel"] == "6.2"
+        and run["minimumShaderModel"] == "6.6"
+        and run["subgroupWidth"] == 32
+        and run["subgroupWidthEnforcement"] == "WaveSize(32)"
         for run in directx["runs"]
     )
 
