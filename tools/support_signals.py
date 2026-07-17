@@ -49,6 +49,20 @@ PROJECT_IMPLEMENTATION_PATHS = (
     "crosstl/_crosstl.py",
 )
 PROJECT_TEST_PATHS = ("tests/test_translator/test_project_translation.py",)
+PROJECT_FEATURE_IMPLEMENTATION_PATHS = {
+    "project.host_dispatch_contract_import": (
+        "crosstl/project/dispatch_contracts.py",
+        "crosstl/project/pipeline.py",
+        "crosstl/_crosstl.py",
+    ),
+}
+PROJECT_FEATURE_TEST_PATHS = {
+    "project.host_dispatch_contract_import": (
+        "tests/test_translator/test_dispatch_contracts.py",
+        "tests/test_translator/test_project_dispatch_contract_import.py",
+        "tests/test_dispatch_contract_cli.py",
+    ),
+}
 
 # Support-signal extraction treats every reviewed non-success catalog row as
 # already accounted for. Issue sync keeps the narrower actionable backlog
@@ -719,13 +733,19 @@ def feature_implementation_paths(
     feature: dict[str, Any],
     backend: dict[str, Any],
 ) -> list[str]:
-    if feature.get("id", "").startswith(PROJECT_FEATURE_PREFIX):
+    feature_id = feature.get("id", "")
+    if feature_id in PROJECT_FEATURE_IMPLEMENTATION_PATHS:
+        return list(PROJECT_FEATURE_IMPLEMENTATION_PATHS[feature_id])
+    if feature_id.startswith(PROJECT_FEATURE_PREFIX):
         return list(PROJECT_IMPLEMENTATION_PATHS)
     return backend_implementation_paths(backend)
 
 
 def feature_test_paths(feature: dict[str, Any], backend: dict[str, Any]) -> list[str]:
-    if feature.get("id", "").startswith(PROJECT_FEATURE_PREFIX):
+    feature_id = feature.get("id", "")
+    if feature_id in PROJECT_FEATURE_TEST_PATHS:
+        return list(PROJECT_FEATURE_TEST_PATHS[feature_id])
+    if feature_id.startswith(PROJECT_FEATURE_PREFIX):
         return list(PROJECT_TEST_PATHS)
     return list(backend.get("tests", []))
 

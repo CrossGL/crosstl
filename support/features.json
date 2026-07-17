@@ -6999,6 +6999,195 @@
       }
     },
     {
+      "id": "project.host_dispatch_contract_import",
+      "category": "project",
+      "name": "Bounded host dispatch contract import",
+      "description": "Load versioned host dispatch manifests, evaluate finite records deterministically, and embed replay-validatable metadata in project reports.",
+      "support_plan": {
+        "current_gap": "Evaluated dispatch records are imported and replay-validated but are not yet connected to artifact variant generation; this bridge is tracked by #1793.",
+        "next_scope": "Map evaluated records into project variant and artifact planning without introducing backend-specific host assumptions.",
+        "completion_criteria": "Close #1793 when each selected evaluated record can produce traceable artifact variants while preserving manifest, content, and variant identities."
+      },
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        },
+        "wgsl": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "Project configuration and repeatable scan, report, and translate-project CLI options load versioned host dispatch manifests, preserve normalized paths, evaluate finite record sets deterministically with content and variant identities, and embed the normalized manifest, provenance, and evaluated records in portability reports. Report validation replays embedded manifests without requiring the original files and rejects schema, identity, count, and evaluation tampering. This capability only imports and evaluates host dispatch metadata. It does not generate artifact variants, execute a runtime, or establish numerical parity; connecting evaluated records to artifact generation remains tracked by #1793.",
+          "evidence": [
+            "tests/test_translator/test_dispatch_contracts.py::def test_loads_normalization_contract_with_sha256_identity_and_provenance",
+            "tests/test_translator/test_dispatch_contracts.py::def test_evaluates_mlx_like_normalization_variants_without_guessing_device_limits",
+            "tests/test_translator/test_dispatch_contracts.py::def test_manifest_order_does_not_change_content_or_variant_identity",
+            "tests/test_translator/test_dispatch_contracts.py::def test_rejects_malformed_or_conflicting_schema",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_config_loads_and_evaluates_dispatch_contracts",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_embeds_replayable_dispatch_contract_metadata",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_does_not_require_original_contract_file",
+            "tests/test_translator/test_project_dispatch_contract_import.py::def test_project_report_validation_rejects_tampered_dispatch_metadata",
+            "tests/test_dispatch_contract_cli.py::def test_project_commands_accept_repeatable_dispatch_contracts",
+            "tests/test_dispatch_contract_cli.py::def test_scan_command_imports_dispatch_contract_into_report"
+          ]
+        }
+      }
+    },
+    {
       "id": "project.batch_translation",
       "category": "project",
       "name": "Batch project translation",
