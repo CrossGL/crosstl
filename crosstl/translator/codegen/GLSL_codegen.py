@@ -554,6 +554,32 @@ class OpenGLBooleanOrderedIntrinsicError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLCopySignError(ValueError):
+    """Raised when ``copysign`` has no exact 32-bit GLSL lowering."""
+
+    project_diagnostic_code = "project.translate.opengl-copysign-unrepresentable"
+    missing_capabilities = ("opengl.copysign-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation="copysign",
+        operand_types=None,
+        result_type=None,
+        target_profile="glsl-460",
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_types = tuple(operand_types or ())
+        self.result_type = result_type
+        self.target_profile = target_profile
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLCompoundAssignmentError(ValueError):
     """Raised when a source compound assignment has no faithful GLSL form."""
 
@@ -855,6 +881,9 @@ class OpenGLCompileTimeGlobalError(ValueError):
         variable_name=None,
         expression_kind=None,
         detail=None,
+        operation=None,
+        operand_type=None,
+        result_type=None,
         reason=None,
         source_location=None,
     ):
@@ -862,6 +891,9 @@ class OpenGLCompileTimeGlobalError(ValueError):
         self.variable_name = variable_name
         self.expression_kind = expression_kind
         self.detail = detail
+        self.operation = operation
+        self.operand_type = operand_type
+        self.result_type = result_type
         self.reason = reason
         self.source_location = source_location
 
@@ -1347,6 +1379,11 @@ class GLSLCodeGen:
         "|=": "|",
     }
     GLSL_BFLOAT16_ALIASES = {"bfloat", "bfloat16", "bfloat16_t"}
+    GLSL_COPYSIGN_NAMES = {
+        "copysign",
+        "metal::copysign",
+        "metal_u3a_u3acopysign",
+    }
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
         "floatBitsToInt",
@@ -1465,6 +1502,9 @@ class GLSLCodeGen:
         "WaveMultiPrefixBitAnd": 2,
         "WaveMultiPrefixBitOr": 2,
         "WaveMultiPrefixBitXor": 2,
+    }
+    GLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES = {
+        "WaveShuffleAndFillUp": (3, 4),
     }
     GLSL_WAVE_DIRECT_MAPPINGS = {
         "WaveActiveSum": "subgroupAdd",
@@ -1637,9 +1677,7 @@ class GLSLCodeGen:
             "#extension GL_KHR_shader_subgroup_shuffle_relative : require"
         ),
         "WaveShuffleUp": "#extension GL_KHR_shader_subgroup_shuffle_relative : require",
-        "WaveShuffleAndFillUp": (
-            "#extension GL_KHR_shader_subgroup_shuffle_relative : require"
-        ),
+        "WaveShuffleAndFillUp": "#extension GL_KHR_shader_subgroup_shuffle : require",
         "WaveShuffleXor": "#extension GL_KHR_shader_subgroup_shuffle : require",
         "WaveReadLaneFirst": "#extension GL_KHR_shader_subgroup_ballot : require",
         "QuadReadAcrossX": "#extension GL_KHR_shader_subgroup_quad : require",
@@ -1842,6 +1880,9 @@ class GLSLCodeGen:
         self.glsl_type_identifier_names = {}
         self.glsl_generic_enum_constructor_names = {}
         self.glsl_compile_time_global_node_ids = set()
+        self.glsl_compile_time_bitcast_substitution_node_ids = set()
+        self.glsl_compile_time_bitcast_substitutions = {}
+        self.glsl_active_compile_time_bitcast_substitutions = set()
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.global_type_aliases = {}
@@ -2421,6 +2462,9 @@ class GLSLCodeGen:
             "fwidth_fine": "fwidthFine",
             "fwidth_coarse": "fwidthCoarse",
             "rsqrt": "inversesqrt",
+            "metal::rint": "roundEven",
+            "metal_u3a_u3arint": "roundEven",
+            "rint": "roundEven",
             "sincos": "sin_cos",  # Custom function needed
             "log2": "log2",
             "exp2": "exp2",
@@ -3193,9 +3237,21 @@ class GLSLCodeGen:
         for value_type in self.GLSL_WAVE_HELPER_VALUE_TYPES:
             code += (
                 f"{value_type} crossglWaveShuffleAndFillUp("
-                f"{value_type} value, {value_type} fill, uint delta) {{\n"
-                f"    {value_type} shuffled = subgroupShuffleUp(value, delta);\n"
-                "    return gl_SubgroupInvocationID >= delta ? shuffled : fill;\n"
+                f"{value_type} value, {value_type} fill, uint delta, "
+                "uint modulo) {\n"
+                "    uint lane = gl_SubgroupInvocationID;\n"
+                "    uint segmentLane = lane % modulo;\n"
+                "    uint segmentBase = lane - segmentLane;\n"
+                "    bool useValue = segmentLane >= delta;\n"
+                "    uint valueSourceLane = useValue ? (lane - delta) : lane;\n"
+                "    uint fillSourceLane = useValue\n"
+                "        ? lane\n"
+                "        : (segmentBase + modulo + segmentLane - delta);\n"
+                f"    {value_type} shuffledValue = "
+                "subgroupShuffle(value, valueSourceLane);\n"
+                f"    {value_type} shuffledFill = "
+                "subgroupShuffle(fill, fillSourceLane);\n"
+                "    return useValue ? shuffledValue : shuffledFill;\n"
                 "}\n\n"
             )
         return code
@@ -3891,6 +3947,9 @@ class GLSLCodeGen:
         self.glsl_type_identifier_names = {}
         self.glsl_generic_enum_constructor_names = {}
         self.glsl_compile_time_global_node_ids = set()
+        self.glsl_compile_time_bitcast_substitution_node_ids = set()
+        self.glsl_compile_time_bitcast_substitutions = {}
+        self.glsl_active_compile_time_bitcast_substitutions = set()
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.function_sampler_parameter_indices = (
@@ -7271,12 +7330,119 @@ class GLSLCodeGen:
         for binding in workgroup_pointer_aliases.values():
             binding["materialization_name"] = target_name
         self.glsl_function_target_names[id(clone)] = target_name
+        self.register_glsl_resource_specialization_private_pointer_metadata(
+            source_func,
+            clone,
+            target_name,
+        )
         self.register_glsl_function_target_metadata(target_name, clone)
 
         self.glsl_resource_function_specializations[key] = clone
         self.glsl_resource_function_call_names[key] = target_name
         self.glsl_resource_specialized_source_names.add(func_name)
         return clone
+
+    def register_glsl_resource_specialization_private_pointer_metadata(
+        self,
+        source_func,
+        clone,
+        target_name,
+    ):
+        source_key = self.glsl_function_declaration_name(source_func)
+        source_parameters = self.function_private_pointer_parameters.get(source_key)
+        if not source_parameters:
+            return
+
+        clone_parameters = list(
+            getattr(clone, "parameters", getattr(clone, "params", [])) or []
+        )
+        clone_private_parameters = [
+            parameter
+            for parameter in clone_parameters
+            if is_private_pointer_parameter(parameter)
+        ]
+        source_positions = {
+            parameter.name: index for index, parameter in enumerate(source_parameters)
+        }
+        clone_parameter_names = {
+            parameter.name for parameter in clone_private_parameters
+        }
+        if not clone_private_parameters or not clone_parameter_names.issubset(
+            source_positions
+        ):
+            return
+
+        def copy_parameter_map(metadata):
+            return {
+                name: value
+                for name, value in metadata.get(source_key, {}).items()
+                if name in clone_parameter_names
+            }
+
+        self.function_private_pointer_parameters[target_name] = clone_private_parameters
+        self.function_private_pointer_parameter_indices[target_name] = {
+            index: parameter.name
+            for index, parameter in enumerate(clone_parameters)
+            if is_private_pointer_parameter(parameter)
+        }
+        self.function_private_pointer_element_types[target_name] = copy_parameter_map(
+            self.function_private_pointer_element_types
+        )
+        self.function_private_pointer_base_names[target_name] = copy_parameter_map(
+            self.function_private_pointer_base_names
+        )
+        self.function_private_pointer_source_names[target_name] = (
+            self.function_private_pointer_source_names.get(
+                source_key,
+                getattr(source_func, "name", target_name),
+            )
+        )
+        self.function_private_pointer_local_arrays[target_name] = (
+            self.glsl_private_pointer_local_arrays(clone)
+        )
+        self.function_private_pointer_full_span_parameters[target_name] = {
+            name
+            for name in self.function_private_pointer_full_span_parameters.get(
+                source_key, set()
+            )
+            if name in clone_parameter_names
+        }
+        self.function_private_pointer_scalar_access_violations[target_name] = {
+            name
+            for name in self.function_private_pointer_scalar_access_violations.get(
+                source_key, set()
+            )
+            if name in clone_parameter_names
+        }
+
+        required_spans = copy_parameter_map(
+            self.function_private_pointer_required_spans
+        )
+        self.function_private_pointer_required_spans[target_name] = required_spans
+        self.glsl_collect_private_pointer_static_direct_spans(
+            clone,
+            target_name,
+            required_spans,
+        )
+
+        source_variants = self.function_private_pointer_backing_variants.get(
+            source_key, ()
+        )
+        if source_variants:
+            self.function_private_pointer_backing_variants[target_name] = tuple(
+                sorted(
+                    {
+                        tuple(
+                            variant[source_positions[parameter.name]]
+                            for parameter in clone_private_parameters
+                        )
+                        for variant in source_variants
+                    }
+                )
+            )
+        self.function_private_pointer_array_size_hints[target_name] = (
+            copy_parameter_map(self.function_private_pointer_array_size_hints)
+        )
 
     def glsl_resource_specialization_name(self, func_name, bindings):
         suffix_parts = []
@@ -15251,6 +15417,126 @@ class GLSLCodeGen:
             return "const "
         return "uniform "
 
+    def opengl_compile_time_global_error(
+        self,
+        node,
+        expression,
+        *,
+        reason,
+        detail=None,
+        operation=None,
+        operand_type=None,
+        result_type=None,
+    ):
+        name = self.resource_node_name(node, "<unnamed>")
+        description = reason.replace("-", " ")
+        if detail:
+            description += f" '{detail}'"
+        raise OpenGLCompileTimeGlobalError(
+            f"OpenGL compile-time global '{name}' cannot use {description}",
+            variable_name=name,
+            expression_kind=(
+                expression.__class__.__name__ if expression is not None else None
+            ),
+            detail=detail,
+            operation=operation,
+            operand_type=operand_type,
+            result_type=result_type,
+            reason=reason,
+            source_location=getattr(expression, "source_location", None)
+            or getattr(node, "source_location", None),
+        )
+
+    def glsl_compile_time_bitcast_contract(self, node, expression):
+        function_name = self.function_call_name(expression)
+        if function_name in self.function_return_types:
+            return None
+
+        native_aliases = {
+            "floatBitsToInt": "asint",
+            "floatBitsToUint": "asuint",
+            "intBitsToFloat": "asfloat",
+            "uintBitsToFloat": "asfloat",
+        }
+        canonical_name = native_aliases.get(function_name, function_name)
+        explicit_target = self.metal_as_type_target(function_name)
+        if (
+            canonical_name not in self.GLSL_BITCAST_FUNCTIONS
+            and explicit_target is None
+        ):
+            return None
+
+        arguments = list(
+            getattr(expression, "arguments", getattr(expression, "args", [])) or []
+        )
+        if len(arguments) != 1:
+            self.opengl_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-arity",
+                detail=f"{function_name} expects exactly one operand",
+                operation=function_name,
+            )
+
+        operand = arguments[0]
+        operand_type = self.map_type(self.expression_result_type(operand))
+        if explicit_target is None:
+            result_type = self.glsl_bitcast_result_type(canonical_name, operand)
+            native_target = self.glsl_bitcast_target(canonical_name, operand)
+            if native_target is None:
+                result_type = self.map_type(result_type)
+                self.opengl_compile_time_global_error(
+                    node,
+                    expression,
+                    reason="bitcast-type-unresolved",
+                    detail=(
+                        f"{function_name} cannot resolve an exact bitcast from "
+                        f"'{operand_type}' to '{result_type}'"
+                    ),
+                    operation=function_name,
+                    operand_type=operand_type,
+                    result_type=result_type,
+                )
+        else:
+            result_type = self.map_type(explicit_target)
+
+        operand_info = self.glsl_numeric_bitcast_shape(operand_type)
+        result_info = self.glsl_numeric_bitcast_shape(result_type)
+        if operand_info is None or result_info is None:
+            self.opengl_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-type-unresolved",
+                detail=(
+                    f"{function_name} cannot resolve an exact bitcast from "
+                    f"'{operand_type}' to '{result_type}'"
+                ),
+                operation=function_name,
+                operand_type=operand_type,
+                result_type=result_type,
+            )
+
+        try:
+            self.generate_glsl_explicit_bitcast(
+                operand_info["type"], result_info["type"], "value"
+            )
+        except ValueError as exc:
+            self.opengl_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-shape-unsupported",
+                detail=str(exc),
+                operation=function_name,
+                operand_type=operand_info["type"],
+                result_type=result_info["type"],
+            )
+        return {
+            "operation": function_name,
+            "operand": operand,
+            "operand_type": operand_info["type"],
+            "result_type": result_info["type"],
+        }
+
     def prepare_glsl_compile_time_globals(self, ast, global_vars):
         specialization_dependent_names = set(self.glsl_specialization_constant_names)
         known_constant_names = {
@@ -15290,7 +15576,7 @@ class GLSLCodeGen:
                     reason="unsupported-value-type",
                     source_location=getattr(node, "source_location", None),
                 )
-            specialization_dependent = (
+            specialization_dependent, bitcast_dependent = (
                 self.validate_glsl_compile_time_global_expression(
                     node,
                     getattr(node, "initial_value", None),
@@ -15299,10 +15585,23 @@ class GLSLCodeGen:
                     specialization_dependent_names,
                 )
             )
+            if specialization_dependent and bitcast_dependent:
+                self.opengl_compile_time_global_error(
+                    node,
+                    getattr(node, "initial_value", None),
+                    reason="specialization-bitcast-expression",
+                    detail="bitcast depends on an unresolved specialization value",
+                )
             self.glsl_compile_time_global_node_ids.add(id(node))
             known_constant_names.add(name)
             if specialization_dependent:
                 specialization_dependent_names.add(name)
+            if bitcast_dependent:
+                self.glsl_compile_time_bitcast_substitution_node_ids.add(id(node))
+                self.glsl_compile_time_bitcast_substitutions[name] = (
+                    getattr(node, "initial_value", None),
+                    self.resource_node_type(node),
+                )
 
             literal_int_value = self.glsl_compile_time_global_integer_value(
                 node,
@@ -15497,31 +15796,25 @@ class GLSLCodeGen:
         specialization_dependent_names,
     ):
         def reject(reason, current, detail=None):
-            name = self.resource_node_name(node, "<unnamed>")
-            description = reason.replace("-", " ")
-            if detail:
-                description += f" '{detail}'"
-            raise OpenGLCompileTimeGlobalError(
-                f"OpenGL compile-time global '{name}' cannot use {description}",
-                variable_name=name,
-                expression_kind=(
-                    current.__class__.__name__ if current is not None else None
-                ),
-                detail=detail,
+            self.opengl_compile_time_global_error(
+                node,
+                current,
                 reason=reason,
-                source_location=getattr(current, "source_location", None)
-                or getattr(node, "source_location", None),
+                detail=detail,
             )
 
         def validate(current):
             if isinstance(current, LiteralNode):
-                return False
+                return False, False
             if isinstance(current, (IdentifierNode, VariableNode)):
                 name = getattr(current, "name", None)
                 if name in known_constant_names:
-                    return name in specialization_dependent_names
+                    return (
+                        name in specialization_dependent_names,
+                        name in self.glsl_compile_time_bitcast_substitutions,
+                    )
                 if name and render_standard_math_constant(name, "opengl") is not None:
-                    return False
+                    return False, False
                 reason = (
                     "forward-reference" if name in candidate_names else "runtime-value"
                 )
@@ -15531,7 +15824,10 @@ class GLSLCodeGen:
                     validate(element)
                     for element in getattr(current, "elements", []) or []
                 ]
-                return any(dependencies)
+                return (
+                    any(item[0] for item in dependencies),
+                    any(item[1] for item in dependencies),
+                )
             if isinstance(current, MemberAccessNode):
                 return validate(current.object)
             if isinstance(current, SwizzleNode):
@@ -15539,22 +15835,29 @@ class GLSLCodeGen:
             if isinstance(current, ArrayAccessNode):
                 array_dependency = validate(current.array)
                 index_dependency = validate(current.index)
-                if index_dependency:
+                if index_dependency[0]:
                     reject("specialization-array-index", current)
-                return array_dependency
+                return (
+                    array_dependency[0],
+                    array_dependency[1] or index_dependency[1],
+                )
             if isinstance(current, BinaryOpNode):
-                return any((validate(current.left), validate(current.right)))
+                left = validate(current.left)
+                right = validate(current.right)
+                return left[0] or right[0], left[1] or right[1]
             if isinstance(current, UnaryOpNode):
                 if self.map_operator(current.op) in {"++", "--"}:
                     reject("mutation", current)
                 return validate(current.operand)
             if isinstance(current, TernaryOpNode):
-                return any(
-                    (
-                        validate(current.condition),
-                        validate(current.true_expr),
-                        validate(current.false_expr),
-                    )
+                dependencies = (
+                    validate(current.condition),
+                    validate(current.true_expr),
+                    validate(current.false_expr),
+                )
+                return (
+                    any(item[0] for item in dependencies),
+                    any(item[1] for item in dependencies),
                 )
             if isinstance(current, CastNode):
                 return validate(current.expression)
@@ -15562,13 +15865,47 @@ class GLSLCodeGen:
                 function_name = self.function_call_name(current)
                 if function_name in self.function_return_types:
                     reject("function-call", current, function_name)
+                bitcast = self.glsl_compile_time_bitcast_contract(node, current)
+                if bitcast is not None:
+                    try:
+                        specialization_dependent, _bitcast_dependent = validate(
+                            bitcast["operand"]
+                        )
+                    except OpenGLCompileTimeGlobalError as error:
+                        if error.reason not in {
+                            "forward-reference",
+                            "function-call",
+                            "runtime-value",
+                        }:
+                            raise
+                        self.opengl_compile_time_global_error(
+                            node,
+                            current,
+                            reason=f"bitcast-operand-{error.reason}",
+                            detail=error.detail,
+                            operation=bitcast["operation"],
+                            operand_type=bitcast["operand_type"],
+                            result_type=bitcast["result_type"],
+                        )
+                    if specialization_dependent:
+                        self.opengl_compile_time_global_error(
+                            node,
+                            current,
+                            reason="specialization-bitcast",
+                            detail=function_name,
+                            operation=function_name,
+                            operand_type=bitcast["operand_type"],
+                            result_type=bitcast["result_type"],
+                        )
+                    return False, True
                 arguments = (
                     getattr(current, "arguments", getattr(current, "args", [])) or []
                 )
                 dependencies = [validate(argument) for argument in arguments]
-                specialization_dependent = any(dependencies)
+                specialization_dependent = any(item[0] for item in dependencies)
+                bitcast_dependent = any(item[1] for item in dependencies)
                 if self.glsl_constructor_type(function_name) is not None:
-                    return specialization_dependent
+                    return specialization_dependent, bitcast_dependent
                 if function_name not in {
                     "abs",
                     "acos",
@@ -15600,7 +15937,7 @@ class GLSLCodeGen:
                     reject("function-call", current, function_name)
                 if specialization_dependent:
                     reject("specialization-function-call", current, function_name)
-                return False
+                return False, bitcast_dependent
             if isinstance(current, ConstructorNode):
                 dependencies = [
                     validate(argument)
@@ -15608,7 +15945,10 @@ class GLSLCodeGen:
                         getattr(current, "arguments", []) or []
                     ) + list((getattr(current, "named_arguments", {}) or {}).values())
                 ]
-                return any(dependencies)
+                return (
+                    any(item[0] for item in dependencies),
+                    any(item[1] for item in dependencies),
+                )
             reject("unsupported-expression", current)
 
         return validate(expression)
@@ -15958,6 +16298,8 @@ class GLSLCodeGen:
         if builtin_output is not None:
             self.current_identifier_aliases[name] = builtin_output
             return ""
+        if id(node) in self.glsl_compile_time_bitcast_substitution_node_ids:
+            return ""
 
         runtime_initializer = id(node) in self.glsl_runtime_global_initializer_node_ids
         qualifier = "" if runtime_initializer else self.global_variable_qualifier(node)
@@ -15995,6 +16337,27 @@ class GLSLCodeGen:
             mapped_type,
         )
         return f"{layout}{qualifier}{declaration}{initializer};\n"
+
+    def glsl_compile_time_bitcast_substitution_expression(self, name):
+        substitution = self.glsl_compile_time_bitcast_substitutions.get(name)
+        if substitution is None or name in self.local_variable_types:
+            return None
+        if name in self.glsl_active_compile_time_bitcast_substitutions:
+            raise OpenGLCompileTimeGlobalError(
+                f"OpenGL compile-time bitcast substitution for '{name}' is cyclic",
+                variable_name=name,
+                expression_kind="IdentifierNode",
+                detail=name,
+                reason="bitcast-substitution-cycle",
+            )
+
+        expression, expected_type = substitution
+        self.glsl_active_compile_time_bitcast_substitutions.add(name)
+        try:
+            rendered = self.generate_expression_with_expected(expression, expected_type)
+        finally:
+            self.glsl_active_compile_time_bitcast_substitutions.remove(name)
+        return f"({rendered})"
 
     def generate_stage_local_interface_variable_declaration(self, node):
         builtin_name = self.glsl_builtin_stage_interface_name(node)
@@ -18373,6 +18736,18 @@ complex64_t crossgl_complex64_mod_assign(
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
+            if func_name in self.GLSL_COPYSIGN_NAMES:
+                resolved_copysign = self.resolve_glsl_function_overload(
+                    func_name,
+                    args,
+                    call_node=expr,
+                )
+                if resolved_copysign is not None:
+                    return self.type_name_string(
+                        getattr(resolved_copysign, "return_type", None)
+                    )
+                if args:
+                    return self.expression_result_type(args[0])
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
             if (
@@ -20094,6 +20469,11 @@ complex64_t crossgl_complex64_mod_assign(
                     return self.glsl_enum_value_expression(expr.name)
                 if expr.name in self.current_identifier_aliases:
                     return self.current_identifier_aliases[expr.name]
+                substitution = self.glsl_compile_time_bitcast_substitution_expression(
+                    expr.name
+                )
+                if substitution is not None:
+                    return substitution
                 return self.generate_glsl_identifier_expression(expr.name)
             else:
                 return str(expr)
@@ -20110,6 +20490,11 @@ complex64_t crossgl_complex64_mod_assign(
                 return self.glsl_enum_value_expression(expr.name)
             if expr.name in self.current_identifier_aliases:
                 return self.current_identifier_aliases[expr.name]
+            substitution = self.glsl_compile_time_bitcast_substitution_expression(
+                expr.name
+            )
+            if substitution is not None:
+                return substitution
             return self.generate_glsl_identifier_expression(expr.name)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_glsl_aggregate_initializer(expr)
@@ -20410,6 +20795,14 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if boolean_order_call is not None:
                 return boolean_order_call
+
+            copysign_call = self.generate_glsl_copysign_call(
+                original_func_name,
+                expr.args,
+                call_node=expr,
+            )
+            if copysign_call is not None:
+                return copysign_call
 
             bitcast_call = self.generate_bitcast_call(original_func_name, expr.args)
             if bitcast_call is not None:
@@ -21023,6 +21416,117 @@ complex64_t crossgl_complex64_mod_assign(
             return f"(1.0 / {value})"
         return None
 
+    def glsl_copysign_type_info(self, type_name):
+        if type_name is None:
+            return None
+        mapped_type = self.map_type(type_name)
+        if mapped_type == "float":
+            return {"type": mapped_type, "lanes": 1}
+        match = re.fullmatch(r"vec([234])", mapped_type or "")
+        if match is None:
+            return None
+        return {"type": mapped_type, "lanes": int(match.group(1))}
+
+    def glsl_copysign_error(
+        self,
+        message,
+        *,
+        operand_types,
+        result_type=None,
+        reason,
+        source_location=None,
+    ):
+        return OpenGLCopySignError(
+            message,
+            operand_types=operand_types,
+            result_type=result_type,
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_glsl_copysign_call(
+        self,
+        func_name,
+        args,
+        *,
+        call_node=None,
+    ):
+        if func_name not in self.GLSL_COPYSIGN_NAMES:
+            return None
+
+        resolved_overload = self.resolve_glsl_function_overload(
+            func_name,
+            args,
+            call_node=call_node,
+        )
+        if resolved_overload is not None:
+            return None
+
+        source_location = getattr(call_node, "source_location", None)
+        if len(args) != 2:
+            raise self.glsl_copysign_error(
+                "OpenGL copysign requires exactly two operands",
+                operand_types=(),
+                reason="invalid-arity",
+                source_location=source_location,
+            )
+
+        source_types = tuple(self.glsl_source_expression_type(arg) for arg in args)
+        display_types = tuple(
+            self.type_name_string(source_type) if source_type is not None else None
+            for source_type in source_types
+        )
+        if any(source_type is None for source_type in source_types):
+            raise self.glsl_copysign_error(
+                "OpenGL copysign requires statically known operand types",
+                operand_types=display_types,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        operand_info = tuple(
+            self.glsl_copysign_type_info(source_type) for source_type in source_types
+        )
+        if any(info is None for info in operand_info):
+            raise self.glsl_copysign_error(
+                "OpenGL copysign supports only 32-bit float scalar and vector "
+                f"operands, got {display_types[0]} and {display_types[1]}",
+                operand_types=display_types,
+                reason="unsupported-operand-type",
+                source_location=source_location,
+            )
+
+        magnitude_info, sign_info = operand_info
+        if magnitude_info["type"] != sign_info["type"]:
+            raise self.glsl_copysign_error(
+                "OpenGL copysign operands must have identical scalar or vector "
+                f"shapes, got {display_types[0]} and {display_types[1]}",
+                operand_types=display_types,
+                result_type=magnitude_info["type"],
+                reason="operand-shape-mismatch",
+                source_location=source_location,
+            )
+
+        value_type = magnitude_info["type"]
+        magnitude = self.generate_expression_with_expected(args[0], value_type)
+        sign_source = self.generate_expression_with_expected(args[1], value_type)
+        lanes = magnitude_info["lanes"]
+        mask_type = "uint" if lanes == 1 else f"uvec{lanes}"
+        magnitude_mask = "0x7fffffffu"
+        sign_mask = "0x80000000u"
+        if lanes != 1:
+            magnitude_mask = f"{mask_type}({magnitude_mask})"
+            sign_mask = f"{mask_type}({sign_mask})"
+        return (
+            "uintBitsToFloat(((floatBitsToUint({magnitude}) & {magnitude_mask}) | "
+            "(floatBitsToUint({sign_source}) & {sign_mask})))"
+        ).format(
+            magnitude=magnitude,
+            magnitude_mask=magnitude_mask,
+            sign_source=sign_source,
+            sign_mask=sign_mask,
+        )
+
     def generate_bitcast_call(self, func_name, args):
         if (
             func_name not in self.GLSL_BITCAST_FUNCTIONS
@@ -21411,10 +21915,14 @@ complex64_t crossgl_complex64_mod_assign(
             )
 
         actual_arity = len(arguments)
-        if actual_arity != expected_arity:
+        accepted_arities = self.GLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES.get(
+            operation, (expected_arity,)
+        )
+        if actual_arity not in accepted_arities:
+            expected = " or ".join(str(arity) for arity in accepted_arities)
             return self.glsl_wave_diagnostic_expression(
                 diagnostic_operation,
-                f"expects {expected_arity} arguments, got {actual_arity}",
+                f"expects {expected} arguments, got {actual_arity}",
             )
 
         floating_bitwise = self.glsl_floating_bitwise_wave_operation(
@@ -21449,11 +21957,22 @@ complex64_t crossgl_complex64_mod_assign(
             value_type = self.expression_result_type(arguments[0])
             value = self.generate_expression_with_expected(arguments[0], value_type)
             fill = self.generate_expression_with_expected(arguments[1], value_type)
-            delta_type = self.expression_result_type(arguments[2])
-            delta = self.generate_expression_with_expected(arguments[2], None)
-            if delta_type is None or self.map_type(delta_type) != "uint":
-                delta = f"uint({delta})"
-            return f"crossglWaveShuffleAndFillUp({value}, {fill}, {delta})"
+            unsigned_arguments = []
+            for argument in arguments[2:]:
+                argument_type = self.expression_result_type(argument)
+                generated_argument = self.generate_expression_with_expected(
+                    argument, None
+                )
+                if argument_type is None or self.map_type(argument_type) != "uint":
+                    generated_argument = f"uint({generated_argument})"
+                unsigned_arguments.append(generated_argument)
+            delta = unsigned_arguments[0]
+            modulo = (
+                unsigned_arguments[1]
+                if len(unsigned_arguments) == 2
+                else "gl_SubgroupSize"
+            )
+            return f"crossglWaveShuffleAndFillUp({value}, {fill}, {delta}, {modulo})"
         if operation in self.GLSL_WAVE_MULTI_PREFIX_OPERATIONS:
             value = self.generate_expression(arguments[0])
             mask = self.generate_expression(arguments[1])
@@ -21642,14 +22161,20 @@ complex64_t crossgl_complex64_mod_assign(
                 ),
             )
 
-        return self.glsl_wave_validate_argument_type(
-            operation,
-            args[2],
-            "a scalar integer",
-            "delta",
-            {"int", "uint"},
-            allow_vectors=False,
-        )
+        for index, argument_label in ((2, "delta"), (3, "modulo")):
+            if index >= len(args):
+                break
+            diagnostic = self.glsl_wave_validate_argument_type(
+                operation,
+                args[index],
+                "a scalar integer",
+                argument_label,
+                {"int", "uint"},
+                allow_vectors=False,
+            )
+            if diagnostic is not None:
+                return diagnostic
+        return None
 
     def glsl_wave_validate_argument_kind(
         self, operation, arg, requirement, argument_label, allowed_kinds
