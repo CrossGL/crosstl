@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 369,
+        "unsupported_marker_count": 402,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -278,11 +278,15 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 39,
+        "unsupported_marker_count": 40,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "project_diagnostic_code = \"project.translate.webgl-struct-construction-unsupported\""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "project_diagnostic_code = \"project.translate.webgl-index-type-unsupported\""
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -355,10 +359,6 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "builtin_name = self.webgl_unsupported_builtin_attribute_name(node)"
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "def webgl_unsupported_builtin_attribute_name(self, node):"
           }
         ]
       },
