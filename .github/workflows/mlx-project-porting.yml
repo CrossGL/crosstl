@@ -19,6 +19,7 @@ on:
       - "tests/test_mlx_copy_directx_proof.py"
       - "tests/test_mlx_dispatch_contract_fixture.py"
       - "tests/test_mlx_layer_norm_directx_proof.py"
+      - "tests/test_mlx_quantized_directx_proof.py"
       - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
       - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
@@ -42,6 +43,7 @@ on:
       - "tests/test_mlx_copy_directx_proof.py"
       - "tests/test_mlx_dispatch_contract_fixture.py"
       - "tests/test_mlx_layer_norm_directx_proof.py"
+      - "tests/test_mlx_quantized_directx_proof.py"
       - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
       - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
@@ -225,6 +227,16 @@ jobs:
             --mlx-root mlx-upstream \
             --work-dir .crosstl-mlx-porting/copy-directx \
             --require-toolchain
+
+      - name: Prove pinned MLX quantized DirectX lowering
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/prove_quantized_directx.py \
+            --mlx-root mlx-upstream \
+            --work-dir .crosstl-mlx-porting/quantized-directx \
+            --require-directx-toolchain
 
       - name: Prove pinned MLX complex copy OpenGL lowering
         if: runner.os == 'Linux'
