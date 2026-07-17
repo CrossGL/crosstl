@@ -1,0 +1,308 @@
+{
+  "kind": "crosstl-project-runtime-fixture-metadata",
+  "metadata": {
+    "fixtureSet": "directx-math-runtime-proofs"
+  },
+  "fixtures": [
+    {
+      "id": "directx-inverse-hyperbolic-float32-domain-boundaries",
+      "selector": {
+        "source": "tests/fixtures/runtime_verification/directx/inverse_hyperbolic_float32.cgl",
+        "target": "directx",
+        "variant": "float32-domain-boundaries"
+      },
+      "inputs": [
+        {
+          "name": "acosh_input_bits",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            16
+          ],
+          "values": [
+            2143289344,
+            4286578688,
+            0,
+            1065353215,
+            1065353216,
+            1065353217,
+            1069547520,
+            1073741824,
+            1082130432,
+            1166016512,
+            1166016513,
+            1325400064,
+            1900671690,
+            2130706432,
+            2139095039,
+            2139095040
+          ],
+          "metadata": {
+            "operation": "acosh",
+            "representation": "ieee-754-binary32-bits"
+          }
+        },
+        {
+          "name": "asinh_input_bits",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            16
+          ],
+          "values": [
+            2143289344,
+            4286578688,
+            4286578687,
+            4048155338,
+            3313500161,
+            3313500160,
+            3212836864,
+            3112173568,
+            2989214839,
+            2147483648,
+            0,
+            841731191,
+            964689920,
+            1065353216,
+            1900671690,
+            2139095040
+          ],
+          "metadata": {
+            "operation": "asinh",
+            "representation": "ieee-754-binary32-bits"
+          }
+        },
+        {
+          "name": "atanh_input_bits",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            16
+          ],
+          "values": [
+            2143289344,
+            4286578688,
+            3217031168,
+            3212836865,
+            3212836864,
+            3212836863,
+            3204448256,
+            2989214839,
+            2147483648,
+            0,
+            841731191,
+            1056964608,
+            1065353215,
+            1065353216,
+            1065353217,
+            2139095040
+          ],
+          "metadata": {
+            "operation": "atanh",
+            "representation": "ieee-754-binary32-bits"
+          }
+        }
+      ],
+      "expectedOutputs": [
+        {
+          "name": "acosh_output_bits",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            16
+          ],
+          "values": [
+            2143289344,
+            2143289344,
+            2143289344,
+            2143289344,
+            0,
+            973078528,
+            1064722789,
+            1068012052,
+            1074007898,
+            1091579059,
+            1091579060,
+            1102148120,
+            1116441241,
+            1118925336,
+            1119016188,
+            2139095040
+          ],
+          "tolerance": {
+            "absolute": 2,
+            "relative": 0
+          },
+          "metadata": {
+            "operation": "acosh",
+            "representation": "ieee-754-binary32-bits",
+            "maximumUlp": 2
+          }
+        },
+        {
+          "name": "asinh_output_bits",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            16
+          ],
+          "values": [
+            2143289344,
+            4286578688,
+            3266499836,
+            3263924889,
+            3239062708,
+            3239062707,
+            3210846643,
+            3112173568,
+            2989214839,
+            2147483648,
+            0,
+            841731191,
+            964689920,
+            1063362995,
+            1116441241,
+            2139095040
+          ],
+          "tolerance": {
+            "absolute": 2,
+            "relative": 0
+          },
+          "metadata": {
+            "operation": "asinh",
+            "representation": "ieee-754-binary32-bits",
+            "maximumUlp": 2
+          }
+        },
+        {
+          "name": "atanh_output_bits",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            16
+          ],
+          "values": [
+            2143289344,
+            2143289344,
+            2143289344,
+            2143289344,
+            4286578688,
+            3238699299,
+            3205275476,
+            2989214839,
+            2147483648,
+            0,
+            841731191,
+            1057791828,
+            1091215651,
+            2139095040,
+            2143289344,
+            2143289344
+          ],
+          "tolerance": {
+            "absolute": 3,
+            "relative": 0
+          },
+          "metadata": {
+            "operation": "atanh",
+            "representation": "ieee-754-binary32-bits",
+            "maximumUlp": 3
+          }
+        }
+      ],
+      "runtimeAdapter": {
+        "id": "directx-inverse-hyperbolic-float32-contract-v1",
+        "entryPoints": [
+          {
+            "name": "CSMain",
+            "stage": "compute",
+            "workgroupSize": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "resourceBindings": [
+          {
+            "name": "acosh_input_bits",
+            "kind": "buffer",
+            "binding": 0,
+            "access": "read",
+            "value": "acosh_input_bits"
+          },
+          {
+            "name": "asinh_input_bits",
+            "kind": "buffer",
+            "binding": 1,
+            "access": "read",
+            "value": "asinh_input_bits"
+          },
+          {
+            "name": "atanh_input_bits",
+            "kind": "buffer",
+            "binding": 2,
+            "access": "read",
+            "value": "atanh_input_bits"
+          },
+          {
+            "name": "acosh_output_bits",
+            "kind": "buffer",
+            "binding": 0,
+            "access": "write",
+            "value": "acosh_output_bits"
+          },
+          {
+            "name": "asinh_output_bits",
+            "kind": "buffer",
+            "binding": 1,
+            "access": "write",
+            "value": "asinh_output_bits"
+          },
+          {
+            "name": "atanh_output_bits",
+            "kind": "buffer",
+            "binding": 2,
+            "access": "write",
+            "value": "atanh_output_bits"
+          }
+        ],
+        "dispatch": {
+          "entryPoint": "CSMain",
+          "globalSize": [
+            16,
+            1,
+            1
+          ]
+        }
+      },
+      "metadata": {
+        "proof": "inverse-hyperbolic-float32-numerical-contract",
+        "reference": {
+          "implementation": "host math library evaluated in binary64 and rounded once to IEEE-754 binary32",
+          "independence": "does not reproduce the DirectX lowering formula"
+        },
+        "contracts": {
+          "finiteNonzeroMaximumUlp": {
+            "acosh": 2,
+            "asinh": 2,
+            "atanh": 3
+          },
+          "nan": "classification-only after fixture-side payload canonicalization",
+          "infinity": "exact classification and sign",
+          "zero": "exact IEEE-754 sign bit"
+        },
+        "testCommand": [
+          "python",
+          "-m",
+          "pytest",
+          "-n",
+          "auto",
+          "tests/test_translator/test_native_runtime_drivers.py",
+          "-k",
+          "directx_compute_runtime_executes_inverse_hyperbolic_numerics_on_device"
+        ]
+      }
+    }
+  ]
+}

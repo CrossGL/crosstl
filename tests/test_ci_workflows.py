@@ -2410,6 +2410,64 @@ def test_mlx_project_porting_workflow_runs_quantized_directx_proof_on_windows():
     assert "--require-directx-toolchain" in mlx_porting
 
 
+def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+
+    for name, environment, test_name in (
+        (
+            "Validate Direct3D wave shuffle runtime contract",
+            "CROSTL_RUN_DIRECTX_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST",
+            "directx_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device",
+        ),
+        (
+            "Validate Direct3D copysign runtime contract",
+            "CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST",
+            "directx_compute_runtime_executes_copysign_bit_patterns_on_device",
+        ),
+        (
+            "Validate Direct3D inverse-hyperbolic runtime contract",
+            "CROSTL_RUN_DIRECTX_INVERSE_HYPERBOLIC_DEVICE_TEST",
+            "directx_compute_runtime_executes_inverse_hyperbolic_numerics_on_device",
+        ),
+    ):
+        step = ci_coverage.workflow_step_section(mlx_porting, name)
+        assert "if: runner.os == 'Windows'" in step
+        assert f'{environment}: "1"' in step
+        assert test_name in step
+        assert "-n auto" in step
+        assert "mlx-upstream" not in step
+
+    opengl_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Validate OpenGL copysign runtime contract",
+    )
+    assert "if: runner.os == 'Linux'" in opengl_step
+    assert 'CROSTL_RUN_OPENGL_COPYSIGN_DEVICE_TEST: "1"' in opengl_step
+    assert "opengl_compute_runtime_executes_copysign_bit_patterns_on_device" in (
+        opengl_step
+    )
+    assert "EGL_PLATFORM: surfaceless" in opengl_step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
+    assert "PYOPENGL_PLATFORM: egl" in opengl_step
+    assert "-n auto" in opengl_step
+    assert "mlx-upstream" not in opengl_step
+
+    vulkan_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Validate generated OpenGL subgroup contract through Vulkan",
+    )
+    assert "if: runner.os == 'Linux'" in vulkan_step
+    assert 'CROSTL_RUN_OPENGL_GLSL_VULKAN_DEVICE_TEST: "1"' in vulkan_step
+    assert "opengl_glsl_wave_shuffle_executes_via_vulkan_on_device" in vulkan_step
+    assert "VK_DRIVER_FILES" in vulkan_step
+    assert "VK_ICD_FILENAMES" in vulkan_step
+    assert "lvp_icd*.json" in vulkan_step
+    assert "vulkaninfo --summary" in vulkan_step
+    assert "-n auto" in vulkan_step
+    assert "mlx-upstream" not in vulkan_step
+
+
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
     workflows = _workflow_texts()
     support_matrix = workflows.get("support-matrix.yml", "")
