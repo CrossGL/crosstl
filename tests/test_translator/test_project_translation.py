@@ -46841,6 +46841,55 @@ def test_translate_project_removes_proven_metal_static_assertions(tmp_path, targ
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_removes_included_concrete_struct_size_assertions(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "value_types.h").write_text(
+        textwrap.dedent("""
+            #pragma once
+            struct ScalarPair {
+                float first;
+                float second;
+            };
+            static_assert(sizeof(ScalarPair) == 8, "Unexpected pair layout.");
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "valid.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            #include "value_types.h"
+            using namespace metal;
+
+            kernel void valid_layout(
+                device const ScalarPair* values [[buffer(0)]],
+                device float* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid] = values[gid].first + values[gid].second;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "static_assert" not in output
+    assert "struct ScalarPair" in output
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
 @pytest.mark.parametrize(
     ("source", "expected"),
     [

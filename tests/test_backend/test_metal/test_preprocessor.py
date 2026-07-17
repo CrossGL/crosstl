@@ -793,6 +793,102 @@ def test_preprocessor_removes_proven_static_assertion_with_logical_chain():
     assert "kernel void supported_group_size" in output
 
 
+def test_preprocessor_removes_proven_static_assertion_for_concrete_struct_layout():
+    code = """
+    struct ScalarPair {
+        float first;
+        float second;
+    };
+
+    struct TaggedPair {
+        uchar tag;
+        ScalarPair value;
+        half weights[2];
+    };
+
+    kernel void valid_layout(device float* out [[buffer(0)]]) {
+        static_assert(sizeof(ScalarPair) == 8, "Unexpected pair layout.");
+        static_assert(sizeof(TaggedPair) == 16, "Unexpected tagged layout.");
+        out[0] = 1.0f;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "static_assert" not in output
+    assert "struct ScalarPair" in output
+    assert "struct TaggedPair" in output
+
+
+def test_preprocessor_rejects_false_static_assertion_for_padded_struct_layout():
+    code = """
+    struct PaddedValue {
+        uchar tag;
+        float3 value;
+    };
+
+    kernel void invalid_layout(device float* out [[buffer(0)]]) {
+        static_assert(sizeof(PaddedValue) == 16, "Unexpected padded layout.");
+        out[0] = 0.0f;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.reason == "assertion-failed"
+    assert error.expression == "sizeof(PaddedValue) == 16"
+    assert error.resolved_expression == "32 == 16"
+    assert error.unresolved_dependencies == ()
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "device float* value;",
+        "float first, second;",
+        "alignas(16) float value;",
+    ),
+)
+def test_preprocessor_keeps_unsupported_struct_layout_assertions_fail_closed(
+    declaration,
+):
+    code = f"""
+    struct UnsupportedLayout {{
+        {declaration}
+    }};
+
+    kernel void unresolved_layout(device float* out [[buffer(0)]]) {{
+        static_assert(sizeof(UnsupportedLayout) == 8, "Layout must be known.");
+        out[0] = 0.0f;
+    }}
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.reason == "condition-unresolved"
+    assert error.resolved_expression == "sizeof(UnsupportedLayout) == 8"
+    assert error.unresolved_dependencies == ("UnsupportedLayout",)
+
+
 def test_preprocessor_rejects_false_static_assertion_with_source_context():
     code = """
     kernel void invalid_specialization(device float* out [[buffer(0)]]) {
@@ -8184,9 +8280,15 @@ def test_sfinae_simd_reduce_recognized_as_template_methods():
     # constraints captured and the return-type SFINAE unwrapped to the value type.
     pp = MetalPreprocessor()
     body = _SFINAE_SIMD_REDUCE_STRUCT.split("struct Red {", 1)[1].rsplit("};", 1)[0]
-    _names, _types, concrete, templates, _members, _ctors = pp._split_struct_body(
-        "Red", body, 0
-    )
+    (
+        _names,
+        _types,
+        concrete,
+        templates,
+        _members,
+        _ctors,
+        _layout_supported,
+    ) = pp._split_struct_body("Red", body, 0)
     by_name = {}
     for method in templates:
         by_name.setdefault(method.name, []).append(method)

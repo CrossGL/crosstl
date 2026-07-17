@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Set, Tuple, TypeVar, Union
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
-from .type_layout import metal_type_size
+from .type_layout import metal_type_layout, metal_type_size
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
 CLANG_FEATURE_TEST_MACROS = {
@@ -484,6 +484,8 @@ class _MetalStructDefinition:
     data_members: List[_MetalDataMember] = field(default_factory=list)
     constructors: List[_MetalConstructor] = field(default_factory=list)
     base_clause: str = ""
+    aggregate_kind: str = "struct"
+    layout_supported: bool = True
     member_prototype_names: Set[str] = field(default_factory=set)
     # Struct-scoped `using` / `typedef` aliases. These remain in the data-only
     # struct, but lowered method bodies need the same lexical type context when
@@ -2340,7 +2342,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         template_spans = self._find_template_declaration_spans(code)
         namespace_spans = self._find_namespace_spans(code)
         definitions: List[_MetalStructDefinition] = []
-        for match in re.finditer(r"\b(?:struct|class|union)\s+", code):
+        for match in re.finditer(r"\b(?P<aggregate_kind>struct|class|union)\s+", code):
             start = match.start()
             if self._containing_span(start, template_spans) is not None:
                 continue
@@ -2395,6 +2397,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 template_methods,
                 ordered_members,
                 constructors,
+                layout_supported,
             ) = self._split_struct_body(
                 name,
                 body,
@@ -2416,6 +2419,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     data_members=ordered_members,
                     constructors=constructors,
                     base_clause=stripped_between,
+                    aggregate_kind=match.group("aggregate_kind"),
+                    layout_supported=layout_supported,
                     member_prototype_names=member_prototype_names,
                     type_aliases=self._collect_struct_scope_type_aliases(body),
                     type_alias_templates=self._collect_struct_scope_type_alias_templates(
@@ -3310,6 +3315,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         List[_MetalStructMethod],
         List[_MetalDataMember],
         List[_MetalConstructor],
+        bool,
     ]:
         # Walk a struct body separating DATA members from METHOD definitions.
         # A method is a declarator followed by `(params)` then `{...}`; everything
@@ -3325,6 +3331,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # scalar-replacement path (declaration order and ctor mapping matter).
         ordered_members: List[_MetalDataMember] = []
         constructors: List[_MetalConstructor] = []
+        layout_supported = True
         if member_prototype_names is None:
             member_prototype_names = set()
         i = 0
@@ -3357,6 +3364,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 angle_start = body.find("<", i)
                 angle_end = self._find_matching_template_param_angle(body, angle_start)
                 if angle_end is None:
+                    layout_supported = False
                     break
                 method_body_start = self._find_next_top_level_char(
                     body, angle_end + 1, "{"
@@ -3404,7 +3412,11 @@ class MetalPreprocessor(HLSLPreprocessor):
                                     body_offset + method_body_end,
                                 )
                                 constructors.append(constructor)
-                    i = method_body_end if method_body_end is not None else n
+                    if method_body_end is None:
+                        layout_supported = False
+                        i = n
+                    else:
+                        i = method_body_end
                 elif semicolon is not None:
                     prototype_name = self._struct_member_prototype_name(
                         body[i:semicolon]
@@ -3413,6 +3425,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                         member_prototype_names.add(prototype_name)
                     i = semicolon + 1
                 else:
+                    layout_supported = False
                     break
                 continue
 
@@ -3424,6 +3437,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 method = self._parse_struct_method(struct_name, body, i, brace)
                 brace_end = self._find_matching_brace(body, brace)
                 if brace_end is None:
+                    layout_supported = False
                     break
                 if method is not None:
                     method.span = (body_offset + i, body_offset + brace_end)
@@ -3463,18 +3477,27 @@ class MetalPreprocessor(HLSLPreprocessor):
                     continue
                 decl_semicolon = self._find_next_top_level_char(body, brace_end, ";")
                 if decl_semicolon is None:
+                    layout_supported = False
                     i = brace_end
                     continue
                 declaration = body[i:decl_semicolon]
-                self._record_data_member(
-                    declaration,
-                    data_member_names,
-                    data_member_types,
-                    ordered_members,
+                declaration_prefix = body[i:brace].strip()
+                trailing_declarator = body[brace_end:decl_semicolon].strip()
+                nested_type = re.match(
+                    r"^(?:struct|class|union|enum)\s+[A-Za-z_]\w*\b",
+                    declaration_prefix,
                 )
+                if nested_type is None or trailing_declarator:
+                    layout_supported &= self._record_data_member(
+                        declaration,
+                        data_member_names,
+                        data_member_types,
+                        ordered_members,
+                    )
                 i = decl_semicolon + 1
                 continue
             if semicolon is None:
+                layout_supported = False
                 break
             # A declaration terminated by `;`. It may still be a method
             # PROTOTYPE (declarator + params + ;) with no body — those have no
@@ -3484,13 +3507,24 @@ class MetalPreprocessor(HLSLPreprocessor):
                 prototype_name = self._struct_member_prototype_name(declaration)
                 if prototype_name is not None:
                     member_prototype_names.add(prototype_name)
+                if re.search(
+                    r"\b(?:alignas|__attribute__|__declspec)\s*\(", declaration
+                ):
+                    layout_supported = False
+                if re.search(r"\(\s*[*&]", declaration):
+                    layout_supported = False
             elif not self._declaration_is_type_alias(declaration):
-                self._record_data_member(
+                type_declaration = re.fullmatch(
+                    r"\s*(?:struct|class|union|enum)\s+[A-Za-z_]\w*\s*",
                     declaration,
-                    data_member_names,
-                    data_member_types,
-                    ordered_members,
                 )
+                if type_declaration is None:
+                    layout_supported &= self._record_data_member(
+                        declaration,
+                        data_member_names,
+                        data_member_types,
+                        ordered_members,
+                    )
             i = semicolon + 1
         return (
             data_member_names,
@@ -3499,6 +3533,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             template_methods,
             ordered_members,
             constructors,
+            layout_supported,
         )
 
     def _record_data_member(
@@ -3507,18 +3542,20 @@ class MetalPreprocessor(HLSLPreprocessor):
         data_member_names: Set[str],
         data_member_types: Dict[str, str],
         ordered_members: List[_MetalDataMember],
-    ) -> None:
+    ) -> bool:
         # Record a data member into the name set, the (normalized) type map, and
         # the ordered list with its FULL declared type text / default / array
         # suffix (used by the pointer-member scalar-replacement path).
         name = self._declared_data_member_name(declaration)
         if not name:
-            return
+            return False
         data_member_names.add(name)
         self._record_data_member_type(data_member_types, name, declaration)
         member = self._parse_ordered_data_member(name, declaration)
         if member is not None:
             ordered_members.append(member)
+            return True
+        return False
 
     def _parse_ordered_data_member(
         self, name: str, declaration: str
@@ -4655,6 +4692,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             owner_spans,
             type_aliases,
         )
+        structs = self._find_concrete_struct_definitions(code)
         replacements: List[Tuple[int, int, str]] = []
         for assertion in assertions:
             condition_position = assertion.condition_span[0]
@@ -4675,6 +4713,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 resolved_condition,
                 lambda type_text: self._resolve_type_aliases_at(
                     type_text,
+                    type_aliases,
+                    condition_position,
+                ),
+                lambda type_text: self._concrete_aggregate_type_layout(
+                    type_text,
+                    structs,
                     type_aliases,
                     condition_position,
                 ),
@@ -4988,17 +5032,163 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     _STATIC_FOLD_MIN_INT = -(1 << 31)
     _STATIC_FOLD_MAX_INT = (1 << 31) - 1
+    _MAX_CONCRETE_AGGREGATE_SIZE = (1 << 63) - 1
+
+    def _concrete_aggregate_type_layout(
+        self,
+        type_text: str,
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+        resolving: Optional[Set[str]] = None,
+    ) -> Optional[Tuple[int, int]]:
+        resolved_type = self._resolve_type_aliases_at(
+            type_text,
+            type_aliases,
+            position,
+        )
+        layout = metal_type_layout(resolved_type)
+        if layout is not None:
+            return layout
+
+        normalized = self._normalize_inferred_type(resolved_type)
+        normalized = re.sub(r"^(?:struct|class|union)\s+", "", normalized)
+        normalized = normalized.lstrip(":")
+        if (
+            re.fullmatch(
+                r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*",
+                normalized,
+            )
+            is None
+        ):
+            return None
+
+        candidates = [
+            struct
+            for struct in structs
+            if normalized
+            in {
+                struct.name,
+                struct.qualified_name.lstrip(":"),
+            }
+        ]
+        if len(candidates) != 1:
+            return None
+        struct = candidates[0]
+        if not struct.layout_supported or struct.base_clause:
+            return None
+
+        aggregate_name = struct.qualified_name or struct.name
+        active = set(resolving or ())
+        if aggregate_name in active:
+            return None
+        active.add(aggregate_name)
+
+        name_counts: Dict[str, int] = {}
+        for definition in structs:
+            name_counts[definition.name] = name_counts.get(definition.name, 0) + 1
+        structs_by_name = {
+            definition.name: definition
+            for definition in structs
+            if name_counts[definition.name] == 1
+        }
+
+        offset = 0
+        aggregate_alignment = 1
+        for member in struct.data_members:
+            qualifiers = set(IDENTIFIER_RE.findall(member.type_text))
+            if "static" in qualifiers:
+                continue
+            if "*" in member.type_text or "&" in member.type_text:
+                return None
+
+            member_type = self._canonicalize_struct_scoped_type(
+                member.type_text,
+                struct,
+                structs_by_name,
+            )
+            member_layout = self._concrete_aggregate_type_layout(
+                member_type,
+                structs,
+                type_aliases,
+                struct.span[0],
+                active,
+            )
+            if member_layout is None:
+                return None
+            member_size, member_alignment = member_layout
+            array_extents = self._concrete_array_extents(member.array_suffix)
+            if array_extents is None:
+                return None
+            for extent in array_extents:
+                stride = self._align_concrete_aggregate_offset(
+                    member_size,
+                    member_alignment,
+                )
+                if stride > self._MAX_CONCRETE_AGGREGATE_SIZE // extent:
+                    return None
+                member_size = stride * extent
+
+            if struct.aggregate_kind == "union":
+                offset = max(offset, member_size)
+            else:
+                offset = self._align_concrete_aggregate_offset(
+                    offset,
+                    member_alignment,
+                )
+                offset += member_size
+            if offset > self._MAX_CONCRETE_AGGREGATE_SIZE:
+                return None
+            aggregate_alignment = max(aggregate_alignment, member_alignment)
+
+        aggregate_size = self._align_concrete_aggregate_offset(
+            offset,
+            aggregate_alignment,
+        )
+        if aggregate_size == 0:
+            aggregate_size = 1
+        if aggregate_size > self._MAX_CONCRETE_AGGREGATE_SIZE:
+            return None
+        return aggregate_size, aggregate_alignment
+
+    def _concrete_array_extents(self, suffix: str) -> Optional[List[int]]:
+        if not suffix:
+            return []
+        extents: List[int] = []
+        cursor = 0
+        for match in re.finditer(r"\[\s*([^\[\]]+?)\s*\]", suffix):
+            if suffix[cursor : match.start()].strip():
+                return None
+            folded, value = self._evaluate_static_integral_expression(match.group(1))
+            if not folded or value is None or value <= 0:
+                return None
+            extents.append(int(value))
+            cursor = match.end()
+        if not extents or suffix[cursor:].strip():
+            return None
+        return extents
+
+    @staticmethod
+    def _align_concrete_aggregate_offset(offset: int, alignment: int) -> int:
+        return ((offset + alignment - 1) // alignment) * alignment
 
     def _replace_concrete_sizeof_expressions(
         self,
         expression: str,
         type_resolver=None,
+        layout_resolver=None,
     ) -> str:
         resolver = type_resolver or (lambda type_text: type_text)
 
         def replace(match):
             operand = self._normalize_template_argument_text(match.group("operand"))
-            size = metal_type_size(resolver(operand))
+            resolved_operand = resolver(operand)
+            layout = (
+                layout_resolver(resolved_operand)
+                if layout_resolver is not None
+                else metal_type_layout(resolved_operand)
+            )
+            size = layout[0] if layout is not None else None
             return str(size) if size is not None else match.group(0)
 
         return re.sub(
