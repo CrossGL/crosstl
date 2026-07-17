@@ -419,18 +419,36 @@ separate.
 A selected DirectX replay of `quantized.metal` now emits one artifact with zero
 translation diagnostics for `affine_quantize_float_gs_32_b_2`. It materializes
 six reachable specializations and three concrete records while pruning 110,861
-unreachable candidates. This path verifies the completed template-member and
-owner-dependent `constexpr` work tracked by CrossGL/crosstl#1476 and
-CrossGL/crosstl#1672. Native 16-bit HLSL emission under
+unreachable candidates. The generated HLSL is 5,737 bytes with SHA-256
+`c2737b9d324578209c15899cb9a1dad94697b041c0bcfd0c1276a809d36f8f88`.
+This path verifies the completed template-member and owner-dependent `constexpr`
+work tracked by CrossGL/crosstl#1476 and CrossGL/crosstl#1672. Native 16-bit HLSL
+emission under
 [#1799](https://github.com/CrossGL/crosstl/issues/1799) and concrete
 `static_assert` evaluation under
 [#1800](https://github.com/CrossGL/crosstl/issues/1800) are resolved for this
-replay. The artifact uses the native 16-bit profile contract and contains no
-remaining `static_assert`. Official DXC validation with `-WX` now reaches one
-observed failure: contextual narrowing for a `uint64_t` expression stored in a
-typed `uint` resource under
-[#1801](https://github.com/CrossGL/crosstl/issues/1801). This is the sole
-observed DXC `-WX` failure for the selected entry.
+selected entry. Contextual narrowing under
+[#1801](https://github.com/CrossGL/crosstl/issues/1801) is also resolved. The
+artifact requires the
+`directx.native-16bit-types` capability and contains no remaining
+`static_assert`. Official DXC validation with profile `cs_6_2`,
+`-enable-16bit-types`, and `-WX` passes. The typed resource store is emitted as
+`out_[uint((out_index + 4))] = uint(((output & 1095216660480ull) >> 32));`.
+The locally generated DXIL was nonempty; its byte size is not treated as a
+cross-version compiler invariant.
+
+The adjacent DirectX entry `affine_gather_qmv_fast_float_gs_32_b_2` now
+advances through the logical `static_assert` covered by
+[#1800](https://github.com/CrossGL/crosstl/issues/1800). Its next one-unit
+project record fails before artifact emission with
+`project.translate.directx-private-pointer-unsupported` and missing capability
+`directx.private-pointer-parameter-lowering`. The materialized helper
+`load_vector_float_float_values_per_thread_2` receives the caller's
+`thread U x_thread[values_per_thread]` array with `values_per_thread = 2`, but
+the DirectX private-pointer analysis reports `missing-fixed-array-extent` for
+parameter `x_thread`. This is tracked by the cross-target fixed-array alias
+contract in [#1497](https://github.com/CrossGL/crosstl/issues/1497). No target
+artifact is emitted, so native validation is not run for this entry.
 
 A selected OpenGL replay of the same entry stops fail-closed with
 `project.translate.opengl-index-type-unsupported` at `w[in_index + i]`. The

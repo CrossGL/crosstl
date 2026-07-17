@@ -6386,12 +6386,24 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
 
 
 def test_selected_quantized_frontiers_record_current_target_boundaries():
+    module = _load_harness()
     readme = MLX_README_PATH.read_text(encoding="utf-8")
     normalized_readme = " ".join(readme.split())
 
     assert "Native 16-bit HLSL emission" in normalized_readme
     assert "concrete `static_assert` evaluation" in normalized_readme
-    assert "sole observed DXC `-WX` failure" in normalized_readme
+    assert "Official DXC validation" in normalized_readme
+    assert "`-enable-16bit-types`, and `-WX` passes" in normalized_readme
+    assert "cross-version compiler invariant" in normalized_readme
+    assert (
+        "`out_[uint((out_index + 4))] = " "uint(((output & 1095216660480ull) >> 32));`"
+    ) in normalized_readme
+    assert "advances through the logical `static_assert`" in normalized_readme
+    assert "`affine_gather_qmv_fast_float_gs_32_b_2`" in readme
+    assert "`directx.private-pointer-parameter-lowering`" in readme
+    assert "`missing-fixed-array-extent`" in readme
+    assert "`values_per_thread = 2`" in readme
+    assert "No target artifact is emitted" in normalized_readme
     assert "`project.translate.opengl-index-type-unsupported`" in readme
     assert "`w[in_index + i]`" in readme
     assert "source index is `uint64_t`" in normalized_readme
@@ -6399,8 +6411,89 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "source range is unproven" in normalized_readme
     assert "No OpenGL target artifact is emitted" in normalized_readme
     assert "native validation is not run" in normalized_readme
-    for issue in (1515, 1799, 1800, 1801):
+    for issue in (1497, 1515, 1799, 1800, 1801):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
+
+    directx = module.MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE
+    assert directx["status"] == "translated-dxc-validated"
+    assert directx["artifact_count"] == 1
+    assert directx["translation_diagnostic_count"] == 0
+    assert directx["generated_hlsl"] == {
+        "sha256": "c2737b9d324578209c15899cb9a1dad94697b041c0bcfd0c1276a809d36f8f88",
+        "size_bytes": 5737,
+    }
+    assert directx["concrete_static_assertion_evaluation"] == {
+        "status": "resolved-for-selected-entry",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1800",
+        "remaining_static_assertion_count": 0,
+    }
+    assert directx["compiler_validation"] == {
+        "compiler": "dxc",
+        "profile": "cs_6_2",
+        "compiler_arguments": ["-enable-16bit-types"],
+        "warnings_as_errors": True,
+        "status": "passed",
+        "observed_failure_count": 0,
+        "contextual_narrowing": {
+            "status": "resolved",
+            "issue": "https://github.com/CrossGL/crosstl/issues/1801",
+            "resource": "out_",
+            "resource_element_type": "uint",
+            "value_type": "uint64_t",
+            "generated_store": (
+                "out_[uint((out_index + 4))] = "
+                "uint(((output & 1095216660480ull) >> 32));"
+            ),
+        },
+    }
+    assert directx["runtime_execution_attempted"] is False
+    assert directx["numerical_parity_claimed"] is False
+
+    adjacent = module.MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE
+    assert adjacent["selected_entry_point"] == (
+        "affine_gather_qmv_fast_float_gs_32_b_2"
+    )
+    assert adjacent["project_translation"] == {
+        "unit_count": 1,
+        "artifact_record_count": 1,
+        "translated_count": 0,
+        "failed_count": 1,
+        "emitted_target_file_count": 0,
+        "project_diagnostic_count": 1,
+    }
+    assert adjacent["diagnostic"] == {
+        "code": "project.translate.directx-private-pointer-unsupported",
+        "missing_capability": "directx.private-pointer-parameter-lowering",
+        "private_pointer": {
+            "function": "load_vector_float_float_values_per_thread_2",
+            "parameter": "x_thread",
+            "reason": "missing-fixed-array-extent",
+        },
+        "message": (
+            "DirectX private pointer parameter "
+            "'load_vector_float_float_values_per_thread_2.x_thread' has no "
+            "provable bounded span"
+        ),
+    }
+    assert adjacent["source_contract"] == {
+        "helper": "load_vector<T, U, values_per_thread, bits>",
+        "caller_array": "thread U x_thread[values_per_thread]",
+        "specialized_extent": 2,
+    }
+    assert adjacent["artifact_emitted"] is False
+    assert adjacent["native_validation_attempted"] is False
+    assert adjacent["runtime_execution_attempted"] is False
+    assert adjacent["numerical_parity_claimed"] is False
+
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (
+        gaps["directx_toolchain_status"]["selected_quantized_private_pointer_boundary"]
+        == adjacent
+    )
 
 
 def test_opengl_index_range_contract_is_documented_as_a_portability_precondition():
@@ -6439,7 +6532,7 @@ def test_closed_project_blockers_are_recorded_as_resolved():
     )
     resolved_issues = {
         f"https://github.com/CrossGL/crosstl/issues/{number}"
-        for number in (1312, 1472, 1476, 1516, 1659, 1672, 1799, 1800)
+        for number in (1312, 1472, 1476, 1516, 1659, 1672, 1799, 1800, 1801)
     }
 
     assert resolved_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
@@ -6467,9 +6560,12 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     workgroup_issue = "https://github.com/CrossGL/crosstl/issues/1671"
     checkpoint_issue = "https://github.com/CrossGL/crosstl/issues/1576"
     resolved_validation_issues = {
-        f"https://github.com/CrossGL/crosstl/issues/{number}" for number in (1799, 1800)
+        f"https://github.com/CrossGL/crosstl/issues/{number}"
+        for number in (1799, 1800, 1801)
     }
     narrowing_issue = "https://github.com/CrossGL/crosstl/issues/1801"
+    static_assertion_issue = "https://github.com/CrossGL/crosstl/issues/1800"
+    private_pointer_issue = "https://github.com/CrossGL/crosstl/issues/1497"
     opengl_index_issue = module.OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE
 
     assert resource_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
@@ -6479,11 +6575,11 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert workgroup_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert checkpoint_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert checkpoint_issue in module.FULL_CORPUS_TRACKED_ISSUES
-    assert module.FULL_CORPUS_VALIDATION_TRACKED_ISSUES == (
-        profile_issue,
-        narrowing_issue,
-    )
-    assert narrowing_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert module.FULL_CORPUS_VALIDATION_TRACKED_ISSUES == (profile_issue,)
+    assert narrowing_issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert static_assertion_issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert private_pointer_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert private_pointer_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert opengl_index_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert opengl_index_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert resolved_validation_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
@@ -6495,7 +6591,11 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert profile_issue in gaps["tracked_issues"]
     assert workgroup_issue in gaps["tracked_issues"]
     assert checkpoint_issue in gaps["tracked_issues"]
-    assert narrowing_issue in gaps["tracked_issues"]
+    assert narrowing_issue not in gaps["tracked_issues"]
+    assert static_assertion_issue not in gaps["tracked_issues"]
+    assert static_assertion_issue in module.RESOLVED_FRONTIER_ISSUES
+    assert static_assertion_issue in gaps["resolved_issues"]
+    assert private_pointer_issue in gaps["tracked_issues"]
     assert opengl_index_issue in gaps["tracked_issues"]
     assert resolved_validation_issues <= set(gaps["resolved_issues"])
     assert resolved_validation_issues.isdisjoint(gaps["tracked_issues"])
@@ -6505,8 +6605,8 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert checkpoint_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert gaps["full_corpus_scout"]["validation_blocked_by"] == [
         profile_issue,
-        narrowing_issue,
     ]
+    assert private_pointer_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert opengl_index_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert resolved_validation_issues.isdisjoint(
         gaps["full_corpus_scout"]["validation_blocked_by"]

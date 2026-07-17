@@ -508,13 +508,18 @@ OPENGL_QUANTIZED_EXPECTED_MESSAGE = (
     "index range unproven"
 )
 MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
-    "status": "translated-dxc-blocked",
+    "status": "translated-dxc-validated",
     "commit": MLX_COMMIT,
     "source": MLX_QUANTIZED_SOURCE,
     "target": "directx",
     "selected_entry_point": MLX_QUANTIZED_SELECTED_ENTRY_POINT,
     "artifact_status": "translated",
+    "artifact_count": 1,
     "translation_diagnostic_count": 0,
+    "generated_hlsl": {
+        "sha256": "c2737b9d324578209c15899cb9a1dad94697b041c0bcfd0c1276a809d36f8f88",
+        "size_bytes": 5737,
+    },
     "materialization": {
         "reachable_specialization_count": 6,
         "concrete_specialization_count": 3,
@@ -529,23 +534,69 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
         "minimum_precision_diagnostic_count": 0,
     },
     "concrete_static_assertion_evaluation": {
-        "status": "resolved",
+        "status": "resolved-for-selected-entry",
         "issue": "https://github.com/CrossGL/crosstl/issues/1800",
         "remaining_static_assertion_count": 0,
     },
     "compiler_validation": {
         "compiler": "dxc",
+        "profile": "cs_6_2",
+        "compiler_arguments": ["-enable-16bit-types"],
         "warnings_as_errors": True,
-        "status": "blocked-by-tracked-issue",
-        "observed_failure_count": 1,
-        "sole_observed_failure": {
+        "status": "passed",
+        "observed_failure_count": 0,
+        "contextual_narrowing": {
+            "status": "resolved",
             "issue": "https://github.com/CrossGL/crosstl/issues/1801",
             "resource": "out_",
             "resource_element_type": "uint",
             "value_type": "uint64_t",
-            "expression": "((output & 1095216660480ull) >> 32)",
+            "generated_store": (
+                "out_[uint((out_index + 4))] = "
+                "uint(((output & 1095216660480ull) >> 32));"
+            ),
         },
     },
+    "runtime_execution_attempted": False,
+    "numerical_parity_claimed": False,
+}
+MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
+    "status": "blocked-as-expected",
+    "commit": MLX_COMMIT,
+    "source": MLX_QUANTIZED_SOURCE,
+    "target": "directx",
+    "selected_entry_point": "affine_gather_qmv_fast_float_gs_32_b_2",
+    "project_translation": {
+        "unit_count": 1,
+        "artifact_record_count": 1,
+        "translated_count": 0,
+        "failed_count": 1,
+        "emitted_target_file_count": 0,
+        "project_diagnostic_count": 1,
+    },
+    "diagnostic": {
+        "code": "project.translate.directx-private-pointer-unsupported",
+        "missing_capability": "directx.private-pointer-parameter-lowering",
+        "private_pointer": {
+            "function": "load_vector_float_float_values_per_thread_2",
+            "parameter": "x_thread",
+            "reason": "missing-fixed-array-extent",
+        },
+        "message": (
+            "DirectX private pointer parameter "
+            "'load_vector_float_float_values_per_thread_2.x_thread' has no "
+            "provable bounded span"
+        ),
+    },
+    "source_contract": {
+        "helper": "load_vector<T, U, values_per_thread, bits>",
+        "caller_array": "thread U x_thread[values_per_thread]",
+        "specialized_extent": 2,
+    },
+    "artifact_emitted": False,
+    "native_validation_attempted": False,
+    "native_validation_status": "not-run-no-artifact",
+    "blocked_by": ["https://github.com/CrossGL/crosstl/issues/1497"],
     "runtime_execution_attempted": False,
     "numerical_parity_claimed": False,
 }
@@ -597,6 +648,7 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1676",
     "https://github.com/CrossGL/crosstl/issues/1479",
     "https://github.com/CrossGL/crosstl/issues/1490",
+    "https://github.com/CrossGL/crosstl/issues/1497",
     OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE,
     "https://github.com/CrossGL/crosstl/issues/1544",
     "https://github.com/CrossGL/crosstl/issues/1546",
@@ -608,7 +660,6 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
 )
 FULL_CORPUS_VALIDATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1670",
-    "https://github.com/CrossGL/crosstl/issues/1801",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",
@@ -689,6 +740,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1800",
+    "https://github.com/CrossGL/crosstl/issues/1801",
     "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1659",
