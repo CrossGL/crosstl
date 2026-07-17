@@ -11262,6 +11262,55 @@ def test_opengl_complex64_struct_operators_lower_to_helpers(tmp_path):
     assert "crossgl_complex64_" not in reused
 
 
+def test_opengl_explicit_complex64_to_scalar_uses_real_component(tmp_path):
+    shader = """
+    shader Complex64ScalarConversion {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        StructuredBuffer<complex64_t> source @ binding(0);
+        RWStructuredBuffer<float> floatOutput @ binding(1);
+        RWStructuredBuffer<int> narrowOutput @ binding(2);
+
+        complex64_t nextValue(inout uint counter) {
+            counter += 1u;
+            return complex64_t(float(counter), -1.0);
+        }
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main(uint3 dispatchId @ SV_DispatchThreadID) {
+                uint index = dispatchId.x;
+                uint counter = 0u;
+                buffer_store(
+                    floatOutput,
+                    index,
+                    float(buffer_load(source, index))
+                );
+                buffer_store(narrowOutput, index, int8(nextValue(counter)));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "floatOutput[index] = (source[index]).real;" in generated
+    assert (
+        "narrowOutput[index] = "
+        "bitfieldExtract(int((nextValue(counter)).real), 0, 8);" in generated
+    )
+    assert generated.count("nextValue(counter)") == 1
+    assert "float(source[index])" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "complex64_scalar_conversion",
+    )
+
+
 def test_opengl_contextual_scalar_to_complex_return_conversion(tmp_path):
     shader = """
     shader ContextualScalarToComplexReturn {

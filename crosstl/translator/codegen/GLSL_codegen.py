@@ -16472,6 +16472,35 @@ complex64_t crossgl_complex64_mod_assign(
             StructureConversionKind.SCALAR_PROMOTION.value,
         )
 
+    def glsl_explicit_complex64_scalar_constructor(self, expr, destination_type):
+        arguments = list(getattr(expr, "args", []) or [])
+        destination = self.glsl_value_type_info(destination_type)
+        if len(arguments) != 1 or destination is None or destination["width"] != 1:
+            return None
+
+        argument = arguments[0]
+        source_type = self.glsl_source_expression_type(argument)
+        if source_type is None or not self.is_glsl_complex64_type(source_type):
+            return None
+
+        binding = self.glsl_registered_scalar_structure_contract(source_type)
+        if binding is None:
+            return None
+        self.glsl_validate_registered_structure_destination(
+            expr,
+            binding,
+            source_type,
+            StructureConversionKind.VALUE_CONVERSION.value,
+        )
+
+        real_member = MemberAccessNode(argument, "real")
+        rendered = f"({self.generate_expression(argument)}).real"
+        return self.glsl_expected_type_conversion(
+            real_member,
+            rendered,
+            destination_type,
+        )
+
     @staticmethod
     def glsl_structure_conversion_scalar_kind(value_type):
         if value_type is None or value_type["width"] != 1:
@@ -20354,6 +20383,14 @@ complex64_t crossgl_complex64_mod_assign(
 
             constructor = self.glsl_constructor_type(func_name)
             if constructor:
+                complex_scalar_constructor = (
+                    self.glsl_explicit_complex64_scalar_constructor(
+                        expr,
+                        original_func_name,
+                    )
+                )
+                if complex_scalar_constructor is not None:
+                    return complex_scalar_constructor
                 partial_vector_constructor = (
                     self.generate_glsl_partial_vector_constructor(
                         expr,
