@@ -1184,8 +1184,6 @@
     "blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1388",
       "https://github.com/CrossGL/crosstl/issues/1471",
-      "https://github.com/CrossGL/crosstl/issues/1472",
-      "https://github.com/CrossGL/crosstl/issues/1516",
       "https://github.com/CrossGL/crosstl/issues/1523"
     ],
     "metadata_diagnostics_by_code": {
@@ -1241,16 +1239,18 @@
       "project.translate.vulkan-atomic-fence-unsupported": 1
     },
     "validation_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1312",
-      "https://github.com/CrossGL/crosstl/issues/1670"
+      "https://github.com/CrossGL/crosstl/issues/1670",
+      "https://github.com/CrossGL/crosstl/issues/1799",
+      "https://github.com/CrossGL/crosstl/issues/1800",
+      "https://github.com/CrossGL/crosstl/issues/1801"
     ],
     "runtime_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1376"
     ],
     "translation_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1376",
+      "https://github.com/CrossGL/crosstl/issues/1576",
       "https://github.com/CrossGL/crosstl/issues/1676",
-      "https://github.com/CrossGL/crosstl/issues/1476",
       "https://github.com/CrossGL/crosstl/issues/1479",
       "https://github.com/CrossGL/crosstl/issues/1490",
       "https://github.com/CrossGL/crosstl/issues/1544",
@@ -1260,10 +1260,8 @@
       "https://github.com/CrossGL/crosstl/issues/1562",
       "https://github.com/CrossGL/crosstl/issues/1566",
       "https://github.com/CrossGL/crosstl/issues/1567",
-      "https://github.com/CrossGL/crosstl/issues/1659",
       "https://github.com/CrossGL/crosstl/issues/1669",
-      "https://github.com/CrossGL/crosstl/issues/1671",
-      "https://github.com/CrossGL/crosstl/issues/1672"
+      "https://github.com/CrossGL/crosstl/issues/1671"
     ],
     "semantic_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1491",
@@ -1274,11 +1272,35 @@
       "https://github.com/CrossGL/crosstl/issues/1569",
       "https://github.com/CrossGL/crosstl/issues/1669",
       "https://github.com/CrossGL/crosstl/issues/1670",
-      "https://github.com/CrossGL/crosstl/issues/1671",
-      "https://github.com/CrossGL/crosstl/issues/1672"
+      "https://github.com/CrossGL/crosstl/issues/1671"
     ],
     "runtime_integration_included": false,
     "runtime_parity_claimed": false,
+    "latest_attempt": {
+      "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+      "outcome": "timeout-before-report",
+      "timeout_seconds": 900,
+      "return_code": 124,
+      "report_produced": false,
+      "generated_file_count": 8,
+      "active_coordinate_claimed": false,
+      "completed_target_artifacts": {
+        "mlx/backend/metal/kernels/arange.metal": [
+          "directx",
+          "opengl",
+          "vulkan"
+        ]
+      },
+      "partial_target_artifacts": {
+        "mlx/backend/metal/kernels/arg_reduce.metal": [
+          "vulkan"
+        ]
+      },
+      "blocked_by": [
+        "https://github.com/CrossGL/crosstl/issues/1376",
+        "https://github.com/CrossGL/crosstl/issues/1576"
+      ]
+    },
     "last_completed": {
       "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
       "snapshot_scope": "pre-canonical-fence-contract",
@@ -1306,23 +1328,22 @@
     "https://github.com/CrossGL/crosstl/issues/1669",
     "https://github.com/CrossGL/crosstl/issues/1670",
     "https://github.com/CrossGL/crosstl/issues/1671",
-    "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1696",
     "https://github.com/CrossGL/crosstl/issues/1735",
     "https://github.com/CrossGL/crosstl/issues/1793",
     "https://github.com/CrossGL/crosstl/issues/1786",
-    "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
+    "https://github.com/CrossGL/crosstl/issues/1576",
+    "https://github.com/CrossGL/crosstl/issues/1799",
+    "https://github.com/CrossGL/crosstl/issues/1800",
+    "https://github.com/CrossGL/crosstl/issues/1801",
     "https://github.com/CrossGL/crosstl/issues/1462",
     "https://github.com/CrossGL/crosstl/issues/1676",
     "https://github.com/CrossGL/crosstl/issues/1388",
     "https://github.com/CrossGL/crosstl/issues/1471",
-    "https://github.com/CrossGL/crosstl/issues/1472",
-    "https://github.com/CrossGL/crosstl/issues/1476",
     "https://github.com/CrossGL/crosstl/issues/1479",
     "https://github.com/CrossGL/crosstl/issues/1490",
     "https://github.com/CrossGL/crosstl/issues/1491",
-    "https://github.com/CrossGL/crosstl/issues/1516",
     "https://github.com/CrossGL/crosstl/issues/1517",
     "https://github.com/CrossGL/crosstl/issues/1518",
     "https://github.com/CrossGL/crosstl/issues/1519",
@@ -1346,10 +1367,15 @@
     "https://github.com/CrossGL/crosstl/issues/1568",
     "https://github.com/CrossGL/crosstl/issues/1569",
     "https://github.com/CrossGL/crosstl/issues/1574",
-    "https://github.com/CrossGL/crosstl/issues/1659",
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1672",
+    "https://github.com/CrossGL/crosstl/issues/1659",
+    "https://github.com/CrossGL/crosstl/issues/1516",
+    "https://github.com/CrossGL/crosstl/issues/1476",
+    "https://github.com/CrossGL/crosstl/issues/1472",
+    "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1792",
     "https://github.com/CrossGL/crosstl/issues/1790",
     "https://github.com/CrossGL/crosstl/issues/1789",

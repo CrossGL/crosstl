@@ -399,47 +399,54 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
-[#1676](https://github.com/CrossGL/crosstl/issues/1676) remains an active
-verification target for MLX commit
-`4367c73b60541ddd5a266ce4644fd93d20223b6e`. The materialization change charges
-configured work budgets to unique reachable concrete entries, helpers, and
-struct specializations plus actual type-environment resolution, rather than an
-eager whole-source instantiation-by-template Cartesian estimate or repeated
-expanded-text scans. Artifact metadata and budget diagnostics report reachable
-specializations, dependency-discovery work, and pruned eager candidate pairs as
-separate counts. Focused tests establish the accounting behavior. A DirectX-only
-project replay of `quantized.metal` at the pinned revision advances past both the
-former 522,068-item eager planning failure and
-`thread const auto& accum = self.Ctile.frag_at(i, j)`. It next fails closed with
-`project.translate.metal-struct-method` and missing capability
-`struct.template-method` while inferring the pointer expression
-`&(src[(i * 8) * 36 + (j * 8)])` for
-`BaseMMAFrag_float_8_8::load(...)`. Existing issue
-[#1476](https://github.com/CrossGL/crosstl/issues/1476) covers that blocker. The
-replay emits no DirectX artifact and establishes no validator result, runtime
-execution, or numerical parity. OpenGL was not replayed in this run, and no
-updated OpenGL full-source frontier is claimed. A fresh pinned full-corpus
-report is still required to satisfy the repository-level acceptance criteria
-for CrossGL/crosstl#1676. The checked-in evidence also
-records full-kernel Vulkan replays of `fp_quantized.metal` and
-`quantized_nax.metal` as failed after selected materialization contracts; only
-the explicitly documented reduced quantized fixtures carry validator evidence.
-CrossGL/crosstl#1659 tracks quadratic DirectX resource-register relocation for
-large aggregate artifacts; a high-budget `binary.metal` DirectX translation
-reaches that allocator after template materialization.
+The latest full-corpus scout at MLX commit
+`4367c73b60541ddd5a266ce4644fd93d20223b6e` discovered 40 Metal units, 841
+include dependencies, and 120 planned target artifacts. It emitted `arange.metal`
+for DirectX, OpenGL, and Vulkan plus a Vulkan `arg_reduce.metal` artifact before
+the 900-second limit expired without a canonical project report. This interrupted
+run does not establish an active full-corpus coordinate. CrossGL/crosstl#1376
+tracks bounded materialization runtime and CrossGL/crosstl#1576 tracks durable
+per-unit checkpointing. [#1676](https://github.com/CrossGL/crosstl/issues/1676)
+remains the repository-level acceptance target.
+
+Materialization charges configured work budgets to unique reachable entries,
+helpers, struct specializations, and actual type-environment resolution. Exact
+source-analysis snapshots and span indexes are reused with bounded retention;
+the generated source remains unchanged. Artifact metadata keeps reachable
+specializations, dependency-discovery work, and pruned eager candidates
+separate.
+
+A selected DirectX replay of `quantized.metal` now emits one artifact with zero
+translation diagnostics for `affine_quantize_float_gs_32_b_2`. It materializes
+six reachable specializations and three concrete records while pruning 110,861
+unreachable candidates. This path verifies the completed template-member and
+owner-dependent `constexpr` work tracked by CrossGL/crosstl#1476 and
+CrossGL/crosstl#1672. Official DXC validation with warnings treated as errors
+then exposes three target-contract gaps: native 16-bit scalar profile emission
+under [#1799](https://github.com/CrossGL/crosstl/issues/1799), compile-time
+assertion elimination under [#1800](https://github.com/CrossGL/crosstl/issues/1800),
+and contextual narrowing for typed resource stores under
+[#1801](https://github.com/CrossGL/crosstl/issues/1801). The replay establishes
+neither runtime execution nor numerical parity. OpenGL was not replayed for this
+selected entry, and no updated OpenGL quantized frontier is claimed.
+
+CrossGL/crosstl#1659 is complete; resource-register relocation no longer blocks
+the selected aggregate DirectX replay. The checked-in evidence also records
+full-kernel Vulkan replays of `fp_quantized.metal` and `quantized_nax.metal` as
+failed after selected materialization contracts. Only the explicitly documented
+reduced quantized fixtures carry validator evidence.
 CrossGL/crosstl#1660 tracks resource coherence and volatility qualifiers that
 are currently absent from Metal round-trip artifacts.
-CrossGL/crosstl#1312 tracks native toolchain validation coverage for project
-CI. CrossGL/crosstl#1388 tracks the artifact execution metadata required by
-runtime-test manifests and native adapters. OpenGL type aliases are inlined
-before host-interface reflection and are not exposed as runtime resources.
-CrossGL/crosstl#1471 tracks entry-point
-ownership for reflected constants in runtime reports. The Direct3D compute
-runtime now covers the reduced immutable lookup fixture and one generated uint32
-entry from pinned `arange.metal`; CrossGL/crosstl#1472 continues to track
-expansion beyond that bounded source/entry/dtype proof across the generated MLX
-frontier. CrossGL/crosstl#1474 is represented by exact per-artifact DirectX
+Native toolchain validation now runs on the target operating systems, completing
+the coverage tracked by CrossGL/crosstl#1312. The bounded Direct3D and OpenGL
+compute runtime drivers tracked by CrossGL/crosstl#1472 and
+CrossGL/crosstl#1516 are also complete. CrossGL/crosstl#1388 still tracks the
+artifact execution metadata required by runtime-test manifests and native
+adapters, and CrossGL/crosstl#1462 covers wiring those contracts to general
+device execution. OpenGL type aliases are inlined before host-interface
+reflection and are not exposed as runtime resources. CrossGL/crosstl#1471
+tracks entry-point ownership for reflected constants in runtime reports.
+CrossGL/crosstl#1474 is represented by exact per-artifact DirectX
 bfloat16 storage and conversion evidence in the pinned project report. The
 harness fails closed unless each emitted source retains the exact
 `bfloat16Lowering` object and corresponding `requiredCapabilities` list; this
@@ -530,8 +537,8 @@ artifact, attempts no native compiler or runtime validation, and makes no
 runtime or numerical-parity claim. Configuring the workgroup-size rule alone
 does not prove the unavailable generated-artifact execution contract.
 
-CrossGL/crosstl#1672 tracks owner-dependent
-`constexpr` helper calls in quantized struct static members.
+Owner-dependent `constexpr` helper calls in quantized struct static members now
+resolve for the selected pinned replay, completing CrossGL/crosstl#1672.
 CrossGL/crosstl#1491 tracks remaining qualified-static-constant materialization
 outside the compiler-validated DirectX frontier.
 Built-in overloads are resolved alongside user-defined wrappers by source
@@ -560,13 +567,14 @@ five such warnings under
 [#1568](https://github.com/CrossGL/crosstl/issues/1568). Qualified pointer and
 array aliases remain tracked in
 [#1567](https://github.com/CrossGL/crosstl/issues/1567).
-`arg_reduce.metal` now belongs to all three clean artifact frontiers.
-Address-space pointer dereferences lower through retained resource provenance,
-private pointer helpers use fixed local-array extents, and `threads_per_grid`
-lowers to native GLSL dispatch dimensions or the generated DirectX dispatch-info
-cbuffer. The aggregate OpenGL module typechecks every generated kernel body but
-exposes only the first as `main`; entry-scoped packaging for the other 23 kernels
-remains tracked in
+`arg_reduce.metal` materializes all 24 host-named entries. Vulkan emits the
+aggregate artifact, while DirectX and OpenGL full-source packaging fails closed
+with `project.translate.workgroup-size-entry-ambiguous` because the pinned host
+selects axis and pipeline limits at runtime. Importing that dispatch contract is
+tracked by [#1793](https://github.com/CrossGL/crosstl/issues/1793). Focused entry
+lowering preserves address-space pointer provenance, fixed private-array extents,
+and target dispatch dimensions, but does not establish an aggregate DirectX or
+OpenGL artifact frontier. Entry-scoped packaging remains tracked in
 [#1523](https://github.com/CrossGL/crosstl/issues/1523).
 The reduced reference-accessor fixture covers three non-template paths. The
 mutable scalar call returns the direct `val_frags[i * width + j]` lvalue and
@@ -865,6 +873,8 @@ rejected explicitly and tracked in CrossGL/crosstl#1562.
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
+CrossGL/crosstl#1672, CrossGL/crosstl#1659, CrossGL/crosstl#1516,
+CrossGL/crosstl#1476, CrossGL/crosstl#1472, CrossGL/crosstl#1312,
 CrossGL/crosstl#1661, CrossGL/crosstl#1573, CrossGL/crosstl#1555,
 CrossGL/crosstl#1561,
 CrossGL/crosstl#1551,

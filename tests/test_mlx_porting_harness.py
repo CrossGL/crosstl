@@ -6404,16 +6404,32 @@ def test_opengl_index_range_contract_is_documented_as_a_portability_precondition
             assert f"`{expression}`" in readme
 
 
-def test_binary_resource_relocation_issue_is_full_corpus_only():
+def test_closed_project_blockers_are_recorded_as_resolved():
     module = _load_harness()
-    issue = "https://github.com/CrossGL/crosstl/issues/1659"
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    resolved_issues = {
+        f"https://github.com/CrossGL/crosstl/issues/{number}"
+        for number in (1312, 1472, 1476, 1516, 1659, 1672)
+    }
 
-    assert issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
-    assert issue not in module.FRONTIER_VALIDATION_TRACKED_ISSUES
-    assert issue not in module.RUNTIME_READINESS_TRACKED_ISSUES
+    assert resolved_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
+    assert resolved_issues <= set(gaps["resolved_issues"])
+    assert resolved_issues.isdisjoint(module.FULL_CORPUS_TRACKED_ISSUES)
+    assert resolved_issues.isdisjoint(gaps["tracked_issues"])
+    assert resolved_issues.isdisjoint(gaps["runtime_readiness_status"]["blocked_by"])
+    for blocker_kind in (
+        "translation_blocked_by",
+        "validation_blocked_by",
+        "semantic_blocked_by",
+    ):
+        assert resolved_issues.isdisjoint(gaps["full_corpus_scout"][blocker_kind])
 
 
-def test_new_pin_resource_profile_and_workgroup_contracts_are_tracked():
+def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked():
     module = _load_harness()
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -6423,27 +6439,62 @@ def test_new_pin_resource_profile_and_workgroup_contracts_are_tracked():
     resource_issue = "https://github.com/CrossGL/crosstl/issues/1669"
     profile_issue = "https://github.com/CrossGL/crosstl/issues/1670"
     workgroup_issue = "https://github.com/CrossGL/crosstl/issues/1671"
-    struct_constant_issue = "https://github.com/CrossGL/crosstl/issues/1672"
+    checkpoint_issue = "https://github.com/CrossGL/crosstl/issues/1576"
+    validation_issues = {
+        f"https://github.com/CrossGL/crosstl/issues/{number}"
+        for number in (1799, 1800, 1801)
+    }
 
     assert resource_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert resource_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert profile_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert workgroup_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert workgroup_issue in module.FULL_CORPUS_TRACKED_ISSUES
-    assert struct_constant_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
-    assert struct_constant_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert checkpoint_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert checkpoint_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert validation_issues <= set(module.FULL_CORPUS_VALIDATION_TRACKED_ISSUES)
+    assert validation_issues <= set(module.FULL_CORPUS_TRACKED_ISSUES)
     assert resource_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert profile_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert workgroup_issue not in module.RESOLVED_FRONTIER_ISSUES
-    assert struct_constant_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert resource_issue in gaps["tracked_issues"]
     assert profile_issue in gaps["tracked_issues"]
     assert workgroup_issue in gaps["tracked_issues"]
-    assert struct_constant_issue in gaps["tracked_issues"]
+    assert checkpoint_issue in gaps["tracked_issues"]
+    assert validation_issues <= set(gaps["tracked_issues"])
     assert resource_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert profile_issue in gaps["full_corpus_scout"]["validation_blocked_by"]
     assert workgroup_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
-    assert struct_constant_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert checkpoint_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert validation_issues <= set(gaps["full_corpus_scout"]["validation_blocked_by"])
+
+
+def test_latest_full_corpus_attempt_records_interruption_without_coordinate_claim():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    attempt = gaps["full_corpus_scout"]["latest_attempt"]
+    assert attempt == {
+        "commit": module.MLX_COMMIT,
+        "outcome": "timeout-before-report",
+        "timeout_seconds": module.FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS,
+        "return_code": 124,
+        "report_produced": False,
+        "generated_file_count": 8,
+        "active_coordinate_claimed": False,
+        "completed_target_artifacts": {
+            module.MLX_ARANGE_SOURCE: ["directx", "opengl", "vulkan"]
+        },
+        "partial_target_artifacts": {module.MLX_ARG_REDUCE_SOURCE: ["vulkan"]},
+        "blocked_by": [
+            "https://github.com/CrossGL/crosstl/issues/1376",
+            "https://github.com/CrossGL/crosstl/issues/1576",
+        ],
+    }
 
 
 def test_fft_opengl_evidence_records_provenance_without_artifact_claims():

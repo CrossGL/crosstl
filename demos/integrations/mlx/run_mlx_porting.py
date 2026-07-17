@@ -499,8 +499,8 @@ FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1376",
+    "https://github.com/CrossGL/crosstl/issues/1576",
     "https://github.com/CrossGL/crosstl/issues/1676",
-    "https://github.com/CrossGL/crosstl/issues/1476",
     "https://github.com/CrossGL/crosstl/issues/1479",
     "https://github.com/CrossGL/crosstl/issues/1490",
     "https://github.com/CrossGL/crosstl/issues/1544",
@@ -508,10 +508,14 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1554",
     "https://github.com/CrossGL/crosstl/issues/1559",
     "https://github.com/CrossGL/crosstl/issues/1562",
-    "https://github.com/CrossGL/crosstl/issues/1659",
     "https://github.com/CrossGL/crosstl/issues/1669",
     "https://github.com/CrossGL/crosstl/issues/1671",
-    "https://github.com/CrossGL/crosstl/issues/1672",
+)
+FULL_CORPUS_VALIDATION_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1670",
+    "https://github.com/CrossGL/crosstl/issues/1799",
+    "https://github.com/CrossGL/crosstl/issues/1800",
+    "https://github.com/CrossGL/crosstl/issues/1801",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",
@@ -578,9 +582,8 @@ RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES = frozenset(
 FULL_CORPUS_TRACKED_ISSUES = (
     *FRONTIER_VALIDATION_TRACKED_ISSUES,
     MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
-    "https://github.com/CrossGL/crosstl/issues/1312",
-    "https://github.com/CrossGL/crosstl/issues/1670",
     *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
+    *FULL_CORPUS_VALIDATION_TRACKED_ISSUES,
     *OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES,
     *OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES,
     *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
@@ -592,6 +595,12 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1672",
+    "https://github.com/CrossGL/crosstl/issues/1659",
+    "https://github.com/CrossGL/crosstl/issues/1516",
+    "https://github.com/CrossGL/crosstl/issues/1476",
+    "https://github.com/CrossGL/crosstl/issues/1472",
+    "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1792",
     "https://github.com/CrossGL/crosstl/issues/1790",
     "https://github.com/CrossGL/crosstl/issues/1789",
