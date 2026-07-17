@@ -2277,6 +2277,72 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     )
 
 
+def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundary():
+    expected_gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    issue = "https://github.com/CrossGL/crosstl/issues/1479"
+    resolved_issue = "https://github.com/CrossGL/crosstl/issues/1807"
+
+    status = expected_gaps["fp_quantized_contextual_materialization_status"]
+
+    assert status == {
+        "status": "blocked-after-contextual-materialization-progress",
+        "source": "mlx/backend/metal/kernels/fp_quantized.metal",
+        "repository_commit": PINNED_MLX_COMMIT,
+        "targets": ["directx", "opengl"],
+        "translation_mode": "full-source-exact-high-budget",
+        "resolved_contracts": [
+            "helper-array-decay-template-deduction",
+            "specialized-struct-constexpr-assertion-evaluation",
+            "lexical-receiver-alias-resolution",
+            "statement-bounded-member-template-parsing",
+            "concrete-constructor-preservation",
+        ],
+        "advanced_past": {
+            "member_call": "loader_w.load_safe",
+            "receiver_declaration": "loader_w_t loader_w",
+        },
+        "current_boundary": {
+            "diagnostic_code": "project.translate.metal-struct-method",
+            "member_call": "mma_op.mma",
+            "receiver_declaration": "mma_t mma_op",
+            "missing_contract": "contextual-receiver-struct-materialization",
+            "blocked_by": issue,
+        },
+        "target_results": {
+            "directx": {
+                "status": "blocked-as-expected",
+                "artifact_emitted": False,
+            },
+            "opengl": {
+                "status": "blocked-as-expected",
+                "artifact_emitted": False,
+            },
+        },
+        "target_artifact_count": 0,
+        "resolved_issues": [resolved_issue],
+        "remaining_materialization_blocked_by": [issue],
+        "runtime_integration_included": False,
+        "numerical_parity_claimed": False,
+        "runtime_parity_claimed": False,
+    }
+    assert resolved_issue in expected_gaps["resolved_issues"]
+    assert resolved_issue not in expected_gaps["tracked_issues"]
+    assert issue in expected_gaps["tracked_issues"]
+
+    readme = MLX_README_PATH.read_text(encoding="utf-8")
+    assert PINNED_MLX_COMMIT in readme
+    assert "`loader_w.load_safe`" in readme
+    assert "`mma_op.mma`" in readme
+    assert "`mma_t mma_op`" in readme
+    assert "CrossGL/crosstl#1479" in readme
+    assert "CrossGL/crosstl#1807" in readme
+    assert "does not claim runtime integration or numerical parity" in readme
+
+
 def test_arange_reference_runtime_resolves_fixture_resource_aliases():
     module = _load_harness()
     runtime = module.MlxArangeReferenceRuntime("vulkan")

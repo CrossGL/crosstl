@@ -917,6 +917,54 @@
     },
     "runtime_integration_included": false
   },
+  "fp_quantized_contextual_materialization_status": {
+    "status": "blocked-after-contextual-materialization-progress",
+    "source": "mlx/backend/metal/kernels/fp_quantized.metal",
+    "repository_commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+    "targets": [
+      "directx",
+      "opengl"
+    ],
+    "translation_mode": "full-source-exact-high-budget",
+    "resolved_contracts": [
+      "helper-array-decay-template-deduction",
+      "specialized-struct-constexpr-assertion-evaluation",
+      "lexical-receiver-alias-resolution",
+      "statement-bounded-member-template-parsing",
+      "concrete-constructor-preservation"
+    ],
+    "advanced_past": {
+      "member_call": "loader_w.load_safe",
+      "receiver_declaration": "loader_w_t loader_w"
+    },
+    "current_boundary": {
+      "diagnostic_code": "project.translate.metal-struct-method",
+      "member_call": "mma_op.mma",
+      "receiver_declaration": "mma_t mma_op",
+      "missing_contract": "contextual-receiver-struct-materialization",
+      "blocked_by": "https://github.com/CrossGL/crosstl/issues/1479"
+    },
+    "target_results": {
+      "directx": {
+        "status": "blocked-as-expected",
+        "artifact_emitted": false
+      },
+      "opengl": {
+        "status": "blocked-as-expected",
+        "artifact_emitted": false
+      }
+    },
+    "target_artifact_count": 0,
+    "resolved_issues": [
+      "https://github.com/CrossGL/crosstl/issues/1807"
+    ],
+    "remaining_materialization_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1479"
+    ],
+    "runtime_integration_included": false,
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "directx_toolchain_status": {
     "status": "passing-with-expected-workgroup-blockers",
     "note": "Windows CI compiles all 468 generated compute entries in the five-source emitted DirectX HLSL frontier below with zero DXC warnings. Six runtime-selected workgroup sources covering 106 entries fail before emission; no placeholder workgroup size is applied. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity.",
@@ -1570,6 +1618,7 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1807",
     "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1800",
     "https://github.com/CrossGL/crosstl/issues/1801",

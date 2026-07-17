@@ -889,6 +889,21 @@ fixtures containing the five-argument `Atile.load` and `Btile.load` forms from
 Calls that reach a target without a concrete specialization fail with a
 structured diagnostic instead of losing the generic suffix or computation.
 
+At pinned MLX commit
+`4367c73b60541ddd5a266ce4644fd93d20223b6e`, exact high-budget project
+translations of the complete `fp_quantized.metal` source now advance past
+`loader_w.load_safe` for both DirectX and OpenGL. This frontier combines helper
+array-decay deduction, specialized struct constexpr assertion evaluation,
+lexical receiver alias resolution, statement-bounded member-template parsing,
+and concrete constructor preservation. Specialized struct constexpr assertion
+evaluation resolves CrossGL/crosstl#1807 for this path.
+
+Both target runs still fail closed with
+`project.translate.metal-struct-method` at `mma_op.mma` on receiver declaration
+`mma_t mma_op`. CrossGL/crosstl#1479 tracks the remaining general contextual
+receiver materialization contract. Neither run emits a target artifact, and
+this evidence does not claim runtime integration or numerical parity.
+
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.
 `fp_quantized.metal` then stopped at
@@ -992,3 +1007,6 @@ numeric-to-Boolean returns and signed mixed-width `arange` arithmetic.
 CrossGL/crosstl#1661 is covered for pinned `binary_two.metal` by fixed-array
 resource helper specialization in CrossTL commit `db593d19b` and the required
 OpenGL/SPIR-V 1.3 compilation and validation gate.
+CrossGL/crosstl#1807 is resolved for the pinned `fp_quantized.metal` frontier by
+specialized struct constexpr assertion evaluation; contextual receiver
+materialization remains tracked in CrossGL/crosstl#1479.
