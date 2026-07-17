@@ -56,6 +56,18 @@ MLX_HOST_NAME_DECL_RE = re.compile(
 DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT = 512
 SOURCE_ANALYSIS_CACHE_LIMIT = 8
 CONTAINING_SPAN_CACHE_LIMIT = 64
+METAL_RECEIVER_DECLARATION_RE = re.compile(
+    r"(?<![A-Za-z0-9_:])"
+    r"(?P<leading>(?:(?:const|volatile|thread|threadgroup|"
+    r"threadgroup_imageblock|device|constant)\s+)*)"
+    r"(?P<type>[A-Za-z_]\w*)"
+    r"(?P<trailing>(?:\s+(?:const|volatile|thread|threadgroup|"
+    r"threadgroup_imageblock|device|constant))*)\s*"
+    r"(?P<indirection>\*+|&&|&)?"
+    r"(?P<indirection_qualifiers>"
+    r"(?:\s+(?:const|volatile|restrict|__restrict|__restrict__))*)"
+    r"\s*\b(?P<name>[A-Za-z_]\w*)\b\s*(?=[,;)=\[\{(])"
+)
 
 
 class MetalStructMethodError(ValueError):
@@ -281,12 +293,25 @@ class _MetalIntegralConstantBinding:
     value: Optional[str]
 
 
+@dataclass(frozen=True)
+class _MetalReceiverDeclaration:
+    name: str
+    declaration_position: int
+    declaration_end: int
+    type_position: int
+    scope_start: int
+    scope_end: int
+    declared_type: str
+    raw_type_text: str
+
+
 @dataclass
 class _MetalSourceAnalysis:
     comment_and_literal_spans: Optional[List[Tuple[int, int]]] = None
     lexical_brace_scopes: Optional[List[Tuple[int, int]]] = None
     template_declaration_spans: Optional[List[Tuple[int, int]]] = None
     namespace_spans: Optional[List[Tuple[int, int, str]]] = None
+    receiver_declarations: Optional[Dict[str, List[_MetalReceiverDeclaration]]] = None
 
 
 @dataclass(frozen=True)
@@ -7882,57 +7907,30 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> Optional[_MetalReceiverContract]:
         if re.fullmatch(r"[A-Za-z_]\w*", receiver) is None:
             return None
-        qualifier = (
-            r"const|volatile|thread|threadgroup|threadgroup_imageblock|"
-            r"device|constant"
-        )
-        pattern = re.compile(
-            rf"(?<![A-Za-z0-9_:])"
-            rf"(?P<leading>(?:(?:{qualifier})\s+)*)"
-            rf"(?P<type>[A-Za-z_]\w*)"
-            rf"(?P<trailing>(?:\s+(?:{qualifier}))*)\s*"
-            rf"(?P<indirection>\*+|&&|&)?"
-            rf"(?P<indirection_qualifiers>"
-            rf"(?:\s+(?:const|volatile|restrict|__restrict|__restrict__))*)"
-            rf"\s*\b{re.escape(receiver)}\b\s*(?=[,;)=\[{{(])"
-        )
-        ignored = self._find_comment_and_literal_spans(code)
-        lexical_scopes = self._find_lexical_brace_scopes(code)
-        matches = []
-        for match in pattern.finditer(code, 0, call_start):
-            if self._containing_span(match.start(), ignored) is not None:
+        declaration = None
+        declarations = self._find_receiver_declarations(code).get(receiver, ())
+        for candidate in declarations:
+            if candidate.declaration_end > call_start:
+                break
+            if not (candidate.scope_start <= call_start < candidate.scope_end):
                 continue
-            declared_type = match.group("type")
-            resolved_type = declared_type
+            resolved_type = candidate.declared_type
             if resolved_type != struct_name and type_aliases is not None:
                 resolved_type = self._resolve_struct_type_alias_at(
                     type_aliases,
-                    declared_type,
-                    match.start("type"),
+                    candidate.declared_type,
+                    candidate.type_position,
                 )
             if resolved_type != struct_name:
                 continue
-            scope = self._innermost_lexical_scope(
-                lexical_scopes,
-                match.start(),
-                len(code),
-            )
-            if scope[0] <= call_start < scope[1]:
-                matches.append(match)
-        if not matches:
+            declaration = candidate
+        if declaration is None:
             return None
 
-        declaration = matches[-1]
-        type_text = "".join(
-            (
-                declaration.group("leading") or "",
-                declaration.group("type"),
-                declaration.group("trailing") or "",
-                declaration.group("indirection") or "",
-                declaration.group("indirection_qualifiers") or "",
-            )
+        return self._receiver_contract_from_type_text(
+            declaration.raw_type_text,
+            struct_name,
         )
-        return self._receiver_contract_from_type_text(type_text, struct_name)
 
     def _receiver_contract_from_type_text(
         self,
@@ -12262,6 +12260,73 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
             )
         return aliases
+
+    def _find_receiver_declarations(
+        self, code: str
+    ) -> Dict[str, List[_MetalReceiverDeclaration]]:
+        analysis = self._source_analysis(code)
+        if analysis.receiver_declarations is None:
+            analysis.receiver_declarations = self._scan_receiver_declarations(code)
+        return analysis.receiver_declarations
+
+    def _scan_receiver_declarations(
+        self, code: str
+    ) -> Dict[str, List[_MetalReceiverDeclaration]]:
+        ignored_spans = self._find_comment_and_literal_spans(code)
+        ordered_scopes = sorted(
+            self._find_lexical_brace_scopes(code),
+            key=lambda scope: (scope[0], -scope[1]),
+        )
+        declarations: Dict[str, List[_MetalReceiverDeclaration]] = {}
+        active_scopes: List[Tuple[int, int]] = []
+        scope_index = 0
+
+        for match in METAL_RECEIVER_DECLARATION_RE.finditer(code):
+            position = match.start()
+            while (
+                scope_index < len(ordered_scopes)
+                and ordered_scopes[scope_index][0] <= position
+            ):
+                scope = ordered_scopes[scope_index]
+                while active_scopes and not (
+                    active_scopes[-1][0] <= scope[0] < active_scopes[-1][1]
+                ):
+                    active_scopes.pop()
+                active_scopes.append(scope)
+                scope_index += 1
+            while active_scopes and not (
+                active_scopes[-1][0] <= position < active_scopes[-1][1]
+            ):
+                active_scopes.pop()
+            if self._containing_span(position, ignored_spans) is not None:
+                continue
+
+            scope_start, scope_end = (
+                active_scopes[-1] if active_scopes else (0, len(code))
+            )
+            raw_type_text = "".join(
+                (
+                    match.group("leading") or "",
+                    match.group("type"),
+                    match.group("trailing") or "",
+                    match.group("indirection") or "",
+                    match.group("indirection_qualifiers") or "",
+                )
+            )
+            name = match.group("name")
+            declarations.setdefault(name, []).append(
+                _MetalReceiverDeclaration(
+                    name=name,
+                    declaration_position=position,
+                    declaration_end=match.end(),
+                    type_position=match.start("type"),
+                    scope_start=scope_start,
+                    scope_end=scope_end,
+                    declared_type=match.group("type"),
+                    raw_type_text=raw_type_text,
+                )
+            )
+        return declarations
 
     def _find_comment_and_literal_spans(self, code: str) -> List[Tuple[int, int]]:
         analysis = self._source_analysis(code)

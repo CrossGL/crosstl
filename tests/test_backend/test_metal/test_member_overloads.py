@@ -143,6 +143,124 @@ def test_preprocessor_preserves_receiver_address_space_and_reference_contracts()
     assert "constant const Box& self" in output
 
 
+def test_receiver_declaration_index_scans_equal_source_snapshot_once(monkeypatch):
+    preprocessor = MetalPreprocessor()
+    scan_count = 0
+    original_scan = preprocessor._scan_receiver_declarations
+
+    def counted_scan(code):
+        nonlocal scan_count
+        scan_count += 1
+        return original_scan(code)
+
+    monkeypatch.setattr(preprocessor, "_scan_receiver_declarations", counted_scan)
+    source = """
+    struct Box { int get(); };
+
+    int read(thread Box& mutable_box, const device Box* readonly_box) {
+      const char* ignored = "constant Box& mutable_box;";
+      return mutable_box.get() + readonly_box->get();
+    }
+    """
+    equal_source = "".join((source[: len(source) // 2], source[len(source) // 2 :]))
+    mutable_call = source.index("mutable_box.get")
+    readonly_call = source.index("readonly_box->get")
+
+    mutable = preprocessor._receiver_contract_for_named_value(
+        source,
+        "Box",
+        "mutable_box",
+        mutable_call,
+    )
+    readonly = preprocessor._receiver_contract_for_named_value(
+        source,
+        "Box",
+        "readonly_box",
+        readonly_call,
+    )
+    repeated = preprocessor._receiver_contract_for_named_value(
+        equal_source,
+        "Box",
+        "mutable_box",
+        mutable_call,
+    )
+
+    assert mutable is not None
+    assert mutable.is_const is False
+    assert mutable.indirection == "&"
+    assert mutable.address_spaces == ("thread",)
+    assert readonly is not None
+    assert readonly.is_const is True
+    assert readonly.indirection == "*"
+    assert readonly.address_spaces == ("device",)
+    assert repeated == mutable
+    assert scan_count == 1
+
+
+def test_receiver_declaration_index_preserves_alias_and_lexical_shadowing():
+    preprocessor = MetalPreprocessor()
+    source = """
+    struct Box { int get(); };
+    using BoxAlias = Box;
+
+    int read(thread BoxAlias& value) {
+      int outer = value.get();
+      {
+        constant const BoxAlias& value = global_box;
+        int inner = value.get();
+      }
+      {
+        threadgroup volatile BoxAlias& value = shared_box;
+        int sibling = value.get();
+      }
+      return outer + value.get();
+    }
+    """
+    aliases = preprocessor._collect_struct_type_aliases(source, {"Box"}, [])
+    outer_call = source.index("value.get")
+    inner_call = source.index("value.get", outer_call + 1)
+    sibling_call = source.index("value.get", inner_call + 1)
+    restored_call = source.index("value.get", sibling_call + 1)
+
+    contracts = [
+        preprocessor._receiver_contract_for_named_value(
+            source,
+            "Box",
+            "value",
+            call_start,
+            type_aliases=aliases,
+        )
+        for call_start in (outer_call, inner_call, sibling_call, restored_call)
+    ]
+
+    assert all(contract is not None for contract in contracts)
+    outer, inner, sibling, restored = contracts
+    assert outer is not None
+    assert inner is not None
+    assert sibling is not None
+    assert restored is not None
+    assert outer.is_const is False
+    assert outer.indirection == "&"
+    assert outer.address_spaces == ("thread",)
+    assert inner.is_const is True
+    assert inner.indirection == "&"
+    assert inner.address_spaces == ("constant",)
+    assert sibling.is_const is False
+    assert sibling.is_volatile is True
+    assert sibling.indirection == "&"
+    assert sibling.address_spaces == ("threadgroup",)
+    assert restored == outer
+
+    lexical_scopes = preprocessor._find_lexical_brace_scopes(source)
+    for declaration in preprocessor._find_receiver_declarations(source)["value"]:
+        expected_scope = preprocessor._innermost_lexical_scope(
+            lexical_scopes,
+            declaration.declaration_position,
+            len(source),
+        )
+        assert (declaration.scope_start, declaration.scope_end) == expected_scope
+
+
 def test_preprocessor_receiver_helper_identity_ignores_parameter_names():
     source = """
     struct Box {
