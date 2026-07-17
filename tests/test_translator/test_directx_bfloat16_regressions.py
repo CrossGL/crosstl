@@ -346,6 +346,94 @@ def test_directx_bfloat_storage_preserves_explicit_minimum_precision_types():
     assert "int16_t preserve_signed" not in generated
 
 
+def test_directx_bfloat_helpers_preserve_minimum_precision_without_native_types():
+    shader = """
+    shader MinimumPrecisionBFloatConversions {
+        bfloat16_t from_bits(min16uint bits) {
+            return as_type<bfloat16_t>(bits);
+        }
+
+        min16uint to_bits(bfloat16_t value) {
+            return as_type<min16uint>(value);
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(shader)
+    )
+
+    assert "uint from_bits(min16uint bits)" in generated
+    assert "min16uint to_bits(uint value)" in generated
+    assert "uint __crossgl_bfloat16_from_uint16(min16uint value)" in generated
+    assert "min16uint __crossgl_bfloat16_to_uint16(uint value)" in generated
+    assert "__crossgl_bfloat16_from_uint16(uint16_t value)" not in generated
+    assert "uint16_t __crossgl_bfloat16_to_uint16(uint value)" not in generated
+
+
+def test_directx_bfloat_helpers_follow_artifact_native_16_bit_mode():
+    shader = """
+    shader MixedPrecisionBFloatConversions {
+        float16_t preserve_native_half(float16_t value) {
+            return value;
+        }
+
+        bfloat16_t from_bits(min16uint bits) {
+            return as_type<bfloat16_t>(bits);
+        }
+
+        min16uint to_bits(bfloat16_t value) {
+            return as_type<min16uint>(value);
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(shader)
+    )
+
+    assert "float16_t preserve_native_half(float16_t value)" in generated
+    assert "uint from_bits(min16uint bits)" in generated
+    assert "min16uint to_bits(uint value)" in generated
+    assert "uint __crossgl_bfloat16_from_uint16(uint16_t value)" in generated
+    assert "uint16_t __crossgl_bfloat16_to_uint16(uint value)" in generated
+    assert "__crossgl_bfloat16_from_uint16(min16uint value)" not in generated
+    assert "min16uint __crossgl_bfloat16_to_uint16(uint value)" not in generated
+
+
+def test_directx_bfloat_helper_native_mode_resets_between_artifacts():
+    native_shader = """
+    shader NativeBFloatConversions {
+        bfloat16_t from_bits(uint16_t bits) {
+            return as_type<bfloat16_t>(bits);
+        }
+    }
+    """
+    minimum_precision_shader = """
+    shader MinimumPrecisionBFloatConversions {
+        bfloat16_t from_bits(min16uint bits) {
+            return as_type<bfloat16_t>(bits);
+        }
+    }
+    """
+    generator = HLSLCodeGen(target_profile="dx12")
+
+    native_generated = generator.generate(crosstl.translator.parse(native_shader))
+    minimum_precision_generated = generator.generate(
+        crosstl.translator.parse(minimum_precision_shader)
+    )
+
+    assert "uint __crossgl_bfloat16_from_uint16(uint16_t value)" in native_generated
+    assert (
+        "uint __crossgl_bfloat16_from_uint16(min16uint value)"
+        in minimum_precision_generated
+    )
+    assert (
+        "__crossgl_bfloat16_from_uint16(uint16_t value)"
+        not in minimum_precision_generated
+    )
+
+
 def test_directx_bfloat_storage_narrows_writes_through_resource_parameters():
     shader = """
     shader ExactBFloatResourceParameter {

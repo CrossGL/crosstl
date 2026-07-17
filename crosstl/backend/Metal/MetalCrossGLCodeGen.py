@@ -6899,9 +6899,12 @@ class MetalToCrossGLConverter:
         if (
             is_reference
             and self.readonly_parameter(var, qualifiers)
-            and getattr(var, "name", None) == "self"
-            and "thread" in qualifiers
+            and not (
+                id(var) in self.current_stage_entry_resource_parameter_ids
+                and self.is_stage_entry_buffer_resource_parameter(var)
+            )
         ):
+            declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
             return f"in {declaration}"
         if self.writable_c_array_parameter(var, semantic_context):
             return f"inout {declaration}"
