@@ -3519,8 +3519,18 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             # Find the next statement boundary: either a `{` (method body or
             # in-struct initializer braces) or a `;` (data member / declaration).
-            brace = self._find_next_top_level_char(body, i, "{")
-            semicolon = self._find_next_top_level_char(body, i, ";")
+            brace = self._find_next_top_level_char(
+                body,
+                i,
+                "{",
+                track_angles=False,
+            )
+            semicolon = self._find_next_top_level_char(
+                body,
+                i,
+                ";",
+                track_angles=False,
+            )
             if brace is not None and (semicolon is None or brace < semicolon):
                 method = self._parse_struct_method(struct_name, body, i, brace)
                 brace_end = self._find_matching_brace(body, brace)
@@ -3728,9 +3738,10 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> Optional[_MetalConstructor]:
         # Parse a constructor `[macros] Name(params) : init_list { body }`.
         # `Name` is a bare identifier with NO return type (that is what makes it a
-        # constructor rather than a method); for a materialized template struct it
-        # is the ORIGINAL template name, not the renamed struct. Destructors and
-        # operators are rejected. Returns None for any non-constructor construct.
+        # constructor rather than a method). Materialized template constructors
+        # are renamed only after this parser has identified their source spans.
+        # Destructors and operators are rejected. Returns None for any
+        # non-constructor construct.
         header = body[decl_start:brace]
         paren_start = self._function_parameter_start(header)
         if paren_start is None:
@@ -14922,12 +14933,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not substitutions:
             return ""
         materialized = self._replace_identifiers(template.source, substitutions)
-        materialized = self._rename_struct_definition(
+        materialized = self._rename_materialized_struct_constructors(
             materialized,
             template.name,
             struct_identifier,
         )
-        materialized = self._rename_materialized_struct_constructors(
+        materialized = self._rename_struct_definition(
             materialized,
             template.name,
             struct_identifier,
@@ -14956,10 +14967,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         materialized = self._rename_struct_definition(
             materialized,
             template.name,
-            struct_identifier,
+            template.name,
             strip_specialization_arguments=True,
         )
         materialized = self._rename_materialized_struct_constructors(
+            materialized,
+            template.name,
+            struct_identifier,
+        )
+        materialized = self._rename_struct_definition(
             materialized,
             template.name,
             struct_identifier,
@@ -17790,7 +17806,14 @@ class MetalPreprocessor(HLSLPreprocessor):
         """Rename constructor declarators with a materialized template owner."""
 
         definitions = self._find_concrete_struct_definitions(source)
-        owner = next((item for item in definitions if item.name == new_name), None)
+        owner = next(
+            (
+                item
+                for item in definitions
+                if item.name == old_name or item.name == new_name
+            ),
+            None,
+        )
         if owner is None:
             return source
 
@@ -17973,7 +17996,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         return None
 
     def _find_next_top_level_char(
-        self, code: str, start: int, target: str
+        self,
+        code: str,
+        start: int,
+        target: str,
+        *,
+        track_angles: bool = True,
     ) -> Optional[int]:
         paren_depth = 0
         bracket_depth = 0
@@ -18002,7 +18030,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 ch == target
                 and paren_depth == 0
                 and bracket_depth == 0
-                and angle_depth == 0
+                and (not track_angles or angle_depth == 0)
             ):
                 return i
             if ch == "(":
@@ -18013,9 +18041,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 bracket_depth += 1
             elif ch == "]":
                 bracket_depth = max(0, bracket_depth - 1)
-            elif ch == "<":
+            elif track_angles and ch == "<":
                 angle_depth += 1
-            elif ch == ">":
+            elif track_angles and ch == ">":
                 angle_depth = max(0, angle_depth - 1)
             i += 1
         return None

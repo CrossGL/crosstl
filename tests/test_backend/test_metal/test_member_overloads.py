@@ -397,6 +397,46 @@ def test_member_call_suffix_does_not_cross_statement_comparisons():
     assert "value.y > (0)" in output
 
 
+def test_preprocessor_materializes_struct_constructor_before_member_lowering():
+    source = """
+    template <int Width, int Threads>
+    struct BlockLoader {
+      static constexpr int pack_factor = packed_width<8, 4>();
+      int stride;
+
+      BlockLoader(int source_stride)
+          : stride(
+                Width < Threads ? Width * packed_width<8, 4>()
+                                : source_stride * packed_width<8, 4>()) {}
+
+      void load_safe(int limit) const {
+        if (limit < Width) {
+          return;
+        }
+      }
+    };
+
+    void consume(int source_stride, int limit) {
+      using loader_w_t = BlockLoader<32, (2 * 2 * 32)>;
+      loader_w_t loader_w(source_stride);
+      loader_w.load_safe(limit);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    concrete_name = "BlockLoader_32_2_2_32"
+    concrete_body = output.split(f"struct {concrete_name} {{", 1)[1].split("};", 1)[0]
+    assert f"{concrete_name}(int source_stride)" in concrete_body
+    assert "BlockLoader(int source_stride)" not in concrete_body
+    assert (
+        f"void {concrete_name}__load_safe(thread const {concrete_name}& self, "
+        "int limit)" in output
+    )
+    assert f"{concrete_name}__load_safe(loader_w, limit)" in output
+    assert "loader_w.load_safe" not in output
+
+
 def test_preprocessor_receiver_helper_identity_ignores_parameter_names():
     source = """
     struct Box {
