@@ -9,6 +9,7 @@ from crosstl.backend.Metal.preprocessor import (
     SOURCE_ANALYSIS_CACHE_LIMIT,
     MetalPreprocessor,
     MetalStatelessGlobalElisionError,
+    MetalStaticAssertionError,
     MetalStructMethodError,
     MetalTemplateSpecializationError,
 )
@@ -701,6 +702,139 @@ def test_preprocessor_materialized_numeric_specialization_preserves_member_names
     assert [function.name for function in ast.functions] == [
         "nvfp4_quantize_float_gs_16_b_4"
     ]
+
+
+def test_preprocessor_removes_proven_static_assertion_after_specialization():
+    code = """
+    inline int checked_simd_size() {
+        constexpr int simd_size = 32;
+        static_assert(simd_size == 32, "Expected a 32-lane simdgroup.");
+        return simd_size;
+    }
+
+    template <typename T, const int group_size>
+    [[kernel]] void quantize(
+        const device T* in [[buffer(0)]],
+        device T* out [[buffer(1)]]) {
+        constexpr int simd_size = 32;
+        static_assert(
+            group_size % simd_size == 0,
+            "Group size must be divisible by simd size.");
+        out[0] = in[0];
+    }
+
+    template [[host_name("quantize_float_gs_32")]] [[kernel]]
+    decltype(quantize<float, 32>) quantize<float, 32>;
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "int checked_simd_size()" in output
+    assert "void quantize_float_gs_32(" in output
+    assert "static_assert" not in output
+    assert "constexpr int simd_size = 32;" in output
+
+
+def test_preprocessor_rejects_false_static_assertion_with_source_context():
+    code = """
+    kernel void invalid_specialization(device float* out [[buffer(0)]]) {
+        constexpr int group_size = 31;
+        static_assert(
+            group_size % 32 == 0,
+            "Group size must be divisible by 32.");
+        out[0] = 0.0;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == "project.translate.metal-static-assertion"
+    assert error.missing_capabilities == ("compile-time.static-assertion",)
+    assert error.reason == "assertion-failed"
+    assert error.expression == "group_size % 32 == 0"
+    assert error.resolved_expression == "31 % 32 == 0"
+    assert error.assertion_message == "Group size must be divisible by 32."
+    assert error.unresolved_dependencies == ()
+    assert error.source_location["line"] == 4
+    assert error.source_location["column"] == 9
+    assert "evaluated to false" in str(error)
+    assert "select specialization values" in error.suggested_action
+
+
+def test_preprocessor_rejects_unresolved_static_assertion_with_dependencies():
+    code = """
+    kernel void unresolved_constraint(
+        device float* out [[buffer(0)]],
+        uint runtime_width [[threads_per_grid]]) {
+        static_assert(
+            runtime_width == 32,
+            "Runtime width must be specialized.");
+        out[0] = 0.0;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == "project.translate.metal-static-assertion"
+    assert error.reason == "condition-unresolved"
+    assert error.expression == "runtime_width == 32"
+    assert error.resolved_expression == "runtime_width == 32"
+    assert error.assertion_message == "Runtime width must be specialized."
+    assert error.unresolved_dependencies == ("runtime_width",)
+    assert error.source_location["line"] == 5
+    assert error.source_location["column"] == 9
+    assert "unresolved dependencies: runtime_width" in str(error)
+    assert "constexpr integral values" in error.suggested_action
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    (
+        "static_assert(true)",
+        "static_assert();",
+    ),
+)
+def test_preprocessor_rejects_malformed_static_assertion(assertion):
+    code = f"""
+    kernel void malformed_assertion(device float* out [[buffer(0)]]) {{
+        {assertion}
+        out[0] = 0.0;
+    }}
+    """
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == "project.translate.metal-static-assertion"
+    assert error.reason == "assertion-malformed"
+    assert error.source_location["line"] == 3
+    assert error.source_location["column"] == 9
+    assert "well-formed static_assert" in error.suggested_action
 
 
 def test_preprocessor_materializes_explicit_template_helper_calls():

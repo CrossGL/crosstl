@@ -166,6 +166,34 @@ class MetalTemplateSpecializationError(ValueError):
         self.requested_arguments = requested_arguments
 
 
+class MetalStaticAssertionError(ValueError):
+    """A source compile-time assertion that cannot be discharged safely."""
+
+    project_diagnostic_code = "project.translate.metal-static-assertion"
+    missing_capabilities = ("compile-time.static-assertion",)
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        expression: str,
+        resolved_expression: str,
+        assertion_message: Optional[str],
+        unresolved_dependencies: Tuple[str, ...],
+        source_location: object,
+        suggested_action: str,
+    ):
+        super().__init__(message)
+        self.reason = reason
+        self.expression = expression
+        self.resolved_expression = resolved_expression
+        self.assertion_message = assertion_message
+        self.unresolved_dependencies = unresolved_dependencies
+        self.source_location = source_location
+        self.suggested_action = suggested_action
+
+
 @dataclass
 class _MetalTemplateFunction:
     name: str
@@ -231,6 +259,14 @@ class _MetalSourceAnalysis:
     lexical_brace_scopes: Optional[List[Tuple[int, int]]] = None
     template_declaration_spans: Optional[List[Tuple[int, int]]] = None
     namespace_spans: Optional[List[Tuple[int, int, str]]] = None
+
+
+@dataclass(frozen=True)
+class _MetalStaticAssertion:
+    span: Tuple[int, int]
+    condition_span: Tuple[int, int]
+    condition: str
+    message: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -522,6 +558,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._int_alias_contract_verified = False
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
+        self._fail_closed_static_assertions = False
         self._source_analysis_cache: Dict[str, _MetalSourceAnalysis] = {}
         # The materialization scan alternates between multiple span lists at
         # nearly every source position. Cache their sorted lookup indexes, but
@@ -559,6 +596,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._int_alias_contract_verified = False
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
+        self._fail_closed_static_assertions = False
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         self._configure_integral_constant_contracts(processed)
@@ -610,6 +648,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         enforce_specialization_limit: bool = True,
         host_names: Optional[Set[str]] = None,
     ) -> str:
+        if not enforce_specialization_limit:
+            # The project pipeline disables this limit only for template-hostile
+            # targets, where residual source assertions cannot be emitted.
+            self._fail_closed_static_assertions = True
         all_instantiations = self._find_project_template_instantiations(code)
         if not all_instantiations:
             return code
@@ -2012,12 +2054,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         # member method call (MetalStructMethodError) is re-raised so the
         # pipeline reports the kernel as a translation FAILURE instead of leaving
         # a dangling call.
+        evaluated = (
+            self._evaluate_static_assertions(code)
+            if self._fail_closed_static_assertions
+            else code
+        )
         try:
-            return self._lower_struct_member_functions_impl(code)
+            return self._lower_struct_member_functions_impl(evaluated)
         except MetalStructMethodError:
             raise
         except Exception:
-            return code
+            return evaluated
 
     def _lower_struct_member_functions_impl(self, code: str) -> str:
         template_declaration_spans = self._find_template_declaration_spans(code)
@@ -4499,6 +4546,276 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not mapping:
             return body
         return self._substitute_bare_member_references(body, mapping)
+
+    def _evaluate_static_assertions(self, code: str) -> str:
+        if "static_assert" not in code:
+            return code
+
+        template_spans = self._find_template_declaration_spans(code)
+        assertions = self._find_concrete_static_assertions(code, template_spans)
+        if not assertions:
+            return code
+
+        owner_spans = [(0, len(code))]
+        type_aliases = self._collect_local_type_alias_bindings(
+            code,
+            owner_spans,
+            skip_spans=template_spans,
+        )
+        constants = self._collect_local_integral_constant_bindings(
+            code,
+            owner_spans,
+            type_aliases,
+        )
+        replacements: List[Tuple[int, int, str]] = []
+        for assertion in assertions:
+            condition_position = assertion.condition_span[0]
+            visible_bindings = self._local_integral_constant_bindings_at(
+                constants,
+                condition_position,
+            )
+            visible_constants = {
+                name: binding.value
+                for name, binding in visible_bindings.items()
+                if binding.value is not None
+            }
+            resolved_condition = self._substitute_template_argument_static_constants(
+                assertion.condition,
+                visible_constants,
+            )
+            resolved_condition = self._replace_concrete_sizeof_expressions(
+                resolved_condition,
+                lambda type_text: self._resolve_type_aliases_at(
+                    type_text,
+                    type_aliases,
+                    condition_position,
+                ),
+            )
+            folded, value = self._evaluate_static_integral_expression(
+                resolved_condition
+            )
+            if folded and value:
+                replacements.append((*assertion.span, ""))
+                continue
+
+            source_message = (
+                self._evaluate_metal_string_expression(assertion.message)
+                if assertion.message is not None
+                else None
+            )
+            compact_condition = re.sub(r"\s+", " ", assertion.condition).strip()
+            compact_resolved = re.sub(r"\s+", " ", resolved_condition).strip()
+            if folded:
+                suggested_action = (
+                    "correct the source condition or select specialization values "
+                    "that satisfy the compile-time constraint"
+                )
+                detail = (
+                    f"Metal static assertion failed because '{compact_resolved}' "
+                    "evaluated to false"
+                )
+                reason = "assertion-failed"
+                unresolved_dependencies: Tuple[str, ...] = ()
+            else:
+                unresolved_dependencies = self._static_assertion_dependencies(
+                    resolved_condition,
+                    visible_bindings,
+                )
+                suggested_action = (
+                    "materialize all template parameters and express assertion "
+                    "dependencies as constexpr integral values before translation"
+                )
+                dependency_detail = (
+                    "; unresolved dependencies: " + ", ".join(unresolved_dependencies)
+                    if unresolved_dependencies
+                    else ""
+                )
+                detail = (
+                    "Metal static assertion could not be evaluated at translation "
+                    f"time: '{compact_resolved}'{dependency_detail}"
+                )
+                reason = "condition-unresolved"
+            if source_message:
+                detail += f". Source message: {source_message}"
+            detail += f". Suggested action: {suggested_action}."
+            raise MetalStaticAssertionError(
+                detail,
+                reason=reason,
+                expression=compact_condition,
+                resolved_expression=compact_resolved,
+                assertion_message=source_message,
+                unresolved_dependencies=unresolved_dependencies,
+                source_location=self._source_location_for_offsets(
+                    code,
+                    assertion.span[0],
+                    assertion.span[1],
+                ),
+                suggested_action=suggested_action,
+            )
+
+        return self._apply_text_replacements(code, replacements)
+
+    def _find_concrete_static_assertions(
+        self,
+        code: str,
+        template_spans: List[Tuple[int, int]],
+    ) -> List[_MetalStaticAssertion]:
+        ignored_spans = self._find_comment_and_literal_spans(code)
+        assertions: List[_MetalStaticAssertion] = []
+        for match in re.finditer(r"\bstatic_assert\b", code):
+            start = match.start()
+            if self._containing_span(start, ignored_spans) is not None:
+                continue
+            if self._containing_span(start, template_spans) is not None:
+                continue
+
+            open_paren = match.end()
+            while open_paren < len(code) and code[open_paren].isspace():
+                open_paren += 1
+            if open_paren >= len(code) or code[open_paren] != "(":
+                self._raise_malformed_static_assertion(code, start, match.end())
+            close_paren = self._find_matching_delimiter(
+                code,
+                open_paren,
+                "(",
+                ")",
+            )
+            if close_paren is None:
+                self._raise_malformed_static_assertion(code, start, len(code))
+
+            end = close_paren + 1
+            while end < len(code) and code[end].isspace():
+                end += 1
+            if end >= len(code) or code[end] != ";":
+                self._raise_malformed_static_assertion(
+                    code,
+                    start,
+                    close_paren + 1,
+                )
+            end += 1
+            condition, assertion_message, condition_offset = (
+                self._split_static_assertion_arguments(
+                    code[open_paren + 1 : close_paren]
+                )
+            )
+            if not condition:
+                self._raise_malformed_static_assertion(code, start, end)
+            condition_start = open_paren + 1 + condition_offset
+            assertions.append(
+                _MetalStaticAssertion(
+                    span=(start, end),
+                    condition_span=(
+                        condition_start,
+                        condition_start + len(condition),
+                    ),
+                    condition=condition,
+                    message=assertion_message,
+                )
+            )
+        return assertions
+
+    def _split_static_assertion_arguments(
+        self, arguments: str
+    ) -> Tuple[str, Optional[str], int]:
+        comma_positions: List[int] = []
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+        i = 0
+        while i < len(arguments):
+            if arguments[i] in "\"'":
+                _literal, consumed = self._read_string(arguments, i)
+                i += consumed
+                continue
+            if arguments.startswith("//", i):
+                end = arguments.find("\n", i)
+                i = len(arguments) if end == -1 else end + 1
+                continue
+            if arguments.startswith("/*", i):
+                end = arguments.find("*/", i + 2)
+                i = len(arguments) if end == -1 else end + 2
+                continue
+            character = arguments[i]
+            if character == "(":
+                paren_depth += 1
+            elif character == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif character == "[":
+                bracket_depth += 1
+            elif character == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif character == "{":
+                brace_depth += 1
+            elif character == "}":
+                brace_depth = max(0, brace_depth - 1)
+            elif (
+                character == ","
+                and paren_depth == 0
+                and bracket_depth == 0
+                and brace_depth == 0
+            ):
+                comma_positions.append(i)
+            i += 1
+
+        for comma in reversed(comma_positions):
+            candidate_message = arguments[comma + 1 :].strip()
+            if re.fullmatch(
+                METAL_STRING_EXPRESSION_PATTERN,
+                candidate_message,
+                re.DOTALL,
+            ):
+                raw_condition = arguments[:comma]
+                condition = raw_condition.strip()
+                return (
+                    condition,
+                    candidate_message,
+                    len(raw_condition) - len(raw_condition.lstrip()),
+                )
+        condition = arguments.strip()
+        return condition, None, len(arguments) - len(arguments.lstrip())
+
+    def _raise_malformed_static_assertion(
+        self, code: str, start: int, end: int
+    ) -> None:
+        suggested_action = (
+            "provide a well-formed static_assert(condition[, message]) statement"
+        )
+        raise MetalStaticAssertionError(
+            "Metal static assertion could not be parsed. Suggested action: "
+            f"{suggested_action}.",
+            reason="assertion-malformed",
+            expression="",
+            resolved_expression="",
+            assertion_message=None,
+            unresolved_dependencies=(),
+            source_location=self._source_location_for_offsets(code, start, end),
+            suggested_action=suggested_action,
+        )
+
+    def _static_assertion_dependencies(
+        self,
+        expression: str,
+        visible_bindings: Dict[str, _MetalIntegralConstantBinding],
+    ) -> Tuple[str, ...]:
+        masked = self._mask_comments_and_literals(expression)
+        ignored = {
+            "alignof",
+            "false",
+            "sizeof",
+            "true",
+        }
+        dependencies = {
+            identifier
+            for identifier in IDENTIFIER_RE.findall(masked)
+            if identifier not in ignored
+        }
+        dependencies.update(
+            name
+            for name, binding in visible_bindings.items()
+            if binding.value is None
+            and re.search(rf"\b{re.escape(name)}\b", masked) is not None
+        )
+        return tuple(sorted(dependencies))
 
     def _substitute_struct_scoped_alias_owners(
         self,
