@@ -590,16 +590,29 @@ jobs:
                       "DirectX GEMV resolved workgroup-size evidence is incomplete"
                   )
               if (
-                  gemv_directx["entryProfile"] != "cs_6_0"
+                  gemv_directx["entryProfile"] != "cs_6_2"
+                  or gemv_directx["compilerArguments"]
+                  != ["-enable-16bit-types"]
+                  or gemv_directx["minimumShaderModel"] != "6.2"
                   or gemv_directx["entryProfileCompilerEntryPoints"]
                   != list(GEMV_DIRECTX_COMPILER_ENTRY_POINTS)
                   or gemv_directx["entryProfileCompiledEntryPointCount"] != 3
                   or gemv_directx["entryProfileDiagnosticCount"] != 0
                   or gemv_directx["entryProfileUnusedValueWarningCount"] != 0
+                  or any(
+                      run["profile"] != "cs_6_2"
+                      or run["compilerArguments"] != ["-enable-16bit-types"]
+                      or run["minimumShaderModel"] != "6.2"
+                      for run in gemv_directx["entryProfileCompilerRuns"]
+                  )
                   or gemv_directx["libraryProfile"] != "lib_6_6"
                   or gemv_directx["libraryExports"]
                   != list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
                   or gemv_directx["libraryExportCount"] != 224
+                  or library_run["profile"] != "lib_6_6"
+                  or library_run["compilerArguments"]
+                  != ["-enable-16bit-types"]
+                  or library_run["minimumShaderModel"] != "6.2"
                   or library_run["status"] != "compiled"
                   or library_run["outputSizeBytes"] <= 0
                   or library_run["unusedValueWarningCount"] != 0

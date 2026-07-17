@@ -2214,7 +2214,12 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "GEMV_WORKGROUP_SIZE_RULE" in mlx_porting
     assert "GEMV_REPORT_WORKGROUP_SIZE_RULE" in mlx_porting
     assert "GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES" in mlx_porting
-    assert 'gemv_directx["entryProfile"] != "cs_6_0"' in mlx_porting
+    assert 'gemv_directx["entryProfile"] != "cs_6_2"' in mlx_porting
+    assert 'gemv_directx["compilerArguments"]' in mlx_porting
+    assert 'gemv_directx["minimumShaderModel"] != "6.2"' in mlx_porting
+    assert 'run["profile"] != "cs_6_2"' in mlx_porting
+    assert 'run["compilerArguments"] != ["-enable-16bit-types"]' in mlx_porting
+    assert 'run["minimumShaderModel"] != "6.2"' in mlx_porting
     assert 'gemv_directx["artifactPackaging"]' in mlx_porting
     assert 'gemv_directx["hostNamedMaterializationCount"] != 224' in mlx_porting
     assert 'gemv_directx["reportExecutionEntryCount"] != 224' in mlx_porting
@@ -2226,6 +2231,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'gemv_directx["entryProfileUnusedValueWarningCount"] != 0' in mlx_porting
     assert 'library_run["unusedValueWarningCount"] != 0' in mlx_porting
     assert 'gemv_directx["libraryProfile"] != "lib_6_6"' in mlx_porting
+    assert 'library_run["profile"] != "lib_6_6"' in mlx_porting
+    assert 'library_run["compilerArguments"]' in mlx_porting
+    assert 'library_run["minimumShaderModel"] != "6.2"' in mlx_porting
     assert 'gemv_directx["libraryExportCount"] != 224' in mlx_porting
     assert 'gemv_directx["compilerCoveredEntryPointCount"] != 224' in mlx_porting
     assert "DirectX GEMV resolved workgroup-size evidence is incomplete" in (
