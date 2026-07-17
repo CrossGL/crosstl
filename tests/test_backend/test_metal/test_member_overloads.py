@@ -262,6 +262,99 @@ def test_receiver_declaration_index_preserves_alias_and_lexical_shadowing():
         assert (declaration.scope_start, declaration.scope_end) == expected_scope
 
 
+def test_preprocessor_preserves_contextual_receiver_qualifiers_in_method_body():
+    source = """
+    struct Transform {
+      int apply(int value) & threadgroup { return value; }
+      int apply(int value) const & threadgroup { return value + 1; }
+    };
+
+    struct Runner {
+      int run(
+          threadgroup const Transform& operation,
+          int value) const {
+        return operation.apply(value);
+      }
+    };
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    helper = "Transform__apply__metal_receiver_const_threadgroup_lvalue"
+    assert f"return {helper}(operation, value);" in output
+    assert "operation.apply" not in output
+    assert "threadgroup const Transform& operation" in output
+
+    repeated = MetalPreprocessor().preprocess(output)
+    assert f"return {helper}(operation, value);" in repeated
+    assert "operation.apply" not in repeated
+
+
+def test_preprocessor_lowers_static_member_called_through_contextual_receiver():
+    source = """
+    struct Transform {
+      static float apply(float value) { return value; }
+    };
+
+    struct Runner {
+      float run(thread const Transform& operation, float value) const {
+        return operation.apply(value);
+      }
+    };
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "return Transform__apply(value);" in output
+    assert "Transform__apply(operation, value)" not in output
+    assert "operation.apply" not in output
+
+    repeated = MetalPreprocessor().preprocess(output)
+    assert "return Transform__apply(value);" in repeated
+    assert "operation.apply" not in repeated
+
+
+def test_preprocessor_rejects_unknown_contextual_receiver_type():
+    source = """
+    struct Runner {
+      int run(thread const MissingTransform& operation, int value) const {
+        return operation.apply(value);
+      }
+    };
+    """
+
+    with pytest.raises(MetalStructMethodError) as exc_info:
+        MetalPreprocessor().preprocess(source)
+
+    error = exc_info.value
+    assert error.reason == "concrete-receiver-type-unresolved"
+    assert error.receiver_type == "thread const MissingTransform&"
+    assert error.requested_signature == "operation.apply"
+
+
+def test_preprocessor_rejects_ambiguous_contextual_receiver_overload():
+    source = """
+    struct Transform {
+      int apply(int value) const { return value; }
+      int apply(int value) volatile { return value + 1; }
+    };
+
+    struct Runner {
+      int run(thread Transform& operation, int value) const {
+        return operation.apply(value);
+      }
+    };
+    """
+
+    with pytest.raises(MetalStructMethodError) as exc_info:
+        MetalPreprocessor().preprocess(source)
+
+    error = exc_info.value
+    assert error.reason == "concrete-overload-ambiguous"
+    assert error.receiver_type == "thread Transform&"
+    assert error.requested_signature == "Transform::apply(value)"
+
+
 @pytest.mark.parametrize(
     "reverse_functions", [False, True], ids=("half-first", "float-first")
 )

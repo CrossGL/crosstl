@@ -7651,6 +7651,38 @@ class MetalPreprocessor(HLSLPreprocessor):
                     arg_open,
                     struct_name=structs_by_name.get(struct_type, struct_type),
                 )
+            if owner_struct is not None and explicit_template_arguments is None:
+                static_method = self._select_concrete_method_for_call(
+                    code,
+                    owner_struct,
+                    member,
+                    arg_open,
+                    buffer_element_types,
+                    local_variable_types,
+                    field_variable_types,
+                    field_structs_by_name,
+                    allow_template_fallback=bool(template_overloads),
+                    require_static=True,
+                    type_alias_fallback_position=type_alias_fallback_position,
+                    call_start=ident_start,
+                )
+                if static_method is not None:
+                    arg_close = self._find_matching_delimiter(
+                        code,
+                        arg_open,
+                        "(",
+                        ")",
+                    )
+                    if arg_close is None:
+                        return None
+                    self._reject_reference_returning_method_call(
+                        code,
+                        structs_by_name.get(struct_type, struct_type),
+                        static_method,
+                        arg_open,
+                        arg_close,
+                    )
+                    return arg_open, static_method.free_name
             # An instance TEMPLATE member call `var.m(args)`.
             if template_overloads:
                 return self._instantiate_template_member_call(
@@ -10579,6 +10611,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         methods_by_struct = methods_by_struct or {}
         operator_call_structs = operator_call_structs or set()
         rewrite_structs_by_name = rewrite_structs_by_name or {}
+        self._register_contextual_receiver_parameters(
+            instantiated_body,
+            instantiated_parameters,
+        )
         instantiated_body = self._lower_runtime_value_template_member_calls(
             struct,
             method,
@@ -10589,6 +10625,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             methods_by_struct,
             operator_call_structs,
             rewrite_structs_by_name,
+        )
+        contextual_receiver_names = self._register_contextual_receiver_parameters(
+            instantiated_body,
+            instantiated_parameters,
         )
         rewrite_struct_names = set(rewrite_structs_by_name)
         struct_type_aliases = self._collect_struct_type_aliases(
@@ -10621,8 +10661,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             qualified_identifiers & (rewrite_struct_names | set(struct_type_aliases))
         )
         has_external_member_call = bool(
-            re.search(r"\bself\s*(?:\.|->)", instantiated_body)
-            and (methods_by_struct or template_methods_by_struct)
+            (methods_by_struct or template_methods_by_struct)
+            and any(
+                re.search(
+                    rf"\b{re.escape(receiver)}\s*(?:\.|->)",
+                    instantiated_body,
+                )
+                for receiver in {"self", *contextual_receiver_names}
+            )
         )
         has_concrete_sibling_call = any(
             re.search(
@@ -12398,6 +12444,49 @@ class MetalPreprocessor(HLSLPreprocessor):
         if analysis.receiver_declarations is None:
             analysis.receiver_declarations = self._scan_receiver_declarations(code)
         return analysis.receiver_declarations
+
+    def _register_contextual_receiver_parameters(
+        self,
+        code: str,
+        parameters: str,
+    ) -> Set[str]:
+        declarations = self._scan_receiver_declarations(code)
+        contextual_names: Set[str] = set()
+        for parameter in self._split_top_level_commas(parameters):
+            text = self._strip_metal_attributes(
+                self._strip_top_level_default_value(parameter)
+            ).strip()
+            if not text:
+                continue
+            match = METAL_RECEIVER_DECLARATION_RE.search(f"{text},")
+            if match is None or match.start() != 0:
+                continue
+            raw_type_text = "".join(
+                (
+                    match.group("leading") or "",
+                    match.group("type"),
+                    match.group("trailing") or "",
+                    match.group("indirection") or "",
+                    match.group("indirection_qualifiers") or "",
+                )
+            )
+            name = match.group("name")
+            contextual_names.add(name)
+            declarations.setdefault(name, []).insert(
+                0,
+                _MetalReceiverDeclaration(
+                    name=name,
+                    declaration_position=-1,
+                    declaration_end=0,
+                    type_position=0,
+                    scope_start=0,
+                    scope_end=len(code),
+                    declared_type=match.group("type"),
+                    raw_type_text=raw_type_text,
+                ),
+            )
+        self._source_analysis(code).receiver_declarations = declarations
+        return contextual_names
 
     def _scan_receiver_declarations(
         self, code: str
