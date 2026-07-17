@@ -265,13 +265,12 @@ entry, dtype, dispatch shape, and fixture only; it does not turn the frontier
 compiler gate into a general runtime-parity claim. The five emitted DirectX
 frontier artifacts carry exact per-source bfloat16 report evidence. All five
 report `status=exact`, `approximationUsed=false`, a `uint-low-16-bits` register
-representation, and round-to-nearest, ties-to-even conversion. `arange.metal`,
-`binary_two.metal`, `rope.metal`, and `ternary.metal` report native `uint16`
-storage with the `directx.native-16bit-types` capability; `random.metal` reports
-storage as `not-required` with no required capability. The harness compares
-each artifact's `bfloat16Lowering` and `requiredCapabilities` fields with this
-pinned contract and fails closed if either field is missing or changes. This is
-storage, conversion, report, and compiler evidence only; it does not execute a
+representation, and round-to-nearest, ties-to-even conversion. All five emitted
+sources require native `uint16` storage declarations and report the
+`directx.native-16bit-types` capability. The harness compares each artifact's
+`bfloat16Lowering` and `requiredCapabilities` fields with this pinned contract
+and fails closed if either field is missing or changes. This is storage,
+conversion, report, and compiler evidence only; it does not execute a
 bfloat16 workload or establish runtime or numerical parity. On macOS CI, the
 generated `fence.metal` round-trip artifact must compile to AIR with the native
 Metal compiler. This checks generated source and project metadata, not numerical

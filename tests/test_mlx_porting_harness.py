@@ -6149,6 +6149,7 @@ def test_directx_bfloat16_lowering_evidence_matches_pinned_report():
     native_storage_sources = {
         module.MLX_ARANGE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
+        module.MLX_RANDOM_SOURCE,
         module.MLX_ROPE_SOURCE,
         module.MLX_TERNARY_SOURCE,
     }
@@ -6364,9 +6365,7 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
     assert "`uint-low-16-bits` register representation" in normalized_readme
     assert "round-to-nearest, ties-to-even conversion" in normalized_readme
     assert "`directx.native-16bit-types` capability" in normalized_readme
-    assert "storage as `not-required` with no required capability" in (
-        normalized_readme
-    )
+    assert "All five emitted sources require" in normalized_readme
     assert "fails closed if either field is missing or changes" in normalized_readme
     assert "storage, conversion, report, and compiler evidence only" in (
         normalized_readme

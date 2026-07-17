@@ -1073,10 +1073,12 @@
           "status": "exact",
           "approximationUsed": false,
           "registerRepresentation": "uint-low-16-bits",
-          "storageRepresentation": "not-required",
+          "storageRepresentation": "native-uint16",
           "roundingMode": "round-to-nearest-ties-to-even"
         },
-        "requiredCapabilities": []
+        "requiredCapabilities": [
+          "directx.native-16bit-types"
+        ]
       },
       "mlx/backend/metal/kernels/rope.metal": {
         "bfloat16Lowering": {
