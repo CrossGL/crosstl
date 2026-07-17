@@ -1,5 +1,6 @@
 """Parser for Metal source AST construction."""
 
+import re
 import sys
 
 from .MetalAst import *
@@ -277,6 +278,40 @@ class MetalParserError(SyntaxError):
             }
 
 
+class MetalCallOperatorAssociationError(SyntaxError):
+    """Raised when a qualified call-operator body has no unique declaration."""
+
+    project_diagnostic_code = (
+        "project.translate.metal-call-operator-association-unresolved"
+    )
+    missing_capabilities = ("metal.out-of-line-call-operator-association",)
+
+    def __init__(
+        self,
+        owner,
+        signature,
+        reason,
+        *,
+        definition_location=None,
+        declaration_locations=(),
+        candidates=(),
+    ):
+        self.owner = owner
+        self.method_name = "operator()"
+        self.signature = signature
+        self.reason = reason
+        self.definition_location = definition_location
+        self.declaration_locations = tuple(declaration_locations)
+        self.candidates = tuple(candidates)
+        self.source_location = definition_location
+        candidate_text = ", ".join(self.candidates) or "<none>"
+        super().__init__(
+            "Cannot associate out-of-line Metal call operator "
+            f"'{owner}::{signature}': {reason}; declaration candidates are "
+            f"{candidate_text}"
+        )
+
+
 class MetalParser:
     """Parse Metal tokens into the Metal backend shader AST."""
 
@@ -412,6 +447,7 @@ class MetalParser:
         self.using_namespace_directives = []
         self.last_struct_type_aliases = []
         self.last_struct_constructors = []
+        self.last_struct_call_operator_declarations = []
 
     def skip_comments(self):
         while self.pos < len(self.tokens) and self.current_token[0] in [
@@ -546,7 +582,7 @@ class MetalParser:
             shader = self.parse_shader()
             self.eat("EOF")
             return shader
-        except MetalParserError:
+        except (MetalParserError, MetalCallOperatorAssociationError):
             raise
         except SyntaxError as exc:
             raise self.annotate_syntax_error(exc) from exc
@@ -708,7 +744,129 @@ class MetalParser:
         )
         shader.using_namespace_directives = list(self.using_namespace_directives)
         shader.namespace_aliases = dict(self.namespace_aliases)
+        self.associate_out_of_line_call_operators(shader)
         return shader
+
+    def associate_out_of_line_call_operators(self, shader):
+        declarations_by_owner = {}
+        for struct_node in getattr(shader, "structs", []) or []:
+            declarations = list(
+                getattr(struct_node, "call_operator_declarations", []) or []
+            )
+            if not declarations:
+                continue
+            owner_names = {
+                str(getattr(struct_node, "name", "")),
+                str(getattr(struct_node, "qualified_name", "")),
+            }
+            for owner_name in owner_names - {""}:
+                declarations_by_owner.setdefault(owner_name, []).extend(declarations)
+
+        definitions = [
+            function
+            for function in getattr(shader, "functions", []) or []
+            if getattr(function, "out_of_line_call_operator_owner", None)
+        ]
+        definitions_by_contract = {}
+        for definition in definitions:
+            owner = definition.out_of_line_call_operator_owner
+            owner_declarations = list(declarations_by_owner.get(owner, []))
+            if not owner_declarations and "::" in owner:
+                owner_declarations = list(
+                    declarations_by_owner.get(owner.rsplit("::", 1)[-1], [])
+                )
+            contract = self.call_operator_contract(definition)
+            matches = [
+                declaration
+                for declaration in owner_declarations
+                if self.call_operator_contract(declaration) == contract
+            ]
+            signature = self.call_operator_signature(definition)
+            if len(matches) != 1:
+                reason = (
+                    "no declaration matches the definition contract"
+                    if not matches
+                    else "multiple declarations match the definition contract"
+                )
+                raise MetalCallOperatorAssociationError(
+                    owner,
+                    signature,
+                    reason,
+                    definition_location=getattr(
+                        definition, "declaration_source_location", None
+                    ),
+                    declaration_locations=tuple(
+                        getattr(candidate, "declaration_source_location", None)
+                        for candidate in matches or owner_declarations
+                    ),
+                    candidates=tuple(
+                        self.call_operator_signature(candidate)
+                        for candidate in matches or owner_declarations
+                    ),
+                )
+
+            declaration = matches[0]
+            definition.out_of_line_call_operator_declaration = {
+                "owner": getattr(declaration, "owner_qualified_name", owner),
+                "signature": self.call_operator_signature(declaration),
+                "source_location": getattr(
+                    declaration, "declaration_source_location", None
+                ),
+            }
+            key = (owner, contract)
+            definitions_by_contract.setdefault(key, []).append(definition)
+
+        for (owner, _contract), matching_definitions in definitions_by_contract.items():
+            if len(matching_definitions) == 1:
+                continue
+            first = matching_definitions[0]
+            raise MetalCallOperatorAssociationError(
+                owner,
+                self.call_operator_signature(first),
+                "multiple definitions match one declaration contract",
+                definition_location=getattr(
+                    matching_definitions[-1], "declaration_source_location", None
+                ),
+                declaration_locations=(
+                    getattr(first, "out_of_line_call_operator_declaration", {}).get(
+                        "source_location"
+                    ),
+                ),
+                candidates=tuple(
+                    self.call_operator_signature(definition)
+                    for definition in matching_definitions
+                ),
+            )
+
+    @classmethod
+    def call_operator_contract(cls, function):
+        return (
+            cls.normalize_contract_type(getattr(function, "return_type", "")),
+            tuple(
+                (
+                    cls.normalize_contract_type(getattr(parameter, "vtype", "")),
+                    tuple(getattr(parameter, "qualifiers", []) or []),
+                    len(getattr(parameter, "array_sizes", []) or []),
+                )
+                for parameter in getattr(function, "params", []) or []
+            ),
+            tuple(getattr(function, "method_qualifiers", []) or []),
+        )
+
+    @classmethod
+    def call_operator_signature(cls, function):
+        parameter_types = ", ".join(
+            cls.normalize_contract_type(getattr(parameter, "vtype", ""))
+            for parameter in getattr(function, "params", []) or []
+        )
+        qualifiers = " ".join(getattr(function, "method_qualifiers", []) or [])
+        suffix = f" {qualifiers}" if qualifiers else ""
+        return f"operator()({parameter_types}){suffix}"
+
+    @staticmethod
+    def normalize_contract_type(type_name):
+        text = re.sub(r"\s+", " ", str(type_name or "").strip())
+        return re.sub(r"\s*([<>,*&])\s*", r"\1", text)
 
     def add_global_declaration(self, global_variables, declaration):
         declarations = declaration if isinstance(declaration, list) else [declaration]
@@ -2631,6 +2789,9 @@ class MetalParser:
         struct_node.base_types = base_types
         struct_node.type_aliases = list(self.last_struct_type_aliases)
         struct_node.constructors = list(self.last_struct_constructors)
+        struct_node.call_operator_declarations = list(
+            self.last_struct_call_operator_declarations
+        )
         for constructor in struct_node.constructors:
             constructor.owner_name = name
             constructor.name = name
@@ -2686,6 +2847,9 @@ class MetalParser:
         class_node.aggregate_kind = "class"
         class_node.type_aliases = list(self.last_struct_type_aliases)
         class_node.constructors = list(self.last_struct_constructors)
+        class_node.call_operator_declarations = list(
+            self.last_struct_call_operator_declarations
+        )
         for constructor in class_node.constructors:
             constructor.owner_name = name
             constructor.name = name
@@ -2761,6 +2925,9 @@ class MetalParser:
         union_node.aggregate_kind = "union"
         union_node.type_aliases = list(self.last_struct_type_aliases)
         union_node.constructors = list(self.last_struct_constructors)
+        union_node.call_operator_declarations = list(
+            self.last_struct_call_operator_declarations
+        )
         for constructor in union_node.constructors:
             constructor.owner_name = name
             constructor.name = name
@@ -2817,6 +2984,7 @@ class MetalParser:
         members = []
         type_aliases = []
         constructors = []
+        call_operator_declarations = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
@@ -2869,6 +3037,22 @@ class MetalParser:
             if self.is_nested_aggregate_declaration_start():
                 self.skip_nested_aggregate_declaration()
                 continue
+            if owner_name and self.is_struct_call_operator_declaration_start():
+                declaration = self.parse_function(preserve_declaration=True)
+                declaration.owner_name = owner_name
+                namespace = self.current_namespace()
+                declaration.owner_qualified_name = (
+                    f"{namespace}::{owner_name}" if namespace else owner_name
+                )
+                declaration.qualified_name = (
+                    f"{declaration.owner_qualified_name}::operator()"
+                )
+                declaration.declaration_kind = (
+                    "definition" if declaration.body is not None else "declaration"
+                )
+                declaration.alignas = member_alignas
+                call_operator_declarations.append(declaration)
+                continue
             if self.is_struct_conversion_operator_start():
                 self.skip_struct_method()
                 continue
@@ -2920,7 +3104,25 @@ class MetalParser:
             self.eat("SEMICOLON")
         self.last_struct_type_aliases = type_aliases
         self.last_struct_constructors = constructors
+        self.last_struct_call_operator_declarations = call_operator_declarations
         return members
+
+    def is_struct_call_operator_declaration_start(self):
+        if not self.is_operator_function_definition():
+            return False
+        idx = self.pos
+        while idx + 3 < len(self.tokens):
+            token = self.tokens[idx]
+            if token == ("IDENTIFIER", "operator"):
+                return (
+                    self.tokens[idx + 1][0] == "LPAREN"
+                    and self.tokens[idx + 2][0] == "RPAREN"
+                    and self.tokens[idx + 3][0] == "LPAREN"
+                )
+            if self.tokens[idx][0] in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
+                return False
+            idx += 1
+        return False
 
     def is_template_constructor_declaration_start(self, owner_name):
         if not self.is_template_declaration_start():
@@ -3336,7 +3538,7 @@ class MetalParser:
 
         return ConstantBufferNode(name, members)
 
-    def parse_function(self):
+    def parse_function(self, preserve_declaration=False):
         start_token = self.current_token
         attributes = self.parse_attributes()
 
@@ -3380,28 +3582,31 @@ class MetalParser:
 
         post_attributes = self.parse_attributes()
         attributes.extend(post_attributes)
-        self.parse_function_method_qualifiers()
+        method_qualifiers = self.parse_function_method_qualifiers()
         trailing_return_type = self.parse_optional_trailing_return_type(attributes)
         if trailing_return_type is not None:
             return_type = trailing_return_type
             attributes.extend(self.parse_attributes())
-            self.parse_function_method_qualifiers()
+            method_qualifiers.extend(self.parse_function_method_qualifiers())
         attribute_qualifier, attributes = self.extract_stage_attributes(attributes)
         if qualifier is None:
             qualifier = attribute_qualifier
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-            self.pop_declaration_context()
-            return None
-        if self.is_defaulted_or_deleted_function_declaration():
+            if not preserve_declaration:
+                self.pop_declaration_context()
+                return None
+            body = None
+        elif self.is_defaulted_or_deleted_function_declaration():
             self.skip_defaulted_or_deleted_function_declaration()
             self.pop_declaration_context()
             return None
-        self.pending_block_scope_names.append(
-            {param.name for param in params if getattr(param, "name", None)}
-        )
-        body = self.parse_block()
+        else:
+            self.pending_block_scope_names.append(
+                {param.name for param in params if getattr(param, "name", None)}
+            )
+            body = self.parse_block()
 
         function = FunctionNode(
             return_type=return_type,
@@ -3414,9 +3619,16 @@ class MetalParser:
         )
         self.annotate_declaration_scope(function)
         function.declaration_qualifiers = list(return_qualifiers)
+        function.method_qualifiers = list(method_qualifiers)
         function.declaration_source_location = self.source_span_from_tokens(
             start_token, self.tokens[self.pos - 1]
         )
+        if name.endswith("::operator()"):
+            owner = name[: -len("::operator()")]
+            namespace = self.current_namespace()
+            if namespace and not owner.startswith(f"{namespace}::"):
+                owner = f"{namespace}::{owner}"
+            function.out_of_line_call_operator_owner = owner
         self.pop_declaration_context()
         return function
 
@@ -3434,10 +3646,13 @@ class MetalParser:
         self.eat("SEMICOLON")
 
     def parse_function_method_qualifiers(self):
+        qualifiers = []
         while self.current_token[0] in {"CONST", "VOLATILE", "BITWISE_AND", "AND"}:
+            qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
 
         if self.current_token == ("IDENTIFIER", "noexcept"):
+            qualifiers.append(self.current_token[1])
             self.eat("IDENTIFIER")
             if self.current_token[0] == "LPAREN":
                 self.parse_balanced_token_text(
@@ -3453,7 +3668,9 @@ class MetalParser:
             "IDENTIFIER",
             "final",
         ):
+            qualifiers.append(self.current_token[1])
             self.eat("IDENTIFIER")
+        return qualifiers
 
     def parse_function_operator_suffix(self, name):
         if (

@@ -106,6 +106,29 @@ class MetalBuiltinResultTypeResolutionError(ValueError):
         )
 
 
+class MetalStandardLibraryWrapperLoweringError(ValueError):
+    """Raised when a materialized Metal standard-library wrapper has no target op."""
+
+    project_diagnostic_code = "project.translate.metal-stdlib-wrapper-unsupported"
+    missing_capabilities = ("metal.standard-library-wrapper-lowering",)
+
+    def __init__(
+        self,
+        function_name,
+        implementation_intrinsics,
+        source_location=None,
+    ):
+        self.function_name = function_name
+        self.implementation_intrinsics = tuple(implementation_intrinsics)
+        self.source_location = source_location
+        intrinsic_text = ", ".join(self.implementation_intrinsics)
+        super().__init__(
+            "Cannot lower materialized Metal standard-library wrapper "
+            f"'{function_name}': no canonical operation represents "
+            f"{intrinsic_text}"
+        )
+
+
 class MetalSourceOverloadResolutionError(ValueError):
     """Raised when a Metal call cannot be bound from source argument types."""
 
@@ -213,6 +236,42 @@ class MetalStructMethodCallResolutionError(ValueError):
             f"{owner}::{method_name}({signature}): {reason}; candidates are "
             f"{candidate_text}; qualify the intended call before lowering or "
             "make the overload argument types exact."
+        )
+
+
+class MetalOutOfLineCallOperatorLoweringError(ValueError):
+    """Raised when a declared call-operator body has no unique lowered helper."""
+
+    project_diagnostic_code = (
+        "project.translate.metal-out-of-line-call-operator-unresolved"
+    )
+    missing_capabilities = ("metal.out-of-line-call-operator-lowering",)
+
+    def __init__(
+        self,
+        owner,
+        signature,
+        candidates,
+        reason,
+        *,
+        declaration_location=None,
+        definition_location=None,
+        candidate_locations=(),
+    ):
+        self.owner = owner
+        self.method_name = "operator()"
+        self.signature = signature
+        self.candidates = tuple(candidates)
+        self.reason = reason
+        self.declaration_location = declaration_location
+        self.definition_location = definition_location
+        self.candidate_locations = tuple(candidate_locations)
+        self.source_location = definition_location or declaration_location
+        candidate_text = ", ".join(self.candidates) or "<none>"
+        super().__init__(
+            "Cannot bind out-of-line Metal call operator "
+            f"'{owner}::{signature}' to a lowered helper: {reason}; "
+            f"candidates are {candidate_text}"
         )
 
 
@@ -645,6 +704,7 @@ class MetalToCrossGLConverter:
         "atanh",
         "ceil",
         "clamp",
+        "copysign",
         "cos",
         "cosh",
         "cospi",
@@ -667,6 +727,7 @@ class MetalToCrossGLConverter:
         "isunordered",
         "length",
         "log",
+        "log10",
         "log2",
         "max",
         "min",
@@ -674,6 +735,7 @@ class MetalToCrossGLConverter:
         "normalize",
         "pow",
         "reflect",
+        "rint",
         "rsqrt",
         "select",
         "sign",
@@ -687,6 +749,7 @@ class MetalToCrossGLConverter:
         "tan",
         "tanh",
     }
+    materialized_metal_stdlib_body_wrappers = {"fdim"}
     metal_math_builtin_result_rules = {
         "abs": ("same", "arithmetic", 1),
         "acos": ("same", "floating", 1),
@@ -700,6 +763,7 @@ class MetalToCrossGLConverter:
         "atanh": ("same", "floating", 1),
         "ceil": ("same", "floating", 1),
         "clamp": ("same", "arithmetic", 3),
+        "copysign": ("same", "floating", 2),
         "cos": ("same", "floating", 1),
         "cosh": ("same", "floating", 1),
         "cospi": ("same", "floating", 1),
@@ -722,6 +786,7 @@ class MetalToCrossGLConverter:
         "isunordered": ("bool_shape", "floating_bfloat", 2),
         "length": ("element", "floating_vector", 1),
         "log": ("same", "floating", 1),
+        "log10": ("same", "floating", 1),
         "log2": ("same", "floating", 1),
         "max": ("same", "arithmetic", 2),
         "min": ("same", "arithmetic", 2),
@@ -729,6 +794,7 @@ class MetalToCrossGLConverter:
         "normalize": ("same", "floating_vector", 1),
         "pow": ("same", "floating", 2),
         "reflect": ("same", "floating_vector", 2),
+        "rint": ("same", "floating", 1),
         "rsqrt": ("same", "floating", 1),
         "select": ("same", "select", 3),
         "sign": ("same", "floating", 1),
@@ -1162,6 +1228,8 @@ class MetalToCrossGLConverter:
         self.current_variable_type_qualifiers = {}
         self.metal_source_overload_groups = {}
         self.metal_source_overload_output_names = {}
+        self.out_of_line_call_operator_replacements = {}
+        self.suppressed_out_of_line_call_operator_ids = set()
         self.storage_texture_declaration_ids = set()
         self.global_storage_texture_names = set()
         self.current_storage_texture_names = set()
@@ -2343,21 +2411,27 @@ class MetalToCrossGLConverter:
         self.local_struct_type_aliases = {}
         functions = getattr(ast, "functions", []) or []
         self.prepare_texture_usage(ast)
+        self.prepare_out_of_line_call_operator_bindings(functions)
+        effective_functions = [
+            function
+            for function in functions
+            if id(function) not in self.suppressed_out_of_line_call_operator_ids
+        ]
         self.wide_vector_reserved_names.update(
             self.collect_declared_identifier_names(ast)
         )
         self.user_function_names = {
             function.name
-            for function in functions
+            for function in effective_functions
             if isinstance(function, FunctionNode) and function.name
         }
         self.user_function_overloads_by_name = {}
-        for function in functions:
+        for function in effective_functions:
             if isinstance(function, FunctionNode) and function.name:
                 self.user_function_overloads_by_name.setdefault(
                     function.name, []
                 ).append(function)
-        self.prepare_value_template_materializations(ast, functions)
+        self.prepare_value_template_materializations(ast, effective_functions)
         self.prepare_alias_template_resolution(ast, typedefs)
         self.prepare_metal_source_overload_transport()
         self.prepare_metal_atomic_fence_transport_constants(ast)
@@ -2620,6 +2694,10 @@ class MetalToCrossGLConverter:
         ordinary_function_code = []
         deferred_template_functions = []
         for f in functions:
+            if id(f) in self.suppressed_out_of_line_call_operator_ids:
+                continue
+            if self.is_materialized_metal_stdlib_wrapper(f):
+                continue
             default_bindings = self.default_value_template_bindings.get(id(f))
             if self.value_template_parameter_names(f) and default_bindings is None:
                 deferred_template_functions.append(f)
@@ -6397,6 +6475,8 @@ class MetalToCrossGLConverter:
         self.global_sampler_names = set()
         self.user_function_names = set()
         self.user_function_overloads_by_name = {}
+        self.out_of_line_call_operator_replacements = {}
+        self.suppressed_out_of_line_call_operator_ids = set()
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
         self.storage_texture_declaration_ids = (
@@ -6934,6 +7014,14 @@ class MetalToCrossGLConverter:
         )
         previous_function_specialization_key = self.current_function_specialization_key
         previous_constructor_scope_index = self.current_constructor_scope_index
+        out_of_line_replacement = self.out_of_line_call_operator_replacements.get(
+            id(func)
+        )
+        function_body = (
+            getattr(out_of_line_replacement["definition"], "body", None)
+            if out_of_line_replacement is not None
+            else func.body
+        )
         self.current_function_name = func.name
         self.current_function_return_type = func.return_type
         self.current_function = func
@@ -6975,6 +7063,19 @@ class MetalToCrossGLConverter:
                 self.format_parameter_decl(p, index, semantic_context=semantic_context)
                 for index, p in enumerate(func.params)
             )
+            if out_of_line_replacement is not None:
+                for definition_name, helper_name in out_of_line_replacement[
+                    "parameter_aliases"
+                ]:
+                    self.current_variable_types[definition_name] = (
+                        self.current_variable_types.get(helper_name)
+                    )
+                    self.current_variable_type_qualifiers[definition_name] = (
+                        self.current_variable_type_qualifiers.get(helper_name, ())
+                    )
+                    self.identifier_maps[-1][definition_name] = self.render_identifier(
+                        helper_name
+                    )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             suffix = f" {fn_semantic}" if fn_semantic else ""
             function_name = self.sanitize_identifier(
@@ -7004,7 +7105,7 @@ class MetalToCrossGLConverter:
                 else self.format_value_template_parameter_declarations(
                     func,
                     indent + 1,
-                    body=func.body,
+                    body=function_body,
                     bound_value_names=active_value_bindings,
                 )
             )
@@ -7013,7 +7114,7 @@ class MetalToCrossGLConverter:
                 f"{suffix} {{\n"
             )
             code += value_param_decls
-            code += self.generate_function_body(func.body, indent=indent + 1)
+            code += self.generate_function_body(function_body, indent=indent + 1)
             code += "    }\n\n"
         finally:
             for param, attributes in implicit_buffer_bindings:
@@ -8482,6 +8583,14 @@ class MetalToCrossGLConverter:
                 expr.args,
                 getattr(expr, "source_location", None),
             )
+            self.validate_materialized_metal_stdlib_wrapper_call(expr)
+            materialized_wave_call = (
+                self.generate_materialized_bfloat_wave_wrapper_call(expr, is_main)
+            )
+            if materialized_wave_call is not None:
+                return materialized_wave_call
+            if self.resolve_metal_math_builtin_name(expr.name, expr.args) == "copysign":
+                self.metal_math_builtin_result_type(expr)
             materialized_name = self.transported_metal_source_overload_name(
                 materialized_name,
                 expr.args,
@@ -9028,6 +9137,151 @@ class MetalToCrossGLConverter:
                 return {name}
         return None
 
+    def prepare_out_of_line_call_operator_bindings(self, functions):
+        """Bind preserved qualified bodies to existing lowered receiver helpers."""
+        replacements = {}
+        suppressed = set()
+        for definition in functions or []:
+            declaration = getattr(
+                definition, "out_of_line_call_operator_declaration", None
+            )
+            owner = getattr(definition, "out_of_line_call_operator_owner", None)
+            if not declaration or not owner:
+                continue
+
+            candidates = [
+                function
+                for function in functions or []
+                if function is not definition
+                and self.out_of_line_call_operator_helper_matches(
+                    definition, function, owner
+                )
+            ]
+            if not candidates:
+                continue
+            if len(candidates) != 1:
+                raise MetalOutOfLineCallOperatorLoweringError(
+                    owner,
+                    declaration.get("signature", "operator()"),
+                    tuple(
+                        self.metal_source_overload_candidate_signature(candidate)
+                        for candidate in candidates
+                    ),
+                    "multiple lowered helpers match the declaration contract",
+                    declaration_location=declaration.get("source_location"),
+                    definition_location=getattr(
+                        definition, "declaration_source_location", None
+                    ),
+                    candidate_locations=tuple(
+                        getattr(candidate, "declaration_source_location", None)
+                        for candidate in candidates
+                    ),
+                )
+
+            helper = candidates[0]
+            existing = replacements.get(id(helper))
+            if existing is not None:
+                raise MetalOutOfLineCallOperatorLoweringError(
+                    owner,
+                    declaration.get("signature", "operator()"),
+                    (self.metal_source_overload_candidate_signature(helper),),
+                    "multiple qualified definitions target the same lowered helper",
+                    declaration_location=declaration.get("source_location"),
+                    definition_location=getattr(
+                        definition, "declaration_source_location", None
+                    ),
+                    candidate_locations=(
+                        getattr(helper, "declaration_source_location", None),
+                    ),
+                )
+
+            helper_parameters = list(getattr(helper, "params", []) or [])
+            transport_count = len(self.lowered_method_transport_parameters(helper))
+            explicit_parameters = helper_parameters[1 + transport_count :]
+            parameter_aliases = tuple(
+                (definition_parameter.name, helper_parameter.name)
+                for definition_parameter, helper_parameter in zip(
+                    getattr(definition, "params", []) or [], explicit_parameters
+                )
+                if getattr(definition_parameter, "name", None)
+                and getattr(helper_parameter, "name", None)
+            )
+            replacements[id(helper)] = {
+                "definition": definition,
+                "parameter_aliases": parameter_aliases,
+            }
+            suppressed.add(id(definition))
+
+        self.out_of_line_call_operator_replacements = replacements
+        self.suppressed_out_of_line_call_operator_ids = suppressed
+
+    def out_of_line_call_operator_helper_matches(self, definition, helper, owner):
+        if (
+            not isinstance(helper, FunctionNode)
+            or getattr(helper, "body", None) is None
+        ):
+            return False
+        params = list(getattr(helper, "params", []) or [])
+        if not params:
+            return False
+        receiver = params[0]
+        if getattr(receiver, "name", None) != "self" or not self.reference_parameter(
+            receiver
+        ):
+            return False
+
+        receiver_owner = self.normalized_metal_type(
+            self.resolve_type_alias(getattr(receiver, "vtype", None))
+        )
+        owner_name = self.normalized_metal_type(self.resolve_type_alias(owner))
+        unqualified_owner = owner_name.rsplit("::", 1)[-1]
+        if receiver_owner not in {owner_name, unqualified_owner}:
+            return False
+
+        helper_name = str(getattr(helper, "name", ""))
+        helper_prefixes = {
+            f"{owner_name}__operator_call",
+            f"{unqualified_owner}__operator_call",
+            f"{self.sanitize_identifier(owner_name)}__operator_call",
+        }
+        if not any(
+            helper_name == prefix or helper_name.startswith(f"{prefix}__")
+            for prefix in helper_prefixes
+        ):
+            return False
+
+        definition_const = "const" in {
+            str(qualifier).lower()
+            for qualifier in getattr(definition, "method_qualifiers", []) or []
+        }
+        receiver_const = self.readonly_parameter(
+            receiver, self.effective_declaration_qualifiers(receiver)
+        )
+        if definition_const != receiver_const:
+            return False
+
+        transport_count = len(self.lowered_method_transport_parameters(helper))
+        explicit_parameters = params[1 + transport_count :]
+        definition_parameters = list(getattr(definition, "params", []) or [])
+        if len(explicit_parameters) != len(definition_parameters):
+            return False
+        if tuple(
+            self.normalized_metal_parameter_type(parameter)
+            for parameter in explicit_parameters
+        ) != tuple(
+            self.normalized_metal_parameter_type(parameter)
+            for parameter in definition_parameters
+        ):
+            return False
+
+        helper_return = self.normalized_metal_type(
+            self.resolve_type_alias(getattr(helper, "return_type", None))
+        )
+        definition_return = self.normalized_metal_type(
+            self.resolve_type_alias(getattr(definition, "return_type", None))
+        )
+        return helper_return == definition_return
+
     def lowered_struct_method_context(self, function):
         """Return the concrete receiver contract for a lowered instance helper."""
         if not isinstance(function, FunctionNode):
@@ -9325,13 +9579,18 @@ class MetalToCrossGLConverter:
     def map_function_call_name(self, name, args=None):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
         if not match:
+            if str(name).rsplit("::", 1)[-1] == "copysign":
+                metal_math_name = self.map_metal_math_function_name(name, args)
+                if metal_math_name is not None:
+                    return metal_math_name
+                return self.sanitize_identifier(name)
             metal_type_constructor = self.map_metal_type_constructor_name(name)
             if metal_type_constructor is not None:
                 return metal_type_constructor
             metal_bit_name = self.map_metal_bit_function_name(name)
             if metal_bit_name is not None:
                 return metal_bit_name
-            metal_math_name = self.map_metal_math_function_name(name)
+            metal_math_name = self.map_metal_math_function_name(name, args)
             if metal_math_name is not None:
                 return metal_math_name
             metal_wave_name = self.map_metal_wave_function_name(name, args)
@@ -9476,11 +9735,13 @@ class MetalToCrossGLConverter:
         mapped = self.metal_wave_intrinsics.get(text)
         if mapped is None:
             return None
-        binding, _function = self.resolve_metal_user_function_overload(
+        binding, function = self.resolve_metal_user_function_overload(
             text,
             args or [],
             allow_wave_lane_conversion=True,
         )
+        if binding == "user" and self.is_materialized_metal_stdlib_wrapper(function):
+            return mapped
         if binding in {"user", "unknown"}:
             return None
         return mapped
@@ -10116,14 +10377,181 @@ class MetalToCrossGLConverter:
             return mapped
         return None
 
-    def map_metal_math_function_name(self, name):
+    def map_metal_math_function_name(self, name, args=None):
         for prefix in self.metal_math_namespace_prefixes:
             if not str(name).startswith(prefix):
                 continue
             unscoped = str(name)[len(prefix) :]
-            if unscoped in self.metal_math_intrinsics:
+            if unscoped not in self.metal_math_intrinsics:
+                continue
+            if unscoped != "copysign" or args is None:
                 return unscoped
+            binding, function = self.resolve_metal_user_function_overload(
+                str(name), args
+            )
+            if binding == "user":
+                if self.is_materialized_metal_stdlib_wrapper(function):
+                    return unscoped
+                return self.function_output_name(function)
+            if binding == "unknown":
+                return None
+            return unscoped
         return None
+
+    @staticmethod
+    def metal_math_source_overload_is_stdlib_extension(function):
+        namespace = str(getattr(function, "namespace", "") or "")
+        return namespace == "metal" or namespace.startswith("metal::")
+
+    def materialized_metal_stdlib_wrapper_intrinsics(self, function):
+        namespace = str(getattr(function, "namespace", "") or "")
+        if namespace != "metal" and not namespace.startswith("metal::"):
+            return ()
+        declaration_qualifiers = {
+            str(qualifier)
+            for qualifier in getattr(function, "declaration_qualifiers", []) or []
+        }
+        if "METAL_FUNC" not in declaration_qualifiers:
+            return ()
+
+        intrinsics = set()
+        seen = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if not isinstance(node, (dict, list, tuple, set)):
+                node_id = id(node)
+                if node_id in seen:
+                    return
+                seen.add(node_id)
+            if isinstance(node, FunctionCallNode):
+                call_name = str(getattr(node, "name", ""))
+                if call_name.rsplit("::", 1)[-1].startswith("__metal_"):
+                    intrinsics.add(call_name)
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(getattr(function, "body", None))
+        function_name = str(getattr(function, "name", ""))
+        if function_name in self.materialized_metal_stdlib_body_wrappers:
+            intrinsics.add(f"metal::{function_name}")
+        return tuple(sorted(intrinsics))
+
+    def is_materialized_metal_stdlib_wrapper(self, function):
+        return bool(self.materialized_metal_stdlib_wrapper_intrinsics(function))
+
+    def validate_materialized_metal_stdlib_wrapper_call(self, expression):
+        selected = self.selected_metal_callable(expression)
+        intrinsics = self.materialized_metal_stdlib_wrapper_intrinsics(selected)
+        if not intrinsics:
+            return
+
+        name = str(getattr(expression, "name", ""))
+        unscoped_name = name.rsplit("::", 1)[-1]
+        if unscoped_name in self.metal_wave_intrinsics:
+            public_operation = self.metal_wave_intrinsics[unscoped_name]
+            internal_operations = tuple(
+                self.metal_wave_intrinsics.get(str(intrinsic).rsplit("::", 1)[-1])
+                for intrinsic in intrinsics
+            )
+            if internal_operations and all(
+                operation == public_operation for operation in internal_operations
+            ):
+                return
+            raise MetalStandardLibraryWrapperLoweringError(
+                name,
+                intrinsics,
+                getattr(expression, "source_location", None),
+            )
+        if (
+            unscoped_name in self.metal_math_intrinsics
+            or unscoped_name in self.metal_bit_intrinsics
+        ):
+            return
+        raise MetalStandardLibraryWrapperLoweringError(
+            name,
+            intrinsics,
+            getattr(expression, "source_location", None),
+        )
+
+    def generate_materialized_bfloat_wave_wrapper_call(self, expression, is_main=False):
+        """Preserve the float compute contract of Metal bfloat SIMD wrappers."""
+        selected = self.selected_metal_callable(expression)
+        intrinsics = self.materialized_metal_stdlib_wrapper_intrinsics(selected)
+        if not intrinsics:
+            return None
+
+        public_name = str(getattr(expression, "name", "")).rsplit("::", 1)[-1]
+        public_operation = self.metal_wave_intrinsics.get(public_name)
+        internal_operations = tuple(
+            self.metal_wave_intrinsics.get(str(intrinsic).rsplit("::", 1)[-1])
+            for intrinsic in intrinsics
+        )
+        if (
+            public_operation is None
+            or not internal_operations
+            or not all(
+                operation == public_operation for operation in internal_operations
+            )
+        ):
+            return None
+
+        return_type = self.selected_metal_callable_return_type(selected)
+        return_value_type = self.metal_source_overload_value_type(return_type)
+        normalized_return_type = self.normalized_metal_type(
+            self.resolve_type_alias(return_value_type)
+        )
+        if normalized_return_type not in self.metal_source_bfloat_types:
+            return None
+
+        parameters = list(getattr(selected, "params", []) or [])
+        if len(parameters) != len(expression.args):
+            raise MetalStandardLibraryWrapperLoweringError(
+                str(getattr(expression, "name", "")),
+                intrinsics,
+                getattr(expression, "source_location", None),
+            )
+
+        arguments = []
+        for parameter, argument in zip(parameters, expression.args):
+            rendered = self.generate_expression(argument, is_main)
+            parameter_type = self.metal_source_overload_parameter_type(parameter)
+            normalized_parameter_type = self.normalized_metal_type(
+                self.resolve_type_alias(parameter_type)
+            )
+            if normalized_parameter_type in self.metal_source_bfloat_types:
+                rendered = f"float({rendered})"
+            arguments.append(rendered)
+
+        result_type = self.map_type(return_value_type)
+        return f"{result_type}({public_operation}({', '.join(arguments)}))"
+
+    def resolve_metal_math_builtin_name(self, name, arguments):
+        text = str(name)
+        builtin_name = self.map_metal_math_function_name(text, arguments)
+        if builtin_name is None:
+            if "::" in text or text not in self.metal_math_intrinsics:
+                return None
+            builtin_name = text
+
+        source_overloads = self.metal_user_function_overloads(text)
+        if source_overloads:
+            binding, _function = self.resolve_metal_user_function_overload(
+                text, arguments
+            )
+            if binding in {"user", "unknown"}:
+                return None
+            if "::" not in text and any(
+                not self.metal_math_source_overload_is_stdlib_extension(function)
+                for function in source_overloads
+            ):
+                return None
+        if "::" not in text and (
+            text in self.current_variable_types or text in self.global_variable_types
+        ):
+            return None
+        return builtin_name
 
     @staticmethod
     def metal_math_builtin_namespace_mode(name):
@@ -10373,7 +10801,9 @@ class MetalToCrossGLConverter:
         )
 
     def metal_math_builtin_result_type(self, expression):
-        builtin_name = self.map_metal_math_function_name(expression.name)
+        builtin_name = self.resolve_metal_math_builtin_name(
+            expression.name, expression.args
+        )
         if builtin_name is None:
             return None
         rule = self.metal_math_builtin_result_rules.get(builtin_name)
