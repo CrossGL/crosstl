@@ -919,32 +919,18 @@
   },
   "directx_toolchain_status": {
     "status": "passing-with-expected-workgroup-blockers",
-    "note": "Windows CI compiles all 468 generated compute entries in the five-source emitted DirectX HLSL frontier below. Six runtime-selected workgroup sources covering 106 entries fail before emission; no placeholder workgroup size is applied. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity.",
+    "note": "Windows CI compiles all 468 generated compute entries in the five-source emitted DirectX HLSL frontier below with zero DXC warnings. Six runtime-selected workgroup sources covering 106 entries fail before emission; no placeholder workgroup size is applied. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity.",
     "compiler": {
       "name": "dxc",
       "version": "v1.9.2602.24"
     },
     "warning_evidence": {
-      "status": "validated-with-tracked-warnings",
-      "warningRunCount": 11,
-      "observedWarningCount": 11,
-      "uniqueContractCount": 1,
-      "contracts": [
-        {
-          "classification": "native-half-arithmetic-conversion",
-          "source": "mlx/backend/metal/kernels/arange.metal",
-          "issue": "https://github.com/CrossGL/crosstl/issues/1802",
-          "message": "conversion from larger type 'uint' to smaller type 'half', possible loss of data [-Wconversion]",
-          "sourceLines": [
-            {
-              "text": "arangefloat16_out[index] = (arangefloat16_start + (index * arangefloat16_step));",
-              "occurrencesPerRun": 1
-            }
-          ],
-          "warningsPerRun": 1,
-          "observedCount": 11
-        }
-      ]
+      "status": "warning-clean",
+      "validatedRunCount": 468,
+      "warningRunCount": 0,
+      "observedWarningCount": 0,
+      "uniqueContractCount": 0,
+      "contracts": []
     },
     "contextual_narrowing_evidence": {
       "status": "resolved",
@@ -961,12 +947,12 @@
           "validatedEntryPointCount": 11,
           "generatedSourceLines": [
             {
-              "text": "arangeint16_out[index] = int16_t((arangeint16_start + (index * arangeint16_step)));",
+              "text": "arangeint16_out[index] = int16_t((uint(arangeint16_start) + (index * uint(arangeint16_step))));",
               "occurrencesPerArtifact": 1
             }
           ],
           "observedWarningCount": 0,
-          "remainingWarningIssue": "https://github.com/CrossGL/crosstl/issues/1802"
+          "warningsAsErrors": true
         },
         {
           "classification": "uint64-local-destination-conversion",
@@ -986,6 +972,22 @@
           "warningsAsErrors": true
         }
       ],
+      "runtimeExecutionAttempted": false,
+      "numericalParityClaimed": false
+    },
+    "native_16_bit_arithmetic_evidence": {
+      "status": "resolved",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1802",
+      "compiler": "dxc",
+      "profile": "cs_6_2",
+      "compilerArguments": [
+        "-enable-16bit-types"
+      ],
+      "source": "mlx/backend/metal/kernels/arange.metal",
+      "validatedEntryPointCount": 11,
+      "generatedSourceLine": "arangefloat16_out[index] = (arangefloat16_start + (float16_t(index) * arangefloat16_step));",
+      "observedWarningCount": 0,
+      "warningsAsErrors": true,
       "runtimeExecutionAttempted": false,
       "numericalParityClaimed": false
     },
@@ -1463,7 +1465,6 @@
       "https://github.com/CrossGL/crosstl/issues/1671"
     ],
     "semantic_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1802",
       "https://github.com/CrossGL/crosstl/issues/1491",
       "https://github.com/CrossGL/crosstl/issues/1537",
       "https://github.com/CrossGL/crosstl/issues/1557",
@@ -1525,7 +1526,6 @@
     }
   },
   "tracked_issues": [
-    "https://github.com/CrossGL/crosstl/issues/1802",
     "https://github.com/CrossGL/crosstl/issues/1669",
     "https://github.com/CrossGL/crosstl/issues/1670",
     "https://github.com/CrossGL/crosstl/issues/1671",
@@ -1573,6 +1573,7 @@
     "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1800",
     "https://github.com/CrossGL/crosstl/issues/1801",
+    "https://github.com/CrossGL/crosstl/issues/1802",
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1659",
     "https://github.com/CrossGL/crosstl/issues/1516",

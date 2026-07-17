@@ -1973,15 +1973,14 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert directx["warning_evidence"] == (
         module.MLX_DIRECTX_TOOLCHAIN_WARNING_EVIDENCE
     )
-    assert directx["warning_evidence"]["warningRunCount"] == 11
-    assert directx["warning_evidence"]["observedWarningCount"] == 11
-    assert directx["warning_evidence"]["uniqueContractCount"] == 1
-    assert directx["warning_evidence"]["contracts"][0]["issue"] == (
-        "https://github.com/CrossGL/crosstl/issues/1802"
-    )
-    assert directx["warning_evidence"]["contracts"][0]["source"] == (
-        module.MLX_ARANGE_SOURCE
-    )
+    assert directx["warning_evidence"] == {
+        "status": "warning-clean",
+        "validatedRunCount": module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT,
+        "warningRunCount": 0,
+        "observedWarningCount": 0,
+        "uniqueContractCount": 0,
+        "contracts": [],
+    }
     assert directx["contextual_narrowing_evidence"] == (
         module.MLX_DIRECTX_CONTEXTUAL_NARROWING_EVIDENCE
     )
@@ -2003,13 +2002,21 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         contract["observedWarningCount"] == 0
         for contract in contextual_narrowing["resolvedWarningContracts"]
     )
-    assert (
-        contextual_narrowing["resolvedWarningContracts"][0]["remainingWarningIssue"]
-        == "https://github.com/CrossGL/crosstl/issues/1802"
+    assert all(
+        contract["warningsAsErrors"] is True
+        for contract in contextual_narrowing["resolvedWarningContracts"]
     )
-    assert (
-        contextual_narrowing["resolvedWarningContracts"][1]["warningsAsErrors"] is True
+    native_arithmetic = directx["native_16_bit_arithmetic_evidence"]
+    assert native_arithmetic == module.MLX_DIRECTX_NATIVE_16_BIT_ARITHMETIC_EVIDENCE
+    assert native_arithmetic["validatedEntryPointCount"] == 11
+    assert native_arithmetic["generatedSourceLine"] == (
+        "arangefloat16_out[index] = (arangefloat16_start + "
+        "(float16_t(index) * arangefloat16_step));"
     )
+    assert native_arithmetic["observedWarningCount"] == 0
+    assert native_arithmetic["warningsAsErrors"] is True
+    assert native_arithmetic["runtimeExecutionAttempted"] is False
+    assert native_arithmetic["numericalParityClaimed"] is False
     assert directx["selected_quantized_frontier"] == (
         module.MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE
     )
@@ -6186,6 +6193,9 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     assert result["contextualNarrowingEvidence"] == (
         module.MLX_DIRECTX_CONTEXTUAL_NARROWING_EVIDENCE
     )
+    assert result["native16BitArithmeticEvidence"] == (
+        module.MLX_DIRECTX_NATIVE_16_BIT_ARITHMETIC_EVIDENCE
+    )
     assert result["bfloat16LoweringEvidence"] == (
         module.MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE
     )
@@ -6210,20 +6220,10 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         assert source in toolchain_config
 
 
-@pytest.mark.parametrize("warning_drift", ("missing", "unexpected"))
-def test_directx_toolchain_warning_contract_rejects_drift(warning_drift):
+def test_directx_toolchain_warning_contract_rejects_new_warning():
     module = _load_harness()
-    warnings = [
-        (contract["message"], source_line["text"])
-        for contract in module.MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS
-        if contract["source"] == module.MLX_ARANGE_SOURCE
-        for source_line in contract["sourceLines"]
-        for _ in range(source_line["occurrencesPerRun"])
-    ]
-    if warning_drift == "missing":
-        warnings.pop()
-    else:
-        warnings.append(("new target warning [-Wconversion]", "value = wider;"))
+    assert module.MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS == ()
+    warnings = [("new target warning [-Wconversion]", "value = wider;")]
     stderr = "\n".join(
         line
         for index, (message, source_line) in enumerate(warnings, start=1)
@@ -6489,8 +6489,9 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "concrete `static_assert` evaluation" in normalized_readme
     assert "Official DXC validation" in normalized_readme
     assert "`-enable-16bit-types`, and `-WX` passes" in normalized_readme
-    assert "one pinned warning contract from `arange.metal`" in normalized_readme
-    assert "11 observed warnings across 11 arange runs" in normalized_readme
+    assert "zero warnings across all 468 entry-point runs" in normalized_readme
+    assert "records this as a warning-clean contract" in normalized_readme
+    assert "rejects any newly observed warning" in normalized_readme
     assert "two selected `random.metal` entries compile without" in normalized_readme
     assert "All 18 rope entries compile with DXC profile `cs_6_2`" in (
         normalized_readme
@@ -6499,16 +6500,21 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         normalized_readme
     )
     assert (
-        "`arangeint16_out[index] = int16_t((arangeint16_start + "
-        "(index * arangeint16_step)));`"
+        "`arangeint16_out[index] = int16_t((uint(arangeint16_start) + "
+        "(index * uint(arangeint16_step))));`"
+    ) in normalized_readme
+    assert (
+        "`arangefloat16_out[index] = (arangefloat16_start + "
+        "(float16_t(index) * arangefloat16_step));`"
     ) in normalized_readme
     assert "`index_1 = uint(((2 * pos.x) + (pos.y * stride)));`" in (normalized_readme)
     assert "`index_1 = uint((pos.x + (pos.y * stride)));`" in normalized_readme
-    assert "exact messages, generated source expressions, and multiplicities" in (
+    assert "and with DXC profile `cs_6_2`, `-enable-16bit-types`, and `-WX`" in (
         normalized_readme
     )
-    assert "rejects missing, additional, or changed warnings" in normalized_readme
-    assert "not a clean `-WX` contract" in normalized_readme
+    assert "compiler acceptance and a warning-clean diagnostic contract" in (
+        normalized_readme
+    )
     assert "native-profile helper contract under #1799 is also resolved" in (
         normalized_readme
     )
@@ -6654,7 +6660,7 @@ def test_closed_project_blockers_are_recorded_as_resolved():
     )
     resolved_issues = {
         f"https://github.com/CrossGL/crosstl/issues/{number}"
-        for number in (1312, 1472, 1476, 1516, 1659, 1672, 1800, 1801)
+        for number in (1312, 1472, 1476, 1516, 1659, 1672, 1800, 1801, 1802)
     }
 
     assert resolved_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
@@ -6685,6 +6691,7 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
         "https://github.com/CrossGL/crosstl/issues/1799",
         "https://github.com/CrossGL/crosstl/issues/1800",
         "https://github.com/CrossGL/crosstl/issues/1801",
+        "https://github.com/CrossGL/crosstl/issues/1802",
     }
     native_profile_issue = "https://github.com/CrossGL/crosstl/issues/1799"
     narrowing_issue = "https://github.com/CrossGL/crosstl/issues/1801"
@@ -6703,7 +6710,7 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert module.FULL_CORPUS_VALIDATION_TRACKED_ISSUES == (profile_issue,)
     assert native_profile_issue not in module.FULL_CORPUS_TRACKED_ISSUES
     assert narrowing_issue not in module.FULL_CORPUS_TRACKED_ISSUES
-    assert arithmetic_conversion_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert arithmetic_conversion_issue not in module.FULL_CORPUS_TRACKED_ISSUES
     assert static_assertion_issue not in module.FULL_CORPUS_TRACKED_ISSUES
     assert private_pointer_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert private_pointer_issue in module.FULL_CORPUS_TRACKED_ISSUES
@@ -6716,17 +6723,17 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert workgroup_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert native_profile_issue in module.RESOLVED_FRONTIER_ISSUES
     assert narrowing_issue in module.RESOLVED_FRONTIER_ISSUES
-    assert arithmetic_conversion_issue not in module.RESOLVED_FRONTIER_ISSUES
+    assert arithmetic_conversion_issue in module.RESOLVED_FRONTIER_ISSUES
     assert resource_issue in gaps["tracked_issues"]
     assert profile_issue in gaps["tracked_issues"]
     assert workgroup_issue in gaps["tracked_issues"]
     assert checkpoint_issue in gaps["tracked_issues"]
     assert native_profile_issue not in gaps["tracked_issues"]
     assert narrowing_issue not in gaps["tracked_issues"]
-    assert arithmetic_conversion_issue in gaps["tracked_issues"]
+    assert arithmetic_conversion_issue not in gaps["tracked_issues"]
     assert native_profile_issue in gaps["resolved_issues"]
     assert narrowing_issue in gaps["resolved_issues"]
-    assert arithmetic_conversion_issue not in gaps["resolved_issues"]
+    assert arithmetic_conversion_issue in gaps["resolved_issues"]
     assert static_assertion_issue not in gaps["tracked_issues"]
     assert static_assertion_issue in module.RESOLVED_FRONTIER_ISSUES
     assert static_assertion_issue in gaps["resolved_issues"]
@@ -6741,7 +6748,8 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert native_profile_issue not in gaps["full_corpus_scout"]["semantic_blocked_by"]
     assert narrowing_issue not in gaps["full_corpus_scout"]["semantic_blocked_by"]
     assert (
-        arithmetic_conversion_issue in gaps["full_corpus_scout"]["semantic_blocked_by"]
+        arithmetic_conversion_issue
+        not in gaps["full_corpus_scout"]["semantic_blocked_by"]
     )
     assert gaps["full_corpus_scout"]["validation_blocked_by"] == [
         profile_issue,
