@@ -113,21 +113,27 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
-def assert_directx_native_16_bit_compute_validates_if_available(hlsl_code, tmp_path):
+def assert_directx_warnings_clean_if_available(
+    hlsl_code,
+    tmp_path,
+    *,
+    profile="cs_6_0",
+    compiler_arguments=(),
+):
     dxc = shutil.which("dxc")
     if dxc is None:
         return
 
-    shader_path = tmp_path / "native-16-bit-shader.hlsl"
-    output_path = tmp_path / "native-16-bit-shader.dxil"
+    shader_path = tmp_path / "warnings-clean-shader.hlsl"
+    output_path = tmp_path / "warnings-clean-shader.dxil"
     shader_path.write_text(hlsl_code, encoding="utf-8")
     compile_result = subprocess.run(
         [
             dxc,
             "-WX",
             "-T",
-            "cs_6_2",
-            "-enable-16bit-types",
+            profile,
+            *compiler_arguments,
             "-E",
             "CSMain",
             str(shader_path),
@@ -139,6 +145,15 @@ def assert_directx_native_16_bit_compute_validates_if_available(hlsl_code, tmp_p
         check=False,
     )
     assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
+
+
+def assert_directx_native_16_bit_compute_validates_if_available(hlsl_code, tmp_path):
+    assert_directx_warnings_clean_if_available(
+        hlsl_code,
+        tmp_path,
+        profile="cs_6_2",
+        compiler_arguments=("-enable-16bit-types",),
+    )
 
 
 HLSL_M_PI_F_LITERAL = "3.14159265358979323846264338327950288f"
@@ -7225,6 +7240,89 @@ def test_hlsl_structured_buffer_fixed_width_aliases_map_resource_generics():
     assert "counts.Store(" not in generated_code
     assert "RWStructuredBuffer<size_t>" not in generated_code
     assert "size_t" not in generated_code
+
+
+def test_hlsl_typed_buffer_store_contextually_narrows_wide_integers(tmp_path):
+    shader = """
+    shader TypedBufferContextualNarrowing {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            @stage_entry
+            void narrow(
+                RWStructuredBuffer<uint> unsignedOutput @binding(0),
+                RWStructuredBuffer<int> signedOutput @binding(1),
+                uint index @gl_GlobalInvocationID
+            ) {
+                uint packed = index;
+                int64_t signedWide = int64_t(index);
+                uint unsignedSame = index;
+                int signedSame = int(index);
+                buffer_store(
+                    unsignedOutput,
+                    index,
+                    (packed & 0xff00000000) >> 32);
+                buffer_store(signedOutput, index, signedWide >> 32);
+                buffer_store(unsignedOutput, index, unsignedSame);
+                buffer_store(signedOutput, index, signedSame);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "unsignedOutput[index] = "
+        "uint(((packed & 1095216660480ull) >> 32));" in generated_code
+    )
+    assert "signedOutput[index] = int((signedWide >> 32));" in generated_code
+    assert "unsignedOutput[index] = unsignedSame;" in generated_code
+    assert "signedOutput[index] = signedSame;" in generated_code
+    assert "uint(unsignedSame)" not in generated_code
+    assert "int(signedSame)" not in generated_code
+
+    assert_directx_warnings_clean_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_typed_resource_assignment_contextually_narrows_wide_integers(
+    tmp_path,
+):
+    shader = """
+    shader TypedResourceAssignmentNarrowing {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            @stage_entry
+            void narrow(
+                RWStructuredBuffer<uint8> unsignedOutput @binding(0),
+                RWStructuredBuffer<int> signedOutput @binding(1),
+                uint index @gl_GlobalInvocationID
+            ) {
+                uint packed = index;
+                int64_t signedWide = int64_t(index);
+                unsignedOutput[index] = (packed & 0xff00000000) >> 32;
+                signedOutput[index] = signedWide >> 32;
+                unsignedOutput[index] = packed;
+                signedOutput[index] = int(index);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWStructuredBuffer<uint> unsignedOutput : register(u0);" in generated_code
+    assert (
+        "unsignedOutput[index] = "
+        "uint(((packed & 1095216660480ull) >> 32));" in generated_code
+    )
+    assert "signedOutput[index] = int((signedWide >> 32));" in generated_code
+    assert "unsignedOutput[index] = packed;" in generated_code
+    assert "signedOutput[index] = int(index);" in generated_code
+    assert "uint(packed)" not in generated_code
+
+    assert_directx_warnings_clean_if_available(generated_code, tmp_path)
 
 
 def test_hlsl_structured_buffer_alias_arrays_infer_helper_parameter_sizes():

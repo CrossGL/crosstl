@@ -10053,6 +10053,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"bool{rows}x{columns}"
         return "bool"
 
+    def hlsl_literal_result_type(self, expr):
+        literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
+        value = getattr(expr, "value", None)
+        if not isinstance(value, int) or isinstance(value, bool):
+            return literal_type
+
+        mapped_type = self.map_type(literal_type) if literal_type else None
+        if mapped_type in {"int64_t", "uint64_t"}:
+            return mapped_type
+        if mapped_type == "uint":
+            return mapped_type
+        if value > 0xFFFFFFFF:
+            return "uint64_t"
+        if value > 0x7FFFFFFF:
+            return "uint"
+        if value < -0x80000000:
+            return "int64_t"
+        return literal_type
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
@@ -10635,9 +10654,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             }:
                 return str(func_name)
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
-            literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
-            if literal_type:
-                return literal_type
+            return self.hlsl_literal_result_type(expr)
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             return self.variable_type_by_name(getattr(expr, "name", None))
         return None
@@ -12295,6 +12312,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return f"{lhs} = {rounded}"
 
+    def hlsl_assignment_target_type(self, target):
+        inferred_type = self.expression_result_type(target)
+        if not isinstance(target, ArrayAccessNode):
+            return inferred_type
+        if self.is_hlsl_bfloat16_type(inferred_type):
+            return inferred_type
+
+        resource_types = {
+            "RWBuffer",
+            "RWStructuredBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+        }
+        array_expression = target.array
+        resource_type = self.hlsl_struct_buffer_expression_resource_type(target)
+        if resource_type is None:
+            binding = self.hlsl_resource_pointer_binding(array_expression)
+            if binding is not None:
+                resource_type = binding.get("resource_type")
+        if resource_type is None:
+            resource_type = self.expression_result_type(array_expression)
+        if resource_type is None:
+            return inferred_type
+        physical_resource_type = self.map_type(
+            self.directx_resource_declaration_type(resource_type)
+        )
+        element_type = self.hlsl_typed_buffer_element_type(
+            physical_resource_type, resource_types
+        )
+        return element_type or inferred_type
+
     def generate_assignment(self, node, *, statement_context=False):
         if hasattr(node, "target") and hasattr(node, "value"):
             target = node.target
@@ -12305,7 +12353,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = node.right
             op = getattr(node, "operator", "=")
 
-        target_type = self.expression_result_type(target)
+        target_type = self.hlsl_assignment_target_type(target)
         boolean_compound_assignment = self.generate_hlsl_boolean_compound_assignment(
             node,
             target,
@@ -12405,7 +12453,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return unsupported_store
 
         atomic_assignment = self.generate_hlsl_typed_buffer_atomic_statement(
-            value, target, self.expression_result_type(target)
+            value, target, target_type
         )
         if atomic_assignment is not None and op == "=":
             return atomic_assignment
@@ -12449,9 +12497,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return compound_assignment
 
         lhs = self.generate_expression(target)
-        rhs = self.generate_expression_with_expected(
-            value, self.expression_result_type(target)
-        )
+        rhs = self.generate_expression_with_expected(value, target_type)
         rhs = self.hlsl_bfloat16_storage_assignment_expression(
             target,
             rhs,
@@ -16041,7 +16087,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
             index = self.hlsl_resource_pointer_offset_index(buffer, index)
-            value = self.generate_expression(args[2])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
             source_element_type = self.hlsl_typed_buffer_element_type(
                 resource_type,
@@ -16079,12 +16124,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 },
             )
             if logical_bfloat_type is not None and physical_element_type == "uint16_t":
+                value = self.generate_expression(args[2])
                 storage_type = self.hlsl_bfloat16_storage_type(
                     logical_bfloat_type,
                     operation="buffer store",
                     source_location=getattr(args[2], "source_location", None),
                 )
                 value = f"{storage_type}({value})"
+            else:
+                value = self.generate_expression_with_expected(
+                    args[2], physical_element_type or source_element_type
+                )
             index = self.hlsl_resource_index_expression(
                 args[0],
                 args[1],
