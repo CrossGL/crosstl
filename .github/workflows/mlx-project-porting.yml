@@ -16,6 +16,7 @@ on:
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
       - "tests/test_mlx_copy_opengl_proof.py"
+      - "tests/test_mlx_dispatch_contract_fixture.py"
       - "tests/test_mlx_layer_norm_directx_proof.py"
       - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
@@ -37,6 +38,7 @@ on:
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
       - "tests/test_mlx_copy_opengl_proof.py"
+      - "tests/test_mlx_dispatch_contract_fixture.py"
       - "tests/test_mlx_layer_norm_directx_proof.py"
       - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
@@ -79,7 +81,10 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
+          python -m pip install -e . pytest-xdist
+
+      - name: Validate bounded MLX dispatch contract
+        run: python -m pytest -q -n auto tests/test_mlx_dispatch_contract_fixture.py
 
       - name: Install Linux SPIR-V tools
         if: runner.os == 'Linux'
