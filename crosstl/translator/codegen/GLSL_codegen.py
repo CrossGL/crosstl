@@ -2558,7 +2558,117 @@ class GLSLCodeGen:
                 for function in getattr(stage, "local_functions", []) or []
                 if getattr(function, "name", None) in reachable_names
             ]
+        self.prune_entry_scoped_declarations(scoped_ast, selected_copy_function)
         return scoped_ast
+
+    def prune_entry_scoped_declarations(self, ast, entry_function):
+        """Retain only module declarations reachable from one compute entry."""
+        functions = list(getattr(ast, "functions", []) or [])
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            functions.extend(getattr(stage, "local_functions", []) or [])
+        functions.append(entry_function)
+
+        function_names = {
+            getattr(function, "name", None)
+            for function in functions
+            if getattr(function, "name", None)
+        }
+        referenced_names = set()
+        for function in functions:
+            local_names = {
+                getattr(parameter, "name", None)
+                for parameter in (
+                    getattr(
+                        function,
+                        "parameters",
+                        getattr(function, "params", []),
+                    )
+                    or []
+                )
+                if getattr(parameter, "name", None)
+            }
+            local_names.update(
+                getattr(node, "name", None)
+                for node in self.entry_ast_nodes(getattr(function, "body", None))
+                if isinstance(node, VariableNode) and getattr(node, "name", None)
+            )
+            referenced_names.update(
+                self.entry_identifier_references(function) - local_names
+            )
+        referenced_names.difference_update(function_names)
+
+        declaration_groups = [
+            (ast, "global_variables", False),
+            (ast, "constants", False),
+            (ast, "cbuffers", True),
+        ]
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            declaration_groups.extend(
+                (
+                    (stage, "local_variables", False),
+                    (stage, "local_cbuffers", True),
+                )
+            )
+
+        declarations = []
+        for owner, attribute, include_members in declaration_groups:
+            for declaration in getattr(owner, attribute, []) or []:
+                names = self.entry_declaration_names(
+                    declaration,
+                    include_members=include_members,
+                )
+                declarations.append((declaration, names))
+
+        retained_ids = set()
+        changed = True
+        while changed:
+            changed = False
+            for declaration, names in declarations:
+                declaration_id = id(declaration)
+                if declaration_id in retained_ids or not names & referenced_names:
+                    continue
+                retained_ids.add(declaration_id)
+                referenced_names.update(
+                    self.entry_identifier_references(declaration) - names
+                )
+                changed = True
+
+        for owner, attribute, _include_members in declaration_groups:
+            setattr(
+                owner,
+                attribute,
+                [
+                    declaration
+                    for declaration in getattr(owner, attribute, []) or []
+                    if id(declaration) in retained_ids
+                ],
+            )
+
+    def entry_ast_nodes(self, root):
+        walk = getattr(root, "walk", None)
+        return walk() if callable(walk) else self.walk_ast(root)
+
+    def entry_identifier_references(self, root):
+        return {
+            str(node.name)
+            for node in self.entry_ast_nodes(root)
+            if isinstance(node, IdentifierNode) and getattr(node, "name", None)
+        }
+
+    def entry_declaration_names(self, declaration, *, include_members):
+        name = getattr(
+            declaration,
+            "name",
+            getattr(declaration, "variable_name", None),
+        )
+        names = {str(name)} if name else set()
+        if include_members:
+            names.update(
+                str(member.name)
+                for member in getattr(declaration, "members", []) or []
+                if getattr(member, "name", None)
+            )
+        return names
 
     def entry_reachable_function_names(self, ast, entry_function):
         functions = list(getattr(ast, "functions", []) or [])

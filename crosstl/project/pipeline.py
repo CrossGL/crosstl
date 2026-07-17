@@ -9834,6 +9834,8 @@ def _target_entry_points_for_crossgl_stages(
     ast: Any,
     target: str,
     stages: Sequence[Any],
+    *,
+    entry_scoped: bool = False,
 ) -> dict[str, str]:
     if target == "opengl":
         return {
@@ -9843,7 +9845,7 @@ def _target_entry_points_for_crossgl_stages(
     if target != "directx":
         return {}
     codegen = get_codegen(target)
-    stage_entry_names = codegen.stage_entry_names(ast)
+    stage_entry_names = {} if entry_scoped else codegen.stage_entry_names(ast)
     result: dict[str, str] = {}
     for stage in stages:
         function = getattr(stage, "entry_point", None)
@@ -9980,6 +9982,7 @@ def _project_workgroup_rule_execution_metadata(
     variant: str | None,
     materialization: Mapping[str, Any] | None,
     source_sizes: Mapping[str, tuple[int, int, int]],
+    entry_scoped: bool,
 ) -> dict[str, Any] | None:
     configured = _configured_workgroup_size_rule(config, unit.relative_path)
     if configured is None:
@@ -9998,7 +10001,12 @@ def _project_workgroup_rule_execution_metadata(
             "components": list(components),
         },
     )
-    target_entry_points = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    target_entry_points = _target_entry_points_for_crossgl_stages(
+        ast,
+        target,
+        stages,
+        entry_scoped=entry_scoped,
+    )
     entries: list[dict[str, Any]] = []
     for stage, record in joined:
         function = getattr(stage, "entry_point", None)
@@ -10171,6 +10179,7 @@ def _project_materialized_workgroup_execution_metadata(
     workgroup_size: Sequence[int],
     provenance: Mapping[str, Any],
     source_sizes: Mapping[str, tuple[int, int, int]],
+    entry_scoped: bool,
 ) -> dict[str, Any] | None:
     if not _has_host_named_template_materializations(materialization):
         return None
@@ -10187,7 +10196,12 @@ def _project_materialized_workgroup_execution_metadata(
             "workgroupSize": list(workgroup_size),
         },
     )
-    target_entry_points = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    target_entry_points = _target_entry_points_for_crossgl_stages(
+        ast,
+        target,
+        stages,
+        entry_scoped=entry_scoped,
+    )
     entries: list[dict[str, Any]] = []
     for stage, record in joined:
         function = getattr(stage, "entry_point", None)
@@ -10348,6 +10362,7 @@ def _project_subgroup_width_rule_execution_metadata(
     target: str,
     variant: str | None,
     materialization: Mapping[str, Any] | None,
+    entry_scoped: bool,
 ) -> dict[str, Any] | None:
     configured = _configured_subgroup_width_rule(config, unit.relative_path)
     if configured is None:
@@ -10382,7 +10397,12 @@ def _project_subgroup_width_rule_execution_metadata(
             materialization_details=exc.materialization_details,
         ) from exc
 
-    target_names = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    target_names = _target_entry_points_for_crossgl_stages(
+        ast,
+        target,
+        stages,
+        entry_scoped=entry_scoped,
+    )
     entries = []
     for stage, record in joined:
         function = getattr(stage, "entry_point", None)
@@ -10553,7 +10573,12 @@ def _dispatch_subgroup_width_execution_metadata(
     materialized_entry = str(getattr(function, "name", "main"))
     source_entry = selected_entry_point or materialized_entry
     _set_crossgl_stage_subgroup_width(stage, subgroup_width)
-    target_names = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    target_names = _target_entry_points_for_crossgl_stages(
+        ast,
+        target,
+        stages,
+        entry_scoped=True,
+    )
     target_entry = target_names.get(materialized_entry, materialized_entry)
     entry = {
         "sourceEntryPoint": source_entry,
@@ -22030,6 +22055,58 @@ def _materialize_crossgl_specialization_constants(
     return materialized
 
 
+def _entry_scoped_specialization_names(
+    unit: ProjectTranslationUnit,
+    source_ast: Any,
+    entry_point: str,
+    target: str,
+) -> set[str] | None:
+    try:
+        if unit.source_backend in {"cgl", "crossgl"}:
+            crossgl_ast = source_ast
+        else:
+            source_spec = SOURCE_REGISTRY.get(unit.source_backend)
+            cgl_spec = SOURCE_REGISTRY.get("cgl")
+            if (
+                source_spec is None
+                or source_spec.reverse_codegen_factory is None
+                or cgl_spec is None
+            ):
+                return None
+            intermediate = source_spec.reverse_codegen_factory().generate(source_ast)
+            crossgl_ast = cgl_spec.parse(
+                intermediate,
+                source_options={
+                    "strict_function_bodies": unit.source_backend != "mojo"
+                },
+            )
+        entry_scoped_ast = getattr(get_codegen(target), "entry_scoped_ast", None)
+        if not callable(entry_scoped_ast):
+            return None
+        scoped_ast = entry_scoped_ast(crossgl_ast, entry_point)
+        return {
+            str(getattr(node, "name"))
+            for node, _default_value, _has_default in (
+                _specialization_ast_declaration_items(scoped_ast)
+            )
+            if _is_non_empty_string(getattr(node, "name", None))
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _specialization_diagnostic_reaches_entry(
+    diagnostic: ProjectDiagnostic, reachable_names: set[str]
+) -> bool:
+    name = diagnostic.details.get("name")
+    if isinstance(name, str) and name not in reachable_names:
+        return False
+    previous_name = diagnostic.details.get("previousName")
+    if isinstance(previous_name, str) and previous_name not in reachable_names:
+        return False
+    return True
+
+
 def _project_specialization_metadata_for_input(
     config: ProjectConfig,
     unit: ProjectTranslationUnit,
@@ -22040,6 +22117,7 @@ def _project_specialization_metadata_for_input(
     include_paths: Sequence[str],
     defines: Mapping[str, str],
     source_options: Mapping[str, Any],
+    entry_point: str | None = None,
     configured_values: Mapping[str, tuple[Any, Mapping[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None, list[ProjectDiagnostic]]:
     source = input_path.read_text(encoding="utf-8", errors="replace")
@@ -22062,6 +22140,21 @@ def _project_specialization_metadata_for_input(
     declarations, declaration_diagnostics = _project_specialization_declarations(
         unit, ast, diagnostic_source
     )
+    if entry_point is not None:
+        reachable_names = _entry_scoped_specialization_names(
+            unit, ast, entry_point, target
+        )
+        if reachable_names is not None:
+            declarations = [
+                declaration
+                for declaration in declarations
+                if declaration.name in reachable_names
+            ]
+            declaration_diagnostics = [
+                diagnostic
+                for diagnostic in declaration_diagnostics
+                if _specialization_diagnostic_reaches_entry(diagnostic, reachable_names)
+            ]
     declaration_diagnostics = [
         replace(diagnostic, target=target, variant=variant)
         for diagnostic in declaration_diagnostics
@@ -22319,6 +22412,7 @@ def _project_workgroup_execution_metadata(
             variant=variant,
             materialization=template_materialization,
             source_sizes=source_sizes,
+            entry_scoped=selected_entry_point is not None,
         )
     )
     if rule_execution is not None:
@@ -22352,6 +22446,7 @@ def _project_workgroup_execution_metadata(
             workgroup_size=configured_size,
             provenance=configured_provenance,
             source_sizes=source_sizes,
+            entry_scoped=selected_entry_point is not None,
         )
         if materialized_execution is not None:
             return materialized_execution
@@ -23184,6 +23279,7 @@ def translate_project(
                         include_paths=include_paths,
                         defines=translation_defines,
                         source_options=translation_source_options,
+                        entry_point=selected_entry_point,
                         configured_values=translation_job.specialization_values,
                     )
                     if specialization_constants:
@@ -23389,6 +23485,7 @@ def translate_project(
                                         if template_materialization is not None
                                         else None
                                     ),
+                                    entry_scoped=selected_entry_point is not None,
                                 )
                             )
                         else:

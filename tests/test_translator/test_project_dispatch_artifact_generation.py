@@ -36,6 +36,24 @@ UNRELATED_COMPUTE_SOURCE = textwrap.dedent("""
     }
     """).strip()
 
+MULTI_ENTRY_COMPUTE_SOURCE = textwrap.dedent("""
+    shader MultiEntryCompute {
+        bool enabled @function_constant(7);
+
+        compute first {
+            void main() {
+                bool first_selected = enabled;
+            }
+        }
+
+        compute second {
+            void main() {
+                bool second_selected = enabled;
+            }
+        }
+    }
+    """).strip()
+
 
 def _dispatch_manifest(*, subgroup_width=None):
     workgroup_size = [32, 1, 1] if subgroup_width is not None else [8, 2, 1]
@@ -91,10 +109,7 @@ def _write_project(tmp_path, *, workgroup_size=None, subgroup_width=None):
         UNRELATED_COMPUTE_SOURCE + "\n", encoding="utf-8"
     )
     (contracts / "planned.json").write_text(
-        json.dumps(
-            _dispatch_manifest(subgroup_width=subgroup_width), indent=2
-        )
-        + "\n",
+        json.dumps(_dispatch_manifest(subgroup_width=subgroup_width), indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -172,24 +187,23 @@ def test_directx_and_opengl_generate_only_source_scoped_dispatch_artifacts(tmp_p
             for record in planned_artifact["specializationConstants"]
         }
         assert constants[7]["concreteValue"] is True
-        assert constants[7]["valueProvenance"] == planned_artifact["execution"][
-            "provenance"
-        ]
+        assert (
+            constants[7]["valueProvenance"]
+            == planned_artifact["execution"]["provenance"]
+        )
 
         assert len(unrelated_artifacts) == 1
         assert "variant" not in unrelated_artifacts[0]
         assert "dispatchArtifact" not in unrelated_artifacts[0]
 
-    directx_artifact = _artifacts_for(
-        payload, "kernels/planned.cgl", target="directx"
-    )[0]
+    directx_artifact = _artifacts_for(payload, "kernels/planned.cgl", target="directx")[
+        0
+    ]
     directx_source = (root / directx_artifact["path"]).read_text(encoding="utf-8")
     assert "[numthreads(8, 2, 1)]" in directx_source
     assert "static const bool enabled = true;" in directx_source
 
-    opengl_artifact = _artifacts_for(
-        payload, "kernels/planned.cgl", target="opengl"
-    )[0]
+    opengl_artifact = _artifacts_for(payload, "kernels/planned.cgl", target="opengl")[0]
     opengl_source = (root / opengl_artifact["path"]).read_text(encoding="utf-8")
     assert (
         "layout(local_size_x = 8, local_size_y = 2, local_size_z = 1) in;"
@@ -211,14 +225,59 @@ def test_directx_and_opengl_generate_only_source_scoped_dispatch_artifacts(tmp_p
     assert validate_project_report(report_path)["success"] is True
 
 
+def test_directx_dispatch_artifact_uses_entry_scoped_target_name(tmp_path):
+    root = tmp_path / "repo"
+    kernels = root / "kernels"
+    contracts = root / "contracts"
+    kernels.mkdir(parents=True)
+    contracts.mkdir()
+    (kernels / "multi.cgl").write_text(
+        MULTI_ENTRY_COMPUTE_SOURCE + "\n", encoding="utf-8"
+    )
+    manifest = _dispatch_manifest(subgroup_width=32)
+    manifest["contracts"][0]["source"] = "kernels/multi.cgl"
+    manifest["contracts"][0]["entryPoint"] = "second"
+    (contracts / "multi.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    (root / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["kernels/multi.cgl"]
+            targets = ["directx"]
+            output_dir = "generated"
+            dispatch_contracts = ["contracts/multi.json"]
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(root), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["entryPoint"] == {
+        "source": "second",
+        "target": "CSMain",
+        "stage": "compute",
+    }
+    assert artifact["execution"]["sourceEntryPoints"] == ["second"]
+    assert artifact["execution"]["entryPoints"][0]["targetEntryPoint"] == "CSMain"
+
+    generated = (root / artifact["path"]).read_text(encoding="utf-8")
+    assert "void CSMain(" in generated
+    assert "CSMain_2" not in generated
+
+
 def test_report_validation_rejects_tampered_dispatch_artifact_metadata(tmp_path):
     root, config = _write_project(tmp_path)
-    payload = copy.deepcopy(
-        translate_project(config, format_output=False).to_json()
-    )
-    planned_artifact = _artifacts_for(
-        payload, "kernels/planned.cgl", target="directx"
-    )[0]
+    payload = copy.deepcopy(translate_project(config, format_output=False).to_json())
+    planned_artifact = _artifacts_for(payload, "kernels/planned.cgl", target="directx")[
+        0
+    ]
     planned_artifact["dispatchArtifact"]["workgroupSize"] = [4, 2, 1]
     report_path = _write_report(root, payload, "tampered-report.json")
 
@@ -251,9 +310,7 @@ def test_report_validation_rejects_dispatch_emission_metadata_tampering(
             format_output=False,
         ).to_json()
     )
-    artifact = _artifacts_for(
-        payload, "kernels/planned.cgl", target="directx"
-    )[0]
+    artifact = _artifacts_for(payload, "kernels/planned.cgl", target="directx")[0]
     assert "dispatchArtifact" in artifact
     if mutation == "specialization":
         constant = next(
@@ -333,9 +390,7 @@ def test_directx_enforces_exact_dispatch_subgroup_width(tmp_path):
     assert payload["summary"]["failedCount"] == 0
     planned_job = payload["project"]["dispatchArtifactPlan"]["artifacts"][0]
     assert planned_job["subgroupWidth"] == 32
-    artifact = _artifacts_for(
-        payload, "kernels/planned.cgl", target="directx"
-    )[0]
+    artifact = _artifacts_for(payload, "kernels/planned.cgl", target="directx")[0]
     assert artifact["status"] == "translated"
     assert artifact["dispatchArtifact"] == planned_job
 
@@ -397,9 +452,7 @@ def test_opengl_fails_closed_for_exact_dispatch_subgroup_width(tmp_path):
     assert payload["summary"]["failedCount"] == 1
     planned_job = payload["project"]["dispatchArtifactPlan"]["artifacts"][0]
     assert planned_job["subgroupWidth"] == 32
-    artifact = _artifacts_for(
-        payload, "kernels/planned.cgl", target="opengl"
-    )[0]
+    artifact = _artifacts_for(payload, "kernels/planned.cgl", target="opengl")[0]
     assert artifact["status"] == "failed"
     assert artifact["dispatchArtifact"] == planned_job
     assert not (root / artifact["path"]).exists()

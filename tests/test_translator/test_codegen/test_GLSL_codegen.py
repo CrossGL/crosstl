@@ -36385,6 +36385,44 @@ def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helper
     )
 
 
+def test_opengl_entry_scoped_generation_prunes_unreachable_global_declarations():
+    source = """
+    shader EntryScopedGlobals {
+        constant uint selectedConstant @constant_id(3) = 7;
+        constant uint unselectedConstant @constant_id(4) = 11;
+        uniform uint selectedDirect @location(0);
+        uniform uint selectedThroughHelper @location(1);
+        uniform uint unselectedGlobal @location(2);
+
+        uint selected_helper(uint value) {
+            return value + selectedConstant + selectedThroughHelper;
+        }
+
+        compute first {
+            void main(RWStructuredBuffer<uint> outputValues @buffer(0)) {
+                outputValues[0] = unselectedConstant + unselectedGlobal;
+            }
+        }
+
+        compute second {
+            void main(RWStructuredBuffer<uint> outputValues @buffer(0)) {
+                outputValues[0] = selectedDirect + selected_helper(1u);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(source))
+
+    generated = GLSLCodeGen().generate_entry(ast, "second")
+
+    assert "layout(constant_id = 3) const uint selectedConstant = 7;" in generated
+    assert "layout(location = 0) uniform uint selectedDirect;" in generated
+    assert "layout(location = 1) uniform uint selectedThroughHelper;" in generated
+    assert "selected_helper" in generated
+    assert "unselectedConstant" not in generated
+    assert "unselectedGlobal" not in generated
+
+
 def test_opengl_entry_scoped_generation_reports_available_entries():
     ast = parse_code(tokenize_code(ENTRY_SCOPED_COMPUTE_SOURCE))
 

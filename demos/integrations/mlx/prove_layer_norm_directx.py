@@ -698,9 +698,11 @@ def _project_config(
         entry_points={MLX_LAYER_NORM_SOURCE: str(case["entryPoint"])},
         include_dirs=(".",),
         variants={variant_name: {}},
-        variant_specialization_constants={
-            variant_name: {str(case["selector"]): case["value"]}
-        },
+        variant_specialization_constants=(
+            {variant_name: {str(case["selector"]): case["value"]}}
+            if case["usesFunctionConstant"]
+            else {}
+        ),
         workgroup_size_rules={
             MLX_LAYER_NORM_SOURCE: [
                 str(component) for component in case["workgroupSize"]
@@ -803,6 +805,11 @@ def _validate_project_report(
         MLX_LAYER_NORM_SOURCE: [str(component) for component in case["workgroupSize"]]
     }
     expected_subgroup_rule = {MLX_LAYER_NORM_SOURCE: str(LAYER_NORM_SUBGROUP_WIDTH)}
+    expected_specialization_constants = (
+        {name: {str(case["selector"]): case["value"]}}
+        if case["usesFunctionConstant"]
+        else {}
+    )
     _require(
         project.get("targets") == ["directx"]
         and project.get("entryPointSelections")
@@ -813,7 +820,7 @@ def _validate_project_report(
         and project.get("selectedVariants") == [name]
         and project.get("variantWorkgroupSizes") == {}
         and project.get("variantSpecializationConstants")
-        == {name: {str(case["selector"]): case["value"]}}
+        == expected_specialization_constants
         and project.get("workgroupSize") is None
         and project.get("workgroupSizeRules") == expected_workgroup_rule
         and project.get("workgroupSizeRuleCount") == 1
@@ -887,8 +894,17 @@ def _validate_specialization(
     artifact: Mapping[str, Any],
     generated: str,
     case: Mapping[str, Any],
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     constants = artifact.get("specializationConstants")
+    if not case["usesFunctionConstant"]:
+        _require(
+            constants in (None, [])
+            and "specializationMaterialization" not in artifact
+            and re.search(r"\b(?:static\s+const\s+bool\s+)?has_w\b", generated) is None,
+            f"{case['name']} retained an unreachable function constant",
+        )
+        return None
+
     _require(
         isinstance(constants, list) and len(constants) == 1,
         f"{case['name']} must report one function constant",
@@ -935,9 +951,8 @@ def _validate_specialization(
         r"\bstatic\s+const\s+bool\s+has_w\s*=\s*(true|false)\s*;",
         generated,
     )
-    expected_static_constants = [literal] if case["usesFunctionConstant"] else []
     _require(
-        static_constants == expected_static_constants,
+        static_constants == [literal],
         f"{case['name']} emitted an incorrect concrete has_w constant set",
     )
     return {
@@ -947,7 +962,7 @@ def _validate_specialization(
         "selectorKind": case["selectorKind"],
         "value": case["value"],
         "valueProvenance": expected_provenance,
-        "emittedInSelectedEntry": bool(case["usesFunctionConstant"]),
+        "emittedInSelectedEntry": True,
     }
 
 

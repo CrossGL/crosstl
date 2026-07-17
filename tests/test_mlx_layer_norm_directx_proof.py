@@ -295,9 +295,11 @@ def test_project_config_selects_one_materialized_entry_and_variant(
         )
     }
     assert config.subgroup_width_rules == {module.MLX_LAYER_NORM_SOURCE: "32"}
-    assert config.variant_specialization_constants == {
-        case["name"]: {case["selector"]: case["value"]}
-    }
+    assert config.variant_specialization_constants == (
+        {case["name"]: {case["selector"]: case["value"]}}
+        if case["usesFunctionConstant"]
+        else {}
+    )
 
 
 @pytest.mark.parametrize("case_index", [0, 1])
@@ -517,10 +519,10 @@ def test_reduced_layer_norm_project_proof_emits_exact_standalone_entries(
             "algorithm": "sha256",
             "value": source_hash,
         }
-    assert [
-        case["specializationConstant"]["emittedInSelectedEntry"]
-        for case in summary["cases"]
-    ] == [False, True]
+    assert summary["cases"][0]["specializationConstant"] is None
+    assert (
+        summary["cases"][1]["specializationConstant"]["emittedInSelectedEntry"] is True
+    )
     assert all(
         case["nativeCompilation"]["status"] == "unavailable"
         for case in summary["cases"]
