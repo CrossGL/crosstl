@@ -13,7 +13,6 @@ from crosstl.project import (
     validate_project_report,
 )
 
-
 PLANNED_COMPUTE_SOURCE = textwrap.dedent("""
     shader PlannedCompute {
         bool enabled @function_constant(7);
