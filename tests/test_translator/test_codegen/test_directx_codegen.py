@@ -1,6 +1,8 @@
+import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 from pathlib import Path
 from typing import List
@@ -57,6 +59,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXCompileTimeGlobalError,
     DirectXComplexCompoundAssignmentError,
     DirectXCooperativeMatrixUnsupportedError,
+    DirectXCopySignError,
     DirectXEntryPointSelectionError,
     DirectXForInIterableError,
     DirectXMinimumPrecisionIntegerArithmeticError,
@@ -160,6 +163,151 @@ HLSL_M_PI_F_LITERAL = "3.14159265358979323846264338327950288f"
 HLSL_M_PI_LITERAL = "3.14159265358979323846264338327950288L"
 
 
+def float32_from_bits(bits):
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
+
+
+def float32(value):
+    return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
+def float32_ulp_distance(left, right):
+    def ordered_bits(value):
+        bits = struct.unpack("<I", struct.pack("<f", value))[0]
+        if bits & 0x80000000:
+            return 0x80000000 - (bits & 0x7FFFFFFF)
+        return 0x80000000 + bits
+
+    return abs(ordered_bits(left) - ordered_bits(right))
+
+
+def stable_log1p_float32_lowering(value):
+    value = float32(value)
+    if value > 0.5:
+        return float32(math.log(float32(1.0 + value)))
+    reduced = float32(value / float32(2.0 + value))
+    reduced_squared = float32(reduced * reduced)
+    series = float32(1.0 / 11.0)
+    for coefficient in (1.0 / 9.0, 1.0 / 7.0, 1.0 / 5.0, 1.0 / 3.0):
+        series = float32(float32(coefficient) + float32(reduced_squared * series))
+    series = float32(1.0 + float32(reduced_squared * series))
+    return float32(float32(2.0 * reduced) * series)
+
+
+def inverse_hyperbolic_float32_lowering(operation, value):
+    value = float32(value)
+    if math.isnan(value):
+        return value
+    if operation == "acosh":
+        if value < 1.0:
+            return math.nan
+        if value == 1.0:
+            return 0.0
+        if value > 4096.0:
+            return float32(float32(math.log(value)) + float32(math.log(2.0)))
+        offset = float32(value - 1.0)
+        if offset <= 0.0625:
+            series = float32(35.0 / 18432.0)
+            series = float32(float32(-5.0 / 896.0) + float32(offset * series))
+            series = float32(float32(3.0 / 160.0) + float32(offset * series))
+            series = float32(float32(-1.0 / 12.0) + float32(offset * series))
+            series = float32(1.0 + float32(offset * series))
+            return float32(float32(math.sqrt(float32(2.0 * offset))) * series)
+        product = float32(offset * float32(value + 1.0))
+        return stable_log1p_float32_lowering(
+            float32(offset + float32(math.sqrt(product)))
+        )
+
+    magnitude = abs(value)
+    if operation == "asinh":
+        if magnitude < 0.000244140625:
+            return value
+        if magnitude > 4096.0:
+            result = float32(float32(math.log(magnitude)) + float32(math.log(2.0)))
+        else:
+            squared = float32(magnitude * magnitude)
+            root = float32(math.sqrt(float32(1.0 + squared)))
+            correction = float32(squared / float32(1.0 + root))
+            result = stable_log1p_float32_lowering(float32(magnitude + correction))
+        return float32(math.copysign(result, value))
+
+    if operation == "atanh":
+        if magnitude > 1.0:
+            return math.nan
+        if magnitude == 1.0:
+            return math.copysign(math.inf, value)
+        if magnitude < 0.000244140625:
+            return value
+        ratio = float32(float32(2.0 * magnitude) / float32(1.0 - magnitude))
+        result = float32(0.5 * stable_log1p_float32_lowering(ratio))
+        return float32(math.copysign(result, value))
+    raise AssertionError(f"unsupported operation {operation}")
+
+
+def inverse_hyperbolic_sweep_values(operation):
+    if operation == "acosh":
+        values = [float32_from_bits(0x3F800000 + offset) for offset in range(1, 4097)]
+        values.extend(float32(1.0 + index / 16.0) for index in range(1025))
+        values.extend(float32(10.0 ** (exponent / 8.0)) for exponent in range(305))
+        return values
+
+    if operation == "asinh":
+        magnitudes = [0.0]
+        magnitudes.extend(
+            float32(10.0 ** (-38.0 + exponent / 4.0)) for exponent in range(305)
+        )
+        magnitudes.extend(float32(index / 16.0) for index in range(1025))
+        return [
+            math.copysign(value, sign) for value in magnitudes for sign in (1.0, -1.0)
+        ]
+
+    magnitudes = [float32(index / 2048.0) for index in range(2048)]
+    magnitudes.extend(
+        float32_from_bits(0x3F800000 - offset) for offset in range(1, 4097)
+    )
+    magnitudes.extend(
+        float32(10.0 ** (-38.0 + exponent / 8.0)) for exponent in range(301)
+    )
+    return [math.copysign(value, sign) for value in magnitudes for sign in (1.0, -1.0)]
+
+
+INVERSE_HYPERBOLIC_FLOAT_SOURCE = """
+shader StableInverseHyperbolic {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main() {
+            float scalar_acosh = acosh(2.0);
+            float scalar_asinh = metal_u3a_u3aasinh(-0.5);
+            float scalar_atanh = atanh(0.5);
+            vec2 pair = acosh(vec2(1.0, 2.0));
+            vec2 pair_again = acosh(pair + vec2(1.0));
+            vec3 triple = asinh(vec3(-1.0, -0.0, 1.0));
+            vec4 quad = atanh(vec4(-0.5, -0.0, 0.0, 0.5));
+        }
+    }
+}
+"""
+
+
+INVERSE_HYPERBOLIC_NATIVE_16_SOURCE = """
+shader Native16InverseHyperbolic {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main() {
+            half narrow_acosh = acosh(half(2.0));
+            half narrow_asinh = asinh(half(-0.5));
+            half narrow_atanh = atanh(half(0.5));
+            half2 narrow_pair = acosh(half2(1.0, 2.0));
+            half3 narrow_triple = asinh(half3(-1.0, -0.0, 1.0));
+            half4 narrow_quad = atanh(half4(-0.5, -0.0, 0.0, 0.5));
+        }
+    }
+}
+"""
+
+
 def test_hlsl_unresolved_standard_math_identifier_uses_exact_float_literal():
     assert (
         HLSLCodeGen().generate_expression(IdentifierNode("M_PI_F"))
@@ -184,6 +332,219 @@ def test_hlsl_unresolved_standard_math_variable_uses_exact_double_literal():
 )
 def test_hlsl_unknown_math_identifier_is_preserved(node):
     assert HLSLCodeGen().generate_expression(node) == node.name
+
+
+def test_hlsl_copysign_preserves_ieee_payload_bits_and_validates(tmp_path):
+    source = """
+    shader ExactCopySign {
+        RWStructuredBuffer<uvec4> output_bits @ binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uvec4 magnitude_bits = uvec4(
+                    0u, 2147483648u, 2139095040u, 2143363909u
+                );
+                uvec4 sign_bits = uvec4(
+                    2147483648u, 0u, 2147483648u, 2147483648u
+                );
+                vec4 magnitudes = asfloat(magnitude_bits);
+                vec4 signs = asfloat(sign_bits);
+                output_bits[0] = asuint(
+                    metal_u3a_u3acopysign(magnitudes, signs));
+                vec2 copied2 = copysign(magnitudes.xy, signs.xy);
+                vec3 copied3 = copysign(magnitudes.xyz, signs.xyz);
+                output_bits[1] = uvec4(
+                    asuint(copied2), asuint(copied3.x), asuint(copied3.y)
+                );
+                output_bits[2].x = asuint(copysign(magnitudes.x, signs.x));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert (
+        "asfloat(((asuint(magnitudes) & uint4(0x7fffffffu, 0x7fffffffu, "
+        "0x7fffffffu, 0x7fffffffu)) | (asuint(signs) & "
+        "uint4(0x80000000u, 0x80000000u, 0x80000000u, 0x80000000u))))" in generated
+    )
+    assert (
+        "asfloat(((asuint(magnitudes.xy) & uint2(0x7fffffffu, "
+        "0x7fffffffu)) | (asuint(signs.xy) & uint2(0x80000000u, "
+        "0x80000000u))))" in generated
+    )
+    assert (
+        "asfloat(((asuint(magnitudes.xyz) & uint3(0x7fffffffu, "
+        "0x7fffffffu, 0x7fffffffu)) | (asuint(signs.xyz) & "
+        "uint3(0x80000000u, 0x80000000u, 0x80000000u))))" in generated
+    )
+    assert (
+        "asfloat(((asuint(magnitudes.x) & 0x7fffffffu) | "
+        "(asuint(signs.x) & 0x80000000u)))" in generated
+    )
+    assert "copysign(" not in generated
+    assert "metal_u3a_u3acopysign(" not in generated
+    assert [
+        ((value & 0x7FFFFFFF) | (sign & 0x80000000))
+        for value, sign in zip(
+            (0, 2147483648, 2139095040, 2143363909),
+            (2147483648, 0, 2147483648, 2147483648),
+        )
+    ] == [2147483648, 0, 4286578688, 4290847557]
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("left_type", "right_type", "reason"),
+    [
+        ("double", "double", "unsupported-operand-type"),
+        ("vec2", "vec3", "operand-shape-mismatch"),
+    ],
+)
+def test_hlsl_copysign_rejects_unrepresentable_shapes_with_metadata(
+    left_type,
+    right_type,
+    reason,
+):
+    source = f"""
+    shader InvalidCopySign {{
+        {left_type} invalid({left_type} magnitude, {right_type} sign_source) {{
+            return copysign(magnitude, sign_source);
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(source)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(DirectXCopySignError) as exc_info:
+        HLSLCodeGen(target_profile="dx11").generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-copysign-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == ("directx.copysign-lowering",)
+    assert diagnostic.operation == "copysign"
+    expected_operand_types = {
+        ("double", "double"): ("double", "double"),
+        ("vec2", "vec3"): ("float2", "float3"),
+    }
+    assert diagnostic.operand_types == expected_operand_types[(left_type, right_type)]
+    assert diagnostic.target_profile == "dx11"
+    assert diagnostic.reason == reason
+    assert diagnostic.source_location == source_location
+
+
+def test_hlsl_user_defined_copysign_remains_an_ordinary_call():
+    source = """
+    shader UserCopySign {
+        float copysign(float magnitude, float sign_source) {
+            return magnitude + sign_source;
+        }
+
+        float apply(float value) {
+            return copysign(value, -1.0);
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "float copysign(float magnitude, float sign_source)" in generated
+    assert "return copysign(value, -1.0);" in generated
+    assert "0x7fffffffu" not in generated
+    assert "0x80000000u" not in generated
+
+
+@pytest.mark.parametrize(
+    ("profile", "normalized_profile"),
+    [
+        ("directx-10", "dx10"),
+        ("directx-11", "dx11"),
+        ("directx-12", "dx12"),
+    ],
+)
+def test_hlsl_inverse_hyperbolic_helpers_cover_profiles(
+    tmp_path,
+    profile,
+    normalized_profile,
+):
+    codegen = HLSLCodeGen(target_profile=profile)
+    generated = codegen.generate(
+        crosstl.translator.parse(INVERSE_HYPERBOLIC_FLOAT_SOURCE)
+    )
+
+    assert codegen.target_profile == normalized_profile
+    assert generated.count("float __crossgl_log1p_float(float value)") == 1
+    for operation in ("acosh", "asinh", "atanh"):
+        assert generated.count(f"float __crossgl_{operation}_float(float value)") == 1
+        assert f"return {operation}(" not in generated
+        assert f"= {operation}(" not in generated
+    assert generated.count("float2 __crossgl_acosh_float2(float2 value)") == 1
+    assert generated.count("float3 __crossgl_asinh_float3(float3 value)") == 1
+    assert generated.count("float4 __crossgl_atanh_float4(float4 value)") == 1
+    assert "metal_u3a_u3aasinh(" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_inverse_hyperbolic_native_16_bit_helpers_compile(tmp_path):
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(INVERSE_HYPERBOLIC_NATIVE_16_SOURCE)
+    )
+
+    for operation in ("acosh", "asinh", "atanh"):
+        assert (
+            f"float16_t __crossgl_{operation}_float16_t(float16_t value)" in generated
+        )
+        assert (
+            f"return (float16_t)__crossgl_{operation}_float((float)value);" in generated
+        )
+    assert "float16_t2 __crossgl_acosh_float16_t2(float16_t2 value)" in generated
+    assert "float16_t3 __crossgl_asinh_float16_t3(float16_t3 value)" in generated
+    assert "float16_t4 __crossgl_atanh_float16_t4(float16_t4 value)" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_inverse_hyperbolic_min16_helpers_widen_deliberately(tmp_path):
+    source = """
+    shader MinimumPrecisionInverseHyperbolic {
+        min16float lower(min16float value) {
+            return asinh(value);
+        }
+
+        min16float2 lower2(min16float2 value) {
+            return atanh(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                min16float scalar = lower(min16float(0.5));
+                min16float2 pair = lower2(min16float2(-0.5, 0.5));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx11").generate(
+        crosstl.translator.parse(source)
+    )
+
+    assert "return (min16float)__crossgl_asinh_float((float)value);" in generated
+    assert "min16float2 __crossgl_atanh_min16float2" in generated
+    assert generated.count("__crossgl_asinh_min16float(value)") == 1
+    assert generated.count("__crossgl_atanh_min16float2(value)") == 1
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -537,6 +898,118 @@ def test_hlsl_specialization_and_file_scope_constants_preserve_contracts(tmp_pat
     assert "$Globals" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_compile_time_bitcasts_preserve_ieee_payloads_and_compile(tmp_path):
+    source = """
+    shader CompileTimeBitcasts {
+        constant float positiveInfinity = asfloat(2139095040u);
+        constant float negativeInfinity = asfloat(4286578688u);
+        constant float nanPayload = asfloat(2143363909u);
+        constant float negativeZero = asfloat(2147483648u);
+        constant float finitePayload = asfloat(1065353217u);
+        constant vec2 vectorPayload = as_type<vec2>(uvec2(1u, 2147483649u));
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<uint> output @binding(0)) {
+                output[0] = asuint(positiveInfinity);
+                output[1] = asuint(negativeInfinity);
+                output[2] = asuint(nanPayload);
+                output[3] = asuint(negativeZero);
+                output[4] = asuint(finitePayload);
+                output[5] = asuint(vectorPayload.x);
+                output[6] = asuint(vectorPayload.y);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "static const float positiveInfinity = asfloat(2139095040u);" in generated
+    assert "static const float negativeInfinity = asfloat(4286578688u);" in generated
+    assert "static const float nanPayload = asfloat(2143363909u);" in generated
+    assert "static const float negativeZero = asfloat(2147483648u);" in generated
+    assert "static const float finitePayload = asfloat(1065353217u);" in generated
+    assert (
+        "static const float2 vectorPayload = "
+        "asfloat(uint2(1u, 2147483649u));" in generated
+    )
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_compile_time_bitcast_rejects_mismatched_shape():
+    source = """
+    shader InvalidCompileTimeBitcast {
+        constant vec2 invalidPayload = as_type<vec2>(1u);
+    }
+    """
+
+    with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "bitcast-shape-unsupported"
+    assert diagnostic.operation == "as_type<vec2>"
+    assert diagnostic.operand_type == "uint"
+    assert diagnostic.result_type == "float2"
+
+
+def test_hlsl_compile_time_bitcast_rejects_runtime_operand_with_metadata():
+    source = """
+    shader RuntimeCompileTimeBitcast {
+        uint runtimeBits;
+        constant float invalidPayload = asfloat(runtimeBits);
+    }
+    """
+
+    with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "bitcast-operand-runtime-value"
+    assert diagnostic.detail == "runtimeBits"
+    assert diagnostic.operation == "asfloat"
+    assert diagnostic.operand_type == "uint"
+    assert diagnostic.result_type == "float"
+
+
+@pytest.mark.parametrize(
+    ("function_name", "function_declaration", "constant_declaration"),
+    [
+        (
+            "asfloat",
+            "float asfloat(uint value) { return float(value); }",
+            "constant float invalidPayload = asfloat(1u);",
+        ),
+        (
+            "asuint",
+            "uint asuint(float value) { return uint(value); }",
+            "constant uint invalidPayload = asuint(1.0);",
+        ),
+    ],
+)
+def test_hlsl_compile_time_global_preserves_user_defined_bitcast_names(
+    function_name, function_declaration, constant_declaration
+):
+    source = f"""
+    shader UserCompileTimeBitcast {{
+        {function_declaration}
+        {constant_declaration}
+    }}
+    """
+
+    with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "function-call"
+    assert diagnostic.detail == function_name
+    assert diagnostic.operation is None
+    assert diagnostic.operand_type is None
+    assert diagnostic.result_type is None
 
 
 def test_hlsl_omits_unreferenced_empty_compile_time_values_and_rejects_uses():
@@ -2444,6 +2917,7 @@ def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op(tmp_path):
         compute {
             void main() {
                 uint scalarResult = WaveShuffleAndFillUp(4u, 7u, 1u);
+                uint segmentedResult = WaveShuffleAndFillUp(9u, 13u, 2u, 8u);
                 uvec2 vectorResult = WaveShuffleAndFillUp(
                     uvec2(1u, 2u), uvec2(3u, 4u), 2u);
                 bool boolResult = WaveShuffleAndFillUp(true, false, 1u);
@@ -2457,22 +2931,36 @@ def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op(tmp_path):
 
     assert (
         "uint __crossgl_wave_shuffle_and_fill_up_uint("
-        "uint value, uint fill, uint delta)" in generated
+        "uint value, uint fill, uint delta, uint modulo)" in generated
     )
     assert (
         "uint2 __crossgl_wave_shuffle_and_fill_up_uint2("
-        "uint2 value, uint2 fill, uint delta)" in generated
+        "uint2 value, uint2 fill, uint delta, uint modulo)" in generated
     )
     assert (
         "bool __crossgl_wave_shuffle_and_fill_up_bool("
-        "bool value, bool fill, uint delta)" in generated
+        "bool value, bool fill, uint delta, uint modulo)" in generated
     )
-    assert "uint sourceLane = (lane >= delta) ? (lane - delta) : 0u;" in generated
-    assert "WaveReadLaneAt(value, sourceLane)" in generated
-    assert "return (lane >= delta) ? shuffled : fill;" in generated
+    assert "uint segmentLane = lane % modulo;" in generated
+    assert "uint segmentBase = lane - segmentLane;" in generated
+    assert "bool useValue = segmentLane >= delta;" in generated
+    assert "uint valueSourceLane = useValue ? (lane - delta) : lane;" in generated
+    assert (
+        "uint fillSourceLane = useValue\n"
+        "        ? lane\n"
+        "        : (segmentBase + modulo + segmentLane - delta);" in generated
+    )
+    assert "WaveReadLaneAt(value, valueSourceLane)" in generated
+    assert "WaveReadLaneAt(fill, fillSourceLane)" in generated
+    assert "return useValue ? shuffled : shuffledFill;" in generated
+    assert (
+        "__crossgl_wave_shuffle_and_fill_up_uint("
+        "4u, 7u, 1u, WaveGetLaneCount())" in generated
+    )
+    assert "__crossgl_wave_shuffle_and_fill_up_uint(9u, 13u, 2u, 8u)" in generated
     assert (
         "return ((__crossgl_wave_shuffle_and_fill_up_uint("
-        "value, fill, delta)) != 0);" in generated
+        "value, fill, delta, WaveGetLaneCount())) != 0);" in generated
     )
     assert "WaveShuffleAndFillUp" not in generated
 
@@ -2530,7 +3018,7 @@ def test_hlsl_codegen_widens_native_uint16_shuffle_and_fill_up_delta():
     assert "uint16_t delta = uint16_t(1u);" in generated
     assert (
         "return __crossgl_wave_shuffle_and_fill_up_uint("
-        "value, fill, uint(delta));" in generated
+        "value, fill, uint(delta), WaveGetLaneCount());" in generated
     )
     assert "min16uint" not in generated
 
@@ -2540,8 +3028,13 @@ def test_hlsl_codegen_widens_native_uint16_shuffle_and_fill_up_delta():
     (
         (
             "WaveShuffleAndFillUp(1u, 0u)",
-            "DirectX wave intrinsic 'WaveShuffleAndFillUp' requires 3 argument(s), "
-            "got 2",
+            "DirectX wave intrinsic 'WaveShuffleAndFillUp' requires 3 or 4 "
+            "argument(s), got 2",
+        ),
+        (
+            "WaveShuffleAndFillUp(1u, 0u, 1u, 8u, 16u)",
+            "DirectX wave intrinsic 'WaveShuffleAndFillUp' requires 3 or 4 "
+            "argument(s), got 5",
         ),
         (
             "WaveShuffleAndFillUp(1u, 0.0, 1u)",
@@ -2557,6 +3050,16 @@ def test_hlsl_codegen_widens_native_uint16_shuffle_and_fill_up_delta():
             "WaveShuffleAndFillUp(uvec2(1u), uvec3(0u), 1u)",
             "DirectX wave intrinsic 'WaveShuffleAndFillUp' value and fill arguments "
             "must have matching types, got uint2 and uint3",
+        ),
+        (
+            "WaveShuffleAndFillUp(1u, 0u, 1u, 8.0)",
+            "DirectX wave intrinsic 'WaveShuffleAndFillUp' modulo argument must be "
+            "scalar int or uint, got float",
+        ),
+        (
+            "WaveShuffleAndFillUp(1u, 0u, 1u, uvec2(8u))",
+            "DirectX wave intrinsic 'WaveShuffleAndFillUp' modulo argument must be "
+            "scalar int or uint, got uint2",
         ),
     ),
 )

@@ -45,6 +45,34 @@ def test_directx_bfloat16_builtin_decodes_and_preserves_return_contract():
     assert f"return __crossgl_bfloat16_to_float(uint({rounded_trunc}));" in generated
 
 
+@pytest.mark.parametrize(
+    ("source_name", "target_name"),
+    [
+        ("exp", "exp"),
+        ("log10", "log10"),
+        ("rint", "round"),
+    ],
+)
+def test_directx_bfloat16_transcendental_builtin_rounds_back_to_bfloat(
+    source_name,
+    target_name,
+):
+    shader = f"""
+    shader ExactBFloatTranscendental {{
+        bfloat16_t transform(bfloat16_t value) {{
+            return {source_name}(value);
+        }}
+    }}
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    decoded = "__crossgl_bfloat16_to_float(uint(value))"
+    assert (
+        "return __crossgl_bfloat16_from_float(float(" f"{target_name}({decoded})));"
+    ) in generated
+
+
 def test_directx_bfloat16_unknown_builtin_still_fails_closed():
     shader = """
     shader UnknownBFloatBuiltin {
