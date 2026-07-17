@@ -326,17 +326,36 @@ python demos/integrations/mlx/run_mlx_porting.py \
   --require-vulkan-gemv-toolchain \
   --require-vulkan-toolchain \
   --require-vulkan-native-runtime
+
+python demos/integrations/mlx/prove_copy_opengl.py \
+  --mlx-root /tmp/mlx \
+  --work-dir .crosstl-mlx-porting/copy-opengl
+
+python demos/integrations/mlx/prove_rms_norm_specialization.py \
+  --mlx-root /tmp/mlx \
+  --work-dir .crosstl-mlx-porting/rms-norm-specialization \
+  --require-opengl-toolchain
 ```
 
 On Windows, install DXC to require DirectX HLSL validation for the reduced
-frontier, the pinned GEMV compiler frontier, and all three reference-accessor
-artifact proofs:
+frontier, the pinned GEMV compiler frontier, all three reference-accessor
+artifact proofs, and the selected LayerNorm entries:
 
 ```bash
 python demos/integrations/mlx/run_mlx_porting.py \
   --mlx-root C:/path/to/mlx \
   --require-directx-toolchain \
   --require-directx-gemv-compiler-frontier
+
+python demos/integrations/mlx/prove_layer_norm_directx.py \
+  --mlx-root C:/path/to/mlx \
+  --work-dir .crosstl-mlx-porting/layer-norm-directx \
+  --require-directx-toolchain
+
+python demos/integrations/mlx/prove_rms_norm_specialization.py \
+  --mlx-root C:/path/to/mlx \
+  --work-dir .crosstl-mlx-porting/rms-norm-specialization \
+  --require-directx-toolchain
 ```
 
 Install the DirectX runtime extra separately to execute the value-sensitive
@@ -591,11 +610,55 @@ DirectX rope check, project
 configuration supplies IDs 1 through 3 and CrossTL materializes a concrete HLSL
 variant before DXC.
 
+The focused `prove_copy_opengl.py` gate checks the pinned
+`copy_s<complex64_t, float, 1>` specialization. It verifies the identity of
+`copy.metal`, `copy.h`, and every local header needed by the specialization,
+then probes the requested entry through the project API. The full translation
+unit currently reaches an unrelated 65th materialization request before the
+selected entry graph is isolated, as tracked by
+[#1676](https://github.com/CrossGL/crosstl/issues/1676). The proof fails closed
+unless that exact bounded diagnostic is present, then translates a minimal
+wrapper containing the two pinned includes and the exact upstream
+`instantiate_kernel` declaration.
+
+The generated OpenGL artifact must lower the source
+`static_cast<float>(src[0])` conversion to one evaluation of `(src[0]).real`.
+Linux CI compiles the resulting compute shader to OpenGL/SPIR-V 1.3 and validates
+the module with `spirv-val`. This bounded lowering follows the pinned
+`complex64_t` conversion body; generalized user-defined conversion operators
+remain tracked by [#1744](https://github.com/CrossGL/crosstl/issues/1744). The
+proof does not claim that full `copy.metal` translated, execute the shader,
+compare numerical results, or run MLX tests.
+
+The focused `prove_layer_norm_directx.py` gate translates two host-selected
+single-row entries from the pinned `layer_norm.metal` source: forward float32
+with axis size 4099 and VJP float32 with axis size 8192 and `has_w=true`. It
+reads the exact host dispatch formulas from the pinned `normalization.cpp` blob
+and checks that both workloads are exercised by the pinned MLX fast-operation
+tests. Those inputs derive workgroup sizes `[544, 1, 1]` and `[1024, 1, 1]`.
+Looped entries remain outside this proof because their workgroup sizes depend on
+the selected Metal pipeline's `maxTotalThreadsPerThreadgroup()` value.
+
+Both selected source templates declare `SIMD_SIZE = 32`, consume the Metal lane
+and simdgroup index builtins, and call the shared `simd_sum` reduction path. The
+DirectX project variants therefore require an exact subgroup-width rule of 32.
+Each standalone HLSL artifact must retain the rule provenance, emit exactly one
+`[WaveSize(32)]` beside its host-derived `numthreads` contract, and compile with
+DXC using `cs_6_6` and warnings as errors. Windows CI applies that gate to both
+entries. This is source identity, host-dispatch, translation, reflection, and
+native compiler evidence. It does not execute either kernel, compare numerical
+results, port the MLX host runtime, or claim coverage of the MLX test suite.
+
 The focused `prove_rms_norm_specialization.py` gate fixes the project-level
 RMSNorm specialization contract to the same upstream commit and to
 `rms_norm.metal` SHA-256
 `5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee`.
 It translates the upstream source through `crosstl.project.translate_project`.
+The source check also requires all four kernel templates to retain
+`constexpr int SIMD_SIZE = 32`, both simdgroup lane/group builtins, and all 12
+`simd_sum` calls. This is a semantic input contract: compiling a target shader
+without an exact 32-lane subgroup guarantee is not sufficient evidence for
+these reductions.
 The pinned MLX host computes single-row workgroup width as
 `32 * ceil_div(ceil_div(axis_size, 4), 32)` and uses the selected pipeline's
 `maxTotalThreadsPerThreadgroup` for looped kernels. The proof materializes
@@ -608,15 +671,24 @@ required `has_w` function constant through both selector forms:
 `has_w=false` by name at `[32, 1, 1]` and `"20"=true` by numeric ID at
 `[64, 1, 1]`. The gate verifies variant selector and workgroup provenance,
 concrete specialization materialization, the pinned source hash, and the
-generated `static const bool has_w` value. Each HLSL library artifact retains
-execution metadata for all 12 pinned host-named entries and emits 12 matching
-`numthreads` attributes. Windows CI uses two DXC runs to compile one reflected
-representative entry from each HLSL library. Their generated native 16-bit HLSL
-selects `cs_6_2` and passes `-enable-16bit-types`. For OpenGL, the
-`workgroup_32` and `workgroup_64` variants leave `has_w` deferred, retain
-`layout(constant_id = 20)`, and split each host-named entry into a standalone
-`main` artifact. Linux CI compiles all 24 GLSL artifacts to OpenGL SPIR-V 1.3
-and validates all 24 binaries with `spirv-val`.
+generated `static const bool has_w` value. The DirectX project configuration
+sets `subgroup_width_rules["mlx/backend/metal/kernels/rms_norm.metal"] = 32`.
+Each HLSL library artifact must retain the exact subgroup-rule provenance and
+Shader Model 6.6 enforcement metadata for all 12 pinned host-named entries,
+emit one `[WaveSize(32)]` and one matching `numthreads` attribute per entry,
+and retain the reflected workgroup contract. Windows CI uses two
+warning-as-error DXC runs to compile one reflected representative entry from
+each HLSL library with `cs_6_6`; native 16-bit artifacts additionally pass
+`-enable-16bit-types`.
+
+For OpenGL, the `workgroup_32` and `workgroup_64` variants leave `has_w`
+deferred, retain `layout(constant_id = 20)`, and split each host-named entry
+into a standalone `main` artifact. The proof deliberately does not configure a
+subgroup-width rule for OpenGL because this project contract cannot enforce an
+exact subgroup width there. It requires subgroup provenance and enforcement
+metadata to remain absent. Linux CI compiles all 24 GLSL artifacts to OpenGL
+SPIR-V 1.3 and validates all 24 binaries with `spirv-val`; that result does not
+establish the source's 32-lane simdgroup or `simd_sum` semantics.
 
 This is translation and native compilation evidence only. It does not execute
 RMSNorm, establish numerical or runtime parity, claim complete runtime
