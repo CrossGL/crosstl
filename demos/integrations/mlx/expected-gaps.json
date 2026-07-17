@@ -518,7 +518,23 @@
     "function_constant": {
       "name": "has_w",
       "id": 20,
-      "required": true
+      "required": true,
+      "required_by_entry_points": [
+        "vjp_rms_loopedbfloat16",
+        "vjp_rms_loopedfloat16",
+        "vjp_rms_loopedfloat32",
+        "vjp_rmsbfloat16",
+        "vjp_rmsfloat16",
+        "vjp_rmsfloat32"
+      ],
+      "absent_from_entry_points": [
+        "rms_loopedbfloat16",
+        "rms_loopedfloat16",
+        "rms_loopedfloat32",
+        "rmsbfloat16",
+        "rmsfloat16",
+        "rmsfloat32"
+      ]
     },
     "representative_workgroup_contract": {
       "host_source": "mlx/backend/metal/normalization.cpp",
@@ -583,7 +599,7 @@
       "compiler_run_count": 2
     },
     "opengl": {
-      "specialization_materialization": "deferred",
+      "specialization_materialization": "deferred-for-vjp-entries",
       "constant_id": 20,
       "subgroup_width_rule_configured": false,
       "subgroup_width_enforcement_claimed": false,
@@ -608,6 +624,10 @@
       ],
       "standalone_artifact_count": 24,
       "standalone_artifact_count_per_variant": 12,
+      "deferred_entry_point_count_per_variant": 6,
+      "constant_free_entry_point_count_per_variant": 6,
+      "deferred_artifact_count": 12,
+      "constant_free_artifact_count": 12,
       "native_compilation": "required-on-linux-ci",
       "compiled_artifact_count": 24,
       "spirv_validation": "required-on-linux-ci",

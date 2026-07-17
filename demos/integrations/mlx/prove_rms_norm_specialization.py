@@ -30,19 +30,25 @@ MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
 MLX_RMS_NORM_SHA256 = "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee"
 RMS_NORM_FUNCTION_CONSTANT_NAME = "has_w"
 RMS_NORM_FUNCTION_CONSTANT_ID = 20
-RMS_NORM_HOST_ENTRY_POINTS = (
+RMS_NORM_FORWARD_ENTRY_POINTS = (
     "rms_loopedbfloat16",
     "rms_loopedfloat16",
     "rms_loopedfloat32",
     "rmsbfloat16",
     "rmsfloat16",
     "rmsfloat32",
+)
+RMS_NORM_VJP_ENTRY_POINTS = (
     "vjp_rms_loopedbfloat16",
     "vjp_rms_loopedfloat16",
     "vjp_rms_loopedfloat32",
     "vjp_rmsbfloat16",
     "vjp_rmsfloat16",
     "vjp_rmsfloat32",
+)
+RMS_NORM_HOST_ENTRY_POINTS = (
+    *RMS_NORM_FORWARD_ENTRY_POINTS,
+    *RMS_NORM_VJP_ENTRY_POINTS,
 )
 RMS_NORM_EXPECTED_ENTRY_POINT_COUNT = len(RMS_NORM_HOST_ENTRY_POINTS)
 RMS_NORM_LOOPED_ENTRY_POINT_COUNT = sum(
@@ -1177,29 +1183,47 @@ def _opengl_evidence(
         },
         f"OpenGL variant {variant_name} artifact entry identity changed",
     )
+    uses_function_constant = source_entry in RMS_NORM_VJP_ENTRY_POINTS
     constants = artifact.get("specializationConstants")
-    _require(
-        isinstance(constants, list) and len(constants) == 1,
-        "OpenGL RMSNorm artifact must report one function constant",
-    )
-    constant = constants[0]
-    _require(
-        isinstance(constant, Mapping)
-        and constant.get("name") == RMS_NORM_FUNCTION_CONSTANT_NAME
-        and constant.get("id") == RMS_NORM_FUNCTION_CONSTANT_ID
-        and constant.get("required") is True
-        and constant.get("overridden") is False
-        and constant.get("deferred") is True
-        and constant.get("status") == "required"
-        and constant.get("valueProvenance") == {"kind": "runtime-override-required"}
-        and "concreteValue" not in constant,
-        f"OpenGL variant {variant_name} function-constant deferral is incorrect",
-    )
-    _validate_specialization_materialization(
-        artifact,
-        target=f"OpenGL variant {variant_name} entry {source_entry}",
-        deferred=True,
-    )
+    specialization_evidence: dict[str, Any] | None = None
+    if uses_function_constant:
+        _require(
+            isinstance(constants, list) and len(constants) == 1,
+            f"OpenGL VJP entry {source_entry} must report one function constant",
+        )
+        constant = constants[0]
+        _require(
+            isinstance(constant, Mapping)
+            and constant.get("name") == RMS_NORM_FUNCTION_CONSTANT_NAME
+            and constant.get("id") == RMS_NORM_FUNCTION_CONSTANT_ID
+            and constant.get("required") is True
+            and constant.get("overridden") is False
+            and constant.get("deferred") is True
+            and constant.get("status") == "required"
+            and constant.get("valueProvenance") == {"kind": "runtime-override-required"}
+            and "concreteValue" not in constant,
+            f"OpenGL VJP entry {source_entry} function-constant deferral is incorrect",
+        )
+        _validate_specialization_materialization(
+            artifact,
+            target=f"OpenGL variant {variant_name} entry {source_entry}",
+            deferred=True,
+        )
+        specialization_evidence = {
+            "name": RMS_NORM_FUNCTION_CONSTANT_NAME,
+            "id": RMS_NORM_FUNCTION_CONSTANT_ID,
+            "required": True,
+            "deferred": True,
+            "valueProvenance": {"kind": "runtime-override-required"},
+            "specializationMaterialization": dict(
+                artifact["specializationMaterialization"]
+            ),
+        }
+    else:
+        _require(
+            constants in (None, []) and "specializationMaterialization" not in artifact,
+            f"OpenGL forward entry {source_entry} retained unreachable has_w metadata",
+        )
     host_materializations = _host_materializations(
         artifact,
         target=f"OpenGL variant {variant_name}",
@@ -1221,10 +1245,17 @@ def _opengl_evidence(
         rf"layout\s*\(\s*constant_id\s*=\s*{RMS_NORM_FUNCTION_CONSTANT_ID}\s*\)"
         rf"\s*const\s+bool\s+{RMS_NORM_FUNCTION_CONSTANT_NAME}\s*=\s*false\s*;"
     )
+    declaration_count = len(re.findall(declaration_pattern, generated))
     _require(
-        len(re.findall(declaration_pattern, generated)) == 1,
-        f"OpenGL variant {variant_name} entry {source_entry} lost constant_id = 20",
+        declaration_count == (1 if uses_function_constant else 0),
+        f"OpenGL variant {variant_name} entry {source_entry} emitted an incorrect "
+        "constant_id = 20 contract",
     )
+    if not uses_function_constant:
+        _require(
+            re.search(rf"\b{RMS_NORM_FUNCTION_CONSTANT_NAME}\b", generated) is None,
+            f"OpenGL forward entry {source_entry} retained unreachable has_w code",
+        )
     _require(
         re.search(
             rf"\buniform\s+bool\s+{RMS_NORM_FUNCTION_CONSTANT_NAME}\b",
@@ -1267,6 +1298,7 @@ def _opengl_evidence(
         "sourceEntryPoint": source_entry,
         "targetEntryPoint": "main",
         "workgroupSize": workgroup_size,
+        "specializationConstant": specialization_evidence,
         "executionIdentity": dict(execution["identity"]),
         "executionEntryIdentity": dict(execution_entry["identity"]),
         "generatedLocalSizeContract": (
@@ -1475,6 +1507,23 @@ def _check_opengl(
             )
             for source_entry in RMS_NORM_HOST_ENTRY_POINTS
         ]
+        deferred_artifacts = [
+            artifact
+            for artifact in entry_evidence
+            if artifact["specializationConstant"] is not None
+        ]
+        constant_free_artifacts = [
+            artifact
+            for artifact in entry_evidence
+            if artifact["specializationConstant"] is None
+        ]
+        _require(
+            [artifact["sourceEntryPoint"] for artifact in deferred_artifacts]
+            == list(RMS_NORM_VJP_ENTRY_POINTS)
+            and [artifact["sourceEntryPoint"] for artifact in constant_free_artifacts]
+            == list(RMS_NORM_FORWARD_ENTRY_POINTS),
+            f"OpenGL variant {variant_name} has_w entry scope changed",
+        )
         variant_evidence.append(
             {
                 "name": variant_name,
@@ -1482,6 +1531,8 @@ def _check_opengl(
                 "artifactCount": len(entry_evidence),
                 "executionEntryCount": len(entry_evidence),
                 "generatedLocalSizeContractCount": len(entry_evidence),
+                "deferredSpecializationArtifactCount": len(deferred_artifacts),
+                "constantFreeArtifactCount": len(constant_free_artifacts),
                 "artifacts": entry_evidence,
             }
         )
@@ -1493,7 +1544,7 @@ def _check_opengl(
         required=require_toolchain,
     )
     return {
-        "name": "rms-norm-opengl-deferred-specialization",
+        "name": "rms-norm-opengl-entry-scoped-specialization",
         "status": "passed",
         "source": MLX_RMS_NORM_SOURCE,
         "target": "opengl",
@@ -1512,8 +1563,21 @@ def _check_opengl(
             "required": True,
             "deferred": True,
             "valueProvenance": {"kind": "runtime-override-required"},
+            "deferredEntryPoints": list(RMS_NORM_VJP_ENTRY_POINTS),
+            "absentEntryPoints": list(RMS_NORM_FORWARD_ENTRY_POINTS),
+            "deferredArtifactCount": (
+                len(RMS_NORM_OPENGL_VARIANTS) * len(RMS_NORM_VJP_ENTRY_POINTS)
+            ),
+            "constantFreeArtifactCount": (
+                len(RMS_NORM_OPENGL_VARIANTS) * len(RMS_NORM_FORWARD_ENTRY_POINTS)
+            ),
             "specializationMaterialization": dict(
-                ordered_artifacts[0]["specializationMaterialization"]
+                artifacts_by_identity[
+                    (
+                        str(RMS_NORM_OPENGL_VARIANTS[0]["name"]),
+                        RMS_NORM_VJP_ENTRY_POINTS[0],
+                    )
+                ]["specializationMaterialization"]
             ),
             "generatedContract": "layout(constant_id = 20) const bool has_w = false;",
         },

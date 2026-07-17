@@ -125,7 +125,7 @@ template <int TAG>
     uint simd_lane_id [[thread_index_in_simdgroup]],
     uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
   constexpr int SIMD_SIZE = 32;
-  float value = (has_w ? 1.0f : 0.0f) + float(TAG + SIMD_SIZE);
+  float value = float(TAG + SIMD_SIZE);
   value = simd_sum(value);
   value = simd_sum(value + float(simd_lane_id + simd_group_id));
   output[index] = value;
@@ -139,7 +139,7 @@ template <int TAG>
     uint simd_lane_id [[thread_index_in_simdgroup]],
     uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
   constexpr int SIMD_SIZE = 32;
-  float value = (has_w ? 1.0f : 0.0f) + float(TAG + SIMD_SIZE + lsize);
+  float value = float(TAG + SIMD_SIZE + lsize);
   value = simd_sum(value);
   value = simd_sum(value + float(simd_lane_id + simd_group_id));
   output[index] = value;
@@ -7036,7 +7036,25 @@ def test_rms_norm_contract_fixture_matches_pinned_translation_scope():
         "name": module.RMS_NORM_FUNCTION_CONSTANT_NAME,
         "id": module.RMS_NORM_FUNCTION_CONSTANT_ID,
         "required": True,
+        "requiredByEntryPoints": list(module.RMS_NORM_VJP_ENTRY_POINTS),
+        "absentFromEntryPoints": list(module.RMS_NORM_FORWARD_ENTRY_POINTS),
     }
+    assert module.RMS_NORM_FORWARD_ENTRY_POINTS == (
+        "rms_loopedbfloat16",
+        "rms_loopedfloat16",
+        "rms_loopedfloat32",
+        "rmsbfloat16",
+        "rmsfloat16",
+        "rmsfloat32",
+    )
+    assert module.RMS_NORM_VJP_ENTRY_POINTS == (
+        "vjp_rms_loopedbfloat16",
+        "vjp_rms_loopedfloat16",
+        "vjp_rms_loopedfloat32",
+        "vjp_rmsbfloat16",
+        "vjp_rmsfloat16",
+        "vjp_rmsfloat32",
+    )
     assert module.RMS_NORM_HOST_ENTRY_POINTS == (
         "rms_loopedbfloat16",
         "rms_loopedfloat16",
@@ -7087,6 +7105,10 @@ def test_rms_norm_contract_fixture_matches_pinned_translation_scope():
         "constantId": 20,
         "standaloneArtifactCount": 24,
         "standaloneArtifactCountPerVariant": 12,
+        "deferredEntryPointCountPerVariant": 6,
+        "constantFreeEntryPointCountPerVariant": 6,
+        "deferredArtifactCount": 12,
+        "constantFreeArtifactCount": 12,
         "compiledArtifactCount": 24,
         "validatedArtifactCount": 24,
         "variants": list(module.RMS_NORM_OPENGL_VARIANTS),
@@ -7109,6 +7131,13 @@ def test_rms_norm_contract_fixture_matches_pinned_translation_scope():
     assert status["source_sha256"] == module.MLX_RMS_NORM_SHA256
     assert status["source_required_subgroup_width"] == 32
     assert status["host_named_entry_count"] == 12
+    assert status["function_constant"] == {
+        "name": module.RMS_NORM_FUNCTION_CONSTANT_NAME,
+        "id": module.RMS_NORM_FUNCTION_CONSTANT_ID,
+        "required": True,
+        "required_by_entry_points": list(module.RMS_NORM_VJP_ENTRY_POINTS),
+        "absent_from_entry_points": list(module.RMS_NORM_FORWARD_ENTRY_POINTS),
+    }
     assert status["representative_workgroup_contract"] == {
         "host_source": "mlx/backend/metal/normalization.cpp",
         "host_lines": "52-91,137-197",
@@ -7151,8 +7180,15 @@ def test_rms_norm_contract_fixture_matches_pinned_translation_scope():
     assert status["opengl"]["subgroup_width_enforcement_claimed"] is False
     assert status["opengl"]["subgroup_semantic_parity_claimed"] is False
     assert status["opengl"]["native_compilation"] == "required-on-linux-ci"
+    assert status["opengl"]["specialization_materialization"] == (
+        "deferred-for-vjp-entries"
+    )
     assert status["opengl"]["standalone_artifact_count"] == 24
     assert status["opengl"]["standalone_artifact_count_per_variant"] == 12
+    assert status["opengl"]["deferred_entry_point_count_per_variant"] == 6
+    assert status["opengl"]["constant_free_entry_point_count_per_variant"] == 6
+    assert status["opengl"]["deferred_artifact_count"] == 12
+    assert status["opengl"]["constant_free_artifact_count"] == 12
     assert status["opengl"]["compiled_artifact_count"] == 24
     assert status["opengl"]["validated_artifact_count"] == 24
     assert status["numerical_execution_included"] is False
@@ -7394,6 +7430,12 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
     )
 
     assert result["status"] == "passed"
+    assert (
+        result["report"]
+        == (report_dir / "rms-norm-opengl-deferred.json")
+        .relative_to(mlx_root)
+        .as_posix()
+    )
     assert result["artifactCount"] == 24
     assert result["artifactCountPerVariant"] == 12
     assert result["subgroupWidthContract"] == {
@@ -7415,6 +7457,14 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
     assert specialization["required"] is True
     assert specialization["deferred"] is True
     assert specialization["valueProvenance"] == {"kind": "runtime-override-required"}
+    assert specialization["deferredEntryPoints"] == list(
+        module.RMS_NORM_VJP_ENTRY_POINTS
+    )
+    assert specialization["absentEntryPoints"] == list(
+        module.RMS_NORM_FORWARD_ENTRY_POINTS
+    )
+    assert specialization["deferredArtifactCount"] == 12
+    assert specialization["constantFreeArtifactCount"] == 12
     assert specialization["generatedContract"] == (
         "layout(constant_id = 20) const bool has_w = false;"
     )
@@ -7429,6 +7479,8 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         assert variant["artifactCount"] == 12
         assert variant["executionEntryCount"] == 12
         assert variant["generatedLocalSizeContractCount"] == 12
+        assert variant["deferredSpecializationArtifactCount"] == 6
+        assert variant["constantFreeArtifactCount"] == 6
         artifacts = variant["artifacts"]
         assert [artifact["sourceEntryPoint"] for artifact in artifacts] == list(
             module.RMS_NORM_HOST_ENTRY_POINTS
@@ -7445,6 +7497,22 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
             assert artifact["consumedWorkgroupProjectionCount"] == (
                 1 if "_looped" in artifact["sourceEntryPoint"] else 0
             )
+            if artifact["sourceEntryPoint"] in module.RMS_NORM_VJP_ENTRY_POINTS:
+                assert artifact["specializationConstant"] == {
+                    "name": "has_w",
+                    "id": 20,
+                    "required": True,
+                    "deferred": True,
+                    "valueProvenance": {"kind": "runtime-override-required"},
+                    "specializationMaterialization": specialization[
+                        "specializationMaterialization"
+                    ],
+                }
+            else:
+                assert artifact["sourceEntryPoint"] in (
+                    module.RMS_NORM_FORWARD_ENTRY_POINTS
+                )
+                assert artifact["specializationConstant"] is None
             for identity_key in ("executionIdentity", "executionEntryIdentity"):
                 assert artifact[identity_key]["algorithm"] == "sha256"
                 assert re.fullmatch(r"[0-9a-f]{64}", artifact[identity_key]["value"])
@@ -7496,15 +7564,33 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         )
         assert "subgroupWidth" not in execution["entryPoints"][0]
         assert "subgroupWidthRule" not in execution["entryPoints"][0]
-        constant = artifact["specializationConstants"][0]
-        assert constant["valueProvenance"] == {"kind": "runtime-override-required"}
-        assert "concreteValue" not in constant
+        materialization = artifact["templateMaterialization"]
+        assert materialization["specializationCount"] == 12
+        assert len(materialization["specializations"]) == 12
+        assert {
+            record["hostName"] for record in materialization["specializations"]
+        } == set(module.RMS_NORM_HOST_ENTRY_POINTS)
         generated = (mlx_root / artifact["path"]).read_text(encoding="utf-8")
         local_size = variants[variant_name]["artifacts"][
             list(module.RMS_NORM_HOST_ENTRY_POINTS).index(source_entry)
         ]["generatedLocalSizeContract"]
         assert generated.count(local_size) == 1
-        assert generated.count(specialization["generatedContract"]) == 1
+        if source_entry in module.RMS_NORM_VJP_ENTRY_POINTS:
+            constant = artifact["specializationConstants"][0]
+            assert constant["valueProvenance"] == {"kind": "runtime-override-required"}
+            assert "concreteValue" not in constant
+            assert (
+                artifact["specializationMaterialization"]
+                == specialization["specializationMaterialization"]
+            )
+            assert generated.count(specialization["generatedContract"]) == 1
+            assert re.search(r"\bhas_w\b", generated)
+        else:
+            assert source_entry in module.RMS_NORM_FORWARD_ENTRY_POINTS
+            assert artifact.get("specializationConstants", []) == []
+            assert "specializationMaterialization" not in artifact
+            assert generated.count(specialization["generatedContract"]) == 0
+            assert re.search(r"\bhas_w\b", generated) is None
         assert "WaveSize" not in generated
     assert artifact_identities == {
         (variant["name"], source_entry)
