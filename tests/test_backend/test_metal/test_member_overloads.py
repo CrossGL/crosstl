@@ -379,6 +379,24 @@ def test_receiver_contract_does_not_borrow_shadowed_alias_declaration():
     assert error.missing_capabilities == ("metal.member-overload-resolution",)
 
 
+def test_member_call_suffix_does_not_cross_statement_comparisons():
+    source = """
+    void select(uint2 value, float low, float high) {
+      float selected = value.x < 16 ? low : high;
+      bool valid = value.y > (0);
+    }
+    """
+    name_end = source.index("value.x") + len("value.x")
+
+    preprocessor = MetalPreprocessor()
+    suffix = preprocessor._member_template_call_suffix(source, name_end)
+    output = preprocessor.preprocess(source)
+
+    assert suffix is None
+    assert "value.x < 16 ? low : high" in output
+    assert "value.y > (0)" in output
+
+
 def test_preprocessor_receiver_helper_identity_ignores_parameter_names():
     source = """
     struct Box {

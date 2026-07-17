@@ -11206,6 +11206,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             angle_end = self._find_matching_angle(code, index)
             if angle_end is None:
                 return None
+            argument_source = code[index + 1 : angle_end]
+            if self._find_next_top_level_char(argument_source, 0, ";") is not None:
+                return None
             explicit_template_arguments = [
                 argument.strip()
                 for argument in self._split_top_level_commas(
