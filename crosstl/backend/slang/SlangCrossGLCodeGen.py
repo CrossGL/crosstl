@@ -764,11 +764,7 @@ class SlangToCrossGLConverter:
     def raise_for_unsupported_conformance_constructs(self, ast):
         constructs = []
 
-        for interface in getattr(ast, "interfaces", []) or []:
-            constructs.extend(self.format_interface_conformance_constructs(interface))
-
         for struct in getattr(ast, "structs", []) or []:
-            constructs.extend(self.format_struct_conformance_constructs(struct))
             constructs.extend(
                 self.format_typedef_generic_constraints(getattr(struct, "typedefs", []))
             )
@@ -795,16 +791,7 @@ class SlangToCrossGLConverter:
 
         for export in getattr(ast, "exports", []) or []:
             item = getattr(export, "item", None)
-            if isinstance(item, InterfaceNode):
-                constructs.extend(self.format_interface_conformance_constructs(item))
-            elif isinstance(item, StructNode):
-                constructs.extend(self.format_struct_conformance_constructs(item))
-                constructs.extend(
-                    self.format_typedef_generic_constraints(
-                        getattr(item, "typedefs", [])
-                    )
-                )
-            elif isinstance(item, ExtensionNode):
+            if isinstance(item, ExtensionNode):
                 conformances = getattr(item, "conformances", []) or []
                 suffix = f" : {', '.join(conformances)}" if conformances else ""
                 constructs.append(f"extension {item.extended_type}{suffix}")
@@ -813,44 +800,6 @@ class SlangToCrossGLConverter:
 
         if constructs:
             raise UnsupportedSlangConformanceError(constructs)
-
-    def format_interface_conformance_constructs(self, interface):
-        constructs = []
-        name = getattr(interface, "name", "anonymous")
-        conformances = getattr(interface, "conformances", []) or []
-        generic_parameters = getattr(interface, "generic_parameters", None)
-        generic_constraints = getattr(interface, "generic_constraints", []) or []
-        associated_types = getattr(interface, "associated_types", []) or []
-        properties = getattr(interface, "properties", []) or []
-        value_requirements = getattr(interface, "value_requirements", []) or []
-        if (
-            conformances
-            or generic_parameters
-            or generic_constraints
-            or associated_types
-            or properties
-            or value_requirements
-            or getattr(interface, "methods", None)
-        ):
-            suffix = f" : {', '.join(conformances)}" if conformances else ""
-            constructs.append(f"interface {name}{suffix}")
-        for method in getattr(interface, "methods", []) or []:
-            constructs.extend(self.format_function_generic_constraints(method))
-        for constraint in generic_constraints:
-            if self.is_erased_generic_constraint(constraint):
-                continue
-            relation = getattr(constraint, "relation", ":")
-            constructs.append(
-                f"interface {name} where "
-                f"{constraint.parameter} {relation} {constraint.constraint_type}"
-            )
-        return constructs
-
-    def format_struct_conformance_constructs(self, struct):
-        conformances = getattr(struct, "conformances", []) or []
-        if not conformances:
-            return []
-        return [f"struct {struct.name} : {', '.join(conformances)}"]
 
     def format_typedef_generic_constraints(self, typedefs):
         constraints = []

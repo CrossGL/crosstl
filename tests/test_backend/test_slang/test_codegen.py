@@ -1606,7 +1606,7 @@ def test_reverse_codegen_rejects_extension_conformance_constructs():
         "project.translate.unsupported-feature"
     )
     assert diagnostic.missing_capabilities == ("slang.interface-conformance-lowering",)
-    assert "struct MyType : IFoo" in diagnostic.constructs
+    assert diagnostic.constructs == ("extension MyType : IBar",)
     assert diagnostic.suggested_action in message
 
 
