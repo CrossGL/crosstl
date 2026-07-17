@@ -242,7 +242,7 @@ MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE = (
     "emitted entry points do not declare a shared source size. Select one entry "
     "point or emit independently specialized artifacts."
 )
-MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues/1750"
+MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues/1793"
 MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
     MLX_ARG_REDUCE_SOURCE: {
         "specializationCount": 51,
@@ -592,6 +592,14 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1792",
+    "https://github.com/CrossGL/crosstl/issues/1790",
+    "https://github.com/CrossGL/crosstl/issues/1789",
+    "https://github.com/CrossGL/crosstl/issues/1787",
+    "https://github.com/CrossGL/crosstl/issues/1784",
+    "https://github.com/CrossGL/crosstl/issues/1750",
+    "https://github.com/CrossGL/crosstl/issues/1726",
+    "https://github.com/CrossGL/crosstl/issues/1474",
     "https://github.com/CrossGL/crosstl/issues/1728",
     "https://github.com/CrossGL/crosstl/issues/1701",
     "https://github.com/CrossGL/crosstl/issues/1694",

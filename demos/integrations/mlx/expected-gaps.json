@@ -26,7 +26,7 @@
     "structural_validation_status": "validated",
     "semantic_readiness_status": "not-established",
     "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
-    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "excluded_blocked_sources": [
       "mlx/backend/metal/kernels/fence.metal"
     ],
@@ -119,7 +119,7 @@
       "opengl"
     ],
     "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
-    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "template_materialization_status": "materialized",
     "specialization_count": 51,
     "unsupported_specialization_count": 0,
@@ -162,7 +162,7 @@
     ],
     "workgroup_blocked_artifact_count": 5,
     "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
-    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "clean_project_diagnostic_count": 0,
     "glslang_compiled_artifact_count": 3,
     "spirv_validated_artifact_count": 3,
@@ -960,7 +960,7 @@
     },
     "workgroup_blocked_entry_point_count": 106,
     "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
-    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "dispatch_evidence": {
       "mlx/backend/metal/kernels/arg_reduce.metal": {
         "specializationCount": 51,
@@ -1099,12 +1099,12 @@
       }
     },
     "directx_toolchain_gaps": {
-      "mlx/backend/metal/kernels/arg_reduce.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
-      "mlx/backend/metal/kernels/layer_norm.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
-      "mlx/backend/metal/kernels/logsumexp.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
-      "mlx/backend/metal/kernels/rms_norm.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
-      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "runtime-selected pass and shape determine the workgroup size, which is unavailable to source materialization; translation fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
-      "mlx/backend/metal/kernels/softmax.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/arg_reduce.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1793)",
+      "mlx/backend/metal/kernels/layer_norm.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1793)",
+      "mlx/backend/metal/kernels/logsumexp.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1793)",
+      "mlx/backend/metal/kernels/rms_norm.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1793)",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "runtime-selected pass and shape determine the workgroup size, which is unavailable to source materialization; translation fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1793)",
+      "mlx/backend/metal/kernels/softmax.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1793)",
       "mlx/backend/metal/kernels/fence.metal": "the requested mem_device, memory_order_seq_cst, thread_scope_system atomic-fence contract is not representable in HLSL and fails with project.translate.directx-atomic-fence-unsupported (https://github.com/CrossGL/crosstl/issues/1537)"
     },
     "native_runtime_executed": false,
@@ -1281,7 +1281,7 @@
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1696",
     "https://github.com/CrossGL/crosstl/issues/1735",
-    "https://github.com/CrossGL/crosstl/issues/1750",
+    "https://github.com/CrossGL/crosstl/issues/1793",
     "https://github.com/CrossGL/crosstl/issues/1786",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
@@ -1322,6 +1322,14 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1792",
+    "https://github.com/CrossGL/crosstl/issues/1790",
+    "https://github.com/CrossGL/crosstl/issues/1789",
+    "https://github.com/CrossGL/crosstl/issues/1787",
+    "https://github.com/CrossGL/crosstl/issues/1784",
+    "https://github.com/CrossGL/crosstl/issues/1750",
+    "https://github.com/CrossGL/crosstl/issues/1726",
+    "https://github.com/CrossGL/crosstl/issues/1474",
     "https://github.com/CrossGL/crosstl/issues/1728",
     "https://github.com/CrossGL/crosstl/issues/1701",
     "https://github.com/CrossGL/crosstl/issues/1694",

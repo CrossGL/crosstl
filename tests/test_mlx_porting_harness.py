@@ -6271,7 +6271,20 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
     )
     assert {
         f"https://github.com/CrossGL/crosstl/issues/{issue}"
-        for issue in (1694, 1695, 1701, 1728)
+        for issue in (
+            1474,
+            1694,
+            1695,
+            1701,
+            1726,
+            1728,
+            1750,
+            1784,
+            1787,
+            1789,
+            1790,
+            1792,
+        )
     } <= set(module.RESOLVED_FRONTIER_ISSUES)
     assert set(module.RESOLVED_FRONTIER_ISSUES) <= set(gaps["resolved_issues"])
     assert not set(module.RESOLVED_FRONTIER_ISSUES) & set(gaps["tracked_issues"])
@@ -6310,8 +6323,9 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
     assert "does not extend the bounded runtime proof to bfloat16" in (
         normalized_readme
     )
-    for issue in (1694, 1695, 1696, 1701, 1728, 1750, 1542, 1537):
+    for issue in (1694, 1695, 1696, 1701, 1728, 1793, 1542, 1537):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
+    assert "https://github.com/CrossGL/crosstl/issues/1750" not in readme
     assert "does not dispatch these kernels or establish numerical parity" in (
         normalized_readme
     )

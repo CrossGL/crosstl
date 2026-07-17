@@ -108,7 +108,8 @@ The current harness verifies:
   metadata remains tracked by
   [#1542](https://github.com/CrossGL/crosstl/issues/1542). The six excluded
   aggregate sources cover 106 compute entries and are asserted as failed
-  artifacts under [#1750](https://github.com/CrossGL/crosstl/issues/1750);
+  artifacts until their host dispatch contracts can be imported under
+  [#1793](https://github.com/CrossGL/crosstl/issues/1793);
   no placeholder workgroup size is restored. `fence.metal` is
   excluded because its DirectX translation intentionally fails under
   [#1537](https://github.com/CrossGL/crosstl/issues/1537) before DXC. This gate
