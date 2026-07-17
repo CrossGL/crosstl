@@ -427,3 +427,25 @@ def test_project_porting_guide_references_python_project_api():
     )
     assert "report.write_json(report_path)" in guide
     assert "inspect_project_report(report_path)" in guide
+
+
+def test_project_porting_guide_documents_dispatch_artifact_generation():
+    guide = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
+        encoding="utf-8"
+    )
+    normalized_guide = " ".join(guide.split())
+
+    for field in (
+        "project.dispatchArtifactCount",
+        "project.dispatchArtifactPlan",
+        "artifacts[*].dispatchArtifact",
+        "artifacts[*].execution.provenance",
+        "artifactMatrix.variantMode",
+    ):
+        assert field in guide
+    assert "deterministic source-scoped artifact plan" in normalized_guide
+    assert (
+        "Import currently does not generate project translation variants" not in guide
+    )
+    assert "GitHub issue #1798" in guide
+    assert "do not execute the host dispatch path" in normalized_guide
