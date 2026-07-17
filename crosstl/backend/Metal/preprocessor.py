@@ -456,15 +456,16 @@ class _MetalDataMember:
     Unlike the unordered ``data_member_names`` set and the normalized
     ``data_member_types`` map, this preserves the full declared type text
     (address space + cv + pointer, e.g. ``const device float2*``), the trailing
-    array suffix (``[N]`` for array members), and any default initializer. It is
-    what the pointer-member scalar-replacement path needs to explode a struct
-    into individual per-member parameters and per-member locals.
+    array suffix (``[N]`` for array members), any default initializer, and the
+    source declaration span. It is what the pointer-member scalar-replacement
+    and declaration-order constant-substitution paths need.
     """
 
     name: str
     type_text: str
     default: Optional[str] = None
     array_suffix: str = ""
+    span: Optional[Tuple[int, int]] = None
 
     @property
     def is_pointer(self) -> bool:
@@ -3591,6 +3592,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                         data_member_names,
                         data_member_types,
                         ordered_members,
+                        declaration_span=(
+                            body_offset + i,
+                            body_offset + decl_semicolon + 1,
+                        ),
                     )
                 i = decl_semicolon + 1
                 continue
@@ -3622,6 +3627,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                         data_member_names,
                         data_member_types,
                         ordered_members,
+                        declaration_span=(
+                            body_offset + i,
+                            body_offset + semicolon + 1,
+                        ),
                     )
             i = semicolon + 1
         self._assign_receiver_overload_free_names(struct_name, methods)
@@ -3641,6 +3650,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         data_member_names: Set[str],
         data_member_types: Dict[str, str],
         ordered_members: List[_MetalDataMember],
+        declaration_span: Tuple[int, int],
     ) -> bool:
         # Record a data member into the name set, the (normalized) type map, and
         # the ordered list with its FULL declared type text / default / array
@@ -3650,14 +3660,21 @@ class MetalPreprocessor(HLSLPreprocessor):
             return False
         data_member_names.add(name)
         self._record_data_member_type(data_member_types, name, declaration)
-        member = self._parse_ordered_data_member(name, declaration)
+        member = self._parse_ordered_data_member(
+            name,
+            declaration,
+            declaration_span,
+        )
         if member is not None:
             ordered_members.append(member)
             return True
         return False
 
     def _parse_ordered_data_member(
-        self, name: str, declaration: str
+        self,
+        name: str,
+        declaration: str,
+        declaration_span: Optional[Tuple[int, int]] = None,
     ) -> Optional[_MetalDataMember]:
         # Split `[qualifiers] Type name [array] [= default]` into its full type
         # text (preserving address space / cv / pointer), trailing array suffix,
@@ -3682,6 +3699,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             type_text=type_text,
             default=default,
             array_suffix=array_suffix,
+            span=declaration_span,
         )
 
     def _split_top_level_assignment(self, text: str) -> Tuple[str, Optional[str]]:
@@ -15041,23 +15059,28 @@ class MetalPreprocessor(HLSLPreprocessor):
             name: self._static_initializer_reference(initializer)
             for name, initializer in constants.items()
         }
+        declaration_ends = {
+            member.name: member.span[1]
+            for member in outer.data_members
+            if member.name in mapping and member.span is not None
+        }
         replacements: List[Tuple[int, int, str]] = []
         cursor = body_start
         for start, end in [*merged_spans, (body_end, body_end)]:
             if cursor < start:
                 segment = materialized[cursor:start]
-                segment = self._substitute_struct_scoped_alias_owners(
+                segment = self._substitute_static_constants_in_declarations(
                     segment,
-                    outer,
+                    mapping,
+                    declaration_ends,
+                    source_offset=cursor,
                 )
+                segment = self._substitute_struct_scoped_alias_owners(segment, outer)
                 replacements.append(
                     (
                         cursor,
                         start,
-                        self._substitute_static_constants_in_declarations(
-                            segment,
-                            mapping,
-                        ),
+                        segment,
                     )
                 )
             cursor = max(cursor, end)
@@ -15071,25 +15094,52 @@ class MetalPreprocessor(HLSLPreprocessor):
         return f"({normalized})"
 
     def _substitute_static_constants_in_declarations(
-        self, source: str, mapping: Dict[str, str]
+        self,
+        source: str,
+        mapping: Dict[str, str],
+        declaration_ends: Dict[str, int],
+        *,
+        source_offset: int,
     ) -> str:
-        # Preserve each constant's declaration name while resolving references in
-        # its initializer and in subsequent aliases, array extents, alignments, and
-        # nested type declarations.
-        sentinels: Dict[str, str] = {}
-        masked = source
-        for index, name in enumerate(mapping):
-            sentinel = f"__CROSSTL_STATIC_DECL_{index}__"
-            while sentinel in masked:
-                sentinel += "_"
-            pattern = re.compile(rf"\b{re.escape(name)}\b(?=\s*=(?!=))")
-            masked, count = pattern.subn(sentinel, masked)
-            if count:
-                sentinels[sentinel] = name
-        substituted = self._substitute_bare_member_references(masked, mapping)
-        for sentinel, name in sentinels.items():
-            substituted = substituted.replace(sentinel, name)
-        return substituted
+        # A class member is not available to declarations that precede it. Apply
+        # each resolved mapping only after its declaration terminator while still
+        # allowing subsequent initializers, aliases, extents, and assertions to
+        # use the value.
+        source_end = source_offset + len(source)
+        visible = {
+            name: value
+            for name, value in mapping.items()
+            if declaration_ends.get(name, source_end + 1) <= source_offset
+        }
+        visibility_events: Dict[int, List[str]] = {}
+        for name in mapping:
+            declaration_end = declaration_ends.get(name)
+            if declaration_end is None or not (
+                source_offset < declaration_end <= source_end
+            ):
+                continue
+            visibility_events.setdefault(declaration_end, []).append(name)
+
+        substituted_parts: List[str] = []
+        relative_cursor = 0
+        for declaration_end in sorted(visibility_events):
+            relative_end = declaration_end - source_offset
+            substituted_parts.append(
+                self._substitute_bare_member_references(
+                    source[relative_cursor:relative_end],
+                    visible,
+                )
+            )
+            for name in visibility_events[declaration_end]:
+                visible[name] = mapping[name]
+            relative_cursor = relative_end
+        substituted_parts.append(
+            self._substitute_bare_member_references(
+                source[relative_cursor:],
+                visible,
+            )
+        )
+        return "".join(substituted_parts)
 
     def _find_explicit_template_function_calls(
         self,

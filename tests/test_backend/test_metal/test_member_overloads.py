@@ -8,6 +8,7 @@ from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
     MetalPreprocessor,
+    MetalStaticAssertionError,
     MetalStructMethodError,
 )
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
@@ -435,6 +436,31 @@ def test_preprocessor_materializes_struct_constructor_before_member_lowering():
     )
     assert f"{concrete_name}__load_safe(loader_w, limit)" in output
     assert "loader_w.load_safe" not in output
+
+
+def test_materialized_struct_assertion_cannot_use_later_static_member():
+    source = """
+    template <int Value>
+    struct Limits {
+      static_assert(reads <= 16, "Unsupported read count.");
+      static constant constexpr const short reads = Value;
+      int value;
+    };
+
+    Limits<8> limits;
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_explicit_template_struct_instantiations(
+        source
+    )
+    assert "struct Limits_8" in materialized
+
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._evaluate_static_assertions(materialized)
+
+    assert exc_info.value.reason == "condition-unresolved"
+    assert exc_info.value.unresolved_dependencies == ("reads",)
 
 
 def test_preprocessor_receiver_helper_identity_ignores_parameter_names():
