@@ -178,6 +178,48 @@
         "traditional": 2
       }
     },
+    "index_range_assertion_evidence": {
+      "assertion_count": 24,
+      "inclusive_bounds": {
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      "expressions_by_source": {
+        "mlx/backend/metal/kernels/binary_two.metal": [
+          "offset + i",
+          "a_idx",
+          "b_idx",
+          "out_idx",
+          "out_idx++",
+          "idx.x",
+          "idx.y"
+        ],
+        "mlx/backend/metal/kernels/rope.metal": [
+          "batch_idx * offset_stride",
+          "freq_stride * pos.x",
+          "in_index_1",
+          "in_index_2",
+          "out_index_1",
+          "out_index_2"
+        ],
+        "mlx/backend/metal/kernels/ternary.metal": [
+          "offset + i",
+          "a_idx",
+          "b_idx",
+          "c_idx",
+          "bidx",
+          "cidx",
+          "out_idx",
+          "out_idx++",
+          "idx.x",
+          "idx.y",
+          "idx.z"
+        ]
+      },
+      "contract_kind": "explicit-host-runtime-portability-preconditions",
+      "inferred": false,
+      "runtime_enforced": false
+    },
     "binary_two_fixed_array_resource_status": {
       "status": "validated",
       "resolved_issue": "https://github.com/CrossGL/crosstl/issues/1661",

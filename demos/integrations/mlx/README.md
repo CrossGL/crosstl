@@ -148,10 +148,12 @@ The current harness verifies:
   `scaled_dot_product_attention.metal`, `softmax.metal`, and `ternary.metal`
   in two project runs. `binary_two.metal`, `rope.metal`, and `ternary.metal`
   must emit with zero diagnostics and compile for OpenGL/SPIR-V 1.3 before
-  `spirv-val`. The other five must produce the same exact fail-closed
-  workgroup-size diagnostic and no target file. This is native artifact
-  validation only; the gate does not run the kernels or establish runtime
-  parity;
+  `spirv-val`. Their project configuration supplies 24 source-qualified
+  index-range assertions, and the portability report must reproduce the exact
+  assertion count and content. The other five sources must produce the same
+  exact fail-closed workgroup-size diagnostic and no target file. This is native
+  artifact validation only; the gate does not run the kernels or establish
+  runtime parity;
 - full project materialization of pinned `gemv.metal` for DirectX. The gate
   requires 225 materialized specializations, no unsupported materializations or
   unresolved residue, no bare pure value-discard statements, one aggregate HLSL
@@ -557,6 +559,16 @@ compiles for OpenGL/SPIR-V 1.3, and the resulting SPIR-V passes `spirv-val`. Thi
 resolves [#1661](https://github.com/CrossGL/crosstl/issues/1661) for the pinned
 frontier. It is artifact and toolchain evidence only; it does not establish
 numerical or runtime parity.
+The clean OpenGL frontier supplies 24 configured index-range assertions, all with
+inclusive bounds `[0, 2147483647]`. The expressions are `offset + i`, `a_idx`,
+`b_idx`, `out_idx`, `out_idx++`, `idx.x`, and `idx.y` for `binary_two.metal`;
+`batch_idx * offset_stride`, `freq_stride * pos.x`, `in_index_1`, `in_index_2`,
+`out_index_1`, and `out_index_2` for `rope.metal`; and `offset + i`, `a_idx`,
+`b_idx`, `c_idx`, `bidx`, `cidx`, `out_idx`, `out_idx++`, `idx.x`, `idx.y`, and
+`idx.z` for `ternary.metal`. These records are explicit MLX host/runtime
+portability preconditions for OpenGL. They are not inferred guarantees, CrossTL
+does not enforce them at runtime, and they do not establish runtime integration
+or numerical parity.
 The eight-source OpenGL/SPIR-V gate includes `rms_norm.metal`, `rope.metal`, and
 `scaled_dot_product_attention.metal`. Their Metal function constants retain
 their numeric identifiers as native GLSL specialization constants; the gate

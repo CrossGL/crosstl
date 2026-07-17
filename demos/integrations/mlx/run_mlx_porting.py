@@ -116,6 +116,50 @@ MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES = tuple(
     if source not in MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
 )
 MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM = 0
+MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM = 2_147_483_647
+MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS = {
+    MLX_BINARY_TWO_SOURCE: (
+        "offset + i",
+        "a_idx",
+        "b_idx",
+        "out_idx",
+        "out_idx++",
+        "idx.x",
+        "idx.y",
+    ),
+    MLX_ROPE_SOURCE: (
+        "batch_idx * offset_stride",
+        "freq_stride * pos.x",
+        "in_index_1",
+        "in_index_2",
+        "out_index_1",
+        "out_index_2",
+    ),
+    MLX_TERNARY_SOURCE: (
+        "offset + i",
+        "a_idx",
+        "b_idx",
+        "c_idx",
+        "bidx",
+        "cidx",
+        "out_idx",
+        "out_idx++",
+        "idx.x",
+        "idx.y",
+        "idx.z",
+    ),
+}
+MLX_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
+    {
+        "source": source,
+        "expression": expression,
+        "minimum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+        "maximum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+    }
+    for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+    for expression in MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS[source]
+)
 MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES = tuple(
     dict.fromkeys(
         (
@@ -885,6 +929,7 @@ def _write_project_config(
     metal_target_options: Mapping[str, Mapping[str, int]] | None = None,
     entry_points: Mapping[str, str] | None = None,
     workgroup_size_rules: Mapping[str, Sequence[str | int]] | None = None,
+    index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
 ) -> None:
     include_values = [include] if isinstance(include, str) else list(include)
     include_list = ", ".join(json.dumps(value) for value in include_values)
@@ -901,6 +946,12 @@ def _write_project_config(
         '"**/*.metal" = "metal"',
         "",
     ]
+    for assertion in index_range_assertions or ():
+        lines.append("[[project.index_range_assertions]]")
+        for field in ("source", "function", "expression", "minimum", "maximum"):
+            if field in assertion:
+                lines.append(f"{field} = {json.dumps(assertion[field])}")
+        lines.append("")
     if entry_points:
         lines.append("[project.entry_points]")
         for source, entry_point in entry_points.items():
@@ -2741,6 +2792,7 @@ def _require_frontier_project_join(
     *,
     target: str,
     sources: Sequence[str],
+    index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
 ) -> dict[str, Mapping[str, Any]]:
     expected_sources = set(sources)
     project = payload.get("project")
@@ -2758,6 +2810,14 @@ def _require_frontier_project_join(
         f"{target.title()} frontier config/report join changed or gained an "
         "unproved workgroup-size rule",
     )
+    if index_range_assertions is not None:
+        expected_assertions = [dict(assertion) for assertion in index_range_assertions]
+        _require(
+            project.get("indexRangeAssertions") == expected_assertions
+            and type(project.get("indexRangeAssertionCount")) is int
+            and project.get("indexRangeAssertionCount") == len(expected_assertions),
+            f"{target.title()} frontier index-range assertion contract changed",
+        )
     units = payload.get("units")
     _require(
         isinstance(units, list) and len(units) == len(sources),
@@ -2793,11 +2853,13 @@ def _require_clean_frontier_report(
     target: str,
     sources: Sequence[str],
     validated: bool = True,
+    index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
 ) -> dict[str, Mapping[str, Any]]:
     units_by_source = _require_frontier_project_join(
         payload,
         target=target,
         sources=sources,
+        index_range_assertions=index_range_assertions,
     )
     summary = payload.get("summary")
     _require(
@@ -3131,6 +3193,7 @@ def _run_frontier_project(
     run_toolchains: bool = False,
     check: bool = True,
     specialization_constants: Mapping[str, bool | int | float] | None = None,
+    index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
 ) -> tuple[CommandResult, dict[str, Any], Path, Path]:
     config_path = config_dir / f"{command_name}.toml"
     report_path = report_dir / f"{command_name}.json"
@@ -3143,6 +3206,7 @@ def _run_frontier_project(
         targets=(target,),
         output_dir=_relpath(output_dir, mlx_root),
         specialization_constants=specialization_constants,
+        index_range_assertions=index_range_assertions,
     )
     command = [
         python,
@@ -3678,6 +3742,7 @@ def _check_opengl_frontier(
         target="opengl",
         sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
         output_dir=clean_output_dir,
+        index_range_assertions=MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
     )
     artifacts_by_source = _require_clean_frontier_report(
         mlx_root,
@@ -3686,6 +3751,7 @@ def _check_opengl_frontier(
         target="opengl",
         sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
         validated=False,
+        index_range_assertions=MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
     )
     summary = payload.get("summary", {})
     diagnostic_counts = summary.get("diagnosticCounts", {})
@@ -3888,6 +3954,22 @@ def _check_opengl_frontier(
         "spirvValidator": "spirv-val",
         "nativeValidationOutputs": validation_outputs,
         "specializationConstants": specialization_evidence,
+        "indexRangeAssertionEvidence": {
+            "assertionCount": len(MLX_OPENGL_INDEX_RANGE_ASSERTIONS),
+            "inclusiveBounds": {
+                "minimum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+                "maximum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+            },
+            "expressionsBySource": {
+                source: list(expressions)
+                for source, expressions in (
+                    MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS.items()
+                )
+            },
+            "contractKind": "explicit-host-runtime-portability-preconditions",
+            "inferred": False,
+            "runtimeEnforced": False,
+        },
         "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
         "trackedIssues": [MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE],
         "runtimeIntegrationIncluded": False,

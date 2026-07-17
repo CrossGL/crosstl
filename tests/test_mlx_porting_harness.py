@@ -51,6 +51,44 @@ def test_mlx_porting_contract_uses_exact_pinned_revision():
     assert expected_gaps["commit"] == PINNED_MLX_COMMIT
 
 
+def test_project_config_writer_emits_general_index_range_assertions(tmp_path):
+    from crosstl.project import load_project_config
+
+    module = _load_harness()
+    config_path = tmp_path / "frontier.toml"
+    assertions = (
+        {
+            "source": "mlx/backend/metal/kernels/example.metal",
+            "function": "gather_values",
+            "expression": "base + index",
+            "minimum": 0,
+            "maximum": 1023,
+        },
+        {
+            "source": "mlx/backend/metal/kernels/other.metal",
+            "expression": "position.x",
+            "minimum": 4,
+            "maximum": 31,
+        },
+    )
+
+    module._write_project_config(
+        config_path,
+        include=tuple(assertion["source"] for assertion in assertions),
+        targets=("opengl",),
+        output_dir="generated",
+        index_range_assertions=assertions,
+    )
+
+    config = load_project_config(tmp_path, config_path)
+    assert [assertion.to_json() for assertion in config.index_range_assertions] == list(
+        assertions
+    )
+    assert config_path.read_text(encoding="utf-8").count(
+        "[[project.index_range_assertions]]"
+    ) == len(assertions)
+
+
 def _load_rms_norm_fixture_metadata():
     return json.loads(
         (
@@ -1853,6 +1891,30 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
             module.MLX_ROPE_SOURCE
         ]
     }
+    index_range_evidence = opengl_frontier["index_range_assertion_evidence"]
+    assert index_range_evidence == {
+        "assertion_count": len(module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS),
+        "inclusive_bounds": {
+            "minimum": module.MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+            "maximum": module.MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+        },
+        "expressions_by_source": {
+            source: list(expressions)
+            for source, expressions in (
+                module.MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS.items()
+            )
+        },
+        "contract_kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
+    }
+    assert (
+        sum(
+            len(expressions)
+            for expressions in index_range_evidence["expressions_by_source"].values()
+        )
+        == index_range_evidence["assertion_count"]
+    )
     assert opengl_frontier["runtime_integration_included"] is False
     assert opengl_frontier["runtime_parity_claimed"] is False
 
@@ -2773,6 +2835,7 @@ def _write_clean_frontier_report(
     target,
     sources,
     toolchain_runs=(),
+    index_range_assertions=(),
     reverse=False,
 ):
     extensions = {"directx": ".hlsl", "opengl": ".glsl", "vulkan": ".spvasm"}
@@ -2831,6 +2894,10 @@ def _write_clean_frontier_report(
             "targets": [target],
             "workgroupSizeRules": {},
             "workgroupSizeRuleCount": 0,
+            "indexRangeAssertions": [
+                dict(assertion) for assertion in index_range_assertions
+            ],
+            "indexRangeAssertionCount": len(index_range_assertions),
         },
         "summary": {
             "unitCount": source_count,
@@ -3277,6 +3344,7 @@ def _prepare_opengl_frontier_check(module, tmp_path):
         report_dir / "opengl-frontier.json",
         target="opengl",
         sources=module.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
+        index_range_assertions=module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
     )
     _write_dynamic_workgroup_report(
         module,
@@ -3362,6 +3430,22 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
             module.MLX_ROPE_SOURCE
         ]
     }
+    assert result["indexRangeAssertionEvidence"] == {
+        "assertionCount": len(module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS),
+        "inclusiveBounds": {
+            "minimum": module.MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+            "maximum": module.MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+        },
+        "expressionsBySource": {
+            source: list(expressions)
+            for source, expressions in (
+                module.MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS.items()
+            )
+        },
+        "contractKind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtimeEnforced": False,
+    }
     assert result["runtimeIntegrationIncluded"] is False
     assert [name for name, _command in commands] == [
         "opengl-frontier",
@@ -3409,11 +3493,21 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     assert module.MLX_TERNARY_SOURCE in config
     assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE not in config
     assert 'targets = ["opengl"]' in config
+    assert config.count("[[project.index_range_assertions]]") == len(
+        module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS
+    )
+    from crosstl.project import load_project_config
+
+    parsed_config = load_project_config(paths[0], paths[2] / "opengl-frontier.toml")
+    assert [
+        assertion.to_json() for assertion in parsed_config.index_range_assertions
+    ] == list(module.MLX_OPENGL_INDEX_RANGE_ASSERTIONS)
     blocked_config = (paths[2] / "opengl-workgroup-frontier.toml").read_text(
         encoding="utf-8"
     )
     for source in module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES:
         assert source in blocked_config
+    assert "[[project.index_range_assertions]]" not in blocked_config
 
 
 def test_opengl_frontier_skips_toolchain_when_not_required(tmp_path, monkeypatch):
@@ -3534,6 +3628,52 @@ def test_opengl_frontier_requires_zero_project_diagnostics(tmp_path, monkeypatch
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
     with pytest.raises(module.PortingCheckError, match="zero project diagnostics"):
+        module._check_opengl_frontier(
+            *paths,
+            "python",
+            require_toolchain=False,
+        )
+
+
+@pytest.mark.parametrize("drift", ("count", "content"))
+def test_opengl_frontier_requires_exact_index_range_assertion_report(
+    tmp_path,
+    monkeypatch,
+    drift,
+):
+    module = _load_harness()
+    paths = _prepare_opengl_frontier_check(module, tmp_path)
+    report_path = paths[3] / "opengl-frontier.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if drift == "count":
+        report["project"]["indexRangeAssertionCount"] -= 1
+    else:
+        report["project"]["indexRangeAssertions"][0]["expression"] = "offset + j"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    payloads = _saved_report_payloads(
+        paths[3], "opengl-frontier", "opengl-workgroup-frontier"
+    )
+
+    def fake_run_command(name, command, *, log_dir, **_kwargs):
+        _restore_fake_report(module, paths[0], paths[3], name, payloads)
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(
+            name,
+            list(command),
+            1 if name == "opengl-workgroup-frontier" else 0,
+            stdout_path,
+            stderr_path,
+        )
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    with pytest.raises(
+        module.PortingCheckError,
+        match="index-range assertion contract changed",
+    ):
         module._check_opengl_frontier(
             *paths,
             "python",
@@ -6067,6 +6207,33 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
         normalized_readme
     )
     assert "DirectX remains outside the DXC gate" not in readme
+
+
+def test_opengl_index_range_contract_is_documented_as_a_portability_precondition():
+    module = _load_harness()
+    readme = MLX_README_PATH.read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
+
+    assert "24 source-qualified index-range assertions" in normalized_readme
+    assert "24 configured index-range assertions" in normalized_readme
+    assert "24 audited index-range assertions" not in normalized_readme
+    assert "exact assertion count and content" in normalized_readme
+    assert "inclusive bounds `[0, 2147483647]`" in normalized_readme
+    assert "explicit MLX host/runtime portability preconditions for OpenGL" in (
+        normalized_readme
+    )
+    assert "They are not inferred guarantees" in normalized_readme
+    assert "does not enforce them at runtime" in normalized_readme
+    assert "do not establish runtime integration or numerical parity" in (
+        normalized_readme
+    )
+    for (
+        source,
+        expressions,
+    ) in module.MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS.items():
+        assert f"`{Path(source).name}`" in readme
+        for expression in expressions:
+            assert f"`{expression}`" in readme
 
 
 def test_binary_resource_relocation_issue_is_full_corpus_only():
