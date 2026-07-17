@@ -161,6 +161,17 @@ from .image_access_contracts import (
     image_atomic_result_kind_error,
     image_atomic_result_kind_mismatch,
 )
+from .index_range_contracts import (
+    INDEX_RANGE_ASSERTED,
+    INDEX_RANGE_CONSTANT,
+    INDEX_RANGE_STATIC,
+    OPENGL_INDEX_PROFILE,
+    IndexRangeAssertion,
+    IndexTargetProfile,
+    IntegerRange,
+    decide_index_narrowing,
+    parse_index_range_assertions,
+)
 from .image_access_contracts import (
     image_atomic_value_arguments as shared_image_atomic_value_arguments,
 )
@@ -630,14 +641,24 @@ class OpenGLIndexTypeError(ValueError):
         *,
         index_type=None,
         target_index_type=None,
+        target_profile=None,
         indexed_value=None,
+        index_expression=None,
+        range_status=None,
+        source_range=None,
+        accepted_range=None,
         reason=None,
         source_location=None,
     ):
         super().__init__(message)
         self.index_type = index_type
         self.target_index_type = target_index_type
+        self.target_profile = target_profile
         self.indexed_value = indexed_value
+        self.index_expression = index_expression
+        self.range_status = range_status
+        self.source_range = source_range
+        self.accepted_range = accepted_range
         self.reason = reason
         self.source_location = source_location
 
@@ -973,6 +994,8 @@ class GLSLCodeGen:
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = OpenGLBooleanCompoundAssignmentError
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = OpenGLBooleanOrderedIntrinsicError
     GLSL_STRUCT_CONSTRUCTION_ERROR = OpenGLStructConstructionError
+    GLSL_INDEX_RANGE_ERROR = OpenGLIndexTypeError
+    GLSL_INDEX_TARGET_PROFILE = OPENGL_INDEX_PROFILE
     GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32, 64})
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32, 64})
     OPENGL_DESCRIPTOR_SET_BINDING_STRIDE = 1024
@@ -1918,6 +1941,7 @@ class GLSLCodeGen:
         self.match_temp_variable_index = 0
         self.local_variable_types = {}
         self.local_variable_source_types = {}
+        self.index_range_assertions = ()
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
         self.current_structured_buffer_array_parameters = {}
@@ -5850,7 +5874,8 @@ class GLSLCodeGen:
             array_code = self.glsl_resource_argument_expression(array_expr, aliases)
             if array_code is None:
                 return None
-            return f"{array_code}[{self.generate_expression(index_expr)}]"
+            index_code = self.glsl_index_expression(index_expr, array_expr)
+            return f"{array_code}[{index_code}]"
         arg_name = self.expression_name(arg)
         if arg_name in aliases:
             return aliases[arg_name]["expression"]
@@ -9842,6 +9867,7 @@ class GLSLCodeGen:
                 ]
                 buffer_info = {
                     **buffer_array,
+                    "source_name": p.name,
                     "expanded_names": expanded_names,
                 }
                 if self.structured_buffer_requires_counter(buffer_array["base_type"]):
@@ -13012,6 +13038,7 @@ class GLSLCodeGen:
 
         return {
             "index_expr": dynamic_info["index_expr"],
+            "indexed_expr": dynamic_info["array_expr"],
             "cases": cases,
             "return_type": self.expression_result_type(expr),
         }
@@ -13025,7 +13052,11 @@ class GLSLCodeGen:
     ):
         indent_str = "    " * indent
         case_indent = "    " * (indent + 1)
-        code = f"{indent_str}switch ({self.generate_expression(dispatch['index_expr'])}) {{\n"
+        selector = self.glsl_index_expression(
+            dispatch["index_expr"],
+            dispatch.get("indexed_expr"),
+        )
+        code = f"{indent_str}switch ({selector}) {{\n"
         for index, call in dispatch["cases"]:
             code += f"{indent_str}case {index}:\n"
             code += f"{case_indent}{case_statement(call)}\n"
@@ -13097,7 +13128,11 @@ class GLSLCodeGen:
 
         indent_str = "    " * indent
         case_indent = "    " * (indent + 1)
-        code = f"{indent_str}switch ({self.generate_expression(dispatch['index_expr'])}) {{\n"
+        selector = self.glsl_index_expression(
+            dispatch["index_expr"],
+            dispatch.get("indexed_expr"),
+        )
+        code = f"{indent_str}switch ({selector}) {{\n"
         for index, call in dispatch["cases"]:
             code += f"{indent_str}case {index}:\n"
             code += f"{case_indent}return {call};\n"
@@ -21796,6 +21831,343 @@ complex64_t crossgl_complex64_mod_assign(
             return self.expression_name(array_expr)
         return None
 
+    def set_index_range_assertions(self, assertions):
+        """Configure explicit source ranges used only to justify index narrowing."""
+        self.index_range_assertions = parse_index_range_assertions(assertions)
+        return self
+
+    def glsl_index_target_profile(self):
+        profile = self.GLSL_INDEX_TARGET_PROFILE
+        version_line = str(self.current_glsl_version_line or "").strip()
+        if not version_line or self.GLSL_TARGET_DISPLAY_NAME != "OpenGL":
+            return profile
+        return IndexTargetProfile(
+            f"OpenGL {version_line}",
+            profile.scalar_types,
+        )
+
+    def glsl_index_asserted_range(self, expression):
+        expression_name = expression_debug_name(expression)
+        matches = [
+            assertion
+            for assertion in self.index_range_assertions
+            if assertion.applies_to(
+                expression_name,
+                self.current_glsl_source_function_name,
+            )
+        ]
+        if not matches:
+            return None
+        minimum = max(assertion.value_range.minimum for assertion in matches)
+        maximum = min(assertion.value_range.maximum for assertion in matches)
+        if minimum > maximum:
+            raise ValueError(
+                "Conflicting index range assertions for source expression "
+                f"'{expression_name}'"
+            )
+        return IntegerRange(
+            minimum,
+            maximum,
+            INDEX_RANGE_ASSERTED,
+            ", ".join(sorted({assertion.source for assertion in matches})),
+        )
+
+    def glsl_integer_type_domain(self, expression, *, allow_wide=False):
+        value_type = self.glsl_source_expression_type(expression)
+        info = self.glsl_value_type_info(value_type)
+        if info is None or info["width"] != 1 or info["family"] not in {"int", "uint"}:
+            return None
+        bits = info["narrow"]["bits"] if info["narrow"] is not None else info["bits"]
+        if bits > 32 and not allow_wide:
+            return None
+        if info["family"] == "int":
+            return IntegerRange(
+                -(1 << (bits - 1)),
+                (1 << (bits - 1)) - 1,
+                INDEX_RANGE_STATIC,
+                f"source type {self.type_name_string(value_type)}",
+            )
+        return IntegerRange(
+            0,
+            (1 << bits) - 1,
+            INDEX_RANGE_STATIC,
+            f"source type {self.type_name_string(value_type)}",
+        )
+
+    def glsl_index_value_range(self, expression, _active=None):
+        if expression is None:
+            return None
+        active = set() if _active is None else _active
+        expression_id = id(expression)
+        if expression_id in active:
+            return None
+        active.add(expression_id)
+        try:
+            literal = self.literal_int_value(
+                expression,
+                self.glsl_active_literal_int_constants(),
+            )
+            if isinstance(literal, int) and not isinstance(literal, bool):
+                return IntegerRange.exact(
+                    literal,
+                    provenance=expression_debug_name(expression),
+                )
+
+            asserted = self.glsl_index_asserted_range(expression)
+            if asserted is not None:
+                return asserted
+
+            if isinstance(expression, MemberAccessNode):
+                component = str(expression.member)
+                component_indices = {
+                    "x": 0,
+                    "r": 0,
+                    "s": 0,
+                    "y": 1,
+                    "g": 1,
+                    "t": 1,
+                    "z": 2,
+                    "b": 2,
+                    "p": 2,
+                    "w": 3,
+                    "a": 3,
+                    "q": 3,
+                }
+                component_index = component_indices.get(component)
+                if component_index is not None:
+                    vector_value = self.glsl_integer_vector_literal_value(
+                        expression.object
+                    )
+                    if vector_value is not None and component_index < len(vector_value):
+                        return IntegerRange.exact(
+                            vector_value[component_index],
+                            provenance=expression_debug_name(expression),
+                        )
+                return self.glsl_integer_type_domain(expression)
+
+            if isinstance(expression, UnaryOpNode):
+                operator_name = self.map_operator(expression.op)
+                operand_range = self.glsl_index_value_range(expression.operand, active)
+                if operator_name == "+":
+                    return operand_range
+                if operator_name == "-" and operand_range is not None:
+                    candidate = IntegerRange(
+                        -operand_range.maximum,
+                        -operand_range.minimum,
+                        INDEX_RANGE_STATIC,
+                        expression_debug_name(expression),
+                    )
+                    domain = self.glsl_integer_type_domain(expression, allow_wide=True)
+                    return (
+                        candidate
+                        if domain is None or candidate.is_within(domain)
+                        else None
+                    )
+                if operator_name in {"++", "--"} or expression.op in {
+                    "PRE_INCREMENT",
+                    "PRE_DECREMENT",
+                    "POST_INCREMENT",
+                    "POST_DECREMENT",
+                }:
+                    return self.glsl_integer_type_domain(expression)
+                return None
+
+            if isinstance(expression, BinaryOpNode):
+                operator_name = self.map_operator(expression.op)
+                left = self.glsl_index_value_range(expression.left, active)
+                right = self.glsl_index_value_range(expression.right, active)
+                if (
+                    operator_name == "%"
+                    and right is not None
+                    and right.is_exact
+                    and right.minimum > 0
+                ):
+                    left = left or self.glsl_integer_type_domain(
+                        expression.left, allow_wide=True
+                    )
+                if (
+                    operator_name == "%"
+                    and left is not None
+                    and left.minimum >= 0
+                    and right is not None
+                    and right.is_exact
+                    and right.minimum > 0
+                ):
+                    return IntegerRange(
+                        0,
+                        right.minimum - 1,
+                        INDEX_RANGE_STATIC,
+                        expression_debug_name(expression),
+                    )
+                if operator_name == "&":
+                    mask = None
+                    if right is not None and right.is_exact and right.minimum >= 0:
+                        mask = right.minimum
+                    elif left is not None and left.is_exact and left.minimum >= 0:
+                        mask = left.minimum
+                    if mask is not None:
+                        return IntegerRange(
+                            0,
+                            mask,
+                            INDEX_RANGE_STATIC,
+                            expression_debug_name(expression),
+                        )
+                if left is None or right is None:
+                    return None
+                if operator_name == "+":
+                    bounds = (
+                        left.minimum + right.minimum,
+                        left.maximum + right.maximum,
+                    )
+                elif operator_name == "-":
+                    bounds = (
+                        left.minimum - right.maximum,
+                        left.maximum - right.minimum,
+                    )
+                elif operator_name == "*":
+                    products = (
+                        left.minimum * right.minimum,
+                        left.minimum * right.maximum,
+                        left.maximum * right.minimum,
+                        left.maximum * right.maximum,
+                    )
+                    bounds = (min(products), max(products))
+                else:
+                    return None
+                candidate = IntegerRange(
+                    *bounds,
+                    INDEX_RANGE_STATIC,
+                    expression_debug_name(expression),
+                )
+                domain = self.glsl_integer_type_domain(expression, allow_wide=True)
+                return (
+                    candidate
+                    if domain is None or candidate.is_within(domain)
+                    else None
+                )
+
+            if isinstance(expression, TernaryOpNode):
+                true_range = self.glsl_index_value_range(expression.true_expr, active)
+                false_range = self.glsl_index_value_range(expression.false_expr, active)
+                if true_range is None or false_range is None:
+                    return None
+                return IntegerRange(
+                    min(true_range.minimum, false_range.minimum),
+                    max(true_range.maximum, false_range.maximum),
+                    INDEX_RANGE_STATIC,
+                    expression_debug_name(expression),
+                )
+
+            if isinstance(expression, (FunctionCallNode, ConstructorNode)):
+                if isinstance(expression, FunctionCallNode):
+                    function_name = self.function_call_name(expression)
+                    arguments = list(expression.arguments or [])
+                else:
+                    function_name = self.type_name_string(expression.constructor_type)
+                    arguments = list(expression.arguments or [])
+                if function_name in {"min", "max"} and len(arguments) == 2:
+                    left = self.glsl_index_value_range(
+                        arguments[0], active
+                    ) or self.glsl_integer_type_domain(arguments[0], allow_wide=True)
+                    right = self.glsl_index_value_range(
+                        arguments[1], active
+                    ) or self.glsl_integer_type_domain(arguments[1], allow_wide=True)
+                    if left is not None and right is not None:
+                        if function_name == "min":
+                            bounds = (
+                                min(left.minimum, right.minimum),
+                                min(left.maximum, right.maximum),
+                            )
+                        else:
+                            bounds = (
+                                max(left.minimum, right.minimum),
+                                max(left.maximum, right.maximum),
+                            )
+                        return IntegerRange(
+                            *bounds,
+                            INDEX_RANGE_STATIC,
+                            expression_debug_name(expression),
+                        )
+                if function_name == "clamp" and len(arguments) == 3:
+                    lower = self.glsl_index_value_range(arguments[1], active)
+                    upper = self.glsl_index_value_range(arguments[2], active)
+                    if (
+                        lower is not None
+                        and lower.is_exact
+                        and upper is not None
+                        and upper.is_exact
+                        and lower.minimum <= upper.minimum
+                    ):
+                        return IntegerRange(
+                            lower.minimum,
+                            upper.minimum,
+                            INDEX_RANGE_STATIC,
+                            expression_debug_name(expression),
+                        )
+                destination = self.glsl_value_type_info(function_name)
+                if (
+                    destination is not None
+                    and destination["width"] == 1
+                    and len(arguments) == 1
+                ):
+                    argument_range = self.glsl_index_value_range(arguments[0], active)
+                    if argument_range is None:
+                        return None
+                    bits = (
+                        destination["narrow"]["bits"]
+                        if destination["narrow"] is not None
+                        else destination["bits"]
+                    )
+                    if destination["family"] == "int":
+                        destination_range = IntegerRange(
+                            -(1 << (bits - 1)),
+                            (1 << (bits - 1)) - 1,
+                        )
+                    elif destination["family"] == "uint":
+                        destination_range = IntegerRange(0, (1 << bits) - 1)
+                    else:
+                        return None
+                    if argument_range.is_within(destination_range):
+                        return argument_range.with_status(
+                            INDEX_RANGE_STATIC,
+                            expression_debug_name(expression),
+                        )
+                return None
+
+            return self.glsl_integer_type_domain(expression)
+        finally:
+            active.remove(expression_id)
+
+    def glsl_indexed_extent(self, indexed_expr):
+        indexed_type = self.type_name_string(
+            self.glsl_source_expression_type(indexed_expr)
+            or self.expression_result_type(indexed_expr)
+        )
+        outer_array = self.glsl_outer_array_type(indexed_type)
+        if outer_array is not None:
+            extent = evaluate_literal_int_expression(
+                outer_array[0],
+                self.glsl_active_literal_int_constants(),
+            )
+            if isinstance(extent, int) and not isinstance(extent, bool) and extent >= 0:
+                return extent
+
+        value_info = self.glsl_value_type_info(indexed_type)
+        if value_info is not None and value_info["width"] > 1:
+            return value_info["width"]
+
+        mapped_type = self.map_type(indexed_type) if indexed_type else ""
+        matrix_match = re.fullmatch(r"(?:d?mat)([234])(?:x[234])?", mapped_type)
+        if matrix_match is not None:
+            return int(matrix_match.group(1))
+
+        indexed_name = self.expression_name(indexed_expr)
+        extent = self.resource_variable_array_sizes.get(indexed_name)
+        return extent if isinstance(extent, int) and extent >= 0 else None
+
+    def glsl_target_index_literal(self, value, target_type):
+        return f"{value}u" if target_type == "uint" else str(value)
+
     def glsl_index_type_error(
         self,
         index_expr,
@@ -21803,21 +22175,36 @@ complex64_t crossgl_complex64_mod_assign(
         index_type,
         target_index_type,
         reason,
+        *,
+        range_status=None,
+        source_range=None,
+        accepted_range=None,
     ):
         rendered_index_type = self.type_name_string(index_type) or "unknown"
         indexed_value = expression_debug_name(indexed_expr)
-        raise OpenGLIndexTypeError(
-            "OpenGL cannot preserve subscript index type "
+        target_profile = self.glsl_index_target_profile()
+        raise self.GLSL_INDEX_RANGE_ERROR(
+            f"{self.GLSL_TARGET_DISPLAY_NAME} cannot preserve subscript index type "
             f"'{rendered_index_type}' for '{indexed_value}': "
             f"{reason.replace('-', ' ')}",
             index_type=rendered_index_type,
             target_index_type=target_index_type,
+            target_profile=target_profile.name,
             indexed_value=indexed_value,
+            index_expression=expression_debug_name(index_expr),
+            range_status=range_status,
+            source_range=source_range,
+            accepted_range=accepted_range,
             reason=reason,
-            source_location=getattr(index_expr, "source_location", None),
+            source_location=(
+                getattr(index_expr, "source_location", None)
+                or getattr(indexed_expr, "source_location", None)
+            ),
         )
 
-    def glsl_index_expression(self, index_expr, indexed_expr=None):
+    def glsl_index_expression(
+        self, index_expr, indexed_expr=None, *, indexed_extent=None
+    ):
         rendered = self.generate_expression_with_expected(index_expr, None)
         index_type = self.glsl_source_expression_type(index_expr)
         index_info = self.glsl_value_type_info(index_type)
@@ -21831,6 +22218,7 @@ complex64_t crossgl_complex64_mod_assign(
                 index_type,
                 None,
                 "vector-index-unsupported",
+                range_status="unproven",
             )
         if index_info["family"] not in {"int", "uint"}:
             self.glsl_index_type_error(
@@ -21839,38 +22227,50 @@ complex64_t crossgl_complex64_mod_assign(
                 index_type,
                 None,
                 "non-integer-index",
+                range_status="unproven",
             )
-        if index_info["bits"] <= 32:
+        source_bits = (
+            index_info["narrow"]["bits"]
+            if index_info["narrow"] is not None
+            else index_info["bits"]
+        )
+        source_range = self.glsl_index_value_range(index_expr)
+        decision = decide_index_narrowing(
+            source_signed=index_info["family"] == "int",
+            source_bits=source_bits,
+            source_width=index_info["width"],
+            profile=self.glsl_index_target_profile(),
+            value_range=source_range,
+            indexed_extent=(
+                self.glsl_indexed_extent(indexed_expr)
+                if indexed_extent is None
+                else indexed_extent
+            ),
+        )
+        target_type = decision.target_type.name if decision.target_type else None
+        if not decision.accepted:
+            self.glsl_index_type_error(
+                index_expr,
+                indexed_expr,
+                index_type,
+                target_type,
+                decision.reason,
+                range_status=decision.range_status,
+                source_range=decision.source_range,
+                accepted_range=decision.accepted_range,
+            )
+        if decision.action == "identity":
             return rendered
-
-        # A defined access to a GLSL-backed collection must fit its 32-bit index
-        # domain. Reject constants that prove otherwise; runtime out-of-range
-        # accesses are already outside the source collection's valid domain.
-        target_type = "int" if index_info["family"] == "int" else "uint"
-        literal_index = self.literal_int_value(index_expr, self.literal_int_constants)
-        if literal_index is not None:
-            minimum = -(1 << 31) if target_type == "int" else 0
-            maximum = (1 << 31) - 1 if target_type == "int" else (1 << 32) - 1
-            if literal_index < minimum or literal_index > maximum:
-                self.glsl_index_type_error(
-                    index_expr,
-                    indexed_expr,
-                    index_type,
-                    target_type,
-                    "constant-index-out-of-range",
-                )
+        if (
+            source_range is not None
+            and source_range.is_exact
+            and source_range.status == INDEX_RANGE_CONSTANT
+        ):
+            return self.glsl_target_index_literal(source_range.minimum, target_type)
         return f"{target_type}({rendered})"
 
     def glsl_resource_array_index_expression(self, expr):
         index_expr = getattr(expr, "index", getattr(expr, "index_expr", None))
-        literal_index = self.literal_int_value(index_expr, self.literal_int_constants)
-        if (
-            isinstance(literal_index, int)
-            and not isinstance(literal_index, bool)
-            and literal_index < 0
-            and self.is_resource_array_access(expr)
-        ):
-            return "0"
         array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
         return self.glsl_index_expression(index_expr, array_expr)
 
@@ -22745,7 +23145,7 @@ complex64_t crossgl_complex64_mod_assign(
             instance_name = self.structured_buffer_counter_instances.get(array_name)
             member_name = self.structured_buffer_counter_members.get(array_name)
             if instance_name and member_name:
-                index = self.generate_expression(index_expr)
+                index = self.glsl_index_expression(index_expr, array_expr)
                 return f"{instance_name}[{index}].{member_name}"
 
         member_name = self.structured_buffer_counter_members.get(arg_name)
@@ -22775,7 +23175,11 @@ complex64_t crossgl_complex64_mod_assign(
         if literal_index is not None and 0 <= literal_index < len(expanded_names):
             return branch(expanded_names[literal_index])
 
-        selector_code = self.generate_expression(selector)
+        selector_code = self.glsl_index_expression(
+            selector,
+            info.get("source_name"),
+            indexed_extent=len(expanded_names),
+        )
         selector_type = self.map_type(self.expression_result_type(selector))
 
         def selector_literal(index):
@@ -23405,7 +23809,14 @@ complex64_t crossgl_complex64_mod_assign(
         type_name = self.type_name_string(vtype)
         base_type = self.resource_base_type(type_name)
         mapped_type = self.map_type(base_type)
-        return is_integer_coordinate_type_name(base_type, mapped_type)
+        if is_integer_coordinate_type_name(base_type, mapped_type):
+            return True
+        value_info = self.glsl_value_type_info(base_type)
+        return bool(
+            value_info is not None
+            and value_info["family"] in {"int", "uint"}
+            and value_info["width"] in {1, 2, 3, 4}
+        )
 
     def texture_dimension_descriptor(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
@@ -24636,6 +25047,12 @@ complex64_t crossgl_complex64_mod_assign(
             "uvec2",
             "uvec3",
             "uvec4",
+            "i64vec2",
+            "i64vec3",
+            "i64vec4",
+            "u64vec2",
+            "u64vec3",
+            "u64vec4",
         }
 
     def glsl_compile_time_int_constants(self):
@@ -25797,6 +26214,21 @@ complex64_t crossgl_complex64_mod_assign(
     def generate_texture_call(self, func_name, args):
         if not func_name:
             return None
+
+        texture_type = self.texture_resource_type(args[0]) if args else None
+        if (
+            is_texel_fetch_basic_operation(func_name)
+            and self.resource_base_type(texture_type)
+            in {"samplerBuffer", "isamplerBuffer", "usamplerBuffer"}
+        ):
+            if len(args) != 2:
+                raise ValueError(
+                    f"{self.GLSL_TARGET_DISPLAY_NAME} texture-buffer operation "
+                    f"'{func_name}' requires 2 argument(s), got {len(args)}"
+                )
+            texture_name = self.generate_expression(args[0])
+            coordinate = self.glsl_index_expression(args[1], args[0])
+            return f"texelFetch({texture_name}, {coordinate})"
 
         self.validate_texture_call_arity(func_name, args)
         self.validate_image_resource_argument(func_name, args)

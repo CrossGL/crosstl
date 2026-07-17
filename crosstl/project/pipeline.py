@@ -46,6 +46,10 @@ from crosstl.translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from crosstl.translator.codegen.index_range_contracts import (
+    IndexRangeAssertion,
+    parse_index_range_assertions,
+)
 from crosstl.translator.codegen.pointer_reinterpret import (
     validate_pointer_reinterpretation_target,
 )
@@ -7334,6 +7338,7 @@ class ProjectConfig:
     subgroup_width_rules: Mapping[str, str | int] = field(default_factory=dict)
     selected_variants: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
+    index_range_assertions: Sequence[Any] = ()
 
     def __post_init__(self) -> None:
         root_path = _filesystem_path_arg(self.root, field_name="ProjectConfig.root")
@@ -7419,6 +7424,25 @@ class ProjectConfig:
             "source_options",
             _as_source_options(
                 self.source_options, field_name="ProjectConfig.source_options"
+            ),
+        )
+        assertions = parse_index_range_assertions(
+            self.index_range_assertions,
+            field_name="ProjectConfig.index_range_assertions",
+        )
+        object.__setattr__(
+            self,
+            "index_range_assertions",
+            tuple(
+                replace(
+                    assertion,
+                    source=(
+                        assertion.source
+                        if assertion.source == "*"
+                        else _normalize_project_relative_path(assertion.source)
+                    ),
+                )
+                for assertion in assertions
             ),
         )
         if not isinstance(self.variants, Mapping):
@@ -8508,6 +8532,10 @@ def load_project_config(
         project.get("source_options"),
         field_name="crosstl.toml [project.source_options]",
     )
+    index_range_assertions = parse_index_range_assertions(
+        project.get("index_range_assertions"),
+        field_name="crosstl.toml [project.index_range_assertions]",
+    )
     entry_points = _as_non_empty_str_mapping(
         project.get("entry_points"),
         field_name="crosstl.toml [project.entry_points]",
@@ -8584,6 +8612,7 @@ def load_project_config(
             field_name="project.selected_variants",
         ),
         external_corpus_manifest=external_corpus_manifest,
+        index_range_assertions=index_range_assertions,
     )
 
 
@@ -8960,6 +8989,18 @@ def _unit_artifact_source_path(unit: Any) -> str | None:
     if _is_non_empty_string(source) and _is_report_identity_path(source):
         return source
     return None
+
+
+def _index_range_assertions_for_unit(
+    config: ProjectConfig, relative_path: str
+) -> tuple[IndexRangeAssertion, ...]:
+    normalized_path = _normalize_project_relative_path(relative_path)
+    return tuple(
+        assertion
+        for assertion in config.index_range_assertions
+        if assertion.source == "*"
+        or fnmatch.fnmatch(normalized_path, assertion.source)
+    )
 
 
 def _artifact_source_suffix_pairs(
@@ -19495,9 +19536,10 @@ def _opengl_index_type_failure_details(
     unit: ProjectTranslationUnit,
     artifact_path: str | None,
 ) -> dict[str, Any]:
-    if _translation_failure_diagnostic_code(exc) != (
-        "project.translate.opengl-index-type-unsupported"
-    ):
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.opengl-index-type-unsupported",
+        "project.translate.webgl-index-type-unsupported",
+    }:
         return {}
 
     details: dict[str, Any] = {
@@ -19508,6 +19550,9 @@ def _opengl_index_type_failure_details(
     index_type = getattr(exc, "index_type", None)
     target_index_type = getattr(exc, "target_index_type", None)
     indexed_value = getattr(exc, "indexed_value", None)
+    index_expression = getattr(exc, "index_expression", None)
+    target_profile = getattr(exc, "target_profile", None)
+    range_status = getattr(exc, "range_status", None)
     reason = getattr(exc, "reason", None)
     if _is_non_empty_string(index_type):
         index["sourceType"] = index_type
@@ -19515,6 +19560,23 @@ def _opengl_index_type_failure_details(
         index["targetType"] = target_index_type
     if _is_non_empty_string(indexed_value):
         index["indexedValue"] = indexed_value
+    if _is_non_empty_string(target_index_type):
+        if _is_non_empty_string(index_expression):
+            index["indexExpression"] = index_expression
+        if _is_non_empty_string(target_profile):
+            index["targetProfile"] = target_profile
+        if _is_non_empty_string(range_status):
+            index["rangeStatus"] = range_status
+        for field_name, attribute_name in (
+            ("sourceRange", "source_range"),
+            ("acceptedRange", "accepted_range"),
+        ):
+            value = getattr(exc, attribute_name, None)
+            to_json = getattr(value, "to_json", None)
+            if callable(to_json):
+                index[field_name] = to_json()
+            elif isinstance(value, Mapping):
+                index[field_name] = dict(value)
     if _is_non_empty_string(reason):
         index["reason"] = reason
     if index:
@@ -20359,6 +20421,9 @@ def _translation_failure_location(
             return source_location
         return replace(source_location, file=file_name)
     if source_location is None:
+        index_location = _index_type_failure_location(exc, unit)
+        if index_location is not None:
+            return index_location
         context = _metal_template_declaration_context(exc, unit)
         if context is not None:
             return context["location"]
@@ -20415,6 +20480,53 @@ def _translation_failure_location(
             0,
         ),
     )
+
+
+def _index_type_failure_location(
+    exc: Exception, unit: ProjectTranslationUnit
+) -> SourceLocation | None:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.opengl-index-type-unsupported",
+        "project.translate.webgl-index-type-unsupported",
+    }:
+        return None
+    index_expression = getattr(exc, "index_expression", None)
+    indexed_value = getattr(exc, "indexed_value", None)
+    if not _is_non_empty_string(index_expression):
+        return None
+    try:
+        source = unit.path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    def source_pattern(value: str) -> str:
+        return r"\s*".join(re.escape(part) for part in value.strip().split())
+
+    index_pattern = source_pattern(index_expression)
+    patterns = []
+    if _is_non_empty_string(indexed_value):
+        indexed_pattern = source_pattern(indexed_value)
+        patterns.extend(
+            (
+                rf"{indexed_pattern}\s*\[\s*(?P<index>{index_pattern})",
+                rf"\bbuffer_(?:load|store)\s*\(\s*{indexed_pattern}\s*,\s*"
+                rf"(?P<index>{index_pattern})",
+                rf"\btexelFetch\s*\(\s*{indexed_pattern}\s*,\s*"
+                rf"(?P<index>{index_pattern})",
+            )
+        )
+    patterns.append(rf"(?P<index>{index_pattern})")
+    for pattern in patterns:
+        match = re.search(pattern, source)
+        if match is None:
+            continue
+        return _source_location_at_offset(
+            unit,
+            source,
+            match.start("index"),
+            match.end("index") - match.start("index"),
+        )
+    return None
 
 
 _SPECIALIZATION_CONSTANT_ID_MAX = 0x7FFFFFFF
@@ -21860,8 +21972,16 @@ def _generate_project_target_from_crossgl_ast(
     output_path: Path,
     entry_point: str | None,
     format_output: bool,
+    index_range_assertions: Sequence[IndexRangeAssertion] = (),
 ) -> str:
     codegen = get_codegen(target)
+    if index_range_assertions:
+        configure_index_ranges = getattr(codegen, "set_index_range_assertions", None)
+        if not callable(configure_index_ranges):
+            raise ValueError(
+                f"Target '{target}' does not consume index range assertions"
+            )
+        configure_index_ranges(index_range_assertions)
     lower_default_arguments(ast)
     validate_pointer_reinterpretation_target(ast, target)
     if entry_point is None:
@@ -22313,6 +22433,7 @@ def translate_project(
             subgroup_width_rules=config.subgroup_width_rules,
             selected_variants=config.selected_variants,
             external_corpus_manifest=config.external_corpus_manifest,
+            index_range_assertions=config.index_range_assertions,
         )
     config = _config_with_selected_variants(config, variants)
 
@@ -22448,6 +22569,11 @@ def translate_project(
                     unit.source_backend,
                     unit.relative_path,
                     target=target,
+                )
+                index_range_assertions = (
+                    _index_range_assertions_for_unit(config, unit.relative_path)
+                    if target in {"opengl", "webgl"}
+                    else ()
                 )
                 try:
                     unsupported_rule_target = (
@@ -22665,6 +22791,7 @@ def translate_project(
                     if translation_source_options:
                         translate_kwargs["source_options"] = translation_source_options
                     generated_source = None
+                    crossgl_ast = None
                     requires_workgroup_specialization = (
                         target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS
                         and (
@@ -22805,6 +22932,9 @@ def translate_project(
                                                 output_path=split_output_path,
                                                 entry_point=materialized_entry,
                                                 format_output=format_output,
+                                                index_range_assertions=(
+                                                    index_range_assertions
+                                                ),
                                             )
                                         )
                                     except Exception as exc:
@@ -22850,6 +22980,9 @@ def translate_project(
                                             output_path=output_path,
                                             entry_point=selected_entry_point,
                                             format_output=format_output,
+                                            index_range_assertions=(
+                                                index_range_assertions
+                                            ),
                                         )
                                     )
                                 except Exception as exc:
@@ -22871,6 +23004,27 @@ def translate_project(
                                     output_path,
                                     execution=execution,
                                 )
+                    if generated_source is None and index_range_assertions:
+                        crossgl_ast = crossgl_ast or _crossgl_ast_for_project_target(
+                            input_path=translation_input_path,
+                            source_backend=translation_source_backend,
+                            original_source_backend=unit.source_backend,
+                            target=target,
+                            include_paths=translation_include_paths,
+                            defines=translation_defines,
+                            source_options=translation_source_options,
+                            source_is_materialized=(
+                                template_materialization is not None
+                            ),
+                        )
+                        generated_source = _generate_project_target_from_crossgl_ast(
+                            ast=crossgl_ast,
+                            target=target,
+                            output_path=output_path,
+                            entry_point=selected_entry_point,
+                            format_output=format_output,
+                            index_range_assertions=index_range_assertions,
+                        )
                     if generated_source is None:
                         generated_source = translate(
                             str(translation_input_path), **translate_kwargs
