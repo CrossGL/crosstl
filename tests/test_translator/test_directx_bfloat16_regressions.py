@@ -129,3 +129,77 @@ def test_directx_half_and_bfloat_entry_resources_do_not_share_source_type(tmp_pa
         "copy_impl_bfloat16_t(copy_bfloat_in, int64_t(0), "
         "copy_bfloat_out, int64_t(0));"
     ) in generated
+
+
+def test_mlx_gemv_materialized_helper_preserves_bfloat_storage_boundary(tmp_path):
+    # Reduced from MLX 4367c73b60541ddd5a266ce4644fd93d20223b6e,
+    # mlx/backend/metal/kernels/gemv.h.
+    (tmp_path / "gemv.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+            typedef bfloat bfloat16_t;
+
+            template <typename T>
+            struct GEMVKernel {
+              template <typename U = T>
+              static void load_unsafe(const device T* src, thread U dst[1]) {
+                dst[0] = static_cast<U>(src[0]);
+              }
+
+              static void run(
+                  const device T* input [[buffer(0)]],
+                  device float* output [[buffer(1)]]) {
+                thread float value[1];
+                load_unsafe<float>(input, value);
+                output[0] = value[0];
+              }
+            };
+
+            template <typename T>
+            [[kernel]] void gemv(
+                const device T* input [[buffer(0)]],
+                device float* output [[buffer(1)]]) {
+              using gemv_kernel = GEMVKernel<T>;
+              gemv_kernel::run(input, output);
+            }
+
+            instantiate_kernel("gemv_bfloat", gemv, bfloat16_t)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        tmp_path,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["requiredCapabilities"] == ["directx.native-16bit-types"]
+    assert artifact["bfloat16Lowering"] == {
+        "status": "exact",
+        "approximationUsed": False,
+        "registerRepresentation": "uint-low-16-bits",
+        "storageRepresentation": "native-uint16",
+        "roundingMode": "round-to-nearest-ties-to-even",
+    }
+
+    generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
+    assert "StructuredBuffer<uint16_t> input : register(t0);" in generated
+    assert "RWStructuredBuffer<float> output : register(u1);" in generated
+    assert (
+        "void GEMVKernel_bfloat16_t__load_unsafe__float("
+        "StructuredBuffer<uint16_t> src, int64_t src_offset, "
+        "inout float dst[1])" in generated
+    )
+    assert (
+        "dst[0] = __crossgl_bfloat16_to_float("
+        "uint(src[uint(src_offset)]));" in generated
+    )
+    assert "StructuredBuffer<half>" not in generated
+    assert "__crossgl_bfloat16_to_float(half(" not in generated

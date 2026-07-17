@@ -10879,8 +10879,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 source_location=getattr(argument, "source_location", None),
             )
 
-        expected_type = self.map_type(contract["element_type"])
-        actual_type = self.map_type(binding.get("element_type"))
+        expected_type = self.hlsl_resource_pointer_element_type(
+            contract["resource_type"]
+        )
+        actual_type = self.hlsl_resource_pointer_element_type(
+            binding.get("resource_type")
+        )
+        if self.is_hlsl_bfloat16_type(actual_type):
+            actual_type = self.hlsl_bfloat16_storage_type(
+                actual_type,
+                operation=(
+                    "storage pointer argument "
+                    f"'{materialized_name}.{parameter_name}'"
+                ),
+                source_location=getattr(argument, "source_location", None),
+            )
         if not actual_type or actual_type != expected_type:
             raise DirectXResourcePointerParameterError(
                 "DirectX storage pointer argument for "
