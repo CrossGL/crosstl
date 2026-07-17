@@ -438,6 +438,72 @@ def test_preprocessor_materializes_struct_constructor_before_member_lowering():
     assert "loader_w.load_safe" not in output
 
 
+def test_preprocessor_materializes_line_wrapped_qualified_struct_receiver():
+    source = """
+    namespace compute {
+    template <typename T, int Width>
+    struct Tile {
+      int bias;
+
+      Tile(int value) : bias(value) {}
+
+      void accumulate(threadgroup T* values) {
+        values[Width] += T(bias);
+      }
+    };
+    }
+
+    void run(threadgroup float* values) {
+      using tile_t = compute::
+          Tile<float, 4>;
+      tile_t tile(2);
+      tile.accumulate(values);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    concrete_name = "Tile_float_4"
+    assert f"using tile_t = {concrete_name};" in output
+    assert f"{concrete_name}__accumulate(tile, values)" in output
+    assert (
+        f"void {concrete_name}__accumulate(thread {concrete_name}& self, "
+        "threadgroup float* values)" in output
+    )
+    assert "tile.accumulate" not in output
+    assert "compute::\n          Tile_float_4" not in output
+
+
+def test_preprocessor_rejects_line_wrapped_mismatched_struct_namespace():
+    source = """
+    namespace compute {
+    template <typename T, int Width>
+    struct Tile {
+      void accumulate(threadgroup T* values) { values[Width] += T(1); }
+    };
+    }
+
+    void run(threadgroup float* values) {
+      using valid_t = compute::Tile<float, 4>;
+      valid_t valid;
+      valid.accumulate(values);
+
+      using invalid_t = unrelated::
+          Tile<float, 4>;
+      invalid_t invalid;
+      invalid.accumulate(values);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as exc_info:
+        MetalPreprocessor().preprocess(source)
+
+    error = exc_info.value
+    assert error.reason == "concrete-receiver-type-unresolved"
+    assert error.receiver_type == "invalid_t"
+    assert error.requested_signature == "invalid.accumulate"
+
+
 def test_materialized_struct_assertion_cannot_use_later_static_member():
     source = """
     template <int Value>

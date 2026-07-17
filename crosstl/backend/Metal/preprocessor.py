@@ -15299,6 +15299,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # dropped. References inside template declarations (excluded_spans) are
         # skipped: they are only materialized once their enclosing template is.
         concrete_structs = self._find_concrete_struct_definitions(code)
+        namespace_spans = self._find_namespace_spans(code)
         concrete_structs_by_name = {struct.name: struct for struct in concrete_structs}
         owner_contexts: List[
             Tuple[
@@ -15389,6 +15390,29 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if angle_end is None:
                     i += consumed
                     continue
+                primary_template = struct_templates_by_name[ident]
+                reference_start = self._scoped_identifier_start(code, i)
+                reference_name = re.sub(
+                    r"\s*::\s*",
+                    "::",
+                    code[reference_start : i + consumed].strip(),
+                )
+                if "::" in reference_name:
+                    globally_qualified = reference_name.startswith("::")
+                    normalized_reference = reference_name.lstrip(":")
+                    expected_name = (
+                        f"{primary_template.namespace}::{ident}"
+                        if primary_template.namespace
+                        else ident
+                    )
+                    visible_names = self._namespace_lookup_names(
+                        normalized_reference,
+                        self._namespace_at(namespace_spans, i),
+                        globally_qualified,
+                    )
+                    if expected_name not in visible_names:
+                        i = angle_end + 1
+                        continue
                 template_arguments = self._split_top_level_commas(
                     code[j + 1 : angle_end]
                 )
@@ -15597,7 +15621,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                             )
                             for argument in template_arguments
                         ]
-                primary_template = struct_templates_by_name[ident]
                 resolved_arguments = (
                     self._template_arguments_with_resolved_defaults(
                         primary_template,
@@ -16645,15 +16668,22 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     def _scoped_identifier_start(self, code: str, identifier_start: int) -> int:
         start = identifier_start
-        while start >= 2 and code[start - 2 : start] == "::":
-            name_end = start - 2
+        while True:
+            separator_end = start
+            while separator_end > 0 and code[separator_end - 1].isspace():
+                separator_end -= 1
+            if separator_end < 2 or code[separator_end - 2 : separator_end] != "::":
+                break
+            name_end = separator_end - 2
+            while name_end > 0 and code[name_end - 1].isspace():
+                name_end -= 1
             name_start = name_end
             while name_start > 0 and (
                 code[name_start - 1].isalnum() or code[name_start - 1] == "_"
             ):
                 name_start -= 1
             if name_start == name_end:
-                start -= 2
+                start = separator_end - 2
                 break
             start = name_start
         return start
