@@ -2780,7 +2780,59 @@ def test_runtime_parity_native_directx_adapter_compiles_hlsl(tmp_path):
     )
 
     assert report["results"][0]["status"] == PASSED
-    assert calls[0][:6] == ("/fake/dxc", "-T", "cs_6_0", "-E", "main", "-Fo")
+    assert calls[0][:-2] == ("/fake/dxc", "-T", "cs_6_0", "-E", "main", "-Fo")
+    assert "-enable-16bit-types" not in calls[0]
+    assert Path(calls[0][-2]).name == "add.dxil"
+    assert calls[0][-1] == str(artifact_path.resolve())
+
+
+def test_runtime_parity_native_directx_adapter_enables_native_16bit_hlsl(tmp_path):
+    artifact_path = tmp_path / "out" / "directx" / "debug" / "add.hlsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        "RWStructuredBuffer<uint16_t> output : register(u0);\n"
+        "[numthreads(2,1,1)] void main() { output[0] = uint16_t(1); }\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def passing_command(command, *, input_text=None):
+        assert input_text is None
+        calls.append(command)
+        return {"returncode": 0}
+
+    adapter = DirectXRuntimeParityAdapter(
+        runtime=FakeNativeRuntime(),
+        required_tools=(),
+        supported_platforms=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=passing_command,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(
+            tmp_path,
+            [
+                _native_runtime_artifact(
+                    path="out/directx/debug/add.hlsl", target="directx"
+                )
+            ],
+        ),
+        _native_runtime_manifest(target="directx"),
+        executors={"directx": adapter},
+    )
+
+    assert report["results"][0]["status"] == PASSED
+    assert calls[0][:-2] == (
+        "/fake/dxc",
+        "-T",
+        "cs_6_2",
+        "-enable-16bit-types",
+        "-E",
+        "main",
+        "-Fo",
+    )
+    assert Path(calls[0][-2]).name == "add.dxil"
     assert calls[0][-1] == str(artifact_path.resolve())
 
 

@@ -15,6 +15,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
+from crosstl.project.directx_toolchain import (
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+)
 from crosstl.translator.codegen import normalize_backend_name
 
 RUNTIME_VERIFICATION_FIXTURES_KIND = "crosstl-runtime-verification-fixtures"
@@ -1497,7 +1501,9 @@ class DirectXRuntimeParityAdapter(NativeRuntimeParityAdapter):
                 "DirectX native runtime validation requires an entry point.",
                 details={"target": self.target, "artifactPath": str(artifact_path)},
             )
-        profile = _native_hlsl_profile(state)
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+        profile = dxc_profile_for_source(_native_hlsl_profile(state), source)
+        compiler_arguments = dxc_compiler_arguments_for_source(source)
         output_path = temp_dir / f"{artifact_path.stem}.dxil"
         return (
             NativeRuntimeValidationCommand(
@@ -1505,6 +1511,7 @@ class DirectXRuntimeParityAdapter(NativeRuntimeParityAdapter):
                     self._tool_command("dxc"),
                     "-T",
                     profile,
+                    *compiler_arguments,
                     "-E",
                     entry_point,
                     "-Fo",
