@@ -434,6 +434,21 @@ def _parse_project_include_dirs(values):
     return tuple(include_dirs)
 
 
+def _parse_project_dispatch_contracts(values):
+    dispatch_contracts = []
+    seen = set()
+    for value in values or []:
+        dispatch_contract = value.strip()
+        if not dispatch_contract:
+            raise ValueError("--dispatch-contract entries must be non-empty")
+        dispatch_contract = _normalize_project_cli_path(dispatch_contract)
+        if dispatch_contract in seen:
+            continue
+        seen.add(dispatch_contract)
+        dispatch_contracts.append(dispatch_contract)
+    return tuple(dispatch_contracts)
+
+
 def _parse_project_targets(values):
     if values is None:
         return None
@@ -460,20 +475,33 @@ def _load_project_config_from_args(args):
     source_overrides = _parse_project_source_overrides(
         getattr(args, "source_override", None)
     )
+    dispatch_contract_overrides = _parse_project_dispatch_contracts(
+        getattr(args, "dispatch_contract", None)
+    )
     if (
         not source_roots
         and include_dirs == tuple(config.include_dirs)
         and not define_overrides
         and not source_overrides
+        and not dispatch_contract_overrides
     ):
         return config
-    return replace(
-        config,
-        source_roots=source_roots or tuple(config.source_roots),
-        include_dirs=include_dirs,
-        defines={**dict(config.defines), **define_overrides},
-        source_overrides={**dict(config.source_overrides), **source_overrides},
-    )
+    replacements = {
+        "source_roots": source_roots or tuple(config.source_roots),
+        "include_dirs": include_dirs,
+        "defines": {**dict(config.defines), **define_overrides},
+        "source_overrides": {**dict(config.source_overrides), **source_overrides},
+    }
+    if dispatch_contract_overrides:
+        replacements["dispatch_contracts"] = tuple(
+            dict.fromkeys(
+                (
+                    *tuple(config.dispatch_contracts),
+                    *dispatch_contract_overrides,
+                )
+            )
+        )
+    return replace(config, **replacements)
 
 
 def _add_project_override_args(parser):
@@ -503,6 +531,12 @@ def _add_project_override_args(parser):
         action="append",
         type=_project_source_override_arg,
         help="Project source backend override as PATTERN=BACKEND; repeatable",
+    )
+    parser.add_argument(
+        "--dispatch-contract",
+        action="append",
+        type=_non_empty_project_arg("--dispatch-contract"),
+        help="Project dispatch contract manifest path; repeatable",
     )
 
 
