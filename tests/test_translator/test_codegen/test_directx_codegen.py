@@ -12774,6 +12774,38 @@ def test_hlsl_two_argument_atan_lowers_to_atan2_intrinsic():
     assert "atan(direction.y, direction.x)" not in generated_code
 
 
+def test_hlsl_rint_aliases_lower_to_round_intrinsic():
+    shader = """
+    shader HlslRoundToEvenBuiltinLowering {
+        float round_namespaced(float value) {
+            return metal_u3a_u3arint(value);
+        }
+
+        float round_portable(float value) {
+            return rint(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                RWStructuredBuffer<float> output @ binding(0),
+                uint3 tid @ gl_GlobalInvocationID
+            ) {
+                output[tid.x] = round_namespaced(-2.5) + round_portable(3.5);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert generated_code.count("return round(value);") == 2
+    assert "metal_u3a_u3arint(" not in generated_code
+    assert "return rint(" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_hlsl_two_argument_atan_renames_shadowed_atan2_locals():
     shader = """
     shader HlslAtan2TargetShadowing {

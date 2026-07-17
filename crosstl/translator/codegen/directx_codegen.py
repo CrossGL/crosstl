@@ -1929,6 +1929,8 @@ class HLSLCodeGen:
             "inversesqrt": "rsqrt",
             "intBitsToFloat": "asfloat",
             "mix": "lerp",
+            "metal_u3a_u3arint": "round",
+            "rint": "round",
             "uintBitsToFloat": "asfloat",
         }
 
