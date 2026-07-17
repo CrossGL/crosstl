@@ -1089,6 +1089,17 @@ class HLSLCodeGen:
     HLSL_SOURCE_BFLOAT16_TYPES = frozenset(
         {"bfloat", "bfloat16", "bfloat16_t"}
     )
+    HLSL_BFLOAT16_BUILTIN_CONTRACTS = {
+        "abs": ("abs", 1, "bfloat"),
+        "ceil": ("ceil", 1, "bfloat"),
+        "fabs": ("abs", 1, "bfloat"),
+        "floor": ("floor", 1, "bfloat"),
+        "fmod": ("fmod", 2, "bfloat"),
+        "isfinite": ("isfinite", 1, "bool"),
+        "isinf": ("isinf", 1, "bool"),
+        "isnan": ("isnan", 1, "bool"),
+        "trunc": ("trunc", 1, "bfloat"),
+    }
     HLSL_NATIVE_16_BIT_STORAGE_RESOURCES = frozenset(
         {
             "AppendStructuredBuffer",
@@ -10077,6 +10088,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             option_call_type = self.hlsl_builtin_option_call_type(expr, func_name)
             if option_call_type is not None:
                 return option_call_type
+            bfloat_argument_types = [
+                self.hlsl_source_expression_type(argument) for argument in args
+            ]
+            if any(
+                self.is_hlsl_bfloat16_type(argument_type)
+                for argument_type in bfloat_argument_types
+            ):
+                bfloat_builtin_result_type = self.hlsl_bfloat16_builtin_result_type(
+                    func_name,
+                    bfloat_argument_types,
+                    len(args),
+                )
+                if bfloat_builtin_result_type is not None:
+                    return bfloat_builtin_result_type
             if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 return self.hlsl_wave_intrinsic_return_type(func_name, args)
             metal_simd_result_type = self.hlsl_metal_simd_shuffle_result_type(
@@ -13830,17 +13855,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.is_hlsl_bfloat16_type(argument_type)
             for argument_type in bfloat_argument_types
         ):
-            source_type = next(
-                argument_type
-                for argument_type in bfloat_argument_types
-                if self.is_hlsl_bfloat16_type(argument_type)
-            )
-            raise self.directx_bfloat16_unsupported(
-                "DirectX exact bfloat16 lowering cannot route bfloat16 payloads "
-                f"through builtin '{func_name}' without a proven source contract",
-                operation=func_name,
-                source_type=source_type,
-                reason="unsupported-bfloat16-builtin",
+            return self.generate_hlsl_bfloat16_builtin_call(
+                func_name,
+                args,
+                bfloat_argument_types,
                 source_location=source_location,
             )
         boolean_order_call = self.hlsl_ordered_boolean_minmax_call(
@@ -13893,6 +13911,59 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
+
+    def hlsl_bfloat16_builtin_result_type(
+        self, func_name, argument_types, argument_count
+    ):
+        contract = self.HLSL_BFLOAT16_BUILTIN_CONTRACTS.get(func_name)
+        if contract is None or argument_count != contract[1]:
+            return None
+        if contract[2] != "bfloat":
+            return contract[2]
+        if not argument_types or not all(
+            self.is_hlsl_bfloat16_type(argument_type)
+            for argument_type in argument_types
+        ):
+            return None
+        return argument_types[0]
+
+    def generate_hlsl_bfloat16_builtin_call(
+        self,
+        func_name,
+        args,
+        argument_types,
+        *,
+        source_location=None,
+    ):
+        source_type = next(
+            argument_type
+            for argument_type in argument_types
+            if self.is_hlsl_bfloat16_type(argument_type)
+        )
+        result_type = self.hlsl_bfloat16_builtin_result_type(
+            func_name, argument_types, len(args)
+        )
+        contract = self.HLSL_BFLOAT16_BUILTIN_CONTRACTS.get(func_name)
+        if result_type is None or contract is None:
+            raise self.directx_bfloat16_unsupported(
+                "DirectX exact bfloat16 lowering cannot route bfloat16 payloads "
+                f"through builtin '{func_name}' without a proven source contract",
+                operation=func_name,
+                source_type=source_type,
+                reason="unsupported-bfloat16-builtin",
+                source_location=source_location,
+            )
+
+        rendered_args = []
+        for argument, argument_type in zip(args, argument_types):
+            rendered = self.generate_expression(argument)
+            if self.is_hlsl_bfloat16_type(argument_type):
+                rendered = self.hlsl_bfloat16_to_float_expression(rendered)
+            rendered_args.append(rendered)
+        call = f"{contract[0]}({', '.join(rendered_args)})"
+        if self.is_hlsl_bfloat16_type(result_type):
+            return self.hlsl_float_to_bfloat16_expression(call)
+        return call
 
     def hlsl_ordered_boolean_minmax_call(
         self,
@@ -16399,8 +16470,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if annotated_source_type:
             return annotated_source_type
-        name = getattr(node, "name", getattr(node, "variable_name", None))
-        return self.hlsl_bfloat16_storage_resource_source_types.get(name)
+        return self.hlsl_bfloat16_storage_resource_source_types.get(id(node))
 
     def hlsl_buffer_pointer_pointee_type(self, vtype):
         if isinstance(vtype, PointerType):
@@ -16801,7 +16871,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             proxy.add_annotation(
                 "directx.bfloat16_storage_source_type", source_bfloat_type
             )
-            self.hlsl_bfloat16_storage_resource_source_types[proxy.name] = (
+            self.hlsl_bfloat16_storage_resource_source_types[id(proxy)] = (
                 source_bfloat_type
             )
         if self.directx_stage_entry_parameter_binding_allows_register_relocation(
