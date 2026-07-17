@@ -7,6 +7,7 @@ from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
     CONTAINING_SPAN_CACHE_LIMIT,
     SOURCE_ANALYSIS_CACHE_LIMIT,
+    MetalMacroExpansionError,
     MetalPreprocessor,
     MetalStatelessGlobalElisionError,
     MetalStaticAssertionError,
@@ -226,6 +227,35 @@ def test_preprocessor_materializes_mlx_instantiate_kernel_macros():
     assert "void arangefloat16(" in output
     assert "device half* out" in output
     assert "out[gid] = half(gid + 3);" in output
+
+
+def test_preprocessor_materializes_multiline_project_instantiation_macro():
+    code = """
+    #define instantiate_copy(name, type) \\
+        instantiate_kernel("copy_" #name, copy, type)
+
+    template <typename T>
+    [[kernel]] void copy(
+        device const T* src [[buffer(0)]],
+        device T* dst [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        dst[gid] = src[gid];
+    }
+
+    instantiate_copy(
+        float32,
+        float)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "instantiate_copy" not in output
+    assert "instantiate_kernel" not in output
+    assert "template <typename T>" not in output
+    assert '[[host_name("copy_float32")]]' in output
+    assert "void copy_float32(" in output
+    assert "device const float* src" in output
+    assert "device float* dst" in output
 
 
 def test_preprocessor_materializes_mlx_instantiations_with_template_defaults():
@@ -946,6 +976,24 @@ def test_preprocessor_materializes_explicit_template_helper_calls():
     assert "return src[index] + float(7);" in output
 
 
+def test_preprocessor_does_not_treat_function_pointer_aliases_as_functor_calls():
+    code = """
+    typedef void (im2col_t)(thread float*, int);
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+    using Transform = void (*)(thread float*, int);
+
+    struct Helper {
+      int value() { return 1; }
+    };
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "typedef void (im2col_t)(thread float*, int);" in output
+    assert "typedef void (*RadixFunc)(thread float2*, thread float2*);" in output
+    assert "using Transform = void (*)(thread float*, int);" in output
+
+
 def test_preprocessor_materializes_callable_non_type_template_arguments():
     code = """
     typedef void (*RadixFunc)(thread float2*, thread float2*);
@@ -1354,7 +1402,7 @@ def test_preprocessor_reports_template_specialization_limit_details():
     assert "Suggested action:" in str(error)
 
 
-def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation():
+def test_preprocessor_expands_multiline_function_macro_invocation():
     code = """
     #define DECLARE_TYPED(name, type) type name;
     DECLARE_TYPED(
@@ -1364,8 +1412,112 @@ def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation()
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "DECLARE_TYPED(" in output
-    assert "float value" not in output
+    assert "DECLARE_TYPED(" not in output
+    assert "float value;" in output
+
+
+def test_preprocessor_preserves_ordinary_multiline_function_call():
+    code = """
+    float make_value(float value) { return value; }
+    float result = make_value(
+        1.0f);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float result = make_value(\n        1.0f);" in output
+
+
+def test_preprocessor_preserves_directives_inside_ordinary_multiline_call():
+    code = """
+    #define USE_FIRST 1
+    float choose(float left, float right) { return left + right; }
+    float result = choose(
+    #if USE_FIRST
+        1.0f,
+    #else
+        2.0f,
+    #endif
+        3.0f);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float result = choose(\n        1.0f,\n        3.0f);" in output
+    assert "2.0f" not in output
+
+
+def test_preprocessor_multiline_macro_matches_single_line_macro_semantics():
+    definitions = r"""
+    #define ADD(left, right) ((left) + (right))
+    #define JOIN(left, right) left ## right
+    #define NAME(value) #value
+    #define DECLARE(name, expression, ...) \
+        float JOIN(name, _value) = ADD(expression, __VA_ARGS__); \
+        constant char* JOIN(name, _name) = NAME(name);
+    """
+    single_line = definitions + r"""
+    DECLARE(sample, ADD(1.0f, 2.0f), 3.0f)
+    """
+    multiline = definitions + r"""
+    DECLARE(
+        sample,
+        ADD(1.0f, 2.0f),
+        3.0f)
+    """
+
+    single_output = MetalPreprocessor().preprocess(single_line)
+    multiline_output = MetalPreprocessor().preprocess(multiline)
+
+    def normalize_whitespace(text):
+        return re.sub(r"\s+", " ", text).strip()
+
+    assert normalize_whitespace(multiline_output) == normalize_whitespace(single_output)
+    assert "float sample_value" in multiline_output
+    assert 'constant char* sample_name = "sample";' in multiline_output
+
+
+def test_preprocessor_multiline_macro_ignores_argument_comment_and_literal_parens():
+    code = r"""
+    #define PASS(value) value
+    #define ADD(left, right) ((left) + (right))
+    constant char* text = PASS(
+        "literal ),( text");
+    float value = ADD(
+        PASS(1.0f /* unmatched ) and , */), // unmatched (
+        2.0f);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert 'constant char* text = "literal ),( text";' in output
+    assert "float value = ((1.0f) + (2.0f));" in output
+    assert "PASS(" not in output
+    assert "ADD(" not in output
+
+
+def test_preprocessor_reports_unterminated_multiline_function_macro_call():
+    code = """
+    #define DECLARE_TYPED(name, type) type name;
+    DECLARE_TYPED(
+        value,
+        float
+    """
+
+    with pytest.raises(MetalMacroExpansionError) as exc_info:
+        MetalPreprocessor().preprocess(code, file_path="unterminated.metal")
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.metal-macro-expansion-invalid"
+    )
+    assert error.missing_capabilities == ("metal.function-macro-expansion",)
+    assert error.macro_name == "DECLARE_TYPED"
+    assert error.reason == "unterminated-function-macro-invocation"
+    assert error.source_location["file"] == "unterminated.metal"
+    assert error.source_location["line"] == 3
+    assert error.source_location["column"] == 5
+    assert error.source_location["length"] == len("DECLARE_TYPED")
 
 
 def test_preprocessor_include_with_search_path(tmp_path):
@@ -5606,11 +5758,139 @@ def test_preprocessor_lowers_temporary_functor_call_with_arithmetic_and_functor_
     # no dangling `Log{}(` temporary and no un-inferred failure survive.
     assert "Log__operator_call__temporary(" in output
     assert "Log{}(" not in output
+    assert "Sqrt{}(" not in output
     assert "could not be inferred" not in output
+    assert (
+        "Log__operator_call__temporary("
+        "x + i * Sqrt__operator_call__temporary(1.0 - x * x))"
+    ) in output
+    assert output.count("Sqrt__operator_call__temporary(1.0 - x * x)") == 1
     # The complex `Sqrt`/`Log` operator() overloads were emitted as free
     # functions (the argument resolved to the concrete complex overload).
     assert "complex64_t Log__operator_call(thread Log& self, complex64_t x)" in output
     assert "complex64_t Sqrt__operator_call(thread Sqrt& self, complex64_t x)" in output
+
+
+def test_preprocessor_defers_temporaries_for_declared_out_of_line_call_operators():
+    code = """
+    struct complex64_t { float real; float imag; };
+
+    struct Sqrt {
+      complex64_t operator()(complex64_t x);
+    };
+
+    struct Log {
+      complex64_t operator()(complex64_t x);
+    };
+
+    complex64_t Sqrt::operator()(complex64_t x) { return x; }
+    complex64_t Log::operator()(complex64_t x) { return Sqrt{}(x); }
+
+    complex64_t nested(complex64_t x) {
+      return Log{}(Sqrt{}(x));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "complex64_t operator()(complex64_t x);" in output
+    assert "return Log{}(Sqrt{}(x));" in output
+
+
+def test_preprocessor_lowers_const_template_operator_on_stateless_temporary():
+    code = """
+    struct Identity {
+      template <typename T>
+      T operator()(T value) const { return value; }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      values[0] = Identity{}(values[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "float Identity__operator_call__float("
+        "thread const Identity& self, float value)"
+    ) in output
+    assert "Identity__operator_call__float__temporary(values[0])" in output
+    assert "Identity{}(" not in output
+
+
+def test_preprocessor_rejects_stateful_temporary_without_dropping_side_effects():
+    code = """
+    int next_state();
+    int next_value();
+
+    struct AddState {
+      int state;
+      AddState(int value) : state(value) { observe(value); }
+      int operator()(int value) const { return state + value; }
+    };
+
+    kernel void k(device int* values [[buffer(0)]]) {
+      values[0] = AddState{next_state()}(next_value());
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == "AddState"
+    assert error.method_name == "operator()"
+    assert error.reason == "temporary-functor-constructor-stateful"
+    assert error.requested_signature == "AddState{next_state()}(next_value())"
+    assert error.source_location["length"] == len(error.requested_signature)
+    assert "next_state()" in str(error)
+    assert "next_value()" in str(error)
+
+
+@pytest.mark.parametrize("functor_name", ["Op", "missing_functor"])
+def test_preprocessor_rejects_unresolved_temporary_functor_structured(functor_name):
+    code = f"""
+    kernel void k(device float* values [[buffer(0)]]) {{
+      values[0] = {functor_name}()(values[0]);
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == functor_name
+    assert error.method_name == "operator()"
+    assert error.reason == "temporary-functor-type-unresolved"
+    assert error.requested_signature == f"{functor_name}()(values[0])"
+    assert error.source_location["length"] == len(error.requested_signature)
+
+
+def test_preprocessor_rejects_ambiguous_temporary_operator_overload_structured():
+    code = """
+    struct Convert {
+      short operator()(short value) const { return value; }
+      long operator()(long value) const { return value; }
+    };
+
+    kernel void k(device int* values [[buffer(0)]]) {
+      values[0] = Convert{}(values[0]);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == "Convert"
+    assert error.method_name == "operator()"
+    assert error.reason == "concrete-overload-ambiguous"
+    assert error.requested_signature == "Convert::operator()(values[0])"
+    assert error.source_location["length"] == len("(values[0])")
 
 
 def test_preprocessor_skips_calls_inside_residual_template_declarations():
