@@ -20352,6 +20352,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "bfloat16Lowering",
         "entryPoint",
         "execution",
+        "dispatchArtifact",
     }
     assert artifact["requiredCapabilities"] == []
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
