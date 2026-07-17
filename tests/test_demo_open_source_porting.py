@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_ROOT = ROOT / "demos" / "open-source-porting"
 CASE_ROOT = DEMO_ROOT / "cases"
@@ -195,14 +197,14 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "--target directx" in workflow
     assert "macOS Metal compile references" in workflow
     assert "Windows DirectX compile references" in workflow
-    assert 'dxc -T "$profile" -E "$entry"' in workflow
     assert "--emit-case-args opengl" in workflow
     assert "--emit-case-args vulkan" in workflow
     assert "--emit-case-args metal" in workflow
     assert "--emit-case-args directx" in workflow
     assert "--emit-artifact-paths metal" in workflow
-    assert "--emit-directx-compile-jobs" in workflow
-    assert "profile=\"${profile%$'\\r'}\"" in workflow
+    assert "--compile-directx-references" in workflow
+    assert '--compiler-output-dir "$out_dir"' in workflow
+    assert "--emit-directx-compile-jobs" not in workflow
     assert "open-source-porting-demo-reports-${{ matrix.os }}" in workflow
     assert "write_demo_failure_summary" in workflow
     assert "--demo-step" in workflow
@@ -279,7 +281,13 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
     assert all((ROOT / path).is_file() for path in metal_paths)
 
     directx_block = _workflow_step_block(workflow, "Windows DirectX compile references")
-    assert "--emit-directx-compile-jobs" in directx_block
+    assert "--compile-directx-references" in directx_block
+    assert '--compiler-output-dir "$out_dir"' in directx_block
+    assert 'if ! "${command[@]}"; then' in directx_block
+    assert "write_demo_failure_summary \\" in directx_block
+    assert "exit 1" in directx_block
+    assert "--emit-directx-compile-jobs" not in directx_block
+    assert "while read -r shader entry profile" not in directx_block
     directx_jobs = runner._directx_compile_jobs()
     directx_paths = {path for path, _entry, _profile in directx_jobs}
     assert {
@@ -299,6 +307,43 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
     )
     assert (sprite_path, "VSMain", "vs_6_0") in directx_jobs
     assert (sprite_path, "PSMain", "ps_6_0") in directx_jobs
+    mesh_path = (
+        "demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/"
+        "crosstl-out/directx/AAPLMeshRenderer.hlsl"
+    )
+    assert (mesh_path, "VSMain", "vs_6_2") in directx_jobs
+
+
+def test_open_source_demo_directx_compile_command_uses_source_requirements(tmp_path):
+    runner = _load_demo_runner()
+    mesh_path = (
+        "demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/"
+        "crosstl-out/directx/AAPLMeshRenderer.hlsl"
+    )
+
+    command = runner._directx_compile_command(
+        mesh_path,
+        "VSMain",
+        "vs_6_0",
+        output_dir=tmp_path,
+    )
+
+    assert command[:4] == ["dxc", "-T", "vs_6_2", "-enable-16bit-types"]
+    assert command[4:7] == ["-E", "VSMain", mesh_path]
+    assert command[7] == "-Fo"
+    assert command[8] == str(
+        tmp_path
+        / "demos_open-source-porting_cases_apple-modern-rendering-mesh-viewdir_"
+        "crosstl-out_directx_AAPLMeshRenderer_hlsl_VSMain_vs_6_2.dxil"
+    )
+
+
+def test_open_source_demo_directx_compile_references_require_dxc(tmp_path, monkeypatch):
+    runner = _load_demo_runner()
+    monkeypatch.setattr(runner.shutil, "which", lambda executable: None)
+
+    with pytest.raises(SystemExit, match="dxc is required"):
+        runner._compile_directx_references(tmp_path)
 
 
 def test_open_source_demo_artifact_comparison_normalizes_platform_text(tmp_path):

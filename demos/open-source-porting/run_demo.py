@@ -14,6 +14,10 @@ import tempfile
 from pathlib import Path
 
 from crosstl.project import load_project_config
+from crosstl.project.directx_toolchain import (
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+)
 
 DEMO_ROOT = Path(__file__).resolve().parent
 CASE_ROOT = DEMO_ROOT / "cases"
@@ -77,15 +81,59 @@ def _artifact_paths_for_target(target: str, suffix: str = "") -> list[str]:
 def _directx_compile_jobs() -> list[tuple[str, str, str]]:
     jobs: list[tuple[str, str, str]] = []
     for path in _artifact_paths_for_target("directx", ".hlsl"):
+        source = (DEMO_ROOT.parents[1] / path).read_text(encoding="utf-8")
         override = DIRECTX_COMPILE_OVERRIDES.get(path)
         if override is not None:
-            jobs.extend((path, entry, profile) for entry, profile in override)
-            continue
-        source = (DEMO_ROOT.parents[1] / path).read_text(encoding="utf-8")
-        for entry, profile in DIRECTX_DEFAULT_ENTRY_PROFILES:
-            if re.search(rf"\b{re.escape(entry)}\s*\(", source):
-                jobs.append((path, entry, profile))
+            entry_profiles = override
+        else:
+            entry_profiles = tuple(
+                (entry, profile)
+                for entry, profile in DIRECTX_DEFAULT_ENTRY_PROFILES
+                if re.search(rf"\b{re.escape(entry)}\s*\(", source)
+            )
+        jobs.extend(
+            (path, entry, dxc_profile_for_source(profile, source))
+            for entry, profile in entry_profiles
+        )
     return jobs
+
+
+def _directx_compile_command(
+    path: str,
+    entry: str,
+    profile: str,
+    *,
+    output_dir: Path,
+) -> list[str]:
+    source = (DEMO_ROOT.parents[1] / path).read_text(encoding="utf-8")
+    profile = dxc_profile_for_source(profile, source)
+    output_name = re.sub(r"[/.:\\]", "_", f"{path}_{entry}_{profile}") + ".dxil"
+    return [
+        "dxc",
+        "-T",
+        profile,
+        *dxc_compiler_arguments_for_source(source),
+        "-E",
+        entry,
+        path,
+        "-Fo",
+        str(output_dir / output_name),
+    ]
+
+
+def _compile_directx_references(output_dir: Path) -> None:
+    if shutil.which("dxc") is None:
+        raise SystemExit("dxc is required to compile DirectX reference artifacts")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for path, entry, profile in _directx_compile_jobs():
+        _run(
+            _directx_compile_command(
+                path,
+                entry,
+                profile,
+                output_dir=output_dir,
+            )
+        )
 
 
 def _selected_case_dirs(case_names: list[str]) -> list[Path]:
@@ -466,6 +514,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print DirectX compile jobs as '<path> <entry> <profile>' records",
     )
+    mode.add_argument(
+        "--compile-directx-references",
+        action="store_true",
+        help="Compile every checked-in DirectX reference with DXC",
+    )
     parser.add_argument(
         "--artifact-suffix",
         default="",
@@ -486,6 +539,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Optional directory for generated portability and validation reports",
     )
+    parser.add_argument(
+        "--compiler-output-dir",
+        type=Path,
+        help="Output directory for --compile-directx-references",
+    )
     args = parser.parse_args(argv)
 
     if args.emit_case_args:
@@ -502,6 +560,15 @@ def main(argv: list[str] | None = None) -> int:
         for path, entry, profile in _directx_compile_jobs():
             print(path, entry, profile)
         return 0
+    if args.compile_directx_references:
+        if args.compiler_output_dir is None:
+            parser.error("--compile-directx-references requires --compiler-output-dir")
+        _compile_directx_references(args.compiler_output_dir)
+        return 0
+    if args.compiler_output_dir is not None:
+        parser.error(
+            "--compiler-output-dir is only valid with --compile-directx-references"
+        )
 
     update = bool(args.update)
     for case_dir in _selected_case_dirs(args.case):

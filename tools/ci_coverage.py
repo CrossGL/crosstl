@@ -315,14 +315,14 @@ DEMO_COMPILE_REFERENCE_STEPS = {
         "runner": "runner.os == 'macOS'",
         "artifact_command": "--emit-artifact-paths metal",
         "compile_command": "xcrun -sdk macosx metal -c",
-        "output_suffix": ".air",
+        "output_marker": ".air",
     },
     "directx": {
         "step": "Windows DirectX compile references",
         "runner": "runner.os == 'Windows'",
-        "artifact_command": "--emit-directx-compile-jobs",
-        "compile_command": 'dxc -T "$profile" -E "$entry" "$shader"',
-        "output_suffix": ".dxil",
+        "artifact_command": "--compile-directx-references",
+        "compile_command": '--compiler-output-dir "$out_dir"',
+        "output_marker": "demo-directx-dxil",
     },
 }
 DEMO_FAILURE_SUMMARY_FIELDS = (
@@ -1706,7 +1706,7 @@ def open_source_porting_demo_report(workflow: str) -> dict[str, Any]:
             config["runner"] in step
             and config["artifact_command"] in step
             and config["compile_command"] in step
-            and config["output_suffix"] in step
+            and config["output_marker"] in step
             and "shell: bash" in step
             and workflow_job_step_after(workflow, job, config["step"], smoke_step)
         )

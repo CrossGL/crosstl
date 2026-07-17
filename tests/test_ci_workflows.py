@@ -386,7 +386,8 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
         assert summary_base in demo
     assert "${summary_base}-failure-summary.json" in demo
     assert "${summary_base}-failure-summary.md" in demo
-    assert "profile=\"${profile%$'\\r'}\"" in demo
+    assert "--compile-directx-references" in demo
+    assert '--compiler-output-dir "$out_dir"' in demo
     assert "if: failure() && steps.run_demo_tests.outcome == 'failure'" in demo
     assert "support/generated/demo-reports/**/*-failure-summary.json" in demo
     assert "support/generated/demo-reports/**/*-failure-summary.md" in demo
