@@ -2192,6 +2192,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
     assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
     assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in mlx_porting
+    assert "MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE" in mlx_porting
     assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in mlx_porting
     assert "MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS" in mlx_porting
     assert 'checks["directx-frontier"]' in mlx_porting
@@ -2202,6 +2203,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'directx["directxToolchainValidatedEntryPointCount"]' in mlx_porting
     assert 'directx["toolchainRuns"] != directx_entry_point_count' in mlx_porting
     assert "DirectX frontier accounting is incomplete" in mlx_porting
+    assert 'directx["bfloat16LoweringEvidence"]' in mlx_porting
+    assert "DirectX bfloat16 lowering evidence is incomplete" in mlx_porting
     assert "DirectX workgroup blocker evidence changed" in mlx_porting
     assert "expected 106 fail-closed DirectX compute entries" in mlx_porting
     assert "matched-materialized-host-names" in mlx_porting

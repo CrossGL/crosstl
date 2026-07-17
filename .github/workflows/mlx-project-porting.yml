@@ -238,6 +238,7 @@ jobs:
               GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
               GEMV_REPORT_WORKGROUP_SIZE_RULE,
               GEMV_WORKGROUP_SIZE_RULE,
+              MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE,
               MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
               MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
               MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
@@ -479,6 +480,11 @@ jobs:
               raise SystemExit("DirectX frontier accounting is incomplete")
           if set(directx["dynamicWorkgroupDispatchEvidence"]) != directx_blocked_sources:
               raise SystemExit("DirectX workgroup blocker source join is incomplete")
+          if (
+              directx["bfloat16LoweringEvidence"]
+              != MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE
+          ):
+              raise SystemExit("DirectX bfloat16 lowering evidence is incomplete")
           for source, expected_evidence in MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE.items():
               observed_evidence = directx["dynamicWorkgroupDispatchEvidence"][source]
               if (
