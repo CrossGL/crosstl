@@ -269,8 +269,20 @@ representation, and round-to-nearest, ties-to-even conversion. All five emitted
 sources require native `uint16` storage declarations and report the
 `directx.native-16bit-types` capability. The harness compares each artifact's
 `bfloat16Lowering` and `requiredCapabilities` fields with this pinned contract
-and fails closed if either field is missing or changes. This is storage,
-conversion, report, and compiler evidence only; it does not execute a
+and fails closed if either field is missing or changes. DXC currently reports
+four pinned warning contracts across `arange.metal`, `random.metal`, and
+`rope.metal`. Whole-artifact compilation repeats those warnings for each selected
+entry: 22 warnings across 11 arange runs, four across two random runs, and 108
+across 18 rope runs. The random bfloat helper promotion remains tracked by
+[#1799](https://github.com/CrossGL/crosstl/issues/1799); native `int16_t` and
+`uint64_t` destination conversions remain tracked by
+[#1801](https://github.com/CrossGL/crosstl/issues/1801); and mixed-width
+native-half arithmetic remains tracked by
+[#1802](https://github.com/CrossGL/crosstl/issues/1802). The harness requires the
+exact messages, generated source expressions, and multiplicities, and rejects
+missing, additional, or changed warnings. The aggregate five-source frontier
+therefore has compiler acceptance, but not a clean `-WX` contract. This is
+storage, conversion, report, and compiler evidence only; it does not execute a
 bfloat16 workload or establish runtime or numerical parity. On macOS CI, the
 generated `fence.metal` round-trip artifact must compile to AIR with the native
 Metal compiler. This checks generated source and project metadata, not numerical
@@ -426,8 +438,10 @@ emission under
 [#1799](https://github.com/CrossGL/crosstl/issues/1799) and concrete
 `static_assert` evaluation under
 [#1800](https://github.com/CrossGL/crosstl/issues/1800) are resolved for this
-selected entry. Contextual narrowing under
-[#1801](https://github.com/CrossGL/crosstl/issues/1801) is also resolved. The
+selected entry. The general native-profile helper contract under #1799 remains
+open. Contextual narrowing under
+[#1801](https://github.com/CrossGL/crosstl/issues/1801) is also resolved for this
+selected entry; the general destination-conversion contract remains open. The
 artifact requires the
 `directx.native-16bit-types` capability and contains no remaining
 `static_assert`. Official DXC validation with profile `cs_6_2`,

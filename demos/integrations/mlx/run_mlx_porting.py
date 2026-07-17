@@ -233,6 +233,116 @@ MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT = sum(
     MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
 )
+MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS = (
+    {
+        "classification": "native-int16-destination-conversion",
+        "source": MLX_ARANGE_SOURCE,
+        "issue": "https://github.com/CrossGL/crosstl/issues/1801",
+        "message": (
+            "conversion from larger type 'unsigned int' to smaller type "
+            "'int16_t', possible loss of data [-Wconversion]"
+        ),
+        "sourceLines": [
+            {
+                "text": (
+                    "arangeint16_out[index] = (arangeint16_start + "
+                    "(index * arangeint16_step));"
+                ),
+                "occurrencesPerRun": 1,
+            }
+        ],
+        "warningsPerRun": 1,
+    },
+    {
+        "classification": "native-half-arithmetic-conversion",
+        "source": MLX_ARANGE_SOURCE,
+        "issue": "https://github.com/CrossGL/crosstl/issues/1802",
+        "message": (
+            "conversion from larger type 'uint' to smaller type 'half', "
+            "possible loss of data [-Wconversion]"
+        ),
+        "sourceLines": [
+            {
+                "text": (
+                    "arangefloat16_out[index] = (arangefloat16_start + "
+                    "(index * arangefloat16_step));"
+                ),
+                "occurrencesPerRun": 1,
+            }
+        ],
+        "warningsPerRun": 1,
+    },
+    {
+        "classification": "native-bfloat-helper-promotion",
+        "source": MLX_RANDOM_SOURCE,
+        "issue": "https://github.com/CrossGL/crosstl/issues/1799",
+        "message": "'min16uint' is promoted to 'uint16_t' [-Wconversion]",
+        "sourceLines": [
+            {
+                "text": "uint __crossgl_bfloat16_from_uint16(min16uint value)",
+                "occurrencesPerRun": 1,
+            },
+            {
+                "text": "min16uint __crossgl_bfloat16_to_uint16(uint value)",
+                "occurrencesPerRun": 1,
+            },
+        ],
+        "warningsPerRun": 2,
+    },
+    {
+        "classification": "uint64-local-destination-conversion",
+        "source": MLX_ROPE_SOURCE,
+        "issue": "https://github.com/CrossGL/crosstl/issues/1801",
+        "message": (
+            "conversion from larger type 'unsigned long long' to smaller type "
+            "'uint', possible loss of data [-Wconversion]"
+        ),
+        "sourceLines": [
+            {
+                "text": "index_1 = ((2 * pos.x) + (pos.y * stride));",
+                "occurrencesPerRun": 3,
+            },
+            {
+                "text": "index_1 = (pos.x + (pos.y * stride));",
+                "occurrencesPerRun": 3,
+            },
+        ],
+        "warningsPerRun": 6,
+    },
+)
+DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1799",
+    "https://github.com/CrossGL/crosstl/issues/1801",
+    "https://github.com/CrossGL/crosstl/issues/1802",
+)
+_MLX_DIRECTX_TOOLCHAIN_WARNING_SOURCES = tuple(
+    dict.fromkeys(
+        contract["source"] for contract in MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS
+    )
+)
+MLX_DIRECTX_TOOLCHAIN_WARNING_EVIDENCE = {
+    "status": "validated-with-tracked-warnings",
+    "warningRunCount": sum(
+        MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[source]
+        for source in _MLX_DIRECTX_TOOLCHAIN_WARNING_SOURCES
+    ),
+    "observedWarningCount": sum(
+        MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[contract["source"]]
+        * contract["warningsPerRun"]
+        for contract in MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS
+    ),
+    "uniqueContractCount": len(MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS),
+    "contracts": [
+        {
+            **contract,
+            "observedCount": (
+                MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[contract["source"]]
+                * contract["warningsPerRun"]
+            ),
+        }
+        for contract in MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS
+    ],
+}
 MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS = {
     source: MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
     for source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
@@ -527,7 +637,7 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
         "pruned_candidate_count": 110861,
     },
     "native_16_bit_emission": {
-        "status": "resolved",
+        "status": "resolved-for-selected-entry",
         "issue": "https://github.com/CrossGL/crosstl/issues/1799",
         "required_capability": "directx.native-16bit-types",
         "profile": "cs_6_2",
@@ -547,7 +657,7 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
         "status": "passed",
         "observed_failure_count": 0,
         "contextual_narrowing": {
-            "status": "resolved",
+            "status": "resolved-for-selected-entry",
             "issue": "https://github.com/CrossGL/crosstl/issues/1801",
             "resource": "out_",
             "resource_element_type": "uint",
@@ -726,6 +836,7 @@ RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES = frozenset(
 )
 FULL_CORPUS_TRACKED_ISSUES = (
     *FRONTIER_VALIDATION_TRACKED_ISSUES,
+    *DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES,
     MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
     *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
     *FULL_CORPUS_VALIDATION_TRACKED_ISSUES,
@@ -741,8 +852,6 @@ FULL_CORPUS_TRACKED_ISSUES = (
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1800",
-    "https://github.com/CrossGL/crosstl/issues/1801",
-    "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1659",
     "https://github.com/CrossGL/crosstl/issues/1516",
@@ -2979,6 +3088,84 @@ def _directx_toolchain_entry_point(run: Mapping[str, Any]) -> str | None:
     return entry_point
 
 
+_DXC_REPORT_WARNING_PATTERN = re.compile(
+    r"^.+:\d+:\d+:\s+warning:\s+(?P<message>.+)$", re.IGNORECASE
+)
+
+
+def _dxc_report_warnings(run: Mapping[str, Any]) -> list[tuple[str, str]]:
+    stderr = run.get("stderr", "")
+    _require(
+        isinstance(stderr, str),
+        "DirectX toolchain validation recorded non-text stderr",
+    )
+    warnings: list[tuple[str, str]] = []
+    lines = stderr.splitlines()
+    for index, line in enumerate(lines):
+        if "warning:" not in line.lower():
+            continue
+        match = _DXC_REPORT_WARNING_PATTERN.match(line)
+        _require(match is not None, f"DXC emitted an unrecognized warning: {line}")
+        _require(
+            index + 1 < len(lines) and lines[index + 1].strip(),
+            f"DXC warning omitted its generated source line: {line}",
+        )
+        warnings.append((match.group("message"), lines[index + 1].strip()))
+    return warnings
+
+
+def _directx_toolchain_warning_evidence(
+    runs: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    contracts_by_source: dict[str, list[Mapping[str, Any]]] = {}
+    for contract in MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS:
+        contracts_by_source.setdefault(contract["source"], []).append(contract)
+
+    observed_counts: Counter[str] = Counter()
+    warning_run_count = 0
+    for run in runs:
+        source = run.get("source")
+        _require(
+            isinstance(source, str),
+            "DirectX toolchain validation omitted a source path",
+        )
+        warnings = Counter(_dxc_report_warnings(run))
+        expected_contracts = contracts_by_source.get(source, [])
+        expected_warnings: Counter[tuple[str, str]] = Counter()
+        for contract in expected_contracts:
+            for source_line in contract["sourceLines"]:
+                expected_warnings[
+                    (contract["message"], source_line["text"])
+                ] += source_line["occurrencesPerRun"]
+        _require(
+            warnings == expected_warnings,
+            f"DirectX toolchain warnings changed for {source}: "
+            f"expected {dict(expected_warnings)}, observed {dict(warnings)}",
+        )
+        if warnings:
+            warning_run_count += 1
+        for contract in expected_contracts:
+            observed_counts[contract["classification"]] += sum(
+                warnings[(contract["message"], source_line["text"])]
+                for source_line in contract["sourceLines"]
+            )
+
+    contracts = [
+        {
+            **contract,
+            "observedCount": observed_counts[contract["classification"]],
+        }
+        for contract in MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS
+    ]
+    return {
+        "status": "validated-with-tracked-warnings" if runs else "not-run",
+        "warningRunCount": warning_run_count,
+        "observedWarningCount": sum(observed_counts.values()),
+        "uniqueContractCount": len(contracts),
+        "contracts": contracts,
+    }
+
+
 def _require_frontier_project_join(
     payload: Mapping[str, Any],
     *,
@@ -3602,6 +3789,7 @@ def _translate_directx_frontier(
             == MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
             "DirectX toolchain did not validate every generated compute entry point",
         )
+    warning_evidence = _directx_toolchain_warning_evidence(directx_runs)
     return {
         "name": "directx-frontier",
         "status": "passed-with-expected-workgroup-blockers",
@@ -3637,12 +3825,14 @@ def _translate_directx_frontier(
         "directxValidationStatus": (
             "validated" if run_toolchains and directx_runs else "not-required"
         ),
+        "directxToolchainWarningEvidence": warning_evidence,
         "bfloat16LoweringEvidence": bfloat16_lowering_evidence,
         "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
         "semanticReadinessStatus": "not-established",
         "trackedIssues": [
             MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
             *FRONTIER_VALIDATION_TRACKED_ISSUES,
+            *DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES,
         ],
         "runtimeParityClaimed": False,
     }
