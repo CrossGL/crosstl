@@ -161,17 +161,6 @@ from .image_access_contracts import (
     image_atomic_result_kind_error,
     image_atomic_result_kind_mismatch,
 )
-from .index_range_contracts import (
-    INDEX_RANGE_ASSERTED,
-    INDEX_RANGE_CONSTANT,
-    INDEX_RANGE_STATIC,
-    OPENGL_INDEX_PROFILE,
-    IndexRangeAssertion,
-    IndexTargetProfile,
-    IntegerRange,
-    decide_index_narrowing,
-    parse_index_range_assertions,
-)
 from .image_access_contracts import (
     image_atomic_value_arguments as shared_image_atomic_value_arguments,
 )
@@ -308,6 +297,16 @@ from .image_access_contracts import (
     unsupported_texture_query_lod_expression,
     unsupported_texture_samples_query_call_expression,
     validate_texture_operation_arity,
+)
+from .index_range_contracts import (
+    INDEX_RANGE_ASSERTED,
+    INDEX_RANGE_CONSTANT,
+    INDEX_RANGE_STATIC,
+    OPENGL_INDEX_PROFILE,
+    IndexTargetProfile,
+    IntegerRange,
+    decide_index_narrowing,
+    parse_index_range_assertions,
 )
 from .match_utils import (
     generate_match_expression_assignment,
@@ -22041,9 +22040,7 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 domain = self.glsl_integer_type_domain(expression, allow_wide=True)
                 return (
-                    candidate
-                    if domain is None or candidate.is_within(domain)
-                    else None
+                    candidate if domain is None or candidate.is_within(domain) else None
                 )
 
             if isinstance(expression, TernaryOpNode):
@@ -22203,7 +22200,12 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
     def glsl_index_expression(
-        self, index_expr, indexed_expr=None, *, indexed_extent=None
+        self,
+        index_expr,
+        indexed_expr=None,
+        *,
+        indexed_extent=None,
+        target_signed=None,
     ):
         rendered = self.generate_expression_with_expected(index_expr, None)
         index_type = self.glsl_source_expression_type(index_expr)
@@ -22246,6 +22248,7 @@ complex64_t crossgl_complex64_mod_assign(
                 if indexed_extent is None
                 else indexed_extent
             ),
+            target_signed=target_signed,
         )
         target_type = decision.target_type.name if decision.target_type else None
         if not decision.accepted:
@@ -22272,6 +22275,19 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_resource_array_index_expression(self, expr):
         index_expr = getattr(expr, "index", getattr(expr, "index_expr", None))
         array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
+        literal_index = self.literal_int_value(index_expr, self.literal_int_constants)
+        array_type = self.glsl_source_expression_type(
+            array_expr
+        ) or self.expression_result_type(array_expr)
+        if (
+            isinstance(literal_index, int)
+            and not isinstance(literal_index, bool)
+            and literal_index < 0
+            and (
+                self.is_resource_array_access(expr) or self.is_sampler_type(array_type)
+            )
+        ):
+            return "0"
         return self.glsl_index_expression(index_expr, array_expr)
 
     def is_resource_array_access(self, expr):
@@ -26216,18 +26232,18 @@ complex64_t crossgl_complex64_mod_assign(
             return None
 
         texture_type = self.texture_resource_type(args[0]) if args else None
-        if (
-            is_texel_fetch_basic_operation(func_name)
-            and self.resource_base_type(texture_type)
-            in {"samplerBuffer", "isamplerBuffer", "usamplerBuffer"}
-        ):
+        if is_texel_fetch_basic_operation(func_name) and self.resource_base_type(
+            texture_type
+        ) in {"samplerBuffer", "isamplerBuffer", "usamplerBuffer"}:
             if len(args) != 2:
                 raise ValueError(
                     f"{self.GLSL_TARGET_DISPLAY_NAME} texture-buffer operation "
                     f"'{func_name}' requires 2 argument(s), got {len(args)}"
                 )
             texture_name = self.generate_expression(args[0])
-            coordinate = self.glsl_index_expression(args[1], args[0])
+            coordinate = self.glsl_index_expression(
+                args[1], args[0], target_signed=True
+            )
             return f"texelFetch({texture_name}, {coordinate})"
 
         self.validate_texture_call_arity(func_name, args)

@@ -4,7 +4,11 @@ import subprocess
 import pytest
 
 import crosstl
-from crosstl.project import load_project_config, translate_project
+from crosstl.project import (
+    load_project_config,
+    translate_project,
+    validate_project_report,
+)
 from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
     OpenGLIndexTypeError,
@@ -156,23 +160,49 @@ def test_opengl_asserted_runtime_ssbo_index_is_converted_and_evaluated_once(tmp_
         }
     }
     """
-    generated = GLSLCodeGen().set_index_range_assertions(
-        [{"expression": "index++", "function": "main", "minimum": 0, "maximum": 31}]
-    ).generate(_parse(shader))
+    generated = (
+        GLSLCodeGen()
+        .set_index_range_assertions(
+            [{"expression": "index++", "function": "main", "minimum": 0, "maximum": 31}]
+        )
+        .generate(_parse(shader))
+    )
 
     assert generated.count("index++") == 1
     assert "values[uint((index++))]" in generated
     _validate_compute_if_available(generated, tmp_path, "runtime_index_once")
 
 
-def test_opengl_normalizes_texture_buffer_and_nested_resource_alias_indices():
+def test_opengl_normalizes_texture_buffer_and_nested_resource_alias_indices(tmp_path):
     texture_shader = """
     shader TextureBufferIndex {
         samplerBuffer values @ binding(0);
         vec4 readValue() { return texelFetch(values, uint64_t(2u)); }
     }
     """
-    assert "texelFetch(values, 2u)" in GLSLCodeGen().generate(_parse(texture_shader))
+    texture_generated = GLSLCodeGen().generate(_parse(texture_shader))
+    assert "texelFetch(values, 2)" in texture_generated
+    _validate_compute_if_available(texture_generated, tmp_path, "texture_buffer_index")
+
+    runtime_texture_shader = """
+    shader RuntimeTextureBufferIndex {
+        samplerBuffer values @ binding(0);
+        vec4 readValue(uint64_t index) { return texelFetch(values, index); }
+    }
+    """
+    runtime_texture_generated = (
+        GLSLCodeGen()
+        .set_index_range_assertions(
+            [{"expression": "index", "minimum": 0, "maximum": 31}]
+        )
+        .generate(_parse(runtime_texture_shader))
+    )
+    assert "texelFetch(values, int(index))" in runtime_texture_generated
+    _validate_compute_if_available(
+        runtime_texture_generated,
+        tmp_path,
+        "runtime_texture_buffer_index",
+    )
 
     alias_shader = """
     shader NestedResourceAliasIndex {
@@ -186,9 +216,13 @@ def test_opengl_normalizes_texture_buffer_and_nested_resource_alias_indices():
         uint run(uint64_t which) { return readNested(values, which); }
     }
     """
-    generated = GLSLCodeGen().set_index_range_assertions(
-        [{"expression": "which", "minimum": 0, "maximum": 1}]
-    ).generate(_parse(alias_shader))
+    generated = (
+        GLSLCodeGen()
+        .set_index_range_assertions(
+            [{"expression": "which", "minimum": 0, "maximum": 1}]
+        )
+        .generate(_parse(alias_shader))
+    )
     assert "uint(which)" in generated
     assert "buffer_load" not in generated
 
@@ -267,7 +301,21 @@ maximum = 31
     )
 
     config = load_project_config(repo)
-    report = translate_project(config, format_output=False).to_json()
+    project_report = translate_project(config, format_output=False)
+    report = project_report.to_json()
+    assert report["project"]["indexRangeAssertions"] == [
+        {
+            "source": "index.cgl",
+            "function": "readValue",
+            "expression": "index",
+            "minimum": 0,
+            "maximum": 31,
+        }
+    ]
+    assert report["project"]["indexRangeAssertionCount"] == 1
+    report_path = repo / "report.json"
+    project_report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True
     generated = (repo / report["artifacts"][0]["path"]).read_text(encoding="utf-8")
     assert "values[uint(index)]" in generated
 

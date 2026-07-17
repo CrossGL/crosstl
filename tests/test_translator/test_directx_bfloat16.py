@@ -1,3 +1,4 @@
+import json
 import shutil
 import struct
 import subprocess
@@ -6,12 +7,17 @@ import textwrap
 import pytest
 
 import crosstl.translator
-from crosstl.project import load_project_config, translate_project
+from crosstl.project import (
+    build_runtime_artifact_manifest,
+    build_runtime_loader_manifest,
+    build_runtime_package,
+    load_project_config,
+    translate_project,
+)
 from crosstl.translator.codegen.directx_codegen import (
     DirectXBFloat16UnsupportedError,
     HLSLCodeGen,
 )
-
 
 BFLOAT_RESOURCE_SHADER = """
 shader ExactBFloatStorage {
@@ -48,12 +54,11 @@ def _float32_from_bits(bits):
         (0x7F800001, 0x7FC0),
     ],
 )
-def test_directx_bfloat16_constant_rounding_is_binary32_rne(
-    float_bits, bfloat_bits
-):
-    assert HLSLCodeGen.bfloat16_bits_for_float(
-        _float32_from_bits(float_bits)
-    ) == bfloat_bits
+def test_directx_bfloat16_constant_rounding_is_binary32_rne(float_bits, bfloat_bits):
+    assert (
+        HLSLCodeGen.bfloat16_bits_for_float(_float32_from_bits(float_bits))
+        == bfloat_bits
+    )
 
 
 def test_directx_bfloat16_numeric_and_bitcast_helpers_are_exact():
@@ -165,14 +170,14 @@ def test_mlx_style_metal_bfloat16_project_lowers_exactly_to_directx(tmp_path):
         encoding="utf-8",
     )
 
-    payload = translate_project(
-        load_project_config(repo), format_output=False
-    ).to_json()
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
 
     assert payload["diagnostics"] == []
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     artifact = payload["artifacts"][0]
+    assert artifact["requiredCapabilities"] == ["directx.native-16bit-types"]
     generated = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert "StructuredBuffer<uint16_t> input" in generated
     assert "RWStructuredBuffer<uint16_t> output" in generated
@@ -181,6 +186,80 @@ def test_mlx_style_metal_bfloat16_project_lowers_exactly_to_directx(tmp_path):
     assert "__crossgl_bfloat16_from_uint16" in generated
     assert "__crossgl_bfloat16_to_uint16" in generated
     assert "StructuredBuffer<half>" not in generated
+
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+    manifest = build_runtime_artifact_manifest(report_path)
+    manifest_path = repo / "runtime-artifact-manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    package_dir = repo / "runtime-package"
+    build_runtime_package(manifest_path, package_dir)
+    loader = build_runtime_loader_manifest(package_dir / "runtime-package.json")
+    load_unit = loader["loadUnits"][0]
+    load_metadata = load_unit["loadSteps"][0]["metadata"]
+    command_input = load_unit["loadSteps"][-1]["metadata"]["commandInput"]
+
+    assert load_metadata["targetProfiles"] == ["directx-12"]
+    assert load_metadata["minimumShaderModel"] == "6.2"
+    assert load_metadata["compilerArguments"] == ["-enable-16bit-types"]
+    assert load_metadata["entryProfiles"] == [{"entry": "CSMain", "profile": "cs_6_2"}]
+    assert command_input["shaderModel"] == "cs_6_2"
+    assert command_input["commands"][0][1:5] == [
+        "-T",
+        "cs_6_2",
+        "-enable-16bit-types",
+        "-E",
+    ]
+
+
+def test_project_bfloat16_failure_reports_actionable_lowering_contract(tmp_path):
+    repo = tmp_path / "unsupported-bfloat16"
+    kernels = repo / "kernels"
+    kernels.mkdir(parents=True)
+    (kernels / "unsupported.cgl").write_text(
+        textwrap.dedent("""
+            shader UnsupportedBFloatBuiltin {
+                bfloat16_t apply_sine(bfloat16_t value) {
+                    return sin(value);
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["kernels"]
+            include = ["kernels/*.cgl"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = next(
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "project.translate.directx-bfloat16-unsupported"
+    )
+    assert diagnostic["details"] == {
+        "bfloat16Lowering": {
+            "operation": "sin",
+            "reason": "unsupported-bfloat16-builtin",
+            "sourceType": "bfloat16_t",
+        },
+        "sourcePath": "kernels/unsupported.cgl",
+        "targetArtifact": "translated/directx/kernels/unsupported.hlsl",
+    }
 
 
 def test_directx_bfloat16_storage_validates_with_dxc_when_available(tmp_path):

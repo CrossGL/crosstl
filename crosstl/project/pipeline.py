@@ -25,6 +25,12 @@ from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, T
 
 from crosstl._crosstl import translate
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.project.directx_toolchain import (
+    directx_target_profiles_for_source,
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+    hlsl_requires_native_16bit_types,
+)
 from crosstl.project.host_reflection import (
     empty_host_interface_record,
     host_interface_record,
@@ -1426,6 +1432,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "entryPointSelectionCount",
         "sourceOptions",
         "sourceOptionCount",
+        "indexRangeAssertions",
+        "indexRangeAssertionCount",
         "includeDirs",
         "includeDirCount",
         "includeDirStatus",
@@ -8344,6 +8352,11 @@ class ProjectPortabilityReport:
                     for name, options in sorted(self.config.source_options.items())
                 },
                 "sourceOptionCount": len(self.config.source_options),
+                "indexRangeAssertions": [
+                    assertion.to_json()
+                    for assertion in self.config.index_range_assertions
+                ],
+                "indexRangeAssertionCount": len(self.config.index_range_assertions),
                 "includeDirs": list(self.config.include_dirs),
                 "includeDirCount": len(self.config.include_dirs),
                 "includeDirStatus": include_dir_status,
@@ -8998,8 +9011,7 @@ def _index_range_assertions_for_unit(
     return tuple(
         assertion
         for assertion in config.index_range_assertions
-        if assertion.source == "*"
-        or fnmatch.fnmatch(normalized_path, assertion.source)
+        if assertion.source == "*" or fnmatch.fnmatch(normalized_path, assertion.source)
     )
 
 
@@ -19414,6 +19426,35 @@ def _directx_private_pointer_failure_details(
     return dict(sorted(details.items()))
 
 
+def _directx_bfloat16_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.directx-bfloat16-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    contract = {}
+    fields = {
+        "targetProfile": getattr(exc, "target_profile", None),
+        "operation": getattr(exc, "operation", None),
+        "sourceType": getattr(exc, "source_type", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            contract[name] = value
+    if contract:
+        details["bfloat16Lowering"] = dict(sorted(contract.items()))
+    return dict(sorted(details.items()))
+
+
 def _directx_resource_pointer_array_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -19978,6 +20019,7 @@ def _translation_failure_details(
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
         **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
         **_directx_private_pointer_failure_details(exc, unit, artifact_path),
+        **_directx_bfloat16_failure_details(exc, unit, artifact_path),
         **_directx_resource_pointer_array_failure_details(exc, unit, artifact_path),
         **_directx_trailing_zero_failure_details(exc, unit, artifact_path),
         **_opengl_private_pointer_failure_details(exc, unit, artifact_path),
@@ -22375,6 +22417,10 @@ def _finalize_project_generated_artifact(
             "target": reflected_entry.get("name"),
             "stage": reflected_entry.get("stage"),
         }
+    if target == "directx" and hlsl_requires_native_16bit_types(generated_source):
+        required_capabilities = set(artifact.get("requiredCapabilities", ()))
+        required_capabilities.add("directx.native-16bit-types")
+        artifact["requiredCapabilities"] = sorted(required_capabilities)
     artifact["generatedHash"] = _source_hash(output_path)
     artifact["generatedSizeBytes"] = output_path.stat().st_size
     artifact["sourceMap"] = _artifact_source_map(config, unit, target, output_path)
@@ -30493,6 +30539,19 @@ def _runtime_loader_package_artifact_path(
     return artifact_path
 
 
+def _runtime_loader_directx_source(
+    adapter: Mapping[str, Any], *, package_root: Path | None = None
+) -> str:
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(package_path):
+        return ""
+    artifact_path = _runtime_loader_package_artifact_path(package_path, package_root)
+    try:
+        return artifact_path.read_text(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        return ""
+
+
 def _runtime_loader_directx_entry_profiles(
     adapter: Mapping[str, Any],
     *,
@@ -30530,14 +30589,36 @@ def _runtime_loader_directx_commands(
     if not _is_non_empty_string(package_path) or not tools:
         return []
     command_path = _runtime_loader_package_command_path(package_path)
+    source = _runtime_loader_directx_source(adapter, package_root=package_root)
+    compiler_arguments = dxc_compiler_arguments_for_source(source)
     entry_profiles = _runtime_loader_directx_entry_profiles(
         adapter, package_root=package_root
     )
     tool = tools[0]
     if entry_profiles is None:
-        return [[tool, "-T", "lib_6_3", command_path, "-Fo", os.devnull]]
+        return [
+            [
+                tool,
+                "-T",
+                dxc_profile_for_source("lib_6_3", source),
+                *compiler_arguments,
+                command_path,
+                "-Fo",
+                os.devnull,
+            ]
+        ]
     return [
-        [tool, "-T", profile, "-E", entry, command_path, "-Fo", os.devnull]
+        [
+            tool,
+            "-T",
+            profile,
+            *compiler_arguments,
+            "-E",
+            entry,
+            command_path,
+            "-Fo",
+            os.devnull,
+        ]
         for entry, profile in entry_profiles
     ]
 
@@ -30583,16 +30664,22 @@ def _runtime_loader_target_load_metadata(
             metadata["programGroup"] = dict(program_group)
         return metadata
     if normalized_target == "directx":
-        return {
+        source = _runtime_loader_directx_source(adapter, package_root=package_root)
+        compiler_arguments = dxc_compiler_arguments_for_source(source)
+        metadata = {
             "runtime": "directx",
             "artifactFormat": adapter.get("artifactFormat"),
             "compiler": "dxc",
-            "targetProfiles": ["directx-11", "directx-12"],
+            "targetProfiles": list(directx_target_profiles_for_source(source)),
             "source": _runtime_loader_metadata_source(package_path),
             "entryProfiles": _runtime_loader_directx_entry_profile_metadata(
                 adapter, package_root=package_root
             ),
         }
+        if compiler_arguments:
+            metadata["compilerArguments"] = list(compiler_arguments)
+            metadata["minimumShaderModel"] = "6.2"
+        return metadata
     return {}
 
 
@@ -45060,6 +45147,29 @@ def _project_metadata_contract_reasons(
                 f"({_value_mismatch_context(source_option_count, len(source_options))})"
             )
 
+    index_range_assertions = project.get("indexRangeAssertions")
+    if _optional_project_field(project, "indexRangeAssertions", required=False):
+        try:
+            parse_index_range_assertions(
+                index_range_assertions,
+                field_name="project.indexRangeAssertions",
+            )
+        except ValueError as exc:
+            reasons.append(str(exc))
+    if _optional_project_field(project, "indexRangeAssertionCount", required=False):
+        count = project.get("indexRangeAssertionCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.indexRangeAssertionCount must be a non-negative integer"
+            )
+        elif isinstance(index_range_assertions, list) and count != len(
+            index_range_assertions
+        ):
+            reasons.append(
+                "project.indexRangeAssertionCount must match "
+                "project.indexRangeAssertions"
+            )
+
     variants = project.get("variants")
     variants_is_mapping = isinstance(variants, Mapping)
     if _optional_project_field(project, "variants", required=require_full_metadata):
@@ -48826,23 +48936,50 @@ def _directx_dxc_smoke_commands(
     *,
     artifact: Mapping[str, Any] | None = None,
 ) -> list[list[str]]:
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        source = ""
+    compiler_arguments = dxc_compiler_arguments_for_source(source)
     entry_profiles = _directx_dxc_entry_profiles(artifact_path, artifact=artifact)
     if entry_profiles is None:
-        return [[tool, "-T", "lib_6_3", str(artifact_path), "-Fo", os.devnull]]
+        return [
+            [
+                tool,
+                "-T",
+                dxc_profile_for_source("lib_6_3", source),
+                *compiler_arguments,
+                str(artifact_path),
+                "-Fo",
+                os.devnull,
+            ]
+        ]
 
     return [
-        _directx_dxc_entry_smoke_command(tool, artifact_path, entry, profile)
+        _directx_dxc_entry_smoke_command(
+            tool,
+            artifact_path,
+            entry,
+            profile,
+            compiler_arguments=compiler_arguments,
+        )
         for entry, profile in entry_profiles
     ]
 
 
 def _directx_dxc_entry_smoke_command(
-    tool: str, artifact_path: Path, entry: str, profile: str
+    tool: str,
+    artifact_path: Path,
+    entry: str,
+    profile: str,
+    *,
+    compiler_arguments: Sequence[str] = (),
 ) -> list[str]:
     return [
         tool,
         "-T",
         profile,
+        *compiler_arguments,
         "-E",
         entry,
         str(artifact_path),
@@ -49150,12 +49287,13 @@ def _directx_dxc_profile_for_source(profile: str, source: str) -> str:
             DIRECTX_DXC_EXACT_WAVE_SIZE_MIN_PROFILE_BY_STAGE.get(stage)
         )
     required = [value for value in minimum_profiles if value is not None]
-    if not required:
-        return profile
-    minimum = max(required, key=_directx_dxc_profile_version)
-    if _directx_dxc_profile_version(profile) >= _directx_dxc_profile_version(minimum):
-        return profile
-    return minimum
+    if required:
+        minimum = max(required, key=_directx_dxc_profile_version)
+        if _directx_dxc_profile_version(profile) < _directx_dxc_profile_version(
+            minimum
+        ):
+            profile = minimum
+    return dxc_profile_for_source(profile, source)
 
 
 def _directx_dxc_profile_version(profile: str) -> tuple[int, int]:

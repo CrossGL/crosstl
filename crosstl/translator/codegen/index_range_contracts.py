@@ -6,7 +6,6 @@ import operator
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
-
 INDEX_RANGE_CONSTANT = "constant"
 INDEX_RANGE_STATIC = "statically-bounded"
 INDEX_RANGE_ASSERTED = "asserted"
@@ -30,17 +29,17 @@ class IntegerRange:
             raise ValueError("integer range minimum must not exceed maximum")
 
     @classmethod
-    def exact(cls, value: int, *, provenance: str | None = None) -> "IntegerRange":
+    def exact(cls, value: int, *, provenance: str | None = None) -> IntegerRange:
         return cls(value, value, INDEX_RANGE_CONSTANT, provenance)
 
     @property
     def is_exact(self) -> bool:
         return self.minimum == self.maximum
 
-    def is_within(self, other: "IntegerRange") -> bool:
+    def is_within(self, other: IntegerRange) -> bool:
         return self.minimum >= other.minimum and self.maximum <= other.maximum
 
-    def with_status(self, status: str, provenance: str | None = None) -> "IntegerRange":
+    def with_status(self, status: str, provenance: str | None = None) -> IntegerRange:
         return replace(
             self,
             status=status,
@@ -168,6 +167,7 @@ def decide_index_narrowing(
     profile: IndexTargetProfile,
     value_range: IntegerRange | None,
     indexed_extent: int | None = None,
+    target_signed: bool | None = None,
 ) -> IndexNarrowingDecision:
     """Prove an identity or narrowing conversion without target-side checks."""
 
@@ -181,7 +181,8 @@ def decide_index_narrowing(
             None,
         )
 
-    target_type = profile.scalar_type(signed=source_signed)
+    required_signedness = source_signed if target_signed is None else target_signed
+    target_type = profile.scalar_type(signed=required_signedness)
     if target_type is None:
         return IndexNarrowingDecision(
             "reject",
@@ -196,14 +197,12 @@ def decide_index_narrowing(
     maximum_index = target_range.maximum
     if indexed_extent is not None:
         maximum_index = min(maximum_index, indexed_extent - 1)
-    accepted_range = (
-        IntegerRange(0, maximum_index) if maximum_index >= 0 else None
-    )
+    accepted_range = IntegerRange(0, maximum_index) if maximum_index >= 0 else None
 
     # A source index that is already legal for the target needs no range proof.
     # Still reject an exact invalid subscript because constants are diagnosed
     # before target emission instead of relying on undefined target behavior.
-    if source_bits <= target_type.bits:
+    if source_signed == target_type.signed and source_bits <= target_type.bits:
         if value_range is not None and value_range.is_exact:
             if value_range.minimum < 0:
                 return IndexNarrowingDecision(
@@ -302,14 +301,14 @@ def parse_index_range_assertions(
         return (value,)
     if isinstance(value, Mapping):
         records: Sequence[Any] = [
-            {"expression": expression, **dict(bounds)}
-            if isinstance(bounds, Mapping)
-            else bounds
+            (
+                {"expression": expression, **dict(bounds)}
+                if isinstance(bounds, Mapping)
+                else bounds
+            )
             for expression, bounds in value.items()
         ]
-    elif isinstance(value, Sequence) and not isinstance(
-        value, (str, bytes, bytearray)
-    ):
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         records = value
     else:
         raise ValueError(f"{field_name} must be an array of assertion tables")
