@@ -866,6 +866,7 @@ def test_reference_accessor_check_records_structured_proof_and_native_validation
         ),
         "-Fo",
     ]
+    assert "-enable-16bit-types" not in commands[1][1]
     assert commands[2][1][0] == "/opt/tools/glslangValidator"
     assert commands[2][1][1:5] == [
         "--target-env",
@@ -948,6 +949,60 @@ def test_reference_accessor_check_records_structured_proof_and_native_validation
         assert proof["nativeValidation"]["status"] == "validated"
         assert proof["nativeValidation"]["nativeCompiler"] == tool
         assert (mlx_root / proof["artifact"]).is_file()
+    directx_validation = result["targetProofs"]["directx"]["nativeValidation"]
+    assert directx_validation["profile"] == "cs_6_0"
+    assert "compilerArguments" not in directx_validation
+    assert "minimumShaderModel" not in directx_validation
+
+
+def test_reference_accessor_directx_enables_native_16bit_hlsl(tmp_path, monkeypatch):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    log_dir = work_dir / "logs"
+    artifact_path = work_dir / "generated" / "reference-accessor.hlsl"
+    artifact_path.parent.mkdir(parents=True)
+    log_dir.mkdir(parents=True)
+    artifact_path.write_text("float16_t value;\n", encoding="utf-8")
+    commands = []
+
+    def fake_run_command(name, command, *, log_dir, check=True):
+        command = list(command)
+        commands.append(command)
+        Path(command[command.index("-Fo") + 1]).write_bytes(b"DXIL")
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, command, 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/tools/{name}")
+
+    result = module._validate_reference_accessor_directx(
+        mlx_root,
+        work_dir,
+        log_dir,
+        artifact_path,
+        required=True,
+    )
+
+    assert commands == [
+        [
+            "/tools/dxc",
+            "-T",
+            "cs_6_2",
+            "-enable-16bit-types",
+            "-E",
+            module.REFERENCE_ACCESSOR_DXC_ENTRY_POINT,
+            str(artifact_path),
+            "-Fo",
+            str(work_dir / "validation" / "reference-accessor.dxil"),
+        ]
+    ]
+    assert result["profile"] == "cs_6_2"
+    assert result["compilerArguments"] == ["-enable-16bit-types"]
+    assert result["minimumShaderModel"] == "6.2"
 
 
 def test_template_member_pointer_fixture_preserves_mlx_addressed_load_shape():
@@ -4075,7 +4130,7 @@ def _gemv_directx_frontier_source(module, *, replace_entry=None):
         old_entry, new_entry = replace_entry
         entry_points[entry_points.index(old_entry)] = new_entry
     sizes = module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
-    return "\n".join(
+    return "typedef float16_t GemvNativeHalf;\n" + "\n".join(
         (
             f"[numthreads({size[0]}, {size[1]}, {size[2]})]\n"
             + f"void {entry_point}(uint3 lid : SV_GroupThreadID) {{\n"
@@ -4358,6 +4413,9 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
     assert result["materializationResidueCount"] == 0
     assert result["bareValueDiscardCount"] == 0
     assert result["computeEntryPointCount"] == 224
+    assert result["compilerArguments"] == ["-enable-16bit-types"]
+    assert result["minimumShaderModel"] == "6.2"
+    assert result["entryProfile"] == "cs_6_2"
     assert result["entryProfileCompilerEntryPoints"] == [
         "CSMain",
         "CSMain_85",
@@ -4375,6 +4433,8 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
         "libraryNumthreads": 224,
     }
     assert result["libraryCompilerRun"]["unusedValueWarningCount"] == 0
+    assert result["libraryCompilerRun"]["compilerArguments"] == ["-enable-16bit-types"]
+    assert result["libraryCompilerRun"]["minimumShaderModel"] == "6.2"
     assert result["libraryAllowedWarnings"] == [
         {
             "classification": "library-profile-numthreads-ignored",
@@ -4414,7 +4474,11 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
     ]
     assert all(run["outputSizeBytes"] > 0 for run in result["entryProfileCompilerRuns"])
     assert all(
-        run["diagnosticCount"] == 0 and run["unusedValueWarningCount"] == 0
+        run["diagnosticCount"] == 0
+        and run["unusedValueWarningCount"] == 0
+        and run["profile"] == "cs_6_2"
+        and run["compilerArguments"] == ["-enable-16bit-types"]
+        and run["minimumShaderModel"] == "6.2"
         for run in result["entryProfileCompilerRuns"]
     )
     assert [name for name, _command, _kwargs in commands] == [
@@ -4427,11 +4491,13 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
     assert commands[0][2] == {"check": False, "timeout_seconds": 900}
     assert commands[0][1][-1] == "--no-format"
     for _name, command, kwargs in commands[1:4]:
-        assert command[command.index("-T") + 1] == "cs_6_0"
+        assert command[command.index("-T") + 1] == "cs_6_2"
+        assert command[command.index("-T") + 2] == "-enable-16bit-types"
         assert Path(command[command.index("-Fo") + 1]).is_file()
         assert kwargs == {"check": False}
     library_command = commands[4][1]
     assert library_command[library_command.index("-T") + 1] == "lib_6_6"
+    assert library_command[library_command.index("-T") + 2] == ("-enable-16bit-types")
     exports = library_command[library_command.index("-exports") + 1].split(";")
     assert exports == list(module.GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
     assert len(exports) == len(set(exports)) == 224
@@ -6141,7 +6207,8 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
     }
     compiler = status["compiler"]
     assert compiler["entry_profile"] == {
-        "profile": "cs_6_0",
+        "profile": "cs_6_2",
+        "compiler_arguments": ["-enable-16bit-types"],
         "entry_points": ["CSMain", "CSMain_85", "CSMain_113"],
         "compiled_binary_count": 3,
         "diagnostic_count": 0,
@@ -6149,6 +6216,7 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
     }
     assert compiler["library_profile"] == {
         "profile": "lib_6_6",
+        "compiler_arguments": ["-enable-16bit-types"],
         "export_set": "CSMain;CSMain_2;...;CSMain_224",
         "export_count": 224,
         "compiled_library_count": 1,
@@ -6187,7 +6255,8 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
     assert status["runtime_parity_claimed"] is False
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
     assert "--require-directx-gemv-compiler-frontier" in readme
-    assert "A second `lib_6_6` invocation exports and code-generates all 224" in readme
+    assert "A second `lib_6_6` invocation retains" in readme
+    assert "exporting and code-generating all 224 functions" in readme
     assert "Any unused-value warning, error, or other diagnostic fails the gate" in (
         readme
     )
@@ -6718,6 +6787,8 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
         for variant in module.RMS_NORM_DIRECTX_VARIANTS
     ]
     assert status["directx"]["native_compilation"] == ("required-on-windows-ci")
+    assert status["directx"]["profile"] == "cs_6_2"
+    assert status["directx"]["compiler_arguments"] == ["-enable-16bit-types"]
     assert status["directx"]["library_artifact_count"] == 2
     assert status["directx"]["execution_entry_count_per_artifact"] == 12
     assert status["directx"]["generated_numthreads_count_per_artifact"] == 12
@@ -7009,7 +7080,7 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
     for variant in module.RMS_NORM_DIRECTX_VARIANTS:
         artifact_path = work_dir / "artifacts" / f"{variant['name']}.hlsl"
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        artifact_path.write_text("generated HLSL", encoding="utf-8")
+        artifact_path.write_text("float16_t generated_value;\n", encoding="utf-8")
         artifacts_by_variant[variant["name"]] = {
             "path": artifact_path.relative_to(mlx_root).as_posix()
         }
@@ -7076,6 +7147,9 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
 
     assert directx["status"] == "compiled"
     assert directx["compiledArtifactCount"] == 2
+    assert directx["profile"] == "cs_6_2"
+    assert directx["compilerArguments"] == ["-enable-16bit-types"]
+    assert directx["minimumShaderModel"] == "6.2"
     assert len(directx["runs"]) == 2
     assert [run["entryPoint"] for run in directx["runs"]] == [
         "CSMain",
@@ -7092,6 +7166,17 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
     ]
     assert len(dxc_commands) == 2
     assert all(command[command.index("-E") + 1] == "CSMain" for command in dxc_commands)
+    assert all(
+        command[command.index("-T") + 1 : command.index("-E")]
+        == ["cs_6_2", "-enable-16bit-types"]
+        for command in dxc_commands
+    )
+    assert all(
+        run["profile"] == "cs_6_2"
+        and run["compilerArguments"] == ["-enable-16bit-types"]
+        and run["minimumShaderModel"] == "6.2"
+        for run in directx["runs"]
+    )
 
     monkeypatch.setattr(module, "sys", SimpleNamespace(platform="linux"))
     opengl = module._compile_opengl(

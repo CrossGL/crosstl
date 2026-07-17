@@ -288,7 +288,10 @@
     "compiler": {
       "name": "dxc",
       "entry_profile": {
-        "profile": "cs_6_0",
+        "profile": "cs_6_2",
+        "compiler_arguments": [
+          "-enable-16bit-types"
+        ],
         "entry_points": [
           "CSMain",
           "CSMain_85",
@@ -300,6 +303,9 @@
       },
       "library_profile": {
         "profile": "lib_6_6",
+        "compiler_arguments": [
+          "-enable-16bit-types"
+        ],
         "export_set": "CSMain;CSMain_2;...;CSMain_224",
         "export_count": 224,
         "compiled_library_count": 1,
@@ -519,6 +525,10 @@
         }
       ],
       "native_compilation": "required-on-windows-ci",
+      "profile": "cs_6_2",
+      "compiler_arguments": [
+        "-enable-16bit-types"
+      ],
       "library_artifact_count": 2,
       "execution_entry_count_per_artifact": 12,
       "generated_numthreads_count_per_artifact": 12,

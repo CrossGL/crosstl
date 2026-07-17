@@ -18,6 +18,10 @@ from crosstl.project import (
     reflect_target_host_interface,
     translate_project,
 )
+from crosstl.project.directx_toolchain import (
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+)
 
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -836,6 +840,9 @@ def _compile_directx_variants(
     for variant in RMS_NORM_DIRECTX_VARIANTS:
         variant_name = str(variant["name"])
         artifact_path = _artifact_path(artifacts_by_variant[variant_name], mlx_root)
+        generated = artifact_path.read_text(encoding="utf-8")
+        profile = dxc_profile_for_source(RMS_NORM_DIRECTX_PROFILE, generated)
+        compiler_arguments = dxc_compiler_arguments_for_source(generated)
         entry_point = _representative_directx_entry_point(artifact_path)
         output_path = output_dir / f"{variant_name}.dxil"
         output_path.unlink(missing_ok=True)
@@ -844,7 +851,8 @@ def _compile_directx_variants(
             [
                 dxc,
                 "-T",
-                RMS_NORM_DIRECTX_PROFILE,
+                profile,
+                *compiler_arguments,
                 "-E",
                 entry_point,
                 str(artifact_path),
@@ -867,21 +875,41 @@ def _compile_directx_variants(
                 "workgroupSize": list(variant["workgroupSize"]),
                 "status": "compiled",
                 "entryPoint": entry_point,
+                "profile": profile,
+                **(
+                    {
+                        "compilerArguments": list(compiler_arguments),
+                        "minimumShaderModel": "6.2",
+                    }
+                    if compiler_arguments
+                    else {}
+                ),
                 "artifact": _relpath(artifact_path, mlx_root),
                 "compiledArtifact": _relpath(output_path, mlx_root),
                 "stdout": _relpath(result["stdoutPath"], mlx_root),
                 "stderr": _relpath(result["stderrPath"], mlx_root),
             }
         )
-    return {
+    profiles = {str(run["profile"]) for run in runs}
+    compiler_argument_sets = {tuple(run.get("compilerArguments", ())) for run in runs}
+    result = {
         "required": True,
         "status": "compiled",
         "platform": sys.platform,
         "compiler": "dxc",
-        "profile": RMS_NORM_DIRECTX_PROFILE,
         "compiledArtifactCount": len(runs),
         "runs": runs,
     }
+    if len(profiles) == 1:
+        result["profile"] = next(iter(profiles))
+    else:
+        result["profiles"] = sorted(profiles)
+    if len(compiler_argument_sets) == 1:
+        compiler_arguments = next(iter(compiler_argument_sets))
+        if compiler_arguments:
+            result["compilerArguments"] = list(compiler_arguments)
+            result["minimumShaderModel"] = "6.2"
+    return result
 
 
 def _check_directx(

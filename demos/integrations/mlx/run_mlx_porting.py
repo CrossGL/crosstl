@@ -22,6 +22,10 @@ from crosstl.project import (
     execute_project_test_runner_plan,
     native_runtime_parity_adapters,
 )
+from crosstl.project.directx_toolchain import (
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+)
 from crosstl.project.runtime_verification import (
     RuntimeParityAdapter,
     build_runtime_test_manifest,
@@ -2125,6 +2129,9 @@ def _validate_reference_accessor_directx(
 
     dxc = shutil.which("dxc")
     _require(dxc is not None, "reference accessor DirectX validation requires dxc")
+    generated = artifact_path.read_text(encoding="utf-8")
+    profile = dxc_profile_for_source("cs_6_0", generated)
+    compiler_arguments = dxc_compiler_arguments_for_source(generated)
     output_path = work_dir / "validation" / "reference-accessor.dxil"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.unlink(missing_ok=True)
@@ -2133,7 +2140,8 @@ def _validate_reference_accessor_directx(
         [
             dxc,
             "-T",
-            "cs_6_0",
+            profile,
+            *compiler_arguments,
             "-E",
             REFERENCE_ACCESSOR_DXC_ENTRY_POINT,
             str(artifact_path),
@@ -2157,7 +2165,15 @@ def _validate_reference_accessor_directx(
         "required": True,
         "nativeCompiler": "dxc",
         "entryPoint": REFERENCE_ACCESSOR_DXC_ENTRY_POINT,
-        "profile": "cs_6_0",
+        "profile": profile,
+        **(
+            {
+                "compilerArguments": list(compiler_arguments),
+                "minimumShaderModel": "6.2",
+            }
+            if compiler_arguments
+            else {}
+        ),
         "compiledArtifact": _relpath(output_path, mlx_root),
         "stdout": _relpath(result.stdout_path, mlx_root),
         "stderr": _relpath(result.stderr_path, mlx_root),
@@ -4485,6 +4501,12 @@ def _check_gemv_directx_compiler_frontier(
     )
 
     generated = generated_path.read_text(encoding="utf-8")
+    entry_profile = dxc_profile_for_source(GEMV_DIRECTX_ENTRY_PROFILE, generated)
+    library_profile = dxc_profile_for_source(
+        GEMV_DIRECTX_LIBRARY_PROFILE,
+        generated,
+    )
+    compiler_arguments = dxc_compiler_arguments_for_source(generated)
     compute_entry_pattern = re.compile(
         r"(?m)^[ \t]*(?P<source_expression>"
         r"\[numthreads\(\s*(?P<x>\d+)\s*,\s*(?P<y>\d+)\s*,\s*"
@@ -4553,7 +4575,8 @@ def _check_gemv_directx_compiler_frontier(
             [
                 dxc,
                 "-T",
-                GEMV_DIRECTX_ENTRY_PROFILE,
+                entry_profile,
+                *compiler_arguments,
                 "-E",
                 entry_point,
                 str(generated_path),
@@ -4579,7 +4602,15 @@ def _check_gemv_directx_compiler_frontier(
         entry_profile_runs.append(
             {
                 "entryPoint": entry_point,
-                "profile": GEMV_DIRECTX_ENTRY_PROFILE,
+                "profile": entry_profile,
+                **(
+                    {
+                        "compilerArguments": list(compiler_arguments),
+                        "minimumShaderModel": "6.2",
+                    }
+                    if compiler_arguments
+                    else {}
+                ),
                 "status": "compiled",
                 "output": _relpath(output_path, mlx_root),
                 "outputHash": {
@@ -4602,7 +4633,8 @@ def _check_gemv_directx_compiler_frontier(
         [
             dxc,
             "-T",
-            GEMV_DIRECTX_LIBRARY_PROFILE,
+            library_profile,
+            *compiler_arguments,
             "-exports",
             library_exports,
             str(generated_path),
@@ -4690,13 +4722,21 @@ def _check_gemv_directx_compiler_frontier(
         "bareValueDiscardCount": 0,
         "computeEntryPointCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
         "compiler": "dxc",
-        "entryProfile": GEMV_DIRECTX_ENTRY_PROFILE,
+        **(
+            {
+                "compilerArguments": list(compiler_arguments),
+                "minimumShaderModel": "6.2",
+            }
+            if compiler_arguments
+            else {}
+        ),
+        "entryProfile": entry_profile,
         "entryProfileCompilerEntryPoints": list(GEMV_DIRECTX_COMPILER_ENTRY_POINTS),
         "entryProfileCompiledEntryPointCount": len(entry_profile_runs),
         "entryProfileCompilerRuns": entry_profile_runs,
         "entryProfileDiagnosticCount": 0,
         "entryProfileUnusedValueWarningCount": 0,
-        "libraryProfile": GEMV_DIRECTX_LIBRARY_PROFILE,
+        "libraryProfile": library_profile,
         "libraryExports": list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
         "libraryExportCount": len(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
         "libraryExportSetHash": {
@@ -4704,7 +4744,15 @@ def _check_gemv_directx_compiler_frontier(
             "value": hashlib.sha256(library_exports.encode("utf-8")).hexdigest(),
         },
         "libraryCompilerRun": {
-            "profile": GEMV_DIRECTX_LIBRARY_PROFILE,
+            "profile": library_profile,
+            **(
+                {
+                    "compilerArguments": list(compiler_arguments),
+                    "minimumShaderModel": "6.2",
+                }
+                if compiler_arguments
+                else {}
+            ),
             "status": "compiled",
             "output": _relpath(library_output_path, mlx_root),
             "outputHash": {"algorithm": "sha256", "value": library_output_hash},

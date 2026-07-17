@@ -157,10 +157,11 @@ The current harness verifies:
   unresolved residue, no bare pure value-discard statements, one aggregate HLSL
   artifact, and exactly 224 host-named report execution entries joined by
   materialization identity. Every generated target entry and `numthreads`
-  declaration must match its report contract. DXC compiles `CSMain`,
-  `CSMain_85`, and `CSMain_113` under `cs_6_0` with zero diagnostics, then
-  compiles all 224 functions in one `lib_6_6` invocation with an exact export
-  set and exact profile-warning classification;
+  declaration must match its report contract. The emitted native 16-bit types
+  require DXC to compile `CSMain`, `CSMain_85`, and `CSMain_113` under
+  `cs_6_2` with `-enable-16bit-types` and zero diagnostics, then compile all
+  224 functions in one `lib_6_6` invocation with the same flag, an exact
+  export set, and exact profile-warning classification;
 - full project materialization of pinned `gemv.metal` for OpenGL as a strict
   expected frontier. The project and report must retain the GEMV workgroup-size
   rule, and all 225 source specializations must materialize, after which
@@ -405,9 +406,13 @@ entry from pinned `arange.metal`; CrossGL/crosstl#1472 continues to track
 expansion beyond that bounded source/entry/dtype proof across the generated MLX
 frontier. CrossGL/crosstl#1474
 tracks exact DirectX bfloat16 lowering beyond the current compile-time smoke
-mapping. Current DXC checks use Shader Model 6 compute profiles and do not prove
-Direct3D 10 or 11 compatibility; CrossGL/crosstl#1670 tracks explicit target
-profiles, feature gates, and compiler selection. CrossGL/crosstl#1669 tracks
+mapping. Every custom DXC invocation derives its effective profile and compiler
+arguments from the emitted HLSL through `crosstl.project.directx_toolchain`.
+Generated `float16_t`, `int16_t`, or `uint16_t` types select at least Shader
+Model 6.2 and add `-enable-16bit-types`; ordinary HLSL retains its selected
+profile and command. These checks do not prove Direct3D 10 or 11 compatibility;
+CrossGL/crosstl#1670 tracks explicit target profiles, feature gates, and
+compiler selection. CrossGL/crosstl#1669 tracks
 the fixed arrays of resource aliases introduced by the pinned revision's wide
 quantized matrix-vector helpers. CrossGL/crosstl#1671 tracks workgroup backing
 provenance through nested FFT helper parameters. A dedicated project replay now
@@ -443,8 +448,9 @@ For every target entry, the emitted `numthreads` declaration must equal that
 entry's report contract. This establishes exact workgroup-size specialization
 for the generated aggregate artifact. DXC compiles representative scalar,
 complex/Wave, and gather/constant-pointer paths (`CSMain`, `CSMain_85`, and
-`CSMain_113`) with `cs_6_0`; all three invocations must produce zero diagnostics.
-A second `lib_6_6` invocation exports and code-generates all 224 functions in
+`CSMain_113`) with `cs_6_2` and `-enable-16bit-types`; all three invocations
+must produce zero diagnostics. A second `lib_6_6` invocation retains
+`-enable-16bit-types` while exporting and code-generating all 224 functions in
 one DXIL library.
 
 The library compile admits exactly 224 `numthreads ignored without accompanying
@@ -582,8 +588,9 @@ concrete specialization materialization, the pinned source hash, and the
 generated `static const bool has_w` value. Each HLSL library artifact retains
 execution metadata for all 12 pinned host-named entries and emits 12 matching
 `numthreads` attributes. Windows CI uses two DXC runs to compile one reflected
-representative entry from each HLSL library. For OpenGL, the `workgroup_32` and
-`workgroup_64` variants leave `has_w` deferred, retain
+representative entry from each HLSL library. Their generated native 16-bit HLSL
+selects `cs_6_2` and passes `-enable-16bit-types`. For OpenGL, the
+`workgroup_32` and `workgroup_64` variants leave `has_w` deferred, retain
 `layout(constant_id = 20)`, and split each host-named entry into a standalone
 `main` artifact. Linux CI compiles all 24 GLSL artifacts to OpenGL SPIR-V 1.3
 and validates all 24 binaries with `spirv-val`.
