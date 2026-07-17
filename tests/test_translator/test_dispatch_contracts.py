@@ -281,7 +281,9 @@ def _image_manifest():
 
 
 def _error_code(exc_info):
-    return exc_info.value.code.removeprefix("project.dispatch-contract.")
+    prefix = "project.dispatch-contract."
+    code = exc_info.value.code
+    return code[len(prefix) :] if code.startswith(prefix) else code
 
 
 def test_dispatch_contract_api_is_exported_from_project_package():
