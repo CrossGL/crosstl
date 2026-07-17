@@ -6802,6 +6802,45 @@ def test_hlsl_metal_scalar_constant_kernel_params_promote_to_cbuffers(tmp_path):
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
+def test_hlsl_metal_native_half_constant_params_promote_to_cbuffers(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    [[kernel]] void half_step(
+        const constant half& start [[buffer(0)]],
+        const constant half& step [[buffer(1)]],
+        device half* out [[buffer(2)]],
+        uint index [[thread_position_in_grid]]) {
+      out[index] = start + half(index) * step;
+    }
+    """
+    shader_path = tmp_path / "half_step.metal"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "cbuffer half_step_start_Constants" in generated_code
+    assert "float16_t half_step_start;" in generated_code
+    assert "cbuffer half_step_step_Constants" in generated_code
+    assert "float16_t half_step_step;" in generated_code
+    assert "void CSMain(float16_t start" not in generated_code
+    assert "void CSMain(uint3 index_dispatchThreadID : SV_DispatchThreadID)" in (
+        generated_code
+    )
+    assert "half_step_start + (float16_t(index) * half_step_step)" in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_native_16_bit_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+    )
+
+
 def test_hlsl_metal_resource_pointer_offsets_apply_to_buffer_helpers(tmp_path):
     shader = """
     #include <metal_stdlib>

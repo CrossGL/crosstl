@@ -17808,23 +17808,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.hlsl_bfloat16_scalar_type_name(element_type)
 
         mapped_type = self.map_type(element_type)
-        if mapped_type in {
-            "bool",
-            "double",
-            "float",
-            "half",
-            "int",
-            "int64_t",
-            "int16_t",
-            "min10float",
-            "min12int",
-            "min16float",
-            "min16int",
-            "min16uint",
-            "uint",
-            "uint64_t",
-            "uint16_t",
-        }:
+        if self.is_scalar_value_type(element_type):
             return mapped_type
         return None
 
