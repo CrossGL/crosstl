@@ -1569,6 +1569,14 @@ class GLSLCodeGen:
         ">": "greaterThan",
         ">=": "greaterThanEqual",
     }
+    GLSL_SUBGROUP_BASIC_BUILTINS = frozenset(
+        {
+            "gl_NumSubgroups",
+            "gl_SubgroupID",
+            "gl_SubgroupSize",
+            "gl_SubgroupInvocationID",
+        }
+    )
     GLSL_WAVE_EXTENSION_REQUIREMENTS = {
         "WaveGetLaneCount": "#extension GL_KHR_shader_subgroup_basic : require",
         "WaveGetLaneIndex": "#extension GL_KHR_shader_subgroup_basic : require",
@@ -3102,6 +3110,27 @@ class GLSLCodeGen:
                         operations.add(operation)
         return operations
 
+    def uses_glsl_subgroup_basic_builtin(self, ast, target_stage=None):
+        for root in self.ray_query_search_roots(ast, target_stage):
+            referenced_names = set()
+            subgroup_semantic_names = set()
+            for node in self.walk_ast(root):
+                if isinstance(node, IdentifierNode):
+                    referenced_names.add(node.name)
+                source_name = getattr(node, "name", None)
+                if not isinstance(source_name, str):
+                    continue
+                semantic = self.semantic_from_node(node)
+                if semantic is None:
+                    continue
+                if self.map_semantic(semantic) in self.GLSL_SUBGROUP_BASIC_BUILTINS:
+                    subgroup_semantic_names.add(source_name)
+            if referenced_names & (
+                self.GLSL_SUBGROUP_BASIC_BUILTINS | subgroup_semantic_names
+            ):
+                return True
+        return False
+
     def uses_nonuniform_ext(self, ast):
         for node in self.walk_ast(ast):
             if (
@@ -3114,7 +3143,7 @@ class GLSLCodeGen:
     def glsl_wave_extension_lines(self, ast, target_stage=None):
         operations = self.glsl_wave_operations(ast, target_stage)
         lines = []
-        if any(
+        if self.uses_glsl_subgroup_basic_builtin(ast, target_stage) or any(
             operation in self.GLSL_WAVE_EXTENSION_REQUIREMENTS
             for operation in operations
         ):

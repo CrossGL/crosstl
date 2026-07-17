@@ -17367,6 +17367,39 @@ def test_glsl_wave_and_mesh_intrinsics():
     assert "SetMeshOutputCounts" not in generated
 
 
+def test_glsl_subgroup_builtin_inputs_request_basic_extension(tmp_path):
+    code = """
+    shader GLSLSubgroupBuiltinInputs {
+        compute {
+            void main(
+                uint subgroupId @gl_SubgroupID,
+                uint laneId @gl_SubgroupInvocationID,
+                uint subgroupCount @gl_NumSubgroups,
+                uint subgroupSize @gl_SubgroupSize,
+                RWStructuredBuffer<uint> outputValues @buffer(0)
+            ) {
+                outputValues[0] = subgroupId + laneId + subgroupCount + subgroupSize;
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated.count("#extension GL_KHR_shader_subgroup_basic : require") == 1
+    assert "gl_SubgroupID" in generated
+    assert "gl_SubgroupInvocationID" in generated
+    assert "gl_NumSubgroups" in generated
+    assert "gl_SubgroupSize" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "subgroup_builtin_inputs",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
 def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
     code = """
     shader GLSLWaveIntrinsics {
