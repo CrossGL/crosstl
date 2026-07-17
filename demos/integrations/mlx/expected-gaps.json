@@ -926,24 +926,10 @@
     },
     "warning_evidence": {
       "status": "validated-with-tracked-warnings",
-      "warningRunCount": 29,
-      "observedWarningCount": 130,
-      "uniqueContractCount": 3,
+      "warningRunCount": 11,
+      "observedWarningCount": 11,
+      "uniqueContractCount": 1,
       "contracts": [
-        {
-          "classification": "native-int16-destination-conversion",
-          "source": "mlx/backend/metal/kernels/arange.metal",
-          "issue": "https://github.com/CrossGL/crosstl/issues/1801",
-          "message": "conversion from larger type 'unsigned int' to smaller type 'int16_t', possible loss of data [-Wconversion]",
-          "sourceLines": [
-            {
-              "text": "arangeint16_out[index] = (arangeint16_start + (index * arangeint16_step));",
-              "occurrencesPerRun": 1
-            }
-          ],
-          "warningsPerRun": 1,
-          "observedCount": 11
-        },
         {
           "classification": "native-half-arithmetic-conversion",
           "source": "mlx/backend/metal/kernels/arange.metal",
@@ -957,26 +943,51 @@
           ],
           "warningsPerRun": 1,
           "observedCount": 11
+        }
+      ]
+    },
+    "contextual_narrowing_evidence": {
+      "status": "resolved",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1801",
+      "compiler": "dxc",
+      "profile": "cs_6_2",
+      "compilerArguments": [
+        "-enable-16bit-types"
+      ],
+      "resolvedWarningContracts": [
+        {
+          "classification": "native-int16-destination-conversion",
+          "source": "mlx/backend/metal/kernels/arange.metal",
+          "validatedEntryPointCount": 11,
+          "generatedSourceLines": [
+            {
+              "text": "arangeint16_out[index] = int16_t((arangeint16_start + (index * arangeint16_step)));",
+              "occurrencesPerArtifact": 1
+            }
+          ],
+          "observedWarningCount": 0,
+          "remainingWarningIssue": "https://github.com/CrossGL/crosstl/issues/1802"
         },
         {
           "classification": "uint64-local-destination-conversion",
           "source": "mlx/backend/metal/kernels/rope.metal",
-          "issue": "https://github.com/CrossGL/crosstl/issues/1801",
-          "message": "conversion from larger type 'unsigned long long' to smaller type 'uint', possible loss of data [-Wconversion]",
-          "sourceLines": [
+          "validatedEntryPointCount": 18,
+          "generatedSourceLines": [
             {
-              "text": "index_1 = ((2 * pos.x) + (pos.y * stride));",
-              "occurrencesPerRun": 3
+              "text": "index_1 = uint(((2 * pos.x) + (pos.y * stride)));",
+              "occurrencesPerArtifact": 3
             },
             {
-              "text": "index_1 = (pos.x + (pos.y * stride));",
-              "occurrencesPerRun": 3
+              "text": "index_1 = uint((pos.x + (pos.y * stride)));",
+              "occurrencesPerArtifact": 3
             }
           ],
-          "warningsPerRun": 6,
-          "observedCount": 108
+          "observedWarningCount": 0,
+          "warningsAsErrors": true
         }
-      ]
+      ],
+      "runtimeExecutionAttempted": false,
+      "numericalParityClaimed": false
     },
     "selected_quantized_frontier": {
       "status": "translated-dxc-validated",
@@ -1452,7 +1463,6 @@
       "https://github.com/CrossGL/crosstl/issues/1671"
     ],
     "semantic_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1801",
       "https://github.com/CrossGL/crosstl/issues/1802",
       "https://github.com/CrossGL/crosstl/issues/1491",
       "https://github.com/CrossGL/crosstl/issues/1537",
@@ -1515,7 +1525,6 @@
     }
   },
   "tracked_issues": [
-    "https://github.com/CrossGL/crosstl/issues/1801",
     "https://github.com/CrossGL/crosstl/issues/1802",
     "https://github.com/CrossGL/crosstl/issues/1669",
     "https://github.com/CrossGL/crosstl/issues/1670",
@@ -1563,6 +1572,7 @@
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1800",
+    "https://github.com/CrossGL/crosstl/issues/1801",
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1659",
     "https://github.com/CrossGL/crosstl/issues/1516",
