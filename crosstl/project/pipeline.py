@@ -26182,7 +26182,7 @@ def inspect_project_report(
 def _runtime_plan_project(project: Any) -> dict[str, Any]:
     project = project if isinstance(project, Mapping) else {}
     targets = project.get("targets", [])
-    return {
+    payload = {
         "root": project.get("root"),
         "targets": (
             [target for target in targets if isinstance(target, str)]
@@ -26191,6 +26191,12 @@ def _runtime_plan_project(project: Any) -> dict[str, Any]:
         ),
         "outputDir": project.get("outputDir"),
     }
+    entry_point_selections = project.get("entryPointSelections")
+    if isinstance(entry_point_selections, Mapping):
+        payload["entryPointSelections"] = dict(entry_point_selections)
+    if _is_non_negative_int(project.get("entryPointSelectionCount")):
+        payload["entryPointSelectionCount"] = project["entryPointSelectionCount"]
+    return payload
 
 
 def _runtime_plan_artifact_counts(

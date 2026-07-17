@@ -37669,6 +37669,97 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
     assert payload["runtimePlan"]["actionCount"] == 2
 
 
+def _write_entry_point_runtime_report(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        include_patterns=("multi.cgl",),
+        targets=("opengl",),
+        output_dir="out",
+        entry_points={"multi.cgl": "second"},
+    )
+    report = translate_project(config, format_output=False)
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    return report_path
+
+
+def test_runtime_artifact_manifest_accepts_entry_point_selection_metadata(tmp_path):
+    report_path = _write_entry_point_runtime_report(tmp_path)
+
+    payload = build_runtime_artifact_manifest(report_path)
+
+    assert payload["success"] is True
+    assert payload["project"]["entryPointSelections"] == {"multi.cgl": "second"}
+    assert payload["project"]["entryPointSelectionCount"] == 1
+    assert len(payload["artifacts"]) == 1
+    assert payload["artifacts"][0]["entryPoint"] == {
+        "source": "second",
+        "target": "main",
+        "stage": "compute",
+    }
+    assert "project.validate.invalid-report" not in {
+        diagnostic["code"] for diagnostic in payload["diagnostics"]
+    }
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value", "expected_reason"),
+    (
+        pytest.param(
+            "entryPointSelections",
+            ["multi.cgl", "second"],
+            "project.entryPointSelections must be an object",
+            id="selection-mapping",
+        ),
+        pytest.param(
+            "entryPointSelections",
+            {"multi.cgl": ""},
+            "project.entryPointSelections values must be non-empty strings",
+            id="selection-value",
+        ),
+        pytest.param(
+            "entryPointSelectionCount",
+            2,
+            (
+                "project.entryPointSelectionCount must match "
+                "project.entryPointSelections"
+            ),
+            id="selection-count",
+        ),
+        pytest.param(
+            "entryPointSelectionMode",
+            "explicit",
+            "project.entryPointSelectionMode is not allowed",
+            id="unknown-field",
+        ),
+    ),
+)
+def test_runtime_artifact_manifest_rejects_invalid_entry_point_selection_metadata(
+    tmp_path,
+    field_name,
+    field_value,
+    expected_reason,
+):
+    report_path = _write_entry_point_runtime_report(tmp_path)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["project"][field_name] = field_value
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    payload = build_runtime_artifact_manifest(report_path)
+
+    assert payload["success"] is False
+    assert payload["artifacts"] == []
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert expected_reason in diagnostic["message"]
+
+
 def test_runtime_artifact_manifest_records_runtime_integration_metadata(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
