@@ -1963,8 +1963,16 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_frontier["runtime_integration_included"] is False
     assert opengl_frontier["runtime_parity_claimed"] is False
 
+    opengl_quantized = expected_gaps["opengl_quantized_frontier_status"]
+    assert opengl_quantized == module.MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE
+    assert opengl_quantized["artifact_emitted"] is False
+    assert opengl_quantized["native_validation_attempted"] is False
+
     directx = expected_gaps["directx_toolchain_status"]
     assert directx["compiler"] == {"name": "dxc", "version": "v1.9.2602.24"}
+    assert directx["selected_quantized_frontier"] == (
+        module.MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE
+    )
     assert directx["dxc_validated_sources"] == list(
         module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     )
@@ -6377,6 +6385,24 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
     assert "DirectX remains outside the DXC gate" not in readme
 
 
+def test_selected_quantized_frontiers_record_current_target_boundaries():
+    readme = MLX_README_PATH.read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
+
+    assert "Native 16-bit HLSL emission" in normalized_readme
+    assert "concrete `static_assert` evaluation" in normalized_readme
+    assert "sole observed DXC `-WX` failure" in normalized_readme
+    assert "`project.translate.opengl-index-type-unsupported`" in readme
+    assert "`w[in_index + i]`" in readme
+    assert "source index is `uint64_t`" in normalized_readme
+    assert "legal target index is `uint`" in normalized_readme
+    assert "source range is unproven" in normalized_readme
+    assert "No OpenGL target artifact is emitted" in normalized_readme
+    assert "native validation is not run" in normalized_readme
+    for issue in (1515, 1799, 1800, 1801):
+        assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
+
+
 def test_opengl_index_range_contract_is_documented_as_a_portability_precondition():
     module = _load_harness()
     readme = MLX_README_PATH.read_text(encoding="utf-8")
@@ -6413,7 +6439,7 @@ def test_closed_project_blockers_are_recorded_as_resolved():
     )
     resolved_issues = {
         f"https://github.com/CrossGL/crosstl/issues/{number}"
-        for number in (1312, 1472, 1476, 1516, 1659, 1672)
+        for number in (1312, 1472, 1476, 1516, 1659, 1672, 1799, 1800)
     }
 
     assert resolved_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
@@ -6440,10 +6466,11 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     profile_issue = "https://github.com/CrossGL/crosstl/issues/1670"
     workgroup_issue = "https://github.com/CrossGL/crosstl/issues/1671"
     checkpoint_issue = "https://github.com/CrossGL/crosstl/issues/1576"
-    validation_issues = {
-        f"https://github.com/CrossGL/crosstl/issues/{number}"
-        for number in (1799, 1800, 1801)
+    resolved_validation_issues = {
+        f"https://github.com/CrossGL/crosstl/issues/{number}" for number in (1799, 1800)
     }
+    narrowing_issue = "https://github.com/CrossGL/crosstl/issues/1801"
+    opengl_index_issue = module.OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE
 
     assert resource_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert resource_issue in module.FULL_CORPUS_TRACKED_ISSUES
@@ -6452,8 +6479,15 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert workgroup_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert checkpoint_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert checkpoint_issue in module.FULL_CORPUS_TRACKED_ISSUES
-    assert validation_issues <= set(module.FULL_CORPUS_VALIDATION_TRACKED_ISSUES)
-    assert validation_issues <= set(module.FULL_CORPUS_TRACKED_ISSUES)
+    assert module.FULL_CORPUS_VALIDATION_TRACKED_ISSUES == (
+        profile_issue,
+        narrowing_issue,
+    )
+    assert narrowing_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert opengl_index_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert opengl_index_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert resolved_validation_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
+    assert resolved_validation_issues.isdisjoint(module.FULL_CORPUS_TRACKED_ISSUES)
     assert resource_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert profile_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert workgroup_issue not in module.RESOLVED_FRONTIER_ISSUES
@@ -6461,12 +6495,22 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert profile_issue in gaps["tracked_issues"]
     assert workgroup_issue in gaps["tracked_issues"]
     assert checkpoint_issue in gaps["tracked_issues"]
-    assert validation_issues <= set(gaps["tracked_issues"])
+    assert narrowing_issue in gaps["tracked_issues"]
+    assert opengl_index_issue in gaps["tracked_issues"]
+    assert resolved_validation_issues <= set(gaps["resolved_issues"])
+    assert resolved_validation_issues.isdisjoint(gaps["tracked_issues"])
     assert resource_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert profile_issue in gaps["full_corpus_scout"]["validation_blocked_by"]
     assert workgroup_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert checkpoint_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
-    assert validation_issues <= set(gaps["full_corpus_scout"]["validation_blocked_by"])
+    assert gaps["full_corpus_scout"]["validation_blocked_by"] == [
+        profile_issue,
+        narrowing_issue,
+    ]
+    assert opengl_index_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert resolved_validation_issues.isdisjoint(
+        gaps["full_corpus_scout"]["validation_blocked_by"]
+    )
 
 
 def test_latest_full_corpus_attempt_records_interruption_without_coordinate_claim():

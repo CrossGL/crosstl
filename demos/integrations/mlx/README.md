@@ -421,14 +421,24 @@ translation diagnostics for `affine_quantize_float_gs_32_b_2`. It materializes
 six reachable specializations and three concrete records while pruning 110,861
 unreachable candidates. This path verifies the completed template-member and
 owner-dependent `constexpr` work tracked by CrossGL/crosstl#1476 and
-CrossGL/crosstl#1672. Official DXC validation with warnings treated as errors
-then exposes three target-contract gaps: native 16-bit scalar profile emission
-under [#1799](https://github.com/CrossGL/crosstl/issues/1799), compile-time
-assertion elimination under [#1800](https://github.com/CrossGL/crosstl/issues/1800),
-and contextual narrowing for typed resource stores under
-[#1801](https://github.com/CrossGL/crosstl/issues/1801). The replay establishes
-neither runtime execution nor numerical parity. OpenGL was not replayed for this
-selected entry, and no updated OpenGL quantized frontier is claimed.
+CrossGL/crosstl#1672. Native 16-bit HLSL emission under
+[#1799](https://github.com/CrossGL/crosstl/issues/1799) and concrete
+`static_assert` evaluation under
+[#1800](https://github.com/CrossGL/crosstl/issues/1800) are resolved for this
+replay. The artifact uses the native 16-bit profile contract and contains no
+remaining `static_assert`. Official DXC validation with `-WX` now reaches one
+observed failure: contextual narrowing for a `uint64_t` expression stored in a
+typed `uint` resource under
+[#1801](https://github.com/CrossGL/crosstl/issues/1801). This is the sole
+observed DXC `-WX` failure for the selected entry.
+
+A selected OpenGL replay of the same entry stops fail-closed with
+`project.translate.opengl-index-type-unsupported` at `w[in_index + i]`. The
+source index is `uint64_t`, the legal target index is `uint`, and the source
+range is unproven. [#1515](https://github.com/CrossGL/crosstl/issues/1515)
+tracks the generalized index-width normalization contract. No OpenGL target
+artifact is emitted and native validation is not run. Neither selected replay
+establishes runtime execution or numerical parity.
 
 CrossGL/crosstl#1659 is complete; resource-register relocation no longer blocks
 the selected aggregate DirectX replay. The checked-in evidence also records

@@ -50,6 +50,8 @@ MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
 MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
 MLX_RANDOM_SOURCE = "mlx/backend/metal/kernels/random.metal"
+MLX_QUANTIZED_SOURCE = "mlx/backend/metal/kernels/quantized.metal"
+MLX_QUANTIZED_SELECTED_ENTRY_POINT = "affine_quantize_float_gs_32_b_2"
 MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
 MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
@@ -494,6 +496,98 @@ FFT_OPENGL_EXPECTED_POINTER_EVIDENCE = {
     "parameter": "crosstl_ptr_buf",
     "reason": "unprovable-view-access",
 }
+OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE = (
+    "https://github.com/CrossGL/crosstl/issues/1515"
+)
+OPENGL_QUANTIZED_EXPECTED_DIAGNOSTIC_CODE = (
+    "project.translate.opengl-index-type-unsupported"
+)
+OPENGL_QUANTIZED_EXPECTED_MISSING_CAPABILITY = "opengl.index-width-normalization"
+OPENGL_QUANTIZED_EXPECTED_MESSAGE = (
+    "OpenGL cannot preserve subscript index type 'uint64_t' for 'w': "
+    "index range unproven"
+)
+MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
+    "status": "translated-dxc-blocked",
+    "commit": MLX_COMMIT,
+    "source": MLX_QUANTIZED_SOURCE,
+    "target": "directx",
+    "selected_entry_point": MLX_QUANTIZED_SELECTED_ENTRY_POINT,
+    "artifact_status": "translated",
+    "translation_diagnostic_count": 0,
+    "materialization": {
+        "reachable_specialization_count": 6,
+        "concrete_specialization_count": 3,
+        "pruned_candidate_count": 110861,
+    },
+    "native_16_bit_emission": {
+        "status": "resolved",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1799",
+        "required_capability": "directx.native-16bit-types",
+        "profile": "cs_6_2",
+        "compiler_arguments": ["-enable-16bit-types"],
+        "minimum_precision_diagnostic_count": 0,
+    },
+    "concrete_static_assertion_evaluation": {
+        "status": "resolved",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1800",
+        "remaining_static_assertion_count": 0,
+    },
+    "compiler_validation": {
+        "compiler": "dxc",
+        "warnings_as_errors": True,
+        "status": "blocked-by-tracked-issue",
+        "observed_failure_count": 1,
+        "sole_observed_failure": {
+            "issue": "https://github.com/CrossGL/crosstl/issues/1801",
+            "resource": "out_",
+            "resource_element_type": "uint",
+            "value_type": "uint64_t",
+            "expression": "((output & 1095216660480ull) >> 32)",
+        },
+    },
+    "runtime_execution_attempted": False,
+    "numerical_parity_claimed": False,
+}
+MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
+    "status": "blocked-as-expected",
+    "commit": MLX_COMMIT,
+    "source": MLX_QUANTIZED_SOURCE,
+    "target": "opengl",
+    "selected_entry_point": MLX_QUANTIZED_SELECTED_ENTRY_POINT,
+    "project_translation": {
+        "unit_count": 1,
+        "artifact_record_count": 1,
+        "translated_count": 0,
+        "failed_count": 1,
+        "emitted_target_file_count": 0,
+        "project_diagnostic_count": 1,
+    },
+    "materialization": {
+        "reachable_specialization_count": 6,
+        "concrete_specialization_count": 3,
+        "pruned_candidate_count": 110861,
+    },
+    "diagnostic": {
+        "code": OPENGL_QUANTIZED_EXPECTED_DIAGNOSTIC_CODE,
+        "missing_capability": OPENGL_QUANTIZED_EXPECTED_MISSING_CAPABILITY,
+        "message": OPENGL_QUANTIZED_EXPECTED_MESSAGE,
+        "index_conversion": {
+            "indexed_value": "w",
+            "index_expression": "in_index + i",
+            "source_type": "uint64_t",
+            "target_type": "uint",
+            "range_status": "unproven",
+            "reason": "index-range-unproven",
+        },
+    },
+    "artifact_emitted": False,
+    "native_validation_attempted": False,
+    "native_validation_status": "not-run-no-artifact",
+    "blocked_by": [OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE],
+    "runtime_execution_attempted": False,
+    "numerical_parity_claimed": False,
+}
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
@@ -503,6 +597,7 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1676",
     "https://github.com/CrossGL/crosstl/issues/1479",
     "https://github.com/CrossGL/crosstl/issues/1490",
+    OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE,
     "https://github.com/CrossGL/crosstl/issues/1544",
     "https://github.com/CrossGL/crosstl/issues/1546",
     "https://github.com/CrossGL/crosstl/issues/1554",
@@ -513,8 +608,6 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
 )
 FULL_CORPUS_VALIDATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1670",
-    "https://github.com/CrossGL/crosstl/issues/1799",
-    "https://github.com/CrossGL/crosstl/issues/1800",
     "https://github.com/CrossGL/crosstl/issues/1801",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
@@ -595,6 +688,8 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1800",
+    "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1659",
     "https://github.com/CrossGL/crosstl/issues/1516",
