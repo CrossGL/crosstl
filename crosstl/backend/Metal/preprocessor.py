@@ -4892,7 +4892,6 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not assertions:
             return code
 
-        constexpr_functions = self._static_constexpr_function_index(code)
         self._static_constexpr_helper_values = {}
         self._static_constexpr_helper_resolution_stack = []
         owner_spans = [(0, len(code))]
@@ -4905,11 +4904,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             code,
             owner_spans,
             type_aliases,
-            constexpr_functions,
         )
         structs = self._find_concrete_struct_definitions(code)
+        constexpr_functions: Dict[str, List[_MetalConstexprFunction]] = {}
+        constexpr_index_built = False
         replacements: List[Tuple[int, int, str]] = []
-        for assertion in assertions:
+        assertion_index = 0
+        while assertion_index < len(assertions):
+            assertion = assertions[assertion_index]
             condition_position = assertion.condition_span[0]
             visible_bindings = self._local_integral_constant_bindings_at(
                 constants,
@@ -4964,6 +4966,21 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
             if folded and value:
                 replacements.append((*assertion.span, ""))
+                assertion_index += 1
+                continue
+            if not folded and not constexpr_index_built:
+                constexpr_functions = self._static_constexpr_function_index(code)
+                self._static_constexpr_helper_values = {}
+                self._static_constexpr_helper_resolution_stack = []
+                constants = self._collect_local_integral_constant_bindings(
+                    code,
+                    owner_spans,
+                    type_aliases,
+                    constexpr_functions,
+                )
+                replacements = []
+                assertion_index = 0
+                constexpr_index_built = True
                 continue
 
             source_message = (

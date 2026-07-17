@@ -770,6 +770,66 @@ def test_preprocessor_removes_proven_static_assertion_after_specialization():
     assert "constexpr int simd_size = 32;" in output
 
 
+def test_preprocessor_skips_constexpr_index_for_concrete_static_assertion(
+    monkeypatch,
+):
+    code = """
+    kernel void checked_width(device int* out [[buffer(0)]]) {
+        constexpr int width = 32;
+        static_assert(width == 32);
+        out[0] = width;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+
+    def unexpected_index(_code):
+        pytest.fail("concrete static assertions must not build the constexpr index")
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_static_constexpr_function_index",
+        unexpected_index,
+    )
+    output = preprocessor._evaluate_static_assertions(code)
+
+    assert "static_assert" not in output
+    assert "constexpr int width = 32;" in output
+
+
+def test_preprocessor_builds_constexpr_index_for_helper_static_assertion(
+    monkeypatch,
+):
+    code = """
+    template <int Word, int Bits>
+    constexpr int get_pack_factor() {
+        return Word / Bits;
+    }
+
+    kernel void checked_pack(device int* out [[buffer(0)]]) {
+        constexpr int reads = get_pack_factor<8, 4>();
+        static_assert(reads * get_pack_factor<8, 4>() == 4);
+        out[0] = reads;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    original_index = preprocessor._static_constexpr_function_index
+    indexed_sources = []
+
+    def tracked_index(source):
+        indexed_sources.append(source)
+        return original_index(source)
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_static_constexpr_function_index",
+        tracked_index,
+    )
+    output = preprocessor._evaluate_static_assertions(code)
+
+    assert "static_assert" not in output
+    assert indexed_sources == [code]
+
+
 def test_preprocessor_resolves_specialized_constexpr_static_assert_dependencies():
     code = """
     template <int Word, int Bits>
