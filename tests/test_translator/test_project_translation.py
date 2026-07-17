@@ -20326,6 +20326,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "templateMaterialization",
         "specializationConstants",
         "specializationMaterialization",
+        "bfloat16Lowering",
         "entryPoint",
         "execution",
     }
