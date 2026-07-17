@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import importlib.util
 import sys
@@ -59,62 +60,7 @@ def _synthetic_checkout(module, tmp_path, monkeypatch):
     return mlx_root
 
 
-def _known_materialization_payload(module):
-    message = (
-        "Metal template materialization work budget exceeded while running "
-        "explicit-template-materialization for target 'opengl'; 65 work items "
-        "requested for reachable source entry 'g3_copybool_uint32', limit 64."
-    )
-    return {
-        "summary": {
-            "artifactCount": 1,
-            "translatedCount": 0,
-            "failedCount": 1,
-            "diagnosticCounts": {"error": 1},
-        },
-        "diagnostics": [
-            {
-                "severity": "error",
-                "code": module.MATERIALIZATION_DIAGNOSTIC,
-                "message": message,
-                "location": {"file": module.MLX_COPY_SOURCE},
-                "target": "opengl",
-                "sourceBackend": "metal",
-                "missingCapabilities": ["template.specialization"],
-                "details": {
-                    "templateMaterialization": {
-                        "limit": module.MATERIALIZATION_WORK_LIMIT,
-                        "requiredWorkItems": module.MATERIALIZATION_WORK_LIMIT + 1,
-                        "requestedSignature": (
-                            "explicit-template-materialization: 65 work items for "
-                            "reachable source entry 'g3_copybool_uint32'"
-                        ),
-                        "accounting": {
-                            "reachableSpecializationCount": 65,
-                            "dependencyDiscoveryWorkCount": 0,
-                            "prunedCandidateCount": 69851,
-                        },
-                    }
-                },
-            }
-        ],
-        "artifacts": [
-            {
-                "source": module.MLX_COPY_SOURCE,
-                "sourceBackend": "metal",
-                "target": "opengl",
-                "status": "failed",
-                "error": message,
-            }
-        ],
-    }
-
-
 def _translated_payload(module, mlx_root, work_dir):
-    wrapper_path = work_dir / "source" / module.COPY_WRAPPER_NAME
-    wrapper_path.parent.mkdir(parents=True, exist_ok=True)
-    wrapper_path.write_text(module.COPY_WRAPPER_SOURCE, encoding="utf-8")
-    source = wrapper_path.relative_to(mlx_root).as_posix()
     artifact_path = work_dir / "artifacts" / "copy.glsl"
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_text(
@@ -139,14 +85,14 @@ def _translated_payload(module, mlx_root, work_dir):
             "diagnostics": [],
             "artifacts": [
                 {
-                    "source": source,
+                    "source": module.MLX_COPY_SOURCE,
                     "sourceBackend": "metal",
                     "target": "opengl",
                     "status": "translated",
                     "path": artifact_path.relative_to(mlx_root).as_posix(),
                     "sourceHash": {
                         "algorithm": "sha256",
-                        "value": module.COPY_WRAPPER_SHA256,
+                        "value": module.PINNED_FILE_SHA256[module.MLX_COPY_SOURCE],
                     },
                     "generatedHash": {
                         "algorithm": "sha256",
@@ -160,6 +106,7 @@ def _translated_payload(module, mlx_root, work_dir):
                     "templateMaterialization": {
                         "status": "materialized",
                         "specializationCount": 1,
+                        "accounting": {"reachableSpecializationCount": 1},
                         "specializations": [
                             {
                                 "name": module.MLX_COPY_TEMPLATE,
@@ -173,28 +120,17 @@ def _translated_payload(module, mlx_root, work_dir):
                 }
             ],
         },
-        source,
         artifact_path,
     )
 
 
-def test_copy_opengl_proof_pins_revision_source_headers_and_wrapper():
+def test_copy_opengl_proof_pins_revision_source_and_headers():
     module = _load_proof()
 
     assert module.MLX_COMMIT == "4367c73b60541ddd5a266ce4644fd93d20223b6e"
     assert module.PINNED_FILE_SHA256 == EXPECTED_PINNED_HASHES
     assert module.MLX_COPY_DECLARED_ENTRY_COUNT == 2496
     assert module.MLX_COPY_PREPROCESSED_INSTANTIATION_COUNT == 2497
-    assert hashlib.sha256(module.COPY_WRAPPER_SOURCE.encode()).hexdigest() == (
-        module.COPY_WRAPPER_SHA256
-    )
-    assert module.COPY_WRAPPER_SOURCE.splitlines() == [
-        '#include "mlx/backend/metal/kernels/utils.h"',
-        '#include "mlx/backend/metal/kernels/copy.h"',
-        "",
-        'instantiate_kernel("s_copycomplex64float32", copy_s, '
-        "complex64_t, float, 1)",
-    ]
     assert module.NON_RUNTIME_CLAIMS == {
         "runtimeExecution": False,
         "numericalParity": False,
@@ -261,54 +197,69 @@ def test_copy_opengl_project_configs_select_one_entry_with_finite_limits(tmp_pat
     mlx_root.mkdir()
     work_dir = mlx_root / "proof"
 
-    real = module._project_config(
+    config = module._project_config(
         mlx_root,
         work_dir,
         source=module.MLX_COPY_SOURCE,
         output_name="real",
     )
-    wrapper_source = "proof/source/copy_complex64_float32.metal"
-    wrapper = module._project_config(
-        mlx_root,
-        work_dir,
-        source=wrapper_source,
-        output_name="wrapper",
-    )
 
-    for config, source in (
-        (real, module.MLX_COPY_SOURCE),
-        (wrapper, wrapper_source),
-    ):
-        assert tuple(config.targets) == ("opengl",)
-        assert tuple(config.include_patterns) == (source,)
-        assert config.entry_points == {source: module.MLX_COPY_ENTRY_POINT}
-        assert tuple(config.include_dirs) == (".",)
-        assert config.source_overrides == {source: "metal"}
-        assert config.source_options == {
-            "metal": {
-                "max_template_specializations": 16,
-                "max_template_materialization_work": 64,
-            }
+    assert tuple(config.targets) == ("opengl",)
+    assert tuple(config.include_patterns) == (module.MLX_COPY_SOURCE,)
+    assert config.entry_points == {
+        module.MLX_COPY_SOURCE: module.MLX_COPY_ENTRY_POINT
+    }
+    assert tuple(config.include_dirs) == (".",)
+    assert config.source_overrides == {module.MLX_COPY_SOURCE: "metal"}
+    assert config.source_options == {
+        "metal": {
+            "max_template_specializations": 16,
+            "max_template_materialization_work": 64,
         }
+    }
 
 
-def test_copy_opengl_wrapper_fallback_requires_the_known_bounded_blocker():
+def test_copy_opengl_real_source_translation_requires_clean_single_artifact(tmp_path):
     module = _load_proof()
-    payload = _known_materialization_payload(module)
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / "proof"
+    payload, _artifact_path = _translated_payload(module, mlx_root, work_dir)
 
-    result = module._classify_real_source_probe(payload)
+    assert module._require_real_source_translation(payload) == {
+        "status": "translated",
+        "fallbackUsed": False,
+    }
 
-    assert result["status"] == "bounded-materialization-blocked"
-    assert result["fallbackRequired"] is True
-    assert result["materializationWorkLimit"] == 64
-    assert result["requiredWorkItems"] == 65
+    invalid_payloads = []
 
-    payload["diagnostics"][0]["code"] = "project.translate.failed"
-    with pytest.raises(
-        module.MlxCopyOpenGLProofError,
-        match="known materialization blocker",
-    ):
-        module._classify_real_source_probe(payload)
+    failed_summary = copy.deepcopy(payload)
+    failed_summary["summary"]["translatedCount"] = 0
+    failed_summary["summary"]["failedCount"] = 1
+    invalid_payloads.append(failed_summary)
+
+    diagnostic_payload = copy.deepcopy(payload)
+    diagnostic_payload["summary"]["diagnosticCounts"]["error"] = 1
+    diagnostic_payload["diagnostics"] = [
+        {"severity": "error", "code": "project.translate.failed"}
+    ]
+    invalid_payloads.append(diagnostic_payload)
+
+    multiple_artifacts = copy.deepcopy(payload)
+    multiple_artifacts["summary"]["artifactCount"] = 2
+    multiple_artifacts["summary"]["translatedCount"] = 2
+    multiple_artifacts["artifacts"].append(
+        copy.deepcopy(multiple_artifacts["artifacts"][0])
+    )
+    invalid_payloads.append(multiple_artifacts)
+
+    malformed_diagnostics = copy.deepcopy(payload)
+    malformed_diagnostics["summary"]["diagnosticCounts"] = None
+    malformed_diagnostics["diagnostics"] = None
+    invalid_payloads.append(malformed_diagnostics)
+
+    for invalid_payload in invalid_payloads:
+        with pytest.raises(module.MlxCopyOpenGLProofError):
+            module._require_real_source_translation(invalid_payload)
 
 
 def test_copy_opengl_artifact_and_projection_drift_fail_closed(tmp_path):
@@ -316,19 +267,34 @@ def test_copy_opengl_artifact_and_projection_drift_fail_closed(tmp_path):
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / "proof"
     work_dir.mkdir(parents=True)
-    payload, source, artifact_path = _translated_payload(module, mlx_root, work_dir)
+    payload, artifact_path = _translated_payload(module, mlx_root, work_dir)
 
     artifact, resolved_path = module._translated_artifact(
         payload,
         mlx_root=mlx_root,
         work_dir=work_dir,
-        expected_source=source,
-        expected_source_hash=module.COPY_WRAPPER_SHA256,
-        require_single_materialization=True,
     )
     assert artifact["entryPoint"]["source"] == module.MLX_COPY_ENTRY_POINT
     assert resolved_path == artifact_path
     assert module._validate_real_projection(artifact_path)["singleEvaluation"] is True
+
+    wrong_source = copy.deepcopy(payload)
+    wrong_source["artifacts"][0]["source"] = "other.metal"
+    with pytest.raises(module.MlxCopyOpenGLProofError):
+        module._translated_artifact(
+            wrong_source,
+            mlx_root=mlx_root,
+            work_dir=work_dir,
+        )
+
+    wrong_source_hash = copy.deepcopy(payload)
+    wrong_source_hash["artifacts"][0]["sourceHash"]["value"] = "0" * 64
+    with pytest.raises(module.MlxCopyOpenGLProofError):
+        module._translated_artifact(
+            wrong_source_hash,
+            mlx_root=mlx_root,
+            work_dir=work_dir,
+        )
 
     invalid_source = artifact_path.read_text(encoding="utf-8").replace(
         "(src[0]).real", "float(src[0])"
@@ -342,15 +308,31 @@ def test_copy_opengl_artifact_and_projection_drift_fail_closed(tmp_path):
             payload,
             mlx_root=mlx_root,
             work_dir=work_dir,
-            expected_source=source,
-            expected_source_hash=module.COPY_WRAPPER_SHA256,
-            require_single_materialization=True,
         )
     with pytest.raises(
         module.MlxCopyOpenGLProofError,
         match=r"projection of src\[0\]\.real",
     ):
         module._validate_real_projection(artifact_path)
+
+
+def test_copy_opengl_artifact_requires_exactly_one_selected_specialization(tmp_path):
+    module = _load_proof()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / "proof"
+    payload, _artifact_path = _translated_payload(module, mlx_root, work_dir)
+    materialization = payload["artifacts"][0]["templateMaterialization"]
+    materialization["specializationCount"] = 2
+    materialization["specializations"].append(
+        copy.deepcopy(materialization["specializations"][0])
+    )
+
+    with pytest.raises(module.MlxCopyOpenGLProofError):
+        module._translated_artifact(
+            payload,
+            mlx_root=mlx_root,
+            work_dir=work_dir,
+        )
 
 
 def test_copy_opengl_toolchain_targets_opengl_spirv13(tmp_path, monkeypatch):

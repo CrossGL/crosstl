@@ -49,17 +49,8 @@ PINNED_FILE_SHA256 = {
     ),
 }
 
-COPY_WRAPPER_SOURCE = (
-    '#include "mlx/backend/metal/kernels/utils.h"\n'
-    '#include "mlx/backend/metal/kernels/copy.h"\n'
-    "\n"
-    'instantiate_kernel("s_copycomplex64float32", copy_s, complex64_t, float, 1)\n'
-)
-COPY_WRAPPER_SHA256 = "df9779099ac1ad90c1ea6f2a09ebb085b71dfa7f7cf5d699189abb005e562ae3"
-COPY_WRAPPER_NAME = "copy_complex64_float32.metal"
 MATERIALIZATION_WORK_LIMIT = 64
 TEMPLATE_SPECIALIZATION_LIMIT = 16
-MATERIALIZATION_DIAGNOSTIC = "project.translate.metal-template-specialization"
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/copy-opengl"
 
 NON_RUNTIME_CLAIMS = {
@@ -270,76 +261,45 @@ def _translate_report(
     return normalized
 
 
-def _classify_real_source_probe(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _require_real_source_translation(payload: Mapping[str, Any]) -> dict[str, Any]:
     summary = payload.get("summary")
-    _require(isinstance(summary, Mapping), "real copy.metal probe summary is missing")
+    _require(
+        isinstance(summary, Mapping),
+        "pinned copy.metal translation summary is missing",
+    )
+    diagnostic_counts = summary.get("diagnosticCounts")
     if (
         summary.get("artifactCount") == 1
         and summary.get("translatedCount") == 1
         and summary.get("failedCount") == 0
-        and summary.get("diagnosticCounts", {}).get("error") == 0
+        and isinstance(diagnostic_counts, Mapping)
+        and diagnostic_counts.get("error") == 0
     ):
-        return {"status": "translated", "fallbackRequired": False}
+        return {"status": "translated", "fallbackUsed": False}
 
     diagnostics = payload.get("diagnostics")
-    artifacts = payload.get("artifacts")
-    _require(
-        summary.get("artifactCount") == 1
-        and summary.get("translatedCount") == 0
-        and summary.get("failedCount") == 1
-        and isinstance(diagnostics, list)
-        and len(diagnostics) == 1
-        and isinstance(artifacts, list)
-        and len(artifacts) == 1,
-        "real copy.metal probe failed outside the bounded fallback contract",
+    diagnostic_records = diagnostics if isinstance(diagnostics, list) else []
+    diagnostic_codes = sorted(
+        {
+            str(diagnostic.get("code"))
+            for diagnostic in diagnostic_records
+            if isinstance(diagnostic, Mapping) and diagnostic.get("code")
+        }
     )
-    diagnostic = diagnostics[0]
-    artifact = artifacts[0]
-    _require(
-        isinstance(diagnostic, Mapping)
-        and diagnostic.get("code") == MATERIALIZATION_DIAGNOSTIC
-        and diagnostic.get("target") == "opengl"
-        and diagnostic.get("sourceBackend") == "metal"
-        and diagnostic.get("location", {}).get("file") == MLX_COPY_SOURCE
-        and diagnostic.get("missingCapabilities") == ["template.specialization"],
-        "real copy.metal probe did not report the known materialization blocker",
-    )
-    materialization = diagnostic.get("details", {}).get("templateMaterialization")
-    _require(
-        isinstance(materialization, Mapping)
-        and materialization.get("limit") == MATERIALIZATION_WORK_LIMIT
-        and materialization.get("requiredWorkItems") == MATERIALIZATION_WORK_LIMIT + 1,
-        "real copy.metal probe did not stop at the configured finite work limit",
-    )
-    _require(
-        isinstance(artifact, Mapping)
-        and artifact.get("source") == MLX_COPY_SOURCE
-        and artifact.get("target") == "opengl"
-        and artifact.get("status") == "failed",
-        "real copy.metal probe artifact does not match the selected source",
-    )
-    return {
-        "status": "bounded-materialization-blocked",
-        "fallbackRequired": True,
-        "diagnosticCode": MATERIALIZATION_DIAGNOSTIC,
-        "materializationWorkLimit": materialization["limit"],
-        "requiredWorkItems": materialization["requiredWorkItems"],
-        "requestedSignature": materialization.get("requestedSignature"),
-        "accounting": materialization.get("accounting", {}),
+    failure_summary = {
+        key: summary.get(key)
+        for key in (
+            "artifactCount",
+            "translatedCount",
+            "failedCount",
+            "diagnosticCounts",
+        )
     }
-
-
-def _write_wrapper(work_dir: Path, mlx_root: Path) -> tuple[Path, str]:
-    path = work_dir / "source" / COPY_WRAPPER_NAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(COPY_WRAPPER_SOURCE, encoding="utf-8")
-    actual_hash = _sha256(path)
-    _require(
-        actual_hash == COPY_WRAPPER_SHA256,
-        "generated copy specialization wrapper SHA-256 mismatch: "
-        f"expected {COPY_WRAPPER_SHA256}, found {actual_hash}",
+    raise MlxCopyOpenGLProofError(
+        "pinned copy.metal selected-entry translation failed: "
+        f"summary={json.dumps(failure_summary, sort_keys=True)}; "
+        f"diagnosticCodes={diagnostic_codes}"
     )
-    return path, _relpath(path, mlx_root)
 
 
 def _translated_artifact(
@@ -347,9 +307,6 @@ def _translated_artifact(
     *,
     mlx_root: Path,
     work_dir: Path,
-    expected_source: str,
-    expected_source_hash: str,
-    require_single_materialization: bool,
 ) -> tuple[Mapping[str, Any], Path]:
     _require(
         payload.get("kind") == "crosstl-project-portability-report",
@@ -379,13 +336,16 @@ def _translated_artifact(
     )
     artifact = artifacts[0]
     _require(
-        artifact.get("source") == expected_source
+        artifact.get("source") == MLX_COPY_SOURCE
         and artifact.get("sourceBackend") == "metal"
         and artifact.get("target") == "opengl"
         and artifact.get("status") == "translated"
         and artifact.get("sourceHash")
-        == {"algorithm": "sha256", "value": expected_source_hash},
-        "copy specialization artifact provenance does not match its source",
+        == {
+            "algorithm": "sha256",
+            "value": PINNED_FILE_SHA256[MLX_COPY_SOURCE],
+        },
+        "copy specialization artifact provenance does not match pinned copy.metal",
     )
     _require(
         artifact.get("entryPoint")
@@ -406,6 +366,8 @@ def _translated_artifact(
     specializations = materialization.get("specializations")
     _require(
         isinstance(specializations, list)
+        and materialization.get("specializationCount") == 1
+        and len(specializations) == 1
         and any(
             isinstance(record, Mapping)
             and record.get("name") == MLX_COPY_TEMPLATE
@@ -414,14 +376,14 @@ def _translated_artifact(
             and record.get("parameters") == MLX_COPY_TEMPLATE_ARGUMENTS
             for record in specializations
         ),
-        "copy_s<complex64_t, float, 1> was not materially selected",
+        "copy_s<complex64_t, float, 1> was not the only materialized specialization",
     )
-    if require_single_materialization:
-        _require(
-            materialization.get("specializationCount") == 1
-            and len(specializations) == 1,
-            "exact wrapper must materialize only the selected copy specialization",
-        )
+    accounting = materialization.get("accounting")
+    _require(
+        isinstance(accounting, Mapping)
+        and accounting.get("reachableSpecializationCount") == 1,
+        "copy specialization reachability accounting is incomplete",
+    )
 
     artifact_path = (mlx_root / str(artifact.get("path", ""))).resolve()
     _require(
@@ -571,60 +533,12 @@ def run_proof(
         ),
         report_path=real_report_path,
     )
-    real_probe = _classify_real_source_probe(real_payload)
-
-    limitation = None
-    if not real_probe["fallbackRequired"]:
-        translation_mode = "pinned-source-selected-entry"
-        translated_source = MLX_COPY_SOURCE
-        translated_hash = PINNED_FILE_SHA256[MLX_COPY_SOURCE]
-        translated_payload = real_payload
-        translated_report_path = real_report_path
-        require_single_materialization = False
-        wrapper_identity = None
-    else:
-        wrapper_path, translated_source = _write_wrapper(resolved_work_dir, root)
-        translation_mode = "exact-pinned-wrapper"
-        translated_hash = COPY_WRAPPER_SHA256
-        translated_report_path = report_dir / "copy-wrapper-opengl.json"
-        translated_payload = _translate_report(
-            _project_config(
-                root,
-                resolved_work_dir,
-                source=translated_source,
-                output_name="wrapper-artifacts",
-            ),
-            report_path=translated_report_path,
-        )
-        require_single_materialization = True
-        wrapper_identity = {
-            "path": translated_source,
-            "hash": {"algorithm": "sha256", "value": _sha256(wrapper_path)},
-            "content": (
-                "two pinned includes and one exact instantiate_kernel declaration"
-            ),
-        }
-        limitation = {
-            "code": "copy-metal-selected-entry-materialization-not-bounded",
-            "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1676",
-            "description": (
-                "The project materializer reaches unrelated explicit copy.metal "
-                "entries before applying the selected entry-point scope. The "
-                "proof therefore translates one exact pinned copy.h instantiation."
-            ),
-            "realSourceTranslated": False,
-            "copyMetalDeclaredEntryCount": MLX_COPY_DECLARED_ENTRY_COUNT,
-            "preprocessedInstantiationCount": MLX_COPY_PREPROCESSED_INSTANTIATION_COUNT,
-            **real_probe,
-        }
+    source_translation = _require_real_source_translation(real_payload)
 
     artifact, artifact_path = _translated_artifact(
-        translated_payload,
+        real_payload,
         mlx_root=root,
         work_dir=resolved_work_dir,
-        expected_source=translated_source,
-        expected_source_hash=translated_hash,
-        require_single_materialization=require_single_materialization,
     )
     projection = _validate_real_projection(artifact_path)
     toolchain = _compile_and_validate(
@@ -651,11 +565,13 @@ def run_proof(
             },
             "target": "opengl",
             "projectTranslationApi": "crosstl.project.translate_project",
-            "translationMode": translation_mode,
-            "realCopyMetalTranslated": (
-                translation_mode == "pinned-source-selected-entry"
+            "translationMode": "pinned-source-selected-entry",
+            "realCopyMetalTranslated": True,
+            "fallbackUsed": False,
+            "copyMetalDeclaredEntryCount": MLX_COPY_DECLARED_ENTRY_COUNT,
+            "preprocessedInstantiationCount": (
+                MLX_COPY_PREPROCESSED_INSTANTIATION_COUNT
             ),
-            "exactPinnedWrapperTranslated": translation_mode == "exact-pinned-wrapper",
             "materializationLimits": {
                 "maxTemplateSpecializations": TEMPLATE_SPECIALIZATION_LIMIT,
                 "maxTemplateMaterializationWork": MATERIALIZATION_WORK_LIMIT,
@@ -668,16 +584,14 @@ def run_proof(
             **NON_RUNTIME_CLAIMS,
         },
         "provenance": provenance,
-        "realSourceProbe": {
-            **real_probe,
+        "sourceTranslation": {
+            **source_translation,
             "report": _relpath(real_report_path, root),
         },
-        "wrapper": wrapper_identity,
-        "limitation": limitation,
         "translation": {
             "status": "passed",
-            "source": translated_source,
-            "report": _relpath(translated_report_path, root),
+            "source": MLX_COPY_SOURCE,
+            "report": _relpath(real_report_path, root),
             "artifact": _relpath(artifact_path, root),
             "artifactHash": artifact["generatedHash"],
             "entryPoint": artifact["entryPoint"],

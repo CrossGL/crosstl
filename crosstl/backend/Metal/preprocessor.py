@@ -587,11 +587,24 @@ class MetalPreprocessor(HLSLPreprocessor):
         return code
 
     def _materialize_project_template_instantiations(
-        self, code: str, *, enforce_specialization_limit: bool = True
+        self,
+        code: str,
+        *,
+        enforce_specialization_limit: bool = True,
+        host_names: Optional[Set[str]] = None,
     ) -> str:
-        instantiations = self._find_project_template_instantiations(code)
-        if not instantiations:
+        all_instantiations = self._find_project_template_instantiations(code)
+        if not all_instantiations:
             return code
+        instantiations = (
+            all_instantiations
+            if host_names is None
+            else [
+                instantiation
+                for instantiation in all_instantiations
+                if instantiation.host_name in host_names
+            ]
+        )
         # Explicit project instantiations (`instantiate_kernel(...)` and the
         # equivalent `template [[host_name(...)]] ... decltype(func<args>)
         # func<args>;` declarations) are the source's own enumerated request for
@@ -602,9 +615,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         # templates when a source declares an unusually large instantiation
         # family). Template-HOSTILE targets cannot emit residual templates, so the
         # project pipeline disables the bail (`enforce_specialization_limit=False`)
-        # and materializes every explicit instantiation; otherwise bailing here
-        # leaves the kernels — and every helper template reachable only from them —
-        # unmaterialized and mis-reported as "missing template arguments".
+        # and materializes every explicit instantiation selected for the artifact;
+        # otherwise bailing here leaves the kernels and every helper template
+        # reachable only from them unmaterialized and mis-reported as "missing
+        # template arguments".
         if (
             enforce_specialization_limit
             and len(instantiations) > self.max_template_specializations
@@ -612,14 +626,19 @@ class MetalPreprocessor(HLSLPreprocessor):
             return code
 
         templates = self._find_template_functions(code)
-        if not templates:
+        if not templates or not instantiations:
             return self._apply_text_replacements(
-                code, [(inst.span[0], inst.span[1], "") for inst in instantiations]
+                code,
+                [
+                    (instantiation.span[0], instantiation.span[1], "")
+                    for instantiation in all_instantiations
+                ],
             )
 
         templates_by_name = {template.name: template for template in templates}
         replacements: List[Tuple[int, int, str]] = [
-            (inst.span[0], inst.span[1], "") for inst in instantiations
+            (instantiation.span[0], instantiation.span[1], "")
+            for instantiation in all_instantiations
         ]
         seen: Set[Tuple[str, Tuple[str, ...], str]] = set()
 

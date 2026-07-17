@@ -18187,6 +18187,7 @@ def _project_template_materialization_for_artifact(
     include_paths: Sequence[str],
     source_options: Mapping[str, Any],
     target_artifact: str | None = None,
+    entry_point: str | None = None,
     source: str | None = None,
     fail_closed: bool = False,
 ) -> ProjectTemplateMaterializedSource | None:
@@ -18307,8 +18308,17 @@ def _project_template_materialization_for_artifact(
         if fail_closed:
             raise
         return None
-    source_instantiations = preprocessor._find_project_template_instantiations(
+    all_source_instantiations = preprocessor._find_project_template_instantiations(
         preprocessed
+    )
+    source_instantiations = (
+        all_source_instantiations
+        if entry_point is None
+        else [
+            instantiation
+            for instantiation in all_source_instantiations
+            if instantiation.host_name == entry_point
+        ]
     )
     if unsupported_type_records and not source_instantiations:
         metadata = _template_materialization_metadata(
@@ -18369,7 +18379,9 @@ def _project_template_materialization_for_artifact(
     # instantiation was paired with every remaining template-function declaration.
     # Exactly one pair is retained for each unique, concrete host entry; duplicate,
     # unmatched, unsupported, and nonmatching declaration pairs are pruned.
-    source_instantiation_candidate_count = len(source_instantiations) * len(templates)
+    source_instantiation_candidate_count = len(all_source_instantiations) * len(
+        templates
+    )
     selected_source_instantiation_candidate_count = 0
 
     explicit_work_budget = (
@@ -18517,9 +18529,11 @@ def _project_template_materialization_for_artifact(
             ] = materialized_name
     # This path only runs for template-hostile targets (see the guard at the top
     # of `_project_template_materialization_for_artifact`), which cannot emit
-    # residual generic templates. Every explicit project instantiation the source
-    # enumerates must therefore be materialized: honour them all instead of
-    # silently bailing when their count exceeds `max_template_specializations`
+    # residual generic templates. Every explicit project instantiation selected
+    # for the artifact must therefore be materialized: honour the complete source
+    # set for aggregate artifacts and the requested host entry for entry-scoped
+    # artifacts instead of silently bailing when their count exceeds
+    # `max_template_specializations`
     # (that limit still bounds the IMPLICITLY discovered call-site specializations
     # below). Bailing here would leave the kernels — and the helper templates
     # reachable only from them — unmaterialized and mis-reported as
@@ -18527,6 +18541,7 @@ def _project_template_materialization_for_artifact(
     preprocessed = preprocessor._materialize_project_template_instantiations(
         preprocessed,
         enforce_specialization_limit=False,
+        host_names={entry_point} if entry_point is not None else None,
     )
 
     templates = preprocessor._find_template_functions(preprocessed)
@@ -23202,6 +23217,7 @@ def translate_project(
                             include_paths=include_paths,
                             source_options=source_options,
                             target_artifact=artifact.get("path"),
+                            entry_point=selected_entry_point,
                         )
                     )
                 except Exception as exc:  # noqa: BLE001

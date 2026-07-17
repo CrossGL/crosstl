@@ -610,25 +610,22 @@ DirectX rope check, project
 configuration supplies IDs 1 through 3 and CrossTL materializes a concrete HLSL
 variant before DXC.
 
-The focused `prove_copy_opengl.py` gate checks the pinned
-`copy_s<complex64_t, float, 1>` specialization. It verifies the identity of
-`copy.metal`, `copy.h`, and every local header needed by the specialization,
-then probes the requested entry through the project API. The full translation
-unit currently reaches an unrelated 65th materialization request before the
-selected entry graph is isolated, as tracked by
-[#1676](https://github.com/CrossGL/crosstl/issues/1676). The proof fails closed
-unless that exact bounded diagnostic is present, then translates a minimal
-wrapper containing the two pinned includes and the exact upstream
-`instantiate_kernel` declaration.
+The focused `prove_copy_opengl.py` gate translates the full upstream
+`copy.metal` source pinned at commit
+`4367c73b60541ddd5a266ce4644fd93d20223b6e` under one selected entry-point
+scope, `s_copycomplex64float32`. The source declares 2,496 entries and expands
+to 2,497 preprocessed instantiations. Exactly one selected specialization is
+materialized, while the current evidence prunes 69,915 candidate pairs. No
+generated wrapper fallback is used.
 
 The generated OpenGL artifact must lower the source
 `static_cast<float>(src[0])` conversion to one evaluation of `(src[0]).real`.
-Linux CI compiles the resulting compute shader to OpenGL/SPIR-V 1.3 and validates
-the module with `spirv-val`. This bounded lowering follows the pinned
+Linux CI compiles the resulting GLSL to OpenGL/SPIR-V 1.3 and validates the
+module with `spirv-val`. This bounded lowering follows the pinned
 `complex64_t` conversion body; generalized user-defined conversion operators
-remain tracked by [#1744](https://github.com/CrossGL/crosstl/issues/1744). The
-proof does not claim that full `copy.metal` translated, execute the shader,
-compare numerical results, or run MLX tests.
+remain tracked by [#1744](https://github.com/CrossGL/crosstl/issues/1744). This
+proof does not claim shader execution, numerical parity, runtime integration,
+or passage of the MLX test suite.
 
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32

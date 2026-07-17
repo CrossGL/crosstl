@@ -756,6 +756,36 @@ def test_preprocessor_materializes_all_project_instantiations_when_limit_not_enf
         assert f"void kernel{index}(" in materialized
 
 
+def test_preprocessor_materializes_only_selected_project_host_names():
+    declarations = "\n".join(
+        f'template [[host_name("kernel" "{index}")]] [[kernel]] '
+        f"decltype(arange<uint>) arange<uint>;"
+        for index in range(4)
+    )
+    code = f"""
+    template <typename T>
+    [[kernel]] void arange(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {{
+        out[gid] = T(gid);
+    }}
+
+    {declarations}
+    """
+
+    materialized = MetalPreprocessor()._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+        host_names={"kernel2"},
+    )
+
+    assert "decltype(arange<uint>)" not in materialized
+    assert "template <typename T>" not in materialized
+    assert "void kernel2(" in materialized
+    for index in (0, 1, 3):
+        assert f"void kernel{index}(" not in materialized
+
+
 def test_preprocessor_materializes_nested_explicit_template_helper_calls():
     code = """
     template <typename T>

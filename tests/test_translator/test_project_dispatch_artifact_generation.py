@@ -277,6 +277,85 @@ def test_directx_dispatch_artifact_uses_entry_scoped_target_name(tmp_path):
     assert "CSMain_2" not in generated
 
 
+def test_dispatch_artifact_materializes_only_selected_metal_entry_graph(tmp_path):
+    root = tmp_path / "repo"
+    kernels = root / "kernels"
+    contracts = root / "contracts"
+    kernels.mkdir(parents=True)
+    contracts.mkdir()
+    (kernels / "multi.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T adjust(T value) {
+                return value + T(1);
+            }
+
+            template <typename T>
+            [[kernel]] void launch(
+                device T* output [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                output[gid] = adjust<T>(T(gid));
+            }
+
+            instantiate_kernel("selected_float", launch, float)
+            instantiate_kernel("unselected_uint", launch, uint)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = _dispatch_manifest()
+    manifest["contracts"][0]["source"] = "kernels/multi.metal"
+    manifest["contracts"][0]["entryPoint"] = "selected_float"
+    manifest["contracts"][0]["branches"][0]["specializationConstants"] = {}
+    (contracts / "multi.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    (root / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["kernels/multi.metal"]
+            include_dirs = ["."]
+            targets = ["directx"]
+            output_dir = "generated"
+            dispatch_contracts = ["contracts/multi.json"]
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(root), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["entryPoint"] == {
+        "source": "selected_float",
+        "target": "CSMain",
+        "stage": "compute",
+    }
+    specializations = artifact["templateMaterialization"]["specializations"]
+    assert {
+        record.get("hostName")
+        for record in specializations
+        if record["source"] == "source-instantiation"
+    } == {"selected_float"}
+    assert {
+        record["materializedName"] for record in specializations
+    } == {"selected_float", "adjust_float"}
+
+    generated = (root / artifact["path"]).read_text(encoding="utf-8")
+    assert "void CSMain(" in generated
+    assert "adjust_float" in generated
+    assert "unselected_uint" not in generated
+    assert "adjust_uint" not in generated
+
+
 def test_report_validation_rejects_tampered_dispatch_artifact_metadata(tmp_path):
     root, config = _write_project(tmp_path)
     payload = copy.deepcopy(translate_project(config, format_output=False).to_json())
