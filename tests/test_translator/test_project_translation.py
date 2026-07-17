@@ -54275,3 +54275,380 @@ def test_translate_project_accepts_shared_source_workgroup_size_for_multi_entry(
     report_path = repo / "shared-source-report.json"
     report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
+
+
+@pytest.mark.parametrize(
+    ("target", "diagnostic_code", "missing_capability", "artifact_path"),
+    [
+        (
+            "directx",
+            "project.translate.directx-compile-time-global-invalid",
+            "directx.compile-time-global-initializer",
+            "translated/directx/runtime_bitcast.hlsl",
+        ),
+        (
+            "opengl",
+            "project.translate.opengl-compile-time-global-invalid",
+            "opengl.compile-time-global-lowering",
+            "translated/opengl/runtime_bitcast.glsl",
+        ),
+    ],
+)
+def test_translate_project_reports_compile_time_global_bitcast_contract(
+    tmp_path,
+    target,
+    diagnostic_code,
+    missing_capability,
+    artifact_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime_bitcast.cgl").write_text(
+        textwrap.dedent("""
+            shader RuntimeCompileTimeBitcast {
+                uint runtimeBits;
+                constant float invalidPayload = asfloat(runtimeBits);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="translated",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {diagnostic_code: 1}
+    assert payload["summary"]["missingCapabilityCounts"] == {missing_capability: 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == diagnostic_code
+    assert diagnostic["target"] == target
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "runtime_bitcast.cgl"
+    assert diagnostic["missingCapabilities"] == [missing_capability]
+    assert diagnostic["details"] == {
+        "compileTimeGlobal": {
+            "detail": "runtimeBits",
+            "expressionKind": "FunctionCallNode",
+            "operandType": "uint",
+            "operation": "asfloat",
+            "reason": "bitcast-operand-runtime-value",
+            "resultType": "float",
+            "variable": "invalidPayload",
+        },
+        "sourcePath": "runtime_bitcast.cgl",
+        "targetArtifact": artifact_path,
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["source"] == "runtime_bitcast.cgl"
+    assert artifact["sourceBackend"] == "cgl"
+    assert artifact["target"] == target
+    assert artifact["path"] == artifact_path
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+
+@pytest.mark.parametrize(
+    ("target", "diagnostic_code"),
+    [
+        (
+            "directx",
+            "project.translate.directx-compile-time-global-invalid",
+        ),
+        (
+            "opengl",
+            "project.translate.opengl-compile-time-global-invalid",
+        ),
+    ],
+)
+def test_translate_project_reports_non_bitcast_compile_time_global_contract(
+    tmp_path,
+    target,
+    diagnostic_code,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime_call.cgl").write_text(
+        textwrap.dedent("""
+            shader RuntimeCompileTimeCall {
+                float buildValue() {
+                    return 2.0;
+                }
+
+                constant float invalidValue = buildValue();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="translated",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["diagnosticsByCode"] == {diagnostic_code: 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["details"]["compileTimeGlobal"] == {
+        "detail": "buildValue",
+        "expressionKind": "FunctionCallNode",
+        "reason": "function-call",
+        "variable": "invalidValue",
+    }
+    assert "operation" not in diagnostic["details"]["compileTimeGlobal"]
+    assert "operandType" not in diagnostic["details"]["compileTimeGlobal"]
+    assert "resultType" not in diagnostic["details"]["compileTimeGlobal"]
+
+
+def test_translate_project_reports_unrepresentable_copysign_types(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "copysign.cgl").write_text(
+        textwrap.dedent("""
+            shader UnsupportedCopySign {
+                compute {
+                    double apply(double magnitude, double sign_source) {
+                        return copysign(magnitude, sign_source);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 2
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-copysign-unrepresentable": 1,
+        "project.translate.opengl-copysign-unrepresentable": 1,
+    }
+    diagnostics = {
+        diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
+    }
+    for target, target_profile in (
+        ("directx", "default"),
+        ("opengl", "glsl-460"),
+    ):
+        diagnostic = diagnostics[target]
+        assert diagnostic["location"]["file"] == "shaders/copysign.cgl"
+        assert diagnostic["missingCapabilities"] == [f"{target}.copysign-lowering"]
+        assert diagnostic["details"] == {
+            "mathIntrinsic": {
+                "operandTypes": ["double", "double"],
+                "operation": "copysign",
+                "reason": "unsupported-operand-type",
+                "targetProfile": target_profile,
+            },
+            "sourcePath": "shaders/copysign.cgl",
+            "targetArtifact": (
+                f"translated/{target}/shaders/copysign."
+                f"{'hlsl' if target == 'directx' else 'glsl'}"
+            ),
+        }
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
+def test_translate_project_reports_unrepresentable_inverse_hyperbolic_type(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "inverse_hyperbolic.cgl").write_text(
+        textwrap.dedent("""
+            shader UnsupportedInverseHyperbolic {
+                compute {
+                    double apply(double value) {
+                        return acosh(value);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-inverse-hyperbolic-unrepresentable": 1,
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["location"]["file"] == "shaders/inverse_hyperbolic.cgl"
+    assert diagnostic["missingCapabilities"] == ["directx.inverse-hyperbolic-lowering"]
+    assert diagnostic["details"] == {
+        "mathIntrinsic": {
+            "operandType": "double",
+            "operation": "acosh",
+            "reason": "double-transcendental-contract-unavailable",
+            "resultType": "double",
+            "targetProfile": "default",
+        },
+        "sourcePath": "shaders/inverse_hyperbolic.cgl",
+        "targetArtifact": "translated/directx/shaders/inverse_hyperbolic.hlsl",
+    }
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
+def test_translate_project_reports_metal_call_operator_association_locations(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mismatched_operator.metal").write_text(
+        textwrap.dedent("""
+            struct Operation {
+                float operator()(float value);
+            };
+
+            int Operation::operator()(int value) {
+                return value;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-call-operator-association-unresolved": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["location"]["file"] == "mismatched_operator.metal"
+    assert diagnostic["location"]["line"] == 5
+    assert diagnostic["missingCapabilities"] == [
+        "metal.out-of-line-call-operator-association"
+    ]
+    details = diagnostic["details"]
+    assert details["sourcePath"] == "mismatched_operator.metal"
+    assert details["targetArtifact"] == "out/directx/mismatched_operator.hlsl"
+    call_operator = details["metalCallOperator"]
+    assert call_operator["owner"] == "Operation"
+    assert call_operator["methodName"] == "operator()"
+    assert call_operator["signature"] == "operator()(int)"
+    assert call_operator["reason"] == "no declaration matches the definition contract"
+    assert call_operator["candidates"] == ["operator()(float)"]
+    assert call_operator["definitionLocation"]["file"] == "mismatched_operator.metal"
+    assert call_operator["definitionLocation"]["line"] == 5
+    assert [location["line"] for location in call_operator["declarationLocations"]] == [
+        2
+    ]
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+
+
+def test_translate_project_reports_ambiguous_metal_call_operator_helpers(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ambiguous_helpers.metal").write_text(
+        textwrap.dedent("""
+            struct Increment {
+                int operator()(int value) const;
+            };
+
+            int Increment::operator()(int value) const {
+                return value + 1;
+            }
+
+            int Increment__operator_call__int(
+                thread const Increment& self, int value) {
+                return value;
+            }
+            int Increment__operator_call__int(
+                thread const Increment& self, int value) {
+                return value + 2;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-out-of-line-call-operator-unresolved": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["location"]["file"] == "ambiguous_helpers.metal"
+    assert diagnostic["location"]["line"] == 5
+    assert diagnostic["missingCapabilities"] == [
+        "metal.out-of-line-call-operator-lowering"
+    ]
+    details = diagnostic["details"]
+    assert details["sourcePath"] == "ambiguous_helpers.metal"
+    assert details["targetArtifact"] == "out/opengl/ambiguous_helpers.glsl"
+    call_operator = details["metalCallOperator"]
+    assert call_operator["owner"] == "Increment"
+    assert call_operator["methodName"] == "operator()"
+    assert call_operator["signature"] == "operator()(int) const"
+    assert call_operator["reason"] == (
+        "multiple lowered helpers match the declaration contract"
+    )
+    assert call_operator["declarationLocations"][0]["line"] == 2
+    assert call_operator["definitionLocation"]["line"] == 5
+    assert [location["line"] for location in call_operator["candidateLocations"]] == [
+        9,
+        13,
+    ]
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
