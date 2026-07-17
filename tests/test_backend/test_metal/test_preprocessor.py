@@ -740,6 +740,29 @@ def test_preprocessor_removes_proven_static_assertion_after_specialization():
     assert "constexpr int simd_size = 32;" in output
 
 
+def test_preprocessor_removes_proven_static_assertion_with_logical_chain():
+    code = """
+    kernel void supported_group_size(device float* out [[buffer(0)]]) {
+        constexpr int group_size = 2;
+        static_assert(
+            group_size == 2 || group_size == 3 || group_size == 4 ||
+                group_size == 5 || group_size == 6 || group_size == 8,
+            "Unsupported group size.");
+        out[0] = 0.0;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "static_assert" not in output
+    assert "kernel void supported_group_size" in output
+
+
 def test_preprocessor_rejects_false_static_assertion_with_source_context():
     code = """
     kernel void invalid_specialization(device float* out [[buffer(0)]]) {
@@ -773,6 +796,34 @@ def test_preprocessor_rejects_false_static_assertion_with_source_context():
     assert "select specialization values" in error.suggested_action
 
 
+def test_preprocessor_rejects_false_static_assertion_logical_chain():
+    code = """
+    kernel void unsupported_group_size(device float* out [[buffer(0)]]) {
+        constexpr int group_size = 7;
+        static_assert(
+            group_size == 2 || group_size == 4 || group_size == 8,
+            "Group size must be a supported tile width.");
+        out[0] = 0.0;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.reason == "assertion-failed"
+    assert error.resolved_expression == "7 == 2 || 7 == 4 || 7 == 8"
+    assert error.assertion_message == "Group size must be a supported tile width."
+    assert error.unresolved_dependencies == ()
+    assert error.source_location["line"] == 4
+    assert error.source_location["column"] == 9
+
+
 def test_preprocessor_rejects_unresolved_static_assertion_with_dependencies():
     code = """
     kernel void unresolved_constraint(
@@ -804,6 +855,40 @@ def test_preprocessor_rejects_unresolved_static_assertion_with_dependencies():
     assert error.source_location["column"] == 9
     assert "unresolved dependencies: runtime_width" in str(error)
     assert "constexpr integral values" in error.suggested_action
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    (
+        (
+            "2 == 2 || 2 == 3 || 2 == 4 || 2 == 5 || 2 == 6 || 2 == 8",
+            (True, 1),
+        ),
+        ("2 != 2 || 2 != 3", (True, 1)),
+        ("2 != 2 && 3 != 3", (True, 0)),
+        ("1 == 1 || 2 == 3 && 4 == 5", (True, 1)),
+        ("(1 == 1 || 2 == 3) && 4 == 5", (True, 0)),
+    ),
+)
+def test_preprocessor_folds_logical_comparison_chains(expression, expected):
+    assert (
+        MetalPreprocessor()._evaluate_static_integral_expression(expression) == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    (
+        ("true || runtime_width == 32", (True, 1)),
+        ("false && runtime_width != 32", (True, 0)),
+        ("false || runtime_width == 32", (False, None)),
+        ("true && runtime_width != 32", (False, None)),
+    ),
+)
+def test_preprocessor_short_circuits_unresolved_logical_operands(expression, expected):
+    assert (
+        MetalPreprocessor()._evaluate_static_integral_expression(expression) == expected
+    )
 
 
 @pytest.mark.parametrize(

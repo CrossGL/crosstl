@@ -4942,7 +4942,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         text = text.replace("&&", " and ").replace("||", " or ")
         text = re.sub(r"!(?!=)", " not ", text)
         try:
-            parsed = ast.parse(text.strip(), mode="eval")
+            parsed = ast.parse(f"({text.strip()})", mode="eval")
         except (SyntaxError, ValueError):
             return False, None
 
@@ -4975,6 +4975,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             ast.LtE,
             ast.Gt,
             ast.GtE,
+            ast.Name,
+            ast.Load,
         )
         nodes = list(ast.walk(parsed))
         if len(nodes) > 128 or any(
@@ -5050,19 +5052,29 @@ class MetalPreprocessor(HLSLPreprocessor):
                 top_level.append(expression[cursor])
             cursor += 1
 
+        logical_operands: List[List[str]] = [[]]
+        for operator_text in top_level:
+            if operator_text in {"&&", "||"}:
+                logical_operands.append([])
+            else:
+                logical_operands[-1].append(operator_text)
+
         comparisons = {"<", "<=", ">", ">=", "==", "!="}
         bitwise = {"&", "|", "^"}
-        comparison_count = sum(
-            operator_text in comparisons for operator_text in top_level
-        )
-        if comparison_count > 1:
-            return True
-        if comparisons.intersection(top_level) and bitwise.intersection(top_level):
-            return True
-        if "!" in top_level and any(
-            operator_text not in {"!", "&&", "||"} for operator_text in top_level
-        ):
-            return True
+        for operand_operators in logical_operands:
+            comparison_count = sum(
+                operator_text in comparisons for operator_text in operand_operators
+            )
+            if comparison_count > 1:
+                return True
+            if comparisons.intersection(operand_operators) and bitwise.intersection(
+                operand_operators
+            ):
+                return True
+            if "!" in operand_operators and any(
+                operator_text != "!" for operator_text in operand_operators
+            ):
+                return True
         return False
 
     def _rewrite_static_integral_conditional_expressions(
