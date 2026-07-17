@@ -353,6 +353,30 @@ class DirectXUnresolvedSourceTypeError(ValueError):
         super().__init__(message)
 
 
+class DirectXContextualConversionError(ValueError):
+    """Raised when a source assignment conversion has no HLSL equivalent."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-contextual-conversion-unrepresentable"
+    )
+    missing_capabilities = ("directx.contextual-conversion-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        source_type,
+        target_type,
+        reason,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.source_type = source_type
+        self.target_type = target_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXBFloat16UnsupportedError(ValueError):
     """Raised when HLSL cannot preserve source bfloat16 semantics exactly."""
 
@@ -9014,7 +9038,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.convert_type_node_to_string(vtype)
         return str(vtype)
 
-    def generate_expression_with_expected(self, expr, expected_type):
+    def generate_expression_with_expected(
+        self, expr, expected_type, *, source_location=None
+    ):
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
         try:
@@ -9031,6 +9057,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 rendered,
                 expected_type,
                 source_type,
+                source_location=(
+                    source_location
+                    if source_location is not None
+                    else getattr(expr, "source_location", None)
+                ),
             )
         finally:
             self.current_expression_expected_type = previous_expected_type
@@ -9155,7 +9186,62 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             source_location=source_location,
         )
 
-    def hlsl_narrowing_cast_expression(self, rendered, expected_type, source_type):
+    def hlsl_integer_conversion_bit_width(self, type_info):
+        if type_info is None:
+            return None
+        return {
+            "int64_t": 64,
+            "uint64_t": 64,
+            "int": 32,
+            "uint": 32,
+            "int16_t": 16,
+            "uint16_t": 16,
+            "min16int": 16,
+            "min16uint": 16,
+            "min12int": 12,
+        }.get(type_info["base_type"])
+
+    def hlsl_contextual_integer_narrowing_expression(
+        self,
+        rendered,
+        expected_type,
+        source_type,
+        *,
+        source_location=None,
+    ):
+        """Render one source-defined integer narrowing conversion when required.
+
+        HLSL constructors preserve the source assignment's numeric conversion and
+        evaluate their argument exactly once. They are only valid for identical
+        scalar/vector shapes, so unequal lane counts remain diagnostics instead
+        of being rewritten into a different computation.
+        """
+        expected_info = self.hlsl_integer_arithmetic_type_info(expected_type)
+        source_info = self.hlsl_integer_arithmetic_type_info(source_type)
+        if expected_info is None or source_info is None:
+            return None
+
+        expected_bits = self.hlsl_integer_conversion_bit_width(expected_info)
+        source_bits = self.hlsl_integer_conversion_bit_width(source_info)
+        if expected_bits is None or source_bits is None:
+            return None
+        if expected_bits >= source_bits:
+            return None
+        if expected_info["width"] != source_info["width"]:
+            raise DirectXContextualConversionError(
+                "DirectX cannot lower source integer narrowing from "
+                f"'{self.map_type(source_type)}' to '{self.map_type(expected_type)}' "
+                "because the scalar/vector lane shapes differ",
+                source_type=self.map_type(source_type),
+                target_type=self.map_type(expected_type),
+                reason="integer-lane-shape-mismatch",
+                source_location=source_location,
+            )
+        return f"{expected_info['mapped_type']}({rendered})"
+
+    def hlsl_narrowing_cast_expression(
+        self, rendered, expected_type, source_type, *, source_location=None
+    ):
         expected_name = self.type_name_string(expected_type)
         source_name = self.type_name_string(source_type)
         if not rendered or not expected_name or not source_name:
@@ -9186,6 +9272,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"__crossgl_complex64_make({rendered}, 0.0)"
         expected_integer = self.hlsl_integer_arithmetic_type_info(expected)
         source_integer = self.hlsl_integer_arithmetic_type_info(source)
+        integer_narrowing = self.hlsl_contextual_integer_narrowing_expression(
+            rendered,
+            expected,
+            source,
+            source_location=source_location,
+        )
+        if integer_narrowing is not None:
+            return integer_narrowing
         if (
             expected_integer is not None
             and expected_integer["minimum_precision"]
@@ -9201,25 +9295,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if source_integer["base_type"] in valid_source_bases:
                 return f"{expected}({rendered})"
-        signed_narrowing = {
-            ("int", "int64_t"),
-            ("int", "uint64_t"),
-            ("int16_t", "int"),
-            ("int16_t", "int64_t"),
-            ("int16_t", "uint64_t"),
-            ("min16int", "int"),
-            ("min16int", "int64_t"),
-            ("min16int", "uint64_t"),
-        }
-        unsigned_narrowing = {
-            ("uint", "uint64_t"),
-            ("uint16_t", "uint"),
-            ("uint16_t", "uint64_t"),
-            ("min16uint", "uint"),
-            ("min16uint", "uint64_t"),
-        }
-        if (expected, source) in signed_narrowing | unsigned_narrowing:
-            return f"{expected}({rendered})"
         return rendered
 
     def is_scalar_value_type(self, vtype):
@@ -12708,7 +12783,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if compound_assignment is not None:
             return compound_assignment
         target_type = binding.get("element_type") if binding else None
-        rhs = self.generate_expression_with_expected(value, target_type)
+        rhs = self.generate_expression_with_expected(
+            value,
+            target_type,
+            source_location=getattr(target, "source_location", None),
+        )
         rhs = self.hlsl_bfloat16_storage_assignment_expression(
             target,
             rhs,
@@ -12890,7 +12969,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if compound_assignment is not None:
                 return compound_assignment
             target_type = binding.get("element_type") if binding else None
-            rhs = self.generate_expression_with_expected(value, target_type)
+            rhs = self.generate_expression_with_expected(
+                value,
+                target_type,
+                source_location=getattr(node, "source_location", None),
+            )
             rhs = self.hlsl_bfloat16_storage_assignment_expression(
                 target,
                 rhs,
@@ -12953,7 +13036,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return compound_assignment
 
         lhs = self.generate_expression(target)
-        rhs = self.generate_expression_with_expected(value, target_type)
+        rhs = self.generate_expression_with_expected(
+            value,
+            target_type,
+            source_location=getattr(node, "source_location", None),
+        )
         rhs = self.hlsl_bfloat16_storage_assignment_expression(
             target,
             rhs,

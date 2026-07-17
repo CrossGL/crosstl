@@ -58,6 +58,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXBooleanOrderedIntrinsicError,
     DirectXCompileTimeGlobalError,
     DirectXComplexCompoundAssignmentError,
+    DirectXContextualConversionError,
     DirectXCooperativeMatrixUnsupportedError,
     DirectXCopySignError,
     DirectXEntryPointSelectionError,
@@ -2879,6 +2880,100 @@ def test_hlsl_codegen_maps_canonical_64_bit_vector_aliases(tmp_path):
     assert "uint64_t3 unsignedValues = uint64_t3(4, 5, 6);" in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_codegen_emits_contextual_integer_narrowing_for_assignment_targets(
+    tmp_path,
+):
+    shader = """
+    shader ContextualIntegerNarrowing {
+        struct NarrowRecord {
+            uint fieldValue;
+            int signedFieldValue;
+        };
+
+        uint64_t nextWide(inout uint calls) {
+            calls += 1u;
+            return uint64_t(calls) << uint64_t(33u);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                RWStructuredBuffer<uint> unsignedOutput @ binding(0),
+                RWStructuredBuffer<int> signedOutput @ binding(1)
+            ) {
+                uint index = 0u;
+                uint calls = 0u;
+                uint64_t wide = uint64_t(7u) << uint64_t(33u);
+                int64_t signedWide = int64_t(7) << int64_t(33);
+                uint localValues[2];
+                NarrowRecord record;
+
+                unsignedOutput[index] = (wide & uint64_t(65535u)) >> uint64_t(1u);
+                signedOutput[index] = signedWide >> int64_t(1);
+                localValues[0] = (wide >> uint64_t(2u)) & uint64_t(65535u);
+                record.fieldValue = nextWide(calls) >> uint64_t(3u);
+                record.signedFieldValue = signedWide >> int64_t(2);
+                buffer_store(unsignedOutput, index, nextWide(calls) & uint64_t(255u));
+                uint ordinaryValue = wide >> uint64_t(4u);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "unsignedOutput[index] = uint(((wide & uint64_t(65535u)) >> uint64_t(1u)));"
+        in generated
+    )
+    assert "signedOutput[index] = int((signedWide >> int64_t(1)));" in generated
+    assert (
+        "localValues[0] = uint(((wide >> uint64_t(2u)) & uint64_t(65535u)));"
+        in generated
+    )
+    assert "record.fieldValue = uint((nextWide(calls) >> uint64_t(3u)));" in generated
+    assert "record.signedFieldValue = int((signedWide >> int64_t(2)));" in generated
+    assert (
+        "unsignedOutput[index] = uint((nextWide(calls) & uint64_t(255u)));" in generated
+    )
+    assert "uint ordinaryValue = uint((wide >> uint64_t(4u)));" in generated
+    assert generated.count("nextWide(calls)") == 2
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_codegen_rejects_contextual_integer_narrowing_with_lane_mismatch():
+    codegen = HLSLCodeGen()
+    codegen.local_variable_types.update(
+        {
+            "narrow": "uint",
+            "wide": "uint64_t2",
+        }
+    )
+    assignment = AssignmentNode(
+        IdentifierNode("narrow"),
+        IdentifierNode("wide"),
+        "=",
+        source_location=("narrowing.cgl", 4, 5),
+    )
+
+    with pytest.raises(DirectXContextualConversionError) as exc_info:
+        codegen.generate_assignment(assignment, statement_context=True)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-contextual-conversion-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.contextual-conversion-lowering",
+    )
+    assert diagnostic.reason == "integer-lane-shape-mismatch"
+    assert diagnostic.source_type == "uint64_t2"
+    assert diagnostic.target_type == "uint"
+    assert diagnostic.source_location == ("narrowing.cgl", 4, 5)
 
 
 def test_hlsl_codegen_casts_64_bit_resource_indices_for_dxc():
