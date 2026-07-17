@@ -649,6 +649,26 @@ entries. This is source identity, host-dispatch, translation, reflection, and
 native compiler evidence. It does not execute either kernel, compare numerical
 results, port the MLX host runtime, or claim coverage of the MLX test suite.
 
+The checked-in
+[`contracts/layer_norm.dispatch.json`](contracts/layer_norm.dispatch.json)
+fixture contains exactly two pinned single-row float32 LayerNorm records from
+MLX commit `4367c73b60541ddd5a266ce4644fd93d20223b6e`. It captures each
+record's entry point, workgroup size, subgroup width, specialization constants,
+and dispatch geometry together with the source and host-dispatch provenance.
+The finite records cover the forward axis-size-4099 workload and the VJP
+axis-size-8192 workload described above. Only the VJP record applies function
+constant `20` (`has_w=true`), matching the pinned host dispatch; the forward
+record carries no function constant. These records do not prove runtime
+execution, numerical parity, looped variants, or the full MLX test suite.
+
+Validate the fixture schema, provenance, deterministic identities, and bounded
+evaluation with:
+
+```bash
+.venv/bin/python -m pytest -q -n auto \
+  tests/test_mlx_dispatch_contract_fixture.py
+```
+
 The focused `prove_rms_norm_specialization.py` gate fixes the project-level
 RMSNorm specialization contract to the same upstream commit and to
 `rms_norm.metal` SHA-256

@@ -1,0 +1,311 @@
+{
+  "kind": "crosstl-host-dispatch-contract",
+  "schemaVersion": 1,
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx",
+    "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+    "sourceReferences": {
+      "hostDispatch": "mlx/backend/metal/normalization.cpp",
+      "kernel": "mlx/backend/metal/kernels/layer_norm.metal"
+    },
+    "scope": {
+      "description": "Pinned single-row float32 LayerNorm dispatch records.",
+      "singleRowOnly": true,
+      "loopedEntriesIncluded": false,
+      "runtimeExecutionVerified": false,
+      "numericalParityVerified": false
+    }
+  },
+  "inputs": [
+    {
+      "name": "axisSize",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "axis_size"
+      }
+    },
+    {
+      "name": "dtype",
+      "role": "dtype",
+      "type": "string"
+    },
+    {
+      "name": "isVjp",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostFunctions": [
+          "LayerNorm::eval_gpu",
+          "LayerNormVJP::eval_gpu"
+        ]
+      }
+    },
+    {
+      "name": "hasW",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "functionConstant": "has_w",
+        "functionConstantId": 20
+      }
+    }
+  ],
+  "workloads": [
+    {
+      "id": "forward-float32-axis-4099",
+      "values": {
+        "axisSize": 4099,
+        "dtype": "float32",
+        "isVjp": false,
+        "hasW": false
+      },
+      "provenance": {
+        "hostFunction": "LayerNorm::eval_gpu",
+        "branch": "single-row"
+      }
+    },
+    {
+      "id": "vjp-float32-axis-8192",
+      "values": {
+        "axisSize": 8192,
+        "dtype": "float32",
+        "isVjp": true,
+        "hasW": true
+      },
+      "provenance": {
+        "hostFunction": "LayerNormVJP::eval_gpu",
+        "branch": "single-row"
+      }
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "simdWidth",
+      "type": "integer",
+      "provenance": {
+        "kernelSymbol": "SIMD_SIZE"
+      }
+    },
+    {
+      "name": "maxThreadsPerWorkgroup",
+      "type": "integer",
+      "provenance": {
+        "requirement": "bounded device record"
+      }
+    }
+  ],
+  "devices": [
+    {
+      "id": "wave32-max1024",
+      "values": {
+        "simdWidth": 32,
+        "maxThreadsPerWorkgroup": 1024
+      },
+      "provenance": {
+        "scope": "bounded wave32 device record"
+      }
+    }
+  ],
+  "contracts": [
+    {
+      "id": "mlx-layer-norm-single-row-float32",
+      "source": "mlx/backend/metal/kernels/layer_norm.metal",
+      "provenance": {
+        "hostSource": "mlx/backend/metal/normalization.cpp",
+        "kernelSource": "mlx/backend/metal/kernels/layer_norm.metal",
+        "hostFormula": "32 * ceilDiv(ceilDiv(axisSize, 8), 32)",
+        "dispatchNormalization": "single-row workgroup count derived from dispatch_threads"
+      },
+      "branches": [
+        {
+          "id": "forward-single-row-float32",
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "dtype"
+                  },
+                  "float32"
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "isVjp"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "capability": "simdWidth"
+                  },
+                  32
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "capability": "maxThreadsPerWorkgroup"
+                  },
+                  1024
+                ]
+              }
+            ]
+          },
+          "entryPoint": "layer_normfloat32",
+          "workgroupSize": [
+            {
+              "op": "multiply",
+              "args": [
+                32,
+                {
+                  "op": "ceilDiv",
+                  "args": [
+                    {
+                      "op": "ceilDiv",
+                      "args": [
+                        {
+                          "input": "axisSize"
+                        },
+                        8
+                      ]
+                    },
+                    32
+                  ]
+                }
+              ]
+            },
+            1,
+            1
+          ],
+          "subgroupWidth": {
+            "capability": "simdWidth"
+          },
+          "dispatch": {
+            "workgroupCount": [
+              1,
+              1,
+              1
+            ]
+          },
+          "provenance": {
+            "hostFunction": "LayerNorm::eval_gpu",
+            "branch": "single-row",
+            "functionConstant20Applied": false
+          }
+        },
+        {
+          "id": "vjp-single-row-float32",
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "dtype"
+                  },
+                  "float32"
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "isVjp"
+                  },
+                  true
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "hasW"
+                  },
+                  true
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "capability": "simdWidth"
+                  },
+                  32
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "capability": "maxThreadsPerWorkgroup"
+                  },
+                  1024
+                ]
+              }
+            ]
+          },
+          "entryPoint": "vjp_layer_normfloat32",
+          "workgroupSize": [
+            {
+              "op": "multiply",
+              "args": [
+                32,
+                {
+                  "op": "ceilDiv",
+                  "args": [
+                    {
+                      "op": "ceilDiv",
+                      "args": [
+                        {
+                          "input": "axisSize"
+                        },
+                        8
+                      ]
+                    },
+                    32
+                  ]
+                }
+              ]
+            },
+            1,
+            1
+          ],
+          "subgroupWidth": {
+            "capability": "simdWidth"
+          },
+          "specializationConstants": {
+            "20": {
+              "input": "hasW",
+              "provenance": {
+                "symbol": "has_w"
+              }
+            }
+          },
+          "dispatch": {
+            "workgroupCount": [
+              1,
+              1,
+              1
+            ]
+          },
+          "provenance": {
+            "hostFunction": "LayerNormVJP::eval_gpu",
+            "branch": "single-row",
+            "functionConstant20Applied": true
+          }
+        }
+      ]
+    }
+  ]
+}
