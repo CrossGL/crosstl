@@ -882,6 +882,66 @@
       "mlx/backend/metal/kernels/rope.metal",
       "mlx/backend/metal/kernels/ternary.metal"
     ],
+    "bfloat16_lowering_evidence": {
+      "mlx/backend/metal/kernels/arange.metal": {
+        "bfloat16Lowering": {
+          "status": "exact",
+          "approximationUsed": false,
+          "registerRepresentation": "uint-low-16-bits",
+          "storageRepresentation": "native-uint16",
+          "roundingMode": "round-to-nearest-ties-to-even"
+        },
+        "requiredCapabilities": [
+          "directx.native-16bit-types"
+        ]
+      },
+      "mlx/backend/metal/kernels/binary_two.metal": {
+        "bfloat16Lowering": {
+          "status": "exact",
+          "approximationUsed": false,
+          "registerRepresentation": "uint-low-16-bits",
+          "storageRepresentation": "native-uint16",
+          "roundingMode": "round-to-nearest-ties-to-even"
+        },
+        "requiredCapabilities": [
+          "directx.native-16bit-types"
+        ]
+      },
+      "mlx/backend/metal/kernels/random.metal": {
+        "bfloat16Lowering": {
+          "status": "exact",
+          "approximationUsed": false,
+          "registerRepresentation": "uint-low-16-bits",
+          "storageRepresentation": "not-required",
+          "roundingMode": "round-to-nearest-ties-to-even"
+        },
+        "requiredCapabilities": []
+      },
+      "mlx/backend/metal/kernels/rope.metal": {
+        "bfloat16Lowering": {
+          "status": "exact",
+          "approximationUsed": false,
+          "registerRepresentation": "uint-low-16-bits",
+          "storageRepresentation": "native-uint16",
+          "roundingMode": "round-to-nearest-ties-to-even"
+        },
+        "requiredCapabilities": [
+          "directx.native-16bit-types"
+        ]
+      },
+      "mlx/backend/metal/kernels/ternary.metal": {
+        "bfloat16Lowering": {
+          "status": "exact",
+          "approximationUsed": false,
+          "registerRepresentation": "uint-low-16-bits",
+          "storageRepresentation": "native-uint16",
+          "roundingMode": "round-to-nearest-ties-to-even"
+        },
+        "requiredCapabilities": [
+          "directx.native-16bit-types"
+        ]
+      }
+    },
     "workgroup_blocked_sources": [
       "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/layer_norm.metal",

@@ -261,10 +261,17 @@ compile with DXC. Separate native tests translate and execute the reduced
 immutable lookup fixture and the pinned source's generated uint32 arange entry
 through Direct3D 12. The arange test is numerical evidence for that one source,
 entry, dtype, dispatch shape, and fixture only; it does not turn the frontier
-compiler gate into a general runtime-parity claim. Current DirectX smoke
-artifacts lower
-MLX bfloat16 aliases to HLSL `half` for toolchain coverage; exact bfloat16
-storage and conversion semantics remain tracked separately. On macOS CI, the
+compiler gate into a general runtime-parity claim. The five emitted DirectX
+frontier artifacts carry exact per-source bfloat16 report evidence. All five
+report `status=exact`, `approximationUsed=false`, a `uint-low-16-bits` register
+representation, and round-to-nearest, ties-to-even conversion. `arange.metal`,
+`binary_two.metal`, `rope.metal`, and `ternary.metal` report native `uint16`
+storage with the `directx.native-16bit-types` capability; `random.metal` reports
+storage as `not-required` with no required capability. The harness compares
+each artifact's `bfloat16Lowering` and `requiredCapabilities` fields with this
+pinned contract and fails closed if either field is missing or changes. This is
+storage, conversion, report, and compiler evidence only; it does not execute a
+bfloat16 workload or establish runtime or numerical parity. On macOS CI, the
 generated `fence.metal` round-trip artifact must compile to AIR with the native
 Metal compiler. This checks generated source and project metadata, not numerical
 runtime parity or equivalent resource visibility. CrossGL/crosstl#1660 tracks
@@ -406,9 +413,12 @@ ownership for reflected constants in runtime reports. The Direct3D compute
 runtime now covers the reduced immutable lookup fixture and one generated uint32
 entry from pinned `arange.metal`; CrossGL/crosstl#1472 continues to track
 expansion beyond that bounded source/entry/dtype proof across the generated MLX
-frontier. CrossGL/crosstl#1474
-tracks exact DirectX bfloat16 lowering beyond the current compile-time smoke
-mapping. Every custom DXC invocation derives its effective profile and compiler
+frontier. CrossGL/crosstl#1474 is represented by exact per-artifact DirectX
+bfloat16 storage and conversion evidence in the pinned project report. The
+harness fails closed unless each emitted source retains the exact
+`bfloat16Lowering` object and corresponding `requiredCapabilities` list; this
+does not extend the bounded runtime proof to bfloat16 or claim numerical parity.
+Every custom DXC invocation derives its effective profile and compiler
 arguments from the emitted HLSL through `crosstl.project.directx_toolchain`.
 Generated `float16_t`, `int16_t`, or `uint16_t` types select at least Shader
 Model 6.2 and add `-enable-16bit-types`; ordinary HLSL retains its selected

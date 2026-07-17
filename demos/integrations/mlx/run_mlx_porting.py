@@ -105,6 +105,33 @@ MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES = tuple(
     for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     if source not in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
 )
+MLX_DIRECTX_NATIVE_BFLOAT16_STORAGE_SOURCES = (
+    MLX_ARANGE_SOURCE,
+    MLX_BINARY_TWO_SOURCE,
+    MLX_ROPE_SOURCE,
+    MLX_TERNARY_SOURCE,
+)
+MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE = {
+    source: {
+        "bfloat16Lowering": {
+            "status": "exact",
+            "approximationUsed": False,
+            "registerRepresentation": "uint-low-16-bits",
+            "storageRepresentation": (
+                "native-uint16"
+                if source in MLX_DIRECTX_NATIVE_BFLOAT16_STORAGE_SOURCES
+                else "not-required"
+            ),
+            "roundingMode": "round-to-nearest-ties-to-even",
+        },
+        "requiredCapabilities": (
+            ["directx.native-16bit-types"]
+            if source in MLX_DIRECTX_NATIVE_BFLOAT16_STORAGE_SOURCES
+            else []
+        ),
+    }
+    for source in MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+}
 MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = tuple(
     source
     for source in MLX_OPENGL_FRONTIER_SOURCES
@@ -2933,6 +2960,31 @@ def _require_clean_frontier_report(
     return artifacts_by_source
 
 
+def _require_directx_bfloat16_lowering_evidence(
+    artifacts_by_source: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    _require(
+        set(artifacts_by_source) == set(MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE),
+        "DirectX bfloat16 lowering evidence source set changed",
+    )
+    evidence: dict[str, dict[str, Any]] = {}
+    for source, expected in MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE.items():
+        artifact = artifacts_by_source[source]
+        lowering = artifact.get("bfloat16Lowering")
+        required_capabilities = artifact.get("requiredCapabilities")
+        _require(
+            isinstance(lowering, Mapping)
+            and dict(lowering) == expected["bfloat16Lowering"]
+            and required_capabilities == expected["requiredCapabilities"],
+            f"DirectX bfloat16 lowering contract changed for {source}",
+        )
+        evidence[source] = {
+            "bfloat16Lowering": dict(lowering),
+            "requiredCapabilities": list(required_capabilities),
+        }
+    return evidence
+
+
 def _require_dynamic_workgroup_blocker_report(
     mlx_root: Path,
     output_dir: Path,
@@ -3253,12 +3305,15 @@ def _translate_directx_frontier(
         validate=True,
         specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
     )
-    _require_clean_frontier_report(
+    clean_artifacts = _require_clean_frontier_report(
         mlx_root,
         clean_output_dir,
         clean_payload,
         target="directx",
         sources=MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
+    )
+    bfloat16_lowering_evidence = _require_directx_bfloat16_lowering_evidence(
+        clean_artifacts
     )
 
     blocked_output_dir = work_dir / "out-directx-workgroup-frontier"
@@ -3316,6 +3371,7 @@ def _translate_directx_frontier(
             target="directx",
             sources=MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
         )
+        _require_directx_bfloat16_lowering_evidence(artifacts)
         validation = toolchain_payload.get("validation")
         runs = (
             validation.get("toolchainRuns") if isinstance(validation, Mapping) else None
@@ -3416,6 +3472,7 @@ def _translate_directx_frontier(
         "directxValidationStatus": (
             "validated" if run_toolchains and directx_runs else "not-required"
         ),
+        "bfloat16LoweringEvidence": bfloat16_lowering_evidence,
         "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
         "semanticReadinessStatus": "not-established",
         "trackedIssues": [

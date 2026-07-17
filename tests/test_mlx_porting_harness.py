@@ -2874,6 +2874,12 @@ def _write_clean_frontier_report(
             "path": generated_path.relative_to(mlx_root).as_posix(),
             "status": "translated",
         }
+        if target == "directx":
+            bfloat16_evidence = module.MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE[source]
+            artifact["bfloat16Lowering"] = dict(bfloat16_evidence["bfloat16Lowering"])
+            artifact["requiredCapabilities"] = list(
+                bfloat16_evidence["requiredCapabilities"]
+            )
         if expected_constants:
             artifact["specializationConstants"] = [
                 {"name": name, "id": constant_id}
@@ -6061,6 +6067,9 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     )
     assert result["semanticReadinessStatus"] == "not-established"
     assert result["directxValidationStatus"] == "validated"
+    assert result["bfloat16LoweringEvidence"] == (
+        module.MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE
+    )
     assert result["workgroupBlockedSources"] == list(
         module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
@@ -6080,6 +6089,86 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         assert f"{json.dumps(selector)} = {json.dumps(value)}" in toolchain_config
     for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES:
         assert source in toolchain_config
+
+
+def test_directx_bfloat16_lowering_evidence_matches_pinned_report():
+    module = _load_harness()
+    native_storage_sources = {
+        module.MLX_ARANGE_SOURCE,
+        module.MLX_BINARY_TWO_SOURCE,
+        module.MLX_ROPE_SOURCE,
+        module.MLX_TERNARY_SOURCE,
+    }
+    assert set(module.MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE) == set(
+        module.MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+    )
+    for source, evidence in module.MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE.items():
+        uses_native_storage = source in native_storage_sources
+        assert evidence == {
+            "bfloat16Lowering": {
+                "status": "exact",
+                "approximationUsed": False,
+                "registerRepresentation": "uint-low-16-bits",
+                "storageRepresentation": (
+                    "native-uint16" if uses_native_storage else "not-required"
+                ),
+                "roundingMode": "round-to-nearest-ties-to-even",
+            },
+            "requiredCapabilities": (
+                ["directx.native-16bit-types"] if uses_native_storage else []
+            ),
+        }
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "missing-lowering",
+        "status",
+        "approximation",
+        "register-representation",
+        "storage-representation",
+        "rounding-mode",
+        "extra-lowering-field",
+        "missing-required-capabilities",
+        "required-capabilities",
+    ),
+)
+def test_directx_bfloat16_lowering_contract_rejects_report_drift(drift):
+    module = _load_harness()
+    artifacts = {
+        source: {
+            "bfloat16Lowering": dict(evidence["bfloat16Lowering"]),
+            "requiredCapabilities": list(evidence["requiredCapabilities"]),
+        }
+        for source, evidence in module.MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE.items()
+    }
+    artifact = artifacts[module.MLX_ARANGE_SOURCE]
+    lowering = artifact["bfloat16Lowering"]
+    if drift == "missing-lowering":
+        artifact.pop("bfloat16Lowering")
+    elif drift == "status":
+        lowering["status"] = "approximate"
+    elif drift == "approximation":
+        lowering["approximationUsed"] = True
+    elif drift == "register-representation":
+        lowering["registerRepresentation"] = "float16"
+    elif drift == "storage-representation":
+        lowering["storageRepresentation"] = "not-required"
+    elif drift == "rounding-mode":
+        lowering["roundingMode"] = "round-toward-zero"
+    elif drift == "extra-lowering-field":
+        lowering["conversionRepresentation"] = "helper-functions"
+    elif drift == "missing-required-capabilities":
+        artifact.pop("requiredCapabilities")
+    else:
+        artifact["requiredCapabilities"] = []
+
+    with pytest.raises(
+        module.PortingCheckError,
+        match="DirectX bfloat16 lowering contract changed",
+    ):
+        module._require_directx_bfloat16_lowering_evidence(artifacts)
 
 
 def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
@@ -6153,6 +6242,9 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS
     )
     assert directx_status["dxc_validated_sources"] == list(expected_sources)
+    assert directx_status["bfloat16_lowering_evidence"] == (
+        module.MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE
+    )
     assert directx_status["expected_entry_point_counts"] == (
         module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
     )
@@ -6201,6 +6293,23 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
         normalized_readme
     )
     assert "no placeholder workgroup size is restored" in normalized_readme
+    assert "exact per-source bfloat16 report evidence" in normalized_readme
+    assert "`status=exact`, `approximationUsed=false`" in normalized_readme
+    assert "`uint-low-16-bits` register representation" in normalized_readme
+    assert "round-to-nearest, ties-to-even conversion" in normalized_readme
+    assert "`directx.native-16bit-types` capability" in normalized_readme
+    assert "storage as `not-required` with no required capability" in (
+        normalized_readme
+    )
+    assert "fails closed if either field is missing or changes" in normalized_readme
+    assert "storage, conversion, report, and compiler evidence only" in (
+        normalized_readme
+    )
+    assert "beyond the current compile-time smoke mapping" not in normalized_readme
+    assert "does not execute a bfloat16 workload" in normalized_readme
+    assert "does not extend the bounded runtime proof to bfloat16" in (
+        normalized_readme
+    )
     for issue in (1694, 1695, 1696, 1701, 1728, 1750, 1542, 1537):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
     assert "does not dispatch these kernels or establish numerical parity" in (
