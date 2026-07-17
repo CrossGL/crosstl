@@ -8025,12 +8025,25 @@ class MetalPreprocessor(HLSLPreprocessor):
             for argument in self._split_top_level_commas(raw_args)
             if argument.strip()
         ]
+        declared_parameters = [
+            parameter
+            for parameter in self._split_top_level_commas(method.parameters)
+            if parameter.strip() and parameter.strip() != "void"
+        ]
+        if not self._callable_accepts_argument_count(
+            method.parameters, len(call_arguments)
+        ):
+            return False
+        fixed_parameters = [
+            parameter for parameter in declared_parameters if "..." not in parameter
+        ]
+        if len(call_arguments) > len(fixed_parameters):
+            return False
         declared_types = [
             self._normalize_inferred_type(
                 self._normalize_function_parameter_type_text(parameter)
             )
-            for parameter in self._split_top_level_commas(method.parameters)
-            if parameter.strip()
+            for parameter in fixed_parameters[: len(call_arguments)]
         ]
         if self._source_type_alias_bindings:
             declared_types = [
@@ -8042,9 +8055,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 or declared_type
                 for declared_type in declared_types
             ]
-        if len(declared_types) != len(call_arguments):
-            return False
-
         buffer_view = self._flatten_types_at(buffer_element_types, arg_open)
         local_view = self._flatten_types_at(local_variable_types, arg_open)
         struct_field_types = self._struct_field_types_at(
@@ -8105,11 +8115,23 @@ class MetalPreprocessor(HLSLPreprocessor):
         receiver_contract: Optional[_MetalReceiverContract] = None,
         call_start: Optional[int] = None,
     ) -> Optional[_MetalStructMethod]:
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        raw_args = code[arg_open + 1 : arg_close].strip()
+        argument_count = len(
+            [
+                argument
+                for argument in self._split_top_level_commas(raw_args)
+                if argument.strip()
+            ]
+        )
         candidates = [
             method
             for method in struct.methods
             if method.name == method_name
             and (require_static is None or method.is_static is require_static)
+            and self._callable_accepts_argument_count(method.parameters, argument_count)
         ]
         if not candidates:
             return None
@@ -8184,10 +8206,6 @@ class MetalPreprocessor(HLSLPreprocessor):
         if len(viable) == 1:
             return viable[0]
 
-        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
-        raw_args = (
-            code[arg_open + 1 : arg_close].strip() if arg_close is not None else "..."
-        )
         reason = "no source-viable concrete overload matches"
         diagnostic_reason = "concrete-overload-no-viable"
         ambiguous_conversions = False
@@ -8225,14 +8243,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 "preserve the receiver declaration qualifiers and make the "
                 "source overload contract unique"
             ),
-            source_location=(
-                self._source_location_for_offsets(
-                    code,
-                    location_start,
-                    arg_close + 1,
-                )
-                if arg_close is not None
-                else None
+            source_location=self._source_location_for_offsets(
+                code,
+                location_start,
+                arg_close + 1,
             ),
             reason=diagnostic_reason,
             receiver_type=receiver_type,

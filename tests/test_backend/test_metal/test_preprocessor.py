@@ -6220,6 +6220,98 @@ def test_preprocessor_rejects_ambiguous_temporary_operator_overload_structured()
     assert error.source_location["length"] == len("(values[0])")
 
 
+def test_preprocessor_selects_concrete_static_overload_by_callable_arity():
+    code = """
+    struct TransformNone_float_float {
+      static float apply(float value) { return value; }
+      static float apply(float value, float residual) {
+        return value + residual;
+      }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      values[0] = TransformNone_float_float::apply(unresolved()[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "TransformNone_float_float__apply(unresolved()[0])" in output
+    assert "TransformNone_float_float::apply" not in output
+
+
+def test_preprocessor_counts_defaulted_parameters_as_callable_for_overload_selection():
+    code = """
+    struct Transform {
+      static float apply(float value, float bias = 1.0f) {
+        return value + bias;
+      }
+      static float apply(float value, float bias, float scale) {
+        return value * scale + bias;
+      }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      values[0] = Transform::apply(unresolved()[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Transform__apply(unresolved()[0])" in output
+    assert "Transform::apply" not in output
+
+
+def test_preprocessor_keeps_defaulted_overload_viable_for_supplied_prefix():
+    code = """
+    struct Convert {
+      static float apply(float value) { return value; }
+      static float apply(float value, int bias = 0) {
+        return value + float(bias);
+      }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      float value = values[0];
+      values[0] = Convert::apply(value);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.reason == "concrete-overload-ambiguous"
+    assert error.candidate_signatures == (
+        "float apply(float value)",
+        "float apply(float value, int bias = 0)",
+    )
+
+
+def test_preprocessor_rejects_same_arity_concrete_overloads_for_unknown_argument():
+    code = """
+    struct Convert {
+      static float apply(short value) { return float(value); }
+      static float apply(long value) { return float(value); }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      values[0] = Convert::apply(unresolved()[0]);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.reason == "concrete-overload-ambiguous"
+    assert error.requested_signature == "Convert::apply(unresolved()[0])"
+    assert error.candidate_signatures == (
+        "float apply(short value)",
+        "float apply(long value)",
+    )
+
+
 def test_preprocessor_skips_calls_inside_residual_template_declarations():
     # After a template struct is materialized to a concrete struct (e.g.
     # `CumLogaddexp_float`), the ORIGINAL `template <typename U> struct
