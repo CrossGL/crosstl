@@ -891,7 +891,7 @@ structured diagnostic instead of losing the generic suffix or computation.
 
 At pinned MLX commit
 `4367c73b60541ddd5a266ce4644fd93d20223b6e`, exact high-budget project
-translations of the complete `fp_quantized.metal` source now advance past
+replays of the complete `fp_quantized.metal` source now advance past
 `epilogue_op.apply` for both DirectX and OpenGL. The receiver declaration is
 `thread const TransformNone_float_float& epilogue_op`. This frontier combines
 helper array-decay deduction, specialized struct constexpr assertion evaluation,
@@ -961,6 +961,17 @@ for all 32 lanes and records `mlx_steel_BaseMMAFrag_get_coord` provenance. This
 is source-specific evidence for the pinned MLX specialization; it is not a
 universal layout claim for Metal cooperative matrices.
 
+The materialized CrossGL AST contains 16 `CooperativeMatrixType` nodes. Before
+the current contract-flow change, two nodes carried the complete 12-field
+contract. In the verified replay, all 16 carry the `metal_thread_elements`
+layout, subgroup size 32, two elements per lane,
+`metal_thread_elements_reference_view` provenance, the `tile_4x4_row_pair`
+mapping, and `mlx_steel_BaseMMAFrag_get_coord` mapping provenance. The same AST
+contains eight `CooperativeMatrixOpNode` operations: seven `element` operations
+and one `multiply_accumulate` operation. All eight still have an unset
+`result_type`; CrossGL/crosstl#1610 tracks that remaining expression-contract
+gap.
+
 DirectX next fails closed with
 `project.translate.directx-cooperative-matrix-unsupported` and OpenGL with
 `project.translate.opengl-cooperative-matrix-unsupported`. Both diagnostics
@@ -969,8 +980,10 @@ identify
 substituting an ordinary HLSL or GLSL matrix would change distributed fragment
 semantics. CrossGL/crosstl#1602 remains the immediate target-lowering blocker.
 CrossGL/crosstl#1820 remains open for target mapping policy, software fallback,
-and numerical verification. Neither run emits a target artifact. This evidence
-does not claim runtime integration or numerical parity.
+and numerical verification. DirectX and OpenGL target policy and software
+fallback are not implemented. Neither run emits a target artifact. These replays
+do not establish successful source translation, runtime execution, or numerical
+parity.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.
