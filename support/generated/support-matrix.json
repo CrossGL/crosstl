@@ -12116,6 +12116,192 @@
     },
     {
       "category": "project",
+      "description": "Build deterministic native loader ABI metadata, C declarations, and multi-unit packages from ready runtime loader units without creating runtime objects or dispatching device work.",
+      "id": "project.native_loader_abi",
+      "name": "Native loader ABI descriptors",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates every unit before publishing target-scoped descriptors, headers, and a hashed package manifest. DirectX and OpenGL integration tests exercise target-specific namespace mappings and deterministic multi-unit publication; other ready loader units preserve reflected resource kinds without claiming a native runtime adapter. This contract does not instantiate runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates all units before writing target-scoped descriptors, headers, and a hashed package manifest. Package integration tests cover translated DirectX and OpenGL artifacts, deterministic multi-unit publication, fail-before-write behavior, and native compilation of generated headers. This contract does not instantiate Direct3D or OpenGL runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates every unit before publishing target-scoped descriptors, headers, and a hashed package manifest. DirectX and OpenGL integration tests exercise target-specific namespace mappings and deterministic multi-unit publication; other ready loader units preserve reflected resource kinds without claiming a native runtime adapter. This contract does not instantiate runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates every unit before publishing target-scoped descriptors, headers, and a hashed package manifest. DirectX and OpenGL integration tests exercise target-specific namespace mappings and deterministic multi-unit publication; other ready loader units preserve reflected resource kinds without claiming a native runtime adapter. This contract does not instantiate runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates every unit before publishing target-scoped descriptors, headers, and a hashed package manifest. DirectX and OpenGL integration tests exercise target-specific namespace mappings and deterministic multi-unit publication; other ready loader units preserve reflected resource kinds without claiming a native runtime adapter. This contract does not instantiate runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates all units before writing target-scoped descriptors, headers, and a hashed package manifest. Package integration tests cover translated DirectX and OpenGL artifacts, deterministic multi-unit publication, fail-before-write behavior, and native compilation of generated headers. This contract does not instantiate Direct3D or OpenGL runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates every unit before publishing target-scoped descriptors, headers, and a hashed package manifest. DirectX and OpenGL integration tests exercise target-specific namespace mappings and deterministic multi-unit publication; other ready loader units preserve reflected resource kinds without claiming a native runtime adapter. This contract does not instantiate runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates every unit before publishing target-scoped descriptors, headers, and a hashed package manifest. DirectX and OpenGL integration tests exercise target-specific namespace mappings and deterministic multi-unit publication; other ready loader units preserve reflected resource kinds without claiming a native runtime adapter. This contract does not instantiate runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates every unit before publishing target-scoped descriptors, headers, and a hashed package manifest. DirectX and OpenGL integration tests exercise target-specific namespace mappings and deterministic multi-unit publication; other ready loader units preserve reflected resource kinds without claiming a native runtime adapter. This contract does not instantiate runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates every unit before publishing target-scoped descriptors, headers, and a hashed package manifest. DirectX and OpenGL integration tests exercise target-specific namespace mappings and deterministic multi-unit publication; other ready loader units preserve reflected resource kinds without claiming a native runtime adapter. This contract does not instantiate runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_output_is_deterministic_from_loader_manifest",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_rejects_blocked_or_incomplete_units",
+            "tests/test_translator/test_native_loader_abi.py::def test_native_loader_abi_manifest_requires_explicit_multi_unit_selection",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_generated_runtime_loader_headers_compile",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_emits_json_descriptor",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_declarations",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_blocked_units_before_writing",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_abi_package_rejects_duplicate_unit_ids",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_runtime_loader_headers_compile"
+          ],
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded C11 and C++17 declarations, native-loader-abi exposes JSON and optional header output, and build_native_loader_abi_package validates every unit before publishing target-scoped descriptors, headers, and a hashed package manifest. DirectX and OpenGL integration tests exercise target-specific namespace mappings and deterministic multi-unit publication; other ready loader units preserve reflected resource kinds without claiming a native runtime adapter. This contract does not instantiate runtime objects, dispatch device work, rewrite host code, or prove MLX test parity.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Plan and report backend-agnostic runtime tests for translated project artifacts.",
       "id": "project.runtime_test_manifest",
       "name": "Runtime test manifest",
@@ -16632,12 +16818,12 @@
   "summary": {
     "backend_count": 11,
     "backlog_count": 0,
-    "feature_count": 76,
+    "feature_count": 77,
     "status_counts": {
       "cuda": {
         "diagnostic": 8,
         "partial": 0,
-        "supported": 65,
+        "supported": 66,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 3
@@ -16645,7 +16831,7 @@
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 74,
+        "supported": 75,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -16653,7 +16839,7 @@
       "hip": {
         "diagnostic": 8,
         "partial": 0,
-        "supported": 65,
+        "supported": 66,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 3
@@ -16661,7 +16847,7 @@
       "metal": {
         "diagnostic": 4,
         "partial": 0,
-        "supported": 69,
+        "supported": 70,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 3
@@ -16669,7 +16855,7 @@
       "mojo": {
         "diagnostic": 6,
         "partial": 0,
-        "supported": 67,
+        "supported": 68,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 3
@@ -16677,7 +16863,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 73,
+        "supported": 74,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1
@@ -16685,7 +16871,7 @@
       "rust": {
         "diagnostic": 5,
         "partial": 0,
-        "supported": 68,
+        "supported": 69,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 3
@@ -16693,7 +16879,7 @@
       "slang": {
         "diagnostic": 4,
         "partial": 0,
-        "supported": 69,
+        "supported": 70,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 3
@@ -16701,7 +16887,7 @@
       "vulkan": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 71,
+        "supported": 72,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 3
@@ -16709,7 +16895,7 @@
       "webgl": {
         "diagnostic": 23,
         "partial": 0,
-        "supported": 41,
+        "supported": 42,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 12
@@ -16717,7 +16903,7 @@
       "wgsl": {
         "diagnostic": 21,
         "partial": 0,
-        "supported": 45,
+        "supported": 46,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 10
