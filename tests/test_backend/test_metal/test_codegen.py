@@ -5946,6 +5946,36 @@ def test_codegen_materializes_local_typedef_struct_per_value_specialization():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_folds_transitive_constexpr_local_struct_extent():
+    crossgl = convert("""
+        template <int WordSize = 8, int Bits = 4>
+        constexpr short get_pack_factor() {
+            return WordSize / Bits;
+        }
+
+        template <int WordSize = 8>
+        constexpr short get_bytes_per_pack() {
+            return WordSize / 8;
+        }
+
+        [[kernel]] void make_block_float_16_4() {
+            constexpr int pack_factor = get_pack_factor<32, 4>();
+            constexpr int bytes_per_pack = get_bytes_per_pack();
+            constexpr int width = 16 / pack_factor;
+            using Word = uint32_t;
+            typedef struct {
+                Word values[width * bytes_per_pack];
+            } Block;
+            thread Block local;
+        }
+        """)
+
+    assert "struct MetalLocal_make_block_float_16_4_Block" in crossgl
+    assert "uint[2] values;" in crossgl
+    assert "thread MetalLocal_make_block_float_16_4_Block local" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_isolates_same_named_local_structs_between_sibling_functions():
     crossgl = convert("""
         uint first() {

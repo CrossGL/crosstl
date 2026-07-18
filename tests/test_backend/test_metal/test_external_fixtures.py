@@ -1040,7 +1040,7 @@ EXTERNAL_FIXTURES = [
         "source_path": "mlx/backend/metal/kernels/fp_quantized.h",
         "roundtrip": True,
         "contains": [
-            "const int bytes_per_pack = get_bytes_per_pack_32();",
+            "const int bytes_per_pack = 4;",
             "int16 get_bytes_per_pack_32()",
             "return 32 / 8;",
         ],

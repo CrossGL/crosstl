@@ -6086,6 +6086,16 @@ class MetalToCrossGLConverter:
             for name, candidates in self.value_template_functions.items()
             if any(self.function_is_constexpr(function) for function in candidates)
         }
+        for function in functions:
+            if (
+                isinstance(function, FunctionNode)
+                and getattr(function, "name", None)
+                and not getattr(function, "template_parameters", None)
+                and self.function_is_constexpr(function)
+            ):
+                self.constexpr_value_template_functions.setdefault(
+                    function.name, []
+                ).append(function)
         self.constexpr_helper_values = {}
         self.constexpr_helper_resolution_stack = []
         self.default_value_template_bindings = {}
@@ -6173,8 +6183,12 @@ class MetalToCrossGLConverter:
         expression,
         *,
         required,
+        allow_concrete_without_bindings=False,
     ):
-        if not self.current_function_materialization_bindings:
+        if (
+            not self.current_function_materialization_bindings
+            and not allow_concrete_without_bindings
+        ):
             return False
         self.materialized_constexpr_expression_contexts.append(
             {
@@ -6235,7 +6249,6 @@ class MetalToCrossGLConverter:
             if (
                 materialization_context is not None
                 and not materialization_context["required"]
-                and error.argument_kind in {"call", "constexpr_body"}
             ):
                 return None
             if materialization_context is None or getattr(
@@ -9384,7 +9397,8 @@ class MetalToCrossGLConverter:
             self.is_supported_constexpr_local_declaration(node)
             and self.push_materialized_constexpr_expression_context(
                 node.right,
-                required=True,
+                required=bool(self.current_function_materialization_bindings),
+                allow_concrete_without_bindings=True,
             )
         )
         initializer_type = None
