@@ -2368,32 +2368,89 @@ def test_cooperative_matrix_fragment_mapping_contract_tracks_pinned_source():
             "cooperativeMatrixType": matrix_type,
             "materializedSpecializationCount": 588,
             "unsupportedSpecializationCount": 0,
+            "sourceContracts": {
+                "cooperativeMatrixTypeCount": 16,
+                "completeTwelveFieldContractCount": 16,
+            },
+            "operationContracts": {
+                "operationCount": 8,
+                "element": {
+                    "count": 7,
+                    "expressionType": "float",
+                    "matrixResultTypeCount": 0,
+                    "matrixResultTypeRequired": False,
+                },
+                "multiplyAccumulate": {
+                    "count": 1,
+                    "expressionType": matrix_type,
+                    "resultType": matrix_type,
+                    "completeTwelveFieldContractCount": 1,
+                    "preservesAccumulatorRepresentation": True,
+                },
+                "resolvedIssue": "https://github.com/CrossGL/crosstl/issues/1610",
+            },
+            "softwareLowering": {
+                "status": "lane-local-foundation",
+                "mode": "explicit-opt-in",
+                "targets": ["directx", "opengl"],
+                "supportedOperations": [
+                    "type-representation",
+                    "element",
+                    "negate",
+                    "elementwise-add",
+                    "elementwise-subtract",
+                    "elementwise-multiply",
+                ],
+                "failClosedOperations": [
+                    "load",
+                    "store",
+                    "multiply",
+                    "multiply-accumulate",
+                ],
+                "defaultEnabled": False,
+                "projectConfigurationWired": False,
+            },
             "targets": {
                 "directx": {
                     "boundaryDiagnostic": (
-                        "project.translate.directx-cooperative-matrix-unsupported"
+                        "project.translate.directx-private-pointer-unsupported"
                     ),
-                    "missingCapability": "directx.cooperative-matrix-lowering",
+                    "missingCapability": "directx.private-pointer-parameter-lowering",
+                    "reason": "missing-fixed-array-extent",
+                    "function": "qdot_float_values_per_thread_4",
+                    "parameter": "x_thread",
                     "artifactEmitted": False,
                 },
                 "opengl": {
                     "boundaryDiagnostic": (
-                        "project.translate.opengl-cooperative-matrix-unsupported"
+                        "project.translate.opengl-private-pointer-unsupported"
                     ),
-                    "missingCapability": "opengl.cooperative-matrix-lowering",
+                    "missingCapability": "opengl.private-pointer-parameter-lowering",
+                    "reason": "missing-view-backing",
+                    "function": "load_vector_float_float_values_per_thread",
+                    "parameter": "x_thread",
                     "artifactEmitted": False,
                 },
             },
         },
         "scope": {
             "sourceCoordinateMappingVerified": True,
+            "expressionResultInferenceImplemented": True,
+            "laneLocalSoftwareLoweringFoundationImplemented": True,
             "targetPolicyImplemented": False,
-            "softwareFallbackImplemented": False,
+            "fullSoftwareFallbackImplemented": False,
+            "defaultTargetBehavior": "fail-closed",
+            "projectConfigurationWired": False,
             "runtimeIntegrationIncluded": False,
             "numericalParityVerified": False,
+            "resolvedIssues": [
+                "https://github.com/CrossGL/crosstl/issues/1610",
+                "https://github.com/CrossGL/crosstl/issues/1823",
+            ],
             "trackedIssues": [
                 "https://github.com/CrossGL/crosstl/issues/1602",
                 "https://github.com/CrossGL/crosstl/issues/1820",
+                "https://github.com/CrossGL/crosstl/issues/1824",
             ],
         },
     }
@@ -2435,12 +2492,14 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     cooperative_matrix_issue = "https://github.com/CrossGL/crosstl/issues/1602"
     operation_result_type_issue = "https://github.com/CrossGL/crosstl/issues/1610"
     coordinate_mapping_issue = "https://github.com/CrossGL/crosstl/issues/1820"
+    opengl_analyzer_issue = "https://github.com/CrossGL/crosstl/issues/1823"
+    source_materialization_issue = "https://github.com/CrossGL/crosstl/issues/1824"
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1807"
 
     status = expected_gaps["fp_quantized_contextual_materialization_status"]
 
     assert status == {
-        "status": "blocked-at-target-cooperative-matrix-lowering",
+        "status": "blocked-with-opt-in-lane-local-lowering",
         "source": "mlx/backend/metal/kernels/fp_quantized.metal",
         "repository_commit": PINNED_MLX_COMMIT,
         "targets": ["directx", "opengl"],
@@ -2465,6 +2524,10 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             "whole-fragment-thread-elements-canonicalization",
             "cooperative-matrix-fragment-contract-provenance",
             "source-proven-cooperative-matrix-coordinate-mapping",
+            "cooperative-matrix-expression-result-inference",
+            "directx-lane-local-cooperative-matrix-software-lowering",
+            "opengl-lane-local-cooperative-matrix-software-lowering",
+            "opengl-private-pointer-unresolved-base-analysis",
         ],
         "contextual_receiver_resolved_by_commit": (
             "c7a3c61addf9ca523e09bc81252ab76340c3f82c"
@@ -2528,8 +2591,11 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
         "coordinate_mapping_status": {
             "source_contract": "contracts/cooperative-matrix-fragment-mapping.json",
             "source_coordinates_verified": True,
+            "lane_local_software_lowering_foundation_implemented": True,
             "target_policy_implemented": False,
-            "software_fallback_implemented": False,
+            "full_software_fallback_implemented": False,
+            "default_target_behavior": "fail-closed",
+            "project_configuration_wired": False,
             "numerical_parity_verified": False,
             "tracked_by": coordinate_mapping_issue,
         },
@@ -2550,67 +2616,111 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             },
         },
         "cooperative_matrix_operation_result_types": {
-            "status": "unresolved",
+            "status": "resolved-expression-contracts",
             "ast_node_type": "CooperativeMatrixOpNode",
             "ast_node_count": 8,
             "operation_counts": {"element": 7, "multiply_accumulate": 1},
-            "result_type_set_count": 0,
-            "result_type_unset_count": 8,
-            "tracked_by": operation_result_type_issue,
+            "expression_type_set_count": 8,
+            "element": {
+                "count": 7,
+                "expression_type": "float",
+                "matrix_result_type_set_count": 0,
+                "matrix_result_type_intentionally_absent_count": 7,
+            },
+            "multiply_accumulate": {
+                "count": 1,
+                "expression_type": (
+                    "CooperativeMatrix<float, 8, 8, subgroup, unspecified, "
+                    "unspecified, metal_thread_elements, 32, 2, "
+                    "metal_thread_elements_reference_view, "
+                    "tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>"
+                ),
+                "result_type": (
+                    "CooperativeMatrix<float, 8, 8, subgroup, unspecified, "
+                    "unspecified, metal_thread_elements, 32, 2, "
+                    "metal_thread_elements_reference_view, "
+                    "tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>"
+                ),
+                "complete_contract_field_count": 12,
+                "preserves_accumulator_representation": True,
+            },
+            "resolved_by": operation_result_type_issue,
+        },
+        "cooperative_matrix_software_lowering": {
+            "status": "lane-local-foundation",
+            "mode": "explicit-opt-in",
+            "registered_mapping": {
+                "matrix_shape": [8, 8],
+                "subgroup_size": 32,
+                "elements_per_lane": 2,
+                "mapping": "tile_4x4_row_pair",
+            },
+            "targets": ["directx", "opengl"],
+            "supported_operations": [
+                "type-representation",
+                "element",
+                "negate",
+                "elementwise-add",
+                "elementwise-subtract",
+                "elementwise-multiply",
+            ],
+            "fail_closed_operations": [
+                "load",
+                "store",
+                "multiply",
+                "multiply-accumulate",
+            ],
+            "default_enabled": False,
+            "project_configuration_wired": False,
+            "full_fallback_implemented": False,
+            "target_policy_implemented": False,
+            "runtime_execution_verified": False,
+            "numerical_parity_verified": False,
+            "tracked_by": [cooperative_matrix_issue, coordinate_mapping_issue],
         },
         "current_boundaries": {
             "directx": {
                 "diagnostic_code": (
-                    "project.translate.directx-cooperative-matrix-unsupported"
+                    "project.translate.directx-private-pointer-unsupported"
                 ),
-                "missing_capability": "directx.cooperative-matrix-lowering",
-                "cooperative_matrix_type": (
-                    "CooperativeMatrix<float, 8, 8, subgroup, unspecified, "
-                    "unspecified, metal_thread_elements, 32, 2, "
-                    "metal_thread_elements_reference_view, "
-                    "tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>"
-                ),
-                "fragment_contract": {
-                    "layout": "metal_thread_elements",
-                    "subgroup_size": 32,
-                    "elements_per_lane": 2,
-                    "provenance": "metal_thread_elements_reference_view",
-                    "mapping": "tile_4x4_row_pair",
-                    "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
+                "missing_capability": "directx.private-pointer-parameter-lowering",
+                "private_pointer": {
+                    "function": "qdot_float_values_per_thread_4",
+                    "parameter": "x_thread",
+                    "reason": "missing-fixed-array-extent",
                 },
-                "blocked_by": cooperative_matrix_issue,
+                "advanced_past": ["cooperative-matrix-type-representation"],
+                "artifact_emitted": False,
+                "blocked_by": source_materialization_issue,
             },
             "opengl": {
                 "diagnostic_code": (
-                    "project.translate.opengl-cooperative-matrix-unsupported"
+                    "project.translate.opengl-private-pointer-unsupported"
                 ),
-                "missing_capability": "opengl.cooperative-matrix-lowering",
-                "cooperative_matrix_type": (
-                    "CooperativeMatrix<float, 8, 8, subgroup, unspecified, "
-                    "unspecified, metal_thread_elements, 32, 2, "
-                    "metal_thread_elements_reference_view, "
-                    "tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>"
-                ),
-                "fragment_contract": {
-                    "layout": "metal_thread_elements",
-                    "subgroup_size": 32,
-                    "elements_per_lane": 2,
-                    "provenance": "metal_thread_elements_reference_view",
-                    "mapping": "tile_4x4_row_pair",
-                    "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
+                "missing_capability": "opengl.private-pointer-parameter-lowering",
+                "private_pointer": {
+                    "function": "load_vector_float_float_values_per_thread",
+                    "parameter": "x_thread",
+                    "reason": "missing-view-backing",
                 },
-                "blocked_by": cooperative_matrix_issue,
+                "advanced_past": ["cooperative-matrix-type-representation"],
+                "analyzer_guard": {
+                    "status": "resolved-on-branch",
+                    "issue": opengl_analyzer_issue,
+                },
+                "artifact_emitted": False,
+                "blocked_by": source_materialization_issue,
             },
         },
         "target_results": {
             "directx": {
-                "status": "blocked-as-expected",
+                "status": "blocked-with-opt-in-lane-local-lowering",
                 "artifact_emitted": False,
                 "specialization_count": 588,
                 "unsupported_specialization_count": 0,
             },
             "opengl": {
-                "status": "blocked-as-expected",
+                "status": "blocked-with-opt-in-lane-local-lowering",
                 "artifact_emitted": False,
                 "specialization_count": 588,
                 "unsupported_specialization_count": 0,
@@ -2622,6 +2732,8 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             indexed_alias_issue,
             whole_fragment_issue,
             fragment_contract_issue,
+            operation_result_type_issue,
+            opengl_analyzer_issue,
         ],
         "advanced_issue_contracts": [
             issue,
@@ -2637,7 +2749,8 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
         ],
         "remaining_blocked_by": [
             cooperative_matrix_issue,
-            operation_result_type_issue,
+            coordinate_mapping_issue,
+            source_materialization_issue,
         ],
         "source_translation_claimed": False,
         "runtime_integration_included": False,
@@ -2663,8 +2776,13 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert member_array_issue in expected_gaps["tracked_issues"]
     assert pointer_cast_issue in expected_gaps["tracked_issues"]
     assert cooperative_matrix_issue in expected_gaps["tracked_issues"]
-    assert operation_result_type_issue in expected_gaps["tracked_issues"]
     assert coordinate_mapping_issue in expected_gaps["tracked_issues"]
+    assert source_materialization_issue in expected_gaps["tracked_issues"]
+    assert operation_result_type_issue in expected_gaps["resolved_issues"]
+    assert operation_result_type_issue not in expected_gaps["tracked_issues"]
+    assert opengl_analyzer_issue in expected_gaps["resolved_issues"]
+    assert opengl_analyzer_issue not in expected_gaps["tracked_issues"]
+    assert source_materialization_issue not in expected_gaps["resolved_issues"]
 
     readme = MLX_README_PATH.read_text(encoding="utf-8")
     assert PINNED_MLX_COMMIT in readme
@@ -2678,8 +2796,12 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "`align_M` (ID 200)" in readme
     assert "`align_N` (ID 201)" in readme
     assert "`align_K` (ID 202)" in readme
-    assert "`project.translate.directx-cooperative-matrix-unsupported`" in readme
-    assert "`project.translate.opengl-cooperative-matrix-unsupported`" in readme
+    assert "`project.translate.directx-private-pointer-unsupported`" in readme
+    assert "`project.translate.opengl-private-pointer-unsupported`" in readme
+    assert "`missing-fixed-array-extent`" in readme
+    assert "`missing-view-backing`" in readme
+    assert "`qdot_float_values_per_thread_4.x_thread`" in readme
+    assert "`load_vector_float_float_values_per_thread.x_thread`" in readme
     assert "`BaseMMAFrag_float_8_8::kFragRows`" in readme
     assert "CrossGL/crosstl#1479" in readme
     assert "CrossGL/crosstl#1490" in readme
@@ -2697,6 +2819,8 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "CrossGL/crosstl#1602" in readme
     assert "CrossGL/crosstl#1610" in readme
     assert "CrossGL/crosstl#1820" in readme
+    assert "CrossGL/crosstl#1823" in readme
+    assert "CrossGL/crosstl#1824" in readme
     assert "ordered `cooperative_matrix_element` operations" in " ".join(readme.split())
     assert "`metal_thread_elements` layout" in " ".join(readme.split())
     assert "a 32-lane subgroup, two elements per lane" in " ".join(readme.split())
@@ -2705,17 +2829,38 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     )
     assert "`tile_4x4_row_pair` mapping" in " ".join(readme.split())
     assert "`mlx_steel_BaseMMAFrag_get_coord` provenance" in " ".join(readme.split())
-    assert "16 `CooperativeMatrixType` nodes" in " ".join(readme.split())
+    assert "16 source `CooperativeMatrixType` contract nodes" in " ".join(
+        readme.split()
+    )
     assert "two nodes carried the complete 12-field contract" in " ".join(
         readme.split()
     )
     assert "all 16 carry the `metal_thread_elements` layout" in " ".join(readme.split())
     assert "eight `CooperativeMatrixOpNode` operations" in " ".join(readme.split())
-    assert "All eight still have an unset `result_type`" in " ".join(readme.split())
+    assert "scalar `expression_type` `float`" in " ".join(readme.split())
+    assert "intentionally has no matrix `result_type`" in " ".join(readme.split())
+    assert (
+        "complete cooperative-matrix `result_type` and `expression_type`"
+        in " ".join(readme.split())
+    )
+    assert "explicit opt-in lane-local cooperative-matrix" in " ".join(readme.split())
+    assert "Reduced target tests compile and validate type representation" in " ".join(
+        readme.split()
+    )
+    assert (
+        "load, store, multiply, and multiply-accumulate operations remain fail closed"
+        in " ".join(readme.split())
+    )
+    assert "not wired through project profiles or configuration" in " ".join(
+        readme.split()
+    )
+    assert "`values_per_thread` extent remains symbolic" in " ".join(readme.split())
     assert "compile with the native Xcode Metal compiler" in " ".join(readme.split())
-    assert "Neither run emits a target artifact" in " ".join(readme.split())
-    assert "do not establish successful source translation" in " ".join(readme.split())
-    assert "runtime execution, or numerical parity" in " ".join(readme.split())
+    assert "Neither target emits an artifact" in " ".join(readme.split())
+    assert "do not establish complete source translation" in " ".join(readme.split())
+    assert "runtime integration, runtime execution, or numerical parity" in " ".join(
+        readme.split()
+    )
 
 
 def test_arange_reference_runtime_resolves_fixture_resource_aliases():

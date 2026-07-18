@@ -7283,14 +7283,14 @@ def test_codegen_nested_const_reference_alias_reaches_native_targets(tmp_path):
     using namespace metal;
 
     struct Tile {
-        static constexpr short width = 2;
+        static constexpr int width = 2;
         float2 val_frags[4];
 
-        constexpr thread float2& frag_at(short i, short j) {
+        constexpr thread float2& frag_at(int i, int j) {
             return val_frags[i * width + j];
         }
 
-        constexpr const thread float2& frag_at(short i, short j) const {
+        constexpr const thread float2& frag_at(int i, int j) const {
             return val_frags[i * width + j];
         }
     };
@@ -7298,9 +7298,9 @@ def test_codegen_nested_const_reference_alias_reaches_native_targets(tmp_path):
     struct StoreLoop {
         Tile Ctile;
 
-        void store(thread float2& stored, short i, short j) const {
+        void store(thread float2& stored, int i, int j) const {
             thread const auto& accum = Ctile.frag_at(i, j);
-            for (short k = 0; k < 2; ++k) {
+            for (int k = 0; k < 2; ++k) {
                 stored[k] = accum[k];
             }
         }

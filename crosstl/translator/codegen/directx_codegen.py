@@ -55,6 +55,7 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from ..cooperative_matrix import get_cooperative_matrix_fragment_mapping
 from ..standard_constants import render_standard_math_constant
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
@@ -1315,6 +1316,40 @@ class _DirectXResourceRegisterAllocator(dict):
 class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
+    DIRECTX_COOPERATIVE_MATRIX_COMPONENT_TYPES = {
+        "float": "float",
+        "f32": "float",
+        "int": "int",
+        "i32": "int",
+        "int32_t": "int",
+        "uint": "uint",
+        "u32": "uint",
+        "uint32_t": "uint",
+    }
+    DIRECTX_COOPERATIVE_MATRIX_LANE_LOCAL_OPERATIONS = frozenset(
+        {
+            "element",
+            "negate",
+            "elementwise_add",
+            "elementwise_subtract",
+            "elementwise_multiply",
+        }
+    )
+    DIRECTX_COOPERATIVE_MATRIX_CONTRACT_FIELDS = (
+        "component_type",
+        "rows",
+        "columns",
+        "scope",
+        "use",
+        "layout",
+        "fragment_layout",
+        "subgroup_size",
+        "elements_per_lane",
+        "fragment_provenance",
+        "fragment_mapping",
+        "fragment_mapping_provenance",
+    )
+
     HLSL_CLANG_TRAILING_ZERO_BUILTINS = frozenset(
         {"__builtin_ctz", "__builtin_ctzl", "__builtin_ctzll"}
     )
@@ -1840,9 +1875,18 @@ class HLSLCodeGen:
     HLSL_GLSL_BUILTIN_INT_CONSTANTS = GLSL_BUILTIN_INT_LIMITS
     HLSL_SPECIALIZATION_CONSTANT_TYPES = frozenset({"bool", "int", "uint", "float"})
 
-    def __init__(self, target_profile=None):
+    def __init__(
+        self,
+        target_profile=None,
+        *,
+        cooperative_matrix_software_lowering=False,
+    ):
         """Initialize DirectX type maps and per-generation resource state."""
+        if not isinstance(cooperative_matrix_software_lowering, bool):
+            raise TypeError("cooperative_matrix_software_lowering must be a boolean")
         self.target_profile = self.normalize_directx_target_profile(target_profile)
+        self.cooperative_matrix_software_lowering = cooperative_matrix_software_lowering
+        self.directx_cooperative_matrix_lowerings = {}
         self.texture_variables = set()
         self.sampler_variables = set()
         self.global_mixed_sampler_names = set()
@@ -2742,6 +2786,7 @@ class HLSLCodeGen:
     def generate_program(self, ast, target_stage=None):
         """Render an AST to HLSL, optionally filtering stage entry points."""
         target_stage = normalize_stage_name(target_stage)
+        self.directx_cooperative_matrix_lowerings = {}
         self.hlsl_builtin_option_available = False
         ast = self.with_hlsl_builtin_option_prelude(ast)
 
@@ -14186,11 +14231,479 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         operator = "==" if op == "==" else "!="
         return f"({subject_expr}.variant {operator} Option_Absent)"
 
+    def directx_cooperative_matrix_unsupported(
+        self,
+        message,
+        *,
+        operation,
+        matrix_type,
+        reason,
+        source_location=None,
+    ):
+        fragment_contract = _directx_cooperative_matrix_fragment_contract(matrix_type)
+        return DirectXCooperativeMatrixUnsupportedError(
+            message,
+            operation=operation,
+            matrix_type=matrix_type,
+            **fragment_contract,
+            reason=reason,
+            source_location=(
+                source_location
+                if source_location is not None
+                else getattr(matrix_type, "source_location", None)
+            ),
+        )
+
+    @classmethod
+    def directx_cooperative_matrix_contract_signature(cls, lowering):
+        return tuple(
+            lowering[field] for field in cls.DIRECTX_COOPERATIVE_MATRIX_CONTRACT_FIELDS
+        )
+
+    @classmethod
+    def directx_cooperative_matrix_contract_differences(cls, left, right):
+        return [
+            field
+            for field in cls.DIRECTX_COOPERATIVE_MATRIX_CONTRACT_FIELDS
+            if left[field] != right[field]
+        ]
+
+    def directx_cooperative_matrix_fragment_lowering(
+        self,
+        matrix_type,
+        *,
+        operation="type",
+        source_location=None,
+    ):
+        matrix_type = _directx_cooperative_matrix_contract_type(matrix_type)
+        if not isinstance(matrix_type, CooperativeMatrixType):
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering requires a "
+                "canonical CooperativeMatrix type contract",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="invalid-fragment-contract",
+                source_location=source_location,
+            )
+
+        concrete_dimensions = {
+            "rows": matrix_type.rows,
+            "columns": matrix_type.cols,
+            "subgroup_size": matrix_type.subgroup_size,
+            "elements_per_lane": matrix_type.elements_per_lane,
+        }
+        missing_dimensions = [
+            name for name, value in concrete_dimensions.items() if value is None
+        ]
+        if missing_dimensions:
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering requires concrete "
+                f"{', '.join(missing_dimensions)} values",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="missing-fragment-contract",
+                source_location=source_location,
+            )
+        symbolic_dimensions = [
+            name
+            for name, value in concrete_dimensions.items()
+            if type(value) is not int
+        ]
+        if symbolic_dimensions:
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering does not resolve "
+                "symbolic fragment dimensions: "
+                f"{', '.join(symbolic_dimensions)}",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="symbolic-fragment-contract",
+                source_location=source_location,
+            )
+
+        fragment_labels = {
+            "fragment_layout": matrix_type.fragment_layout,
+            "fragment_provenance": matrix_type.fragment_provenance,
+            "fragment_mapping": matrix_type.fragment_mapping,
+            "fragment_mapping_provenance": matrix_type.fragment_mapping_provenance,
+        }
+        missing_labels = [
+            name
+            for name, value in fragment_labels.items()
+            if value is None
+            or (isinstance(value, str) and value.strip().lower() in {"", "unspecified"})
+        ]
+        if missing_labels:
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering requires complete "
+                "fragment mapping and provenance fields: "
+                f"{', '.join(missing_labels)}",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="missing-fragment-contract",
+                source_location=source_location,
+            )
+        symbolic_labels = [
+            name
+            for name, value in fragment_labels.items()
+            if not isinstance(value, str) or not value.strip()
+        ]
+        if symbolic_labels:
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering requires concrete "
+                "fragment mapping labels: "
+                f"{', '.join(symbolic_labels)}",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="symbolic-fragment-contract",
+                source_location=source_location,
+            )
+
+        qualifier_labels = {
+            "scope": matrix_type.scope,
+            "use": matrix_type.use,
+            "layout": matrix_type.layout,
+        }
+        missing_qualifiers = [
+            name
+            for name, value in qualifier_labels.items()
+            if value is None or (isinstance(value, str) and not value.strip())
+        ]
+        if missing_qualifiers:
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering requires complete "
+                "matrix qualifier fields: "
+                f"{', '.join(missing_qualifiers)}",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="missing-fragment-contract",
+                source_location=source_location,
+            )
+        symbolic_qualifiers = [
+            name
+            for name, value in qualifier_labels.items()
+            if not isinstance(value, str)
+        ]
+        if symbolic_qualifiers:
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering requires concrete "
+                "matrix qualifier labels: "
+                f"{', '.join(symbolic_qualifiers)}",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="symbolic-fragment-contract",
+                source_location=source_location,
+            )
+
+        scope = matrix_type.scope.strip().lower().replace("-", "_")
+        if scope != "subgroup":
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering requires subgroup "
+                f"scope, got '{matrix_type.scope}'",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="incompatible-fragment-contract",
+                source_location=source_location,
+            )
+
+        mapping = get_cooperative_matrix_fragment_mapping(
+            matrix_type.fragment_mapping,
+            matrix_type.rows,
+            matrix_type.cols,
+            matrix_type.subgroup_size,
+            matrix_type.elements_per_lane,
+        )
+        if mapping is None:
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering has no registered "
+                f"fragment mapping for '{matrix_type.fragment_mapping}' with "
+                f"{matrix_type.rows}x{matrix_type.cols} elements across "
+                f"{matrix_type.subgroup_size} lanes and "
+                f"{matrix_type.elements_per_lane} elements per lane",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="unregistered-fragment-mapping",
+                source_location=source_location,
+            )
+
+        source_component_type = str(
+            self.type_name_string(matrix_type.element_type) or ""
+        ).strip()
+        component_type = self.DIRECTX_COOPERATIVE_MATRIX_COMPONENT_TYPES.get(
+            source_component_type
+        )
+        if (
+            component_type is None
+            or self.map_type(matrix_type.element_type) != component_type
+        ):
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering cannot safely "
+                f"represent component type '{source_component_type or 'unknown'}'",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="unsupported-component-type",
+                source_location=source_location,
+            )
+
+        elements_per_lane = matrix_type.elements_per_lane
+        if not 1 <= elements_per_lane <= 4:
+            raise self.directx_cooperative_matrix_unsupported(
+                "DirectX cooperative matrix software lowering currently requires "
+                "between one and four lane-local elements; got "
+                f"{elements_per_lane}",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="unsupported-lane-fragment-width",
+                source_location=source_location,
+            )
+        hlsl_type = (
+            component_type
+            if elements_per_lane == 1
+            else f"{component_type}{elements_per_lane}"
+        )
+        lowering = {
+            "source_component_type": source_component_type,
+            "component_type": component_type,
+            "hlsl_type": hlsl_type,
+            "rows": matrix_type.rows,
+            "columns": matrix_type.cols,
+            "scope": scope,
+            "use": matrix_type.use.strip(),
+            "layout": matrix_type.layout.strip(),
+            "fragment_layout": matrix_type.fragment_layout.strip(),
+            "subgroup_size": matrix_type.subgroup_size,
+            "elements_per_lane": elements_per_lane,
+            "fragment_provenance": matrix_type.fragment_provenance.strip(),
+            "fragment_mapping": mapping.name,
+            "fragment_mapping_contract": mapping,
+            "fragment_mapping_provenance": (
+                matrix_type.fragment_mapping_provenance.strip()
+            ),
+            "matrix_type": matrix_type,
+        }
+        signature = self.directx_cooperative_matrix_contract_signature(lowering)
+        existing = self.directx_cooperative_matrix_lowerings.get(signature)
+        if existing is not None:
+            return existing
+        self.directx_cooperative_matrix_lowerings[signature] = lowering
+        return lowering
+
+    def directx_cooperative_matrix_expression_type(self, expr):
+        if isinstance(expr, CooperativeMatrixOpNode):
+            if expr.operation == "element":
+                return None
+            return (
+                getattr(expr, "result_type", None)
+                or getattr(expr, "expression_type", None)
+                or self.current_expression_expected_type
+            )
+        if isinstance(expr, (IdentifierNode, VariableNode)):
+            name = getattr(expr, "name", None)
+            return self.local_variable_source_types.get(name) or (
+                self.variable_type_by_name(name)
+            )
+        if isinstance(expr, str):
+            return self.local_variable_source_types.get(expr) or (
+                self.variable_type_by_name(expr)
+            )
+        return self.expression_result_type(expr)
+
+    def directx_cooperative_matrix_operation_error(
+        self,
+        expr,
+        message,
+        *,
+        matrix_type=None,
+        reason,
+    ):
+        return self.directx_cooperative_matrix_unsupported(
+            message,
+            operation=expr.operation,
+            matrix_type=matrix_type,
+            reason=reason,
+            source_location=getattr(expr, "source_location", None),
+        )
+
+    def directx_cooperative_matrix_operation_lowering(self, expr):
+        operation = expr.operation
+        result_type = getattr(expr, "result_type", None)
+
+        if operation not in self.DIRECTX_COOPERATIVE_MATRIX_LANE_LOCAL_OPERATIONS:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX cooperative matrix software lowering is unavailable for "
+                f"non-lane-local operation '{operation}'",
+                matrix_type=result_type,
+                reason="unsupported-operation",
+            )
+
+        required_arity = {
+            "element": 2,
+            "negate": 1,
+            "elementwise_add": 2,
+            "elementwise_subtract": 2,
+            "elementwise_multiply": 2,
+        }[operation]
+        if len(expr.arguments) != required_arity:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                f"DirectX cooperative matrix {operation} requires exactly "
+                f"{required_arity} operands; got {len(expr.arguments)}",
+                matrix_type=result_type,
+                reason="invalid-operation-arity",
+            )
+
+        matrix_arguments = (
+            expr.arguments[:1] if operation in {"element", "negate"} else expr.arguments
+        )
+        operand_lowerings = []
+        for operand_index, argument in enumerate(matrix_arguments):
+            operand_type = self.directx_cooperative_matrix_expression_type(argument)
+            operand_type = _directx_cooperative_matrix_contract_type(operand_type)
+            if not isinstance(operand_type, CooperativeMatrixType):
+                raise self.directx_cooperative_matrix_operation_error(
+                    expr,
+                    "DirectX cooperative matrix software lowering requires a "
+                    f"concrete cooperative-matrix contract for operand "
+                    f"{operand_index}",
+                    matrix_type=result_type,
+                    reason="missing-operand-contract",
+                )
+            operand_lowerings.append(
+                self.directx_cooperative_matrix_fragment_lowering(
+                    operand_type,
+                    operation=operation,
+                    source_location=getattr(expr, "source_location", None),
+                )
+            )
+
+        if operation == "element":
+            expression_type = getattr(expr, "expression_type", None)
+            if expression_type is not None:
+                mapped_expression_type = self.map_type(expression_type)
+                component_type = operand_lowerings[0]["component_type"]
+                if mapped_expression_type != component_type:
+                    raise self.directx_cooperative_matrix_operation_error(
+                        expr,
+                        "DirectX cooperative matrix element access result type "
+                        f"'{mapped_expression_type}' does not match fragment "
+                        f"component type '{component_type}'",
+                        matrix_type=operand_lowerings[0]["matrix_type"],
+                        reason="incompatible-result-contract",
+                    )
+
+        result_lowerings = []
+        if operation != "element":
+            result_candidates = (
+                ("result", result_type),
+                ("expression", getattr(expr, "expression_type", None)),
+                ("contextual", self.current_expression_expected_type),
+            )
+            seen_candidates = set()
+            for source, candidate in result_candidates:
+                if candidate is None:
+                    continue
+                candidate_signature = self.type_name_string(candidate)
+                if candidate_signature in seen_candidates:
+                    continue
+                seen_candidates.add(candidate_signature)
+                matrix_candidate = _directx_cooperative_matrix_contract_type(candidate)
+                if not isinstance(matrix_candidate, CooperativeMatrixType):
+                    if source == "contextual" and candidate_signature in {
+                        "auto",
+                        "var",
+                    }:
+                        continue
+                    raise self.directx_cooperative_matrix_operation_error(
+                        expr,
+                        "DirectX cooperative matrix lane-local operation "
+                        f"'{operation}' has a non-cooperative {source} result "
+                        f"type '{candidate_signature}'",
+                        matrix_type=operand_lowerings[0]["matrix_type"],
+                        reason="incompatible-result-contract",
+                    )
+                result_lowerings.append(
+                    self.directx_cooperative_matrix_fragment_lowering(
+                        matrix_candidate,
+                        operation=operation,
+                        source_location=getattr(expr, "source_location", None),
+                    )
+                )
+
+        result_lowering = result_lowerings[0] if result_lowerings else None
+        reference_lowering = result_lowering or operand_lowerings[0]
+        compared_lowerings = [*result_lowerings[1:], *operand_lowerings]
+        for compared_lowering in compared_lowerings:
+            differences = self.directx_cooperative_matrix_contract_differences(
+                reference_lowering, compared_lowering
+            )
+            if differences:
+                raise self.directx_cooperative_matrix_operation_error(
+                    expr,
+                    "DirectX cooperative matrix software lowering requires "
+                    "identical lane-fragment contracts for every operand and "
+                    f"result; differing fields: {', '.join(differences)}",
+                    matrix_type=compared_lowering["matrix_type"],
+                    reason="incompatible-fragment-contract",
+                )
+
+        if operation == "element":
+            index_expr = expr.arguments[1]
+            index_type = self.expression_result_type(index_expr)
+            if index_type is None or self.map_type(index_type) not in {"int", "uint"}:
+                raise self.directx_cooperative_matrix_operation_error(
+                    expr,
+                    "DirectX cooperative matrix element access requires a scalar "
+                    "32-bit integer lane-local index",
+                    matrix_type=reference_lowering["matrix_type"],
+                    reason="invalid-element-index-type",
+                )
+            literal_index = self.literal_int_value(
+                index_expr, self.literal_int_constants
+            )
+            if literal_index is not None and not (
+                0 <= literal_index < reference_lowering["elements_per_lane"]
+            ):
+                raise self.directx_cooperative_matrix_operation_error(
+                    expr,
+                    "DirectX cooperative matrix lane-local element index "
+                    f"{literal_index} is outside [0, "
+                    f"{reference_lowering['elements_per_lane']})",
+                    matrix_type=reference_lowering["matrix_type"],
+                    reason="element-index-out-of-range",
+                )
+            matrix = self.generate_expression(expr.arguments[0])
+            if reference_lowering["elements_per_lane"] == 1:
+                if literal_index is None:
+                    raise self.directx_cooperative_matrix_operation_error(
+                        expr,
+                        "DirectX scalar lane fragments require a statically proven "
+                        "element index of zero",
+                        matrix_type=reference_lowering["matrix_type"],
+                        reason="unsupported-dynamic-element-index",
+                    )
+                return matrix
+            index = self.generate_expression(index_expr)
+            if not isinstance(expr.arguments[0], (IdentifierNode, VariableNode, str)):
+                matrix = f"({matrix})"
+            return f"{matrix}[{index}]"
+
+        rendered = [self.generate_expression(argument) for argument in expr.arguments]
+        if operation == "negate":
+            return f"(-{rendered[0]})"
+        operator = {
+            "elementwise_add": "+",
+            "elementwise_subtract": "-",
+            "elementwise_multiply": "*",
+        }[operation]
+        return f"({rendered[0]} {operator} {rendered[1]})"
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into HLSL expression syntax."""
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
+            if self.cooperative_matrix_software_lowering:
+                return self.directx_cooperative_matrix_operation_lowering(expr)
             operation = expr.operation
             matrix_type = getattr(expr, "result_type", None)
             fragment_contract = _directx_cooperative_matrix_fragment_contract(
@@ -38255,6 +38768,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "float"
 
         if isinstance(vtype, CooperativeMatrixType):
+            if self.cooperative_matrix_software_lowering:
+                return self.directx_cooperative_matrix_fragment_lowering(vtype)[
+                    "hlsl_type"
+                ]
             fragment_contract = _directx_cooperative_matrix_fragment_contract(vtype)
             fragment_contract_message = (
                 _directx_cooperative_matrix_fragment_contract_message(fragment_contract)
@@ -38288,6 +38805,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and cooperative_base.rsplit("::", 1)[-1] == "CooperativeMatrix"
         ):
             matrix_type = _directx_cooperative_matrix_contract_type(vtype)
+            if self.cooperative_matrix_software_lowering:
+                return self.directx_cooperative_matrix_fragment_lowering(matrix_type)[
+                    "hlsl_type"
+                ]
             fragment_contract = _directx_cooperative_matrix_fragment_contract(
                 matrix_type
             )

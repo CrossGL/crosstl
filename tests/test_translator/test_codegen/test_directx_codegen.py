@@ -80,6 +80,9 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXWorkgroupSizeError,
     HLSLCodeGen,
 )
+from crosstl.translator.cooperative_matrix import (
+    get_cooperative_matrix_fragment_mapping,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from tests.test_backend.test_SPIRV.test_codegen import (
@@ -1516,6 +1519,357 @@ def test_hlsl_type_node_renders_expression_generic_arguments():
         HLSLCodeGen().convert_type_node_to_string(type_node)
         == "LoopedElemToLoc<DIM, -1, OffsetT, General>"
     )
+
+
+def directx_cooperative_matrix_software_type(**overrides):
+    values = {
+        "element_type": PrimitiveType("float"),
+        "rows": 8,
+        "cols": 8,
+        "scope": "subgroup",
+        "use": "unspecified",
+        "layout": "unspecified",
+        "fragment_layout": "metal_thread_elements",
+        "subgroup_size": 32,
+        "elements_per_lane": 2,
+        "fragment_provenance": "metal_thread_elements_reference_view",
+        "fragment_mapping": "tile_4x4_row_pair",
+        "fragment_mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
+    }
+    values.update(overrides)
+    return CooperativeMatrixType(**values)
+
+
+def directx_cooperative_matrix_software_source():
+    matrix_type = (
+        "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, "
+        "metal_thread_elements, 32, 2, metal_thread_elements_reference_view, "
+        "tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>"
+    )
+    return f"""
+    shader CooperativeMatrixSoftwareLowering {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @ binding(0)) {{
+                {matrix_type} left;
+                {matrix_type} right;
+                cooperative_matrix_element(left, 0) = 1.0;
+                cooperative_matrix_element(left, 1) = 2.0;
+                cooperative_matrix_element(right, 0) = 3.0;
+                cooperative_matrix_element(right, 1) = 4.0;
+                {matrix_type} added = cooperative_matrix_add(left, right);
+                {matrix_type} subtracted =
+                    cooperative_matrix_subtract(added, right);
+                {matrix_type} multiplied =
+                    cooperative_matrix_elementwise_multiply(subtracted, right);
+                {matrix_type} negated = cooperative_matrix_negate(multiplied);
+                int element_index = 1;
+                output[0] = cooperative_matrix_element(negated, 0);
+                output[1] = cooperative_matrix_element(negated, element_index);
+            }}
+        }}
+    }}
+    """
+
+
+def test_hlsl_cooperative_matrix_software_lowering_is_strictly_opt_in():
+    matrix_type = directx_cooperative_matrix_software_type()
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        HLSLCodeGen(cooperative_matrix_software_lowering=False).map_type(matrix_type)
+
+    assert excinfo.value.reason == "unsupported-type"
+    assert "cooperative matrix type lowering is unavailable" in str(excinfo.value)
+
+
+def test_hlsl_cooperative_matrix_software_lowering_retains_exact_mapping_contract():
+    matrix_type = directx_cooperative_matrix_software_type()
+    codegen = HLSLCodeGen(cooperative_matrix_software_lowering=True)
+
+    assert codegen.map_type(matrix_type) == "float2"
+
+    assert len(codegen.directx_cooperative_matrix_lowerings) == 1
+    lowering = next(iter(codegen.directx_cooperative_matrix_lowerings.values()))
+    assert lowering["component_type"] == "float"
+    assert lowering["hlsl_type"] == "float2"
+    assert lowering["rows"] == 8
+    assert lowering["columns"] == 8
+    assert lowering["scope"] == "subgroup"
+    assert lowering["fragment_layout"] == "metal_thread_elements"
+    assert lowering["subgroup_size"] == 32
+    assert lowering["elements_per_lane"] == 2
+    assert lowering["fragment_provenance"] == "metal_thread_elements_reference_view"
+    assert lowering["fragment_mapping"] == "tile_4x4_row_pair"
+    assert lowering[
+        "fragment_mapping_contract"
+    ] is get_cooperative_matrix_fragment_mapping("tile_4x4_row_pair", 8, 8, 32, 2)
+    assert lowering["fragment_mapping_provenance"] == "mlx_steel_BaseMMAFrag_get_coord"
+
+
+def test_hlsl_cooperative_matrix_software_lowering_generates_lane_local_hlsl(
+    tmp_path,
+):
+    codegen = HLSLCodeGen(cooperative_matrix_software_lowering=True)
+
+    generated = codegen.generate(
+        crosstl.translator.parse(directx_cooperative_matrix_software_source())
+    )
+
+    assert "CooperativeMatrix" not in generated
+    assert "float2 left;" in generated
+    assert "left[0] = 1.0;" in generated
+    assert "float2 added = (left + right);" in generated
+    assert "float2 subtracted = (added - right);" in generated
+    assert "float2 multiplied = (subtracted * right);" in generated
+    assert "float2 negated = (-multiplied);" in generated
+    assert "output[0] = negated[0];" in generated
+    assert "output[1] = negated[element_index];" in generated
+    assert len(codegen.directx_cooperative_matrix_lowerings) == 1
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_cooperative_matrix_software_lowering_resets_generation_state():
+    codegen = HLSLCodeGen(cooperative_matrix_software_lowering=True)
+    matrix_ast = crosstl.translator.parse(directx_cooperative_matrix_software_source())
+
+    first = codegen.generate(matrix_ast)
+    first_contracts = tuple(codegen.directx_cooperative_matrix_lowerings)
+    second = codegen.generate(matrix_ast)
+
+    assert second == first
+    assert tuple(codegen.directx_cooperative_matrix_lowerings) == first_contracts
+
+    plain_ast = crosstl.translator.parse("""
+        shader PlainCompute {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main(RWStructuredBuffer<float> output @ binding(0)) {
+                    output[0] = 1.0;
+                }
+            }
+        }
+    """)
+    plain_first = codegen.generate(plain_ast)
+
+    assert codegen.directx_cooperative_matrix_lowerings == {}
+    assert codegen.generate(plain_ast) == plain_first
+    assert codegen.directx_cooperative_matrix_lowerings == {}
+
+
+def test_hlsl_cooperative_matrix_software_lowering_rejects_unknown_mapping():
+    matrix_type = directx_cooperative_matrix_software_type(
+        fragment_mapping="unknown_fragment_mapping"
+    )
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        HLSLCodeGen(cooperative_matrix_software_lowering=True).map_type(matrix_type)
+
+    diagnostic = excinfo.value
+    assert diagnostic.reason == "unregistered-fragment-mapping"
+    assert diagnostic.operation == "type"
+    assert diagnostic.fragment_mapping == "unknown_fragment_mapping"
+    assert diagnostic.details["fragmentMappingProvenance"] == (
+        "mlx_steel_BaseMMAFrag_get_coord"
+    )
+
+
+@pytest.mark.parametrize(
+    ("matrix_type", "reason"),
+    [
+        (
+            directx_cooperative_matrix_software_type(
+                fragment_mapping=None,
+                fragment_mapping_provenance=None,
+            ),
+            "missing-fragment-contract",
+        ),
+        (
+            directx_cooperative_matrix_software_type(
+                rows=NamedType("ROWS"),
+            ),
+            "symbolic-fragment-contract",
+        ),
+        (
+            directx_cooperative_matrix_software_type(scope="workgroup"),
+            "incompatible-fragment-contract",
+        ),
+        (
+            directx_cooperative_matrix_software_type(
+                element_type=PrimitiveType("half")
+            ),
+            "unsupported-component-type",
+        ),
+        (
+            directx_cooperative_matrix_software_type(fragment_provenance=""),
+            "missing-fragment-contract",
+        ),
+        (
+            directx_cooperative_matrix_software_type(use=None),
+            "missing-fragment-contract",
+        ),
+        (
+            directx_cooperative_matrix_software_type(layout=NamedType("LAYOUT")),
+            "symbolic-fragment-contract",
+        ),
+    ],
+)
+def test_hlsl_cooperative_matrix_software_lowering_rejects_unsafe_contracts(
+    matrix_type, reason
+):
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        HLSLCodeGen(cooperative_matrix_software_lowering=True).map_type(matrix_type)
+
+    assert excinfo.value.reason == reason
+    assert excinfo.value.operation == "type"
+
+
+@pytest.mark.parametrize(
+    ("right_overrides", "differing_field"),
+    [
+        ({"use": "matrix_b"}, "use"),
+        ({"layout": "column_major"}, "layout"),
+        ({"fragment_layout": "dense"}, "fragment_layout"),
+        ({"fragment_provenance": "alternate_reference"}, "fragment_provenance"),
+        (
+            {"fragment_mapping_provenance": "alternate_helper"},
+            "fragment_mapping_provenance",
+        ),
+    ],
+)
+def test_hlsl_cooperative_matrix_software_lowering_rejects_incompatible_operands(
+    right_overrides, differing_field
+):
+    left_type = directx_cooperative_matrix_software_type()
+    right_type = directx_cooperative_matrix_software_type(**right_overrides)
+    operation = CooperativeMatrixOpNode(
+        "elementwise_add",
+        [IdentifierNode("left"), IdentifierNode("right")],
+        result_type=left_type,
+    )
+    codegen = HLSLCodeGen(cooperative_matrix_software_lowering=True)
+    codegen.local_variable_source_types = {
+        "left": left_type,
+        "right": right_type,
+    }
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        codegen.generate_expression(operation)
+
+    assert excinfo.value.reason == "incompatible-fragment-contract"
+    assert excinfo.value.operation == "elementwise_add"
+    assert f"differing fields: {differing_field}" in str(excinfo.value)
+
+
+def test_hlsl_cooperative_matrix_software_lowering_rejects_scalar_matrix_result():
+    matrix_type = directx_cooperative_matrix_software_type()
+    operation = CooperativeMatrixOpNode(
+        "elementwise_add",
+        [IdentifierNode("left"), IdentifierNode("right")],
+        expression_type=PrimitiveType("float"),
+    )
+    codegen = HLSLCodeGen(cooperative_matrix_software_lowering=True)
+    codegen.local_variable_source_types = {
+        "left": matrix_type,
+        "right": matrix_type,
+    }
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        codegen.generate_expression(operation)
+
+    assert excinfo.value.reason == "incompatible-result-contract"
+    assert excinfo.value.operation == "elementwise_add"
+    assert "non-cooperative expression result type 'float'" in str(excinfo.value)
+
+
+def test_hlsl_cooperative_matrix_software_lowering_rejects_scalar_context():
+    matrix_type = directx_cooperative_matrix_software_type()
+    operation = CooperativeMatrixOpNode(
+        "negate",
+        [IdentifierNode("matrix")],
+        result_type=matrix_type,
+    )
+    codegen = HLSLCodeGen(cooperative_matrix_software_lowering=True)
+    codegen.local_variable_source_types = {"matrix": matrix_type}
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        codegen.generate_expression_with_expected(operation, PrimitiveType("float"))
+
+    assert excinfo.value.reason == "incompatible-result-contract"
+    assert excinfo.value.operation == "negate"
+    assert "non-cooperative contextual result type 'float'" in str(excinfo.value)
+
+
+def test_hlsl_cooperative_matrix_software_lowering_rejects_element_type_mismatch():
+    matrix_type = directx_cooperative_matrix_software_type()
+    operation = CooperativeMatrixOpNode(
+        "element",
+        [
+            IdentifierNode("matrix"),
+            LiteralNode(0, PrimitiveType("int")),
+        ],
+        expression_type=PrimitiveType("int"),
+    )
+    codegen = HLSLCodeGen(cooperative_matrix_software_lowering=True)
+    codegen.local_variable_source_types = {"matrix": matrix_type}
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        codegen.generate_expression(operation)
+
+    assert excinfo.value.reason == "incompatible-result-contract"
+    assert excinfo.value.operation == "element"
+    assert "result type 'int' does not match fragment component type 'float'" in str(
+        excinfo.value
+    )
+
+
+def test_hlsl_cooperative_matrix_software_lowering_rejects_contextual_contract_mismatch():
+    matrix_type = directx_cooperative_matrix_software_type()
+    contextual_type = directx_cooperative_matrix_software_type(
+        fragment_provenance="alternate_reference"
+    )
+    operation = CooperativeMatrixOpNode(
+        "negate",
+        [IdentifierNode("matrix")],
+        result_type=matrix_type,
+    )
+    codegen = HLSLCodeGen(cooperative_matrix_software_lowering=True)
+    codegen.local_variable_source_types = {"matrix": matrix_type}
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        codegen.generate_expression_with_expected(operation, contextual_type)
+
+    assert excinfo.value.reason == "incompatible-fragment-contract"
+    assert excinfo.value.operation == "negate"
+    assert "differing fields: fragment_provenance" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["load", "store", "multiply", "multiply_accumulate"],
+)
+def test_hlsl_cooperative_matrix_software_lowering_rejects_non_lane_local_operations(
+    operation,
+):
+    matrix_type = directx_cooperative_matrix_software_type()
+    matrix_op = CooperativeMatrixOpNode(
+        operation,
+        [],
+        result_type=matrix_type,
+    )
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        HLSLCodeGen(cooperative_matrix_software_lowering=True).generate_expression(
+            matrix_op
+        )
+
+    diagnostic = excinfo.value
+    assert diagnostic.reason == "unsupported-operation"
+    assert diagnostic.operation == operation
+    assert diagnostic.fragment_mapping == "tile_4x4_row_pair"
+    assert "non-lane-local operation" in str(diagnostic)
 
 
 def test_hlsl_cooperative_matrix_type_reports_structured_diagnostic():

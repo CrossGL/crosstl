@@ -1660,17 +1660,31 @@ class CooperativeMatrixOpNode(ExpressionNode):
         operation: str,
         arguments: List[ExpressionNode],
         result_type: Optional[CooperativeMatrixType] = None,
+        expression_type: Optional[TypeNode] = None,
         **kwargs,
     ):
         if operation not in self.SUPPORTED_OPERATIONS:
             raise ValueError(f"Unsupported cooperative matrix operation: {operation}")
-        super().__init__(expression_type=result_type, **kwargs)
+        resolved_expression_type = (
+            expression_type if expression_type is not None else result_type
+        )
+        super().__init__(expression_type=resolved_expression_type, **kwargs)
         self.operation = operation
         self.arguments = arguments
         self.result_type = result_type
 
         # Keep the common call-node alias available to existing visitors.
         self.args = arguments
+
+    def set_result_contract(self, result_type: CooperativeMatrixType):
+        """Set the matrix result contract and its expression-type aliases."""
+        self.result_type = result_type
+        self.set_expression_type(result_type)
+
+    def set_expression_type(self, expression_type: TypeNode):
+        """Set the expression type while retaining legacy visitor aliases."""
+        self.expression_type = expression_type
+        self.vtype = expression_type
 
     def __repr__(self):
         return (

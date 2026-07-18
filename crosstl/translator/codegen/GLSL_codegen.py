@@ -67,6 +67,10 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from ..cooperative_matrix import (
+    get_cooperative_matrix_fragment_mapping,
+    has_cooperative_matrix_fragment_mapping,
+)
 from ..standard_constants import render_standard_math_constant
 from ..structure_conversions import (
     ScalarKind,
@@ -1991,9 +1995,35 @@ class GLSLCodeGen:
         }
     )
     GLSL_THREADS_PER_GRID_EXPRESSION = "(gl_NumWorkGroups * gl_WorkGroupSize)"
+    GLSL_COOPERATIVE_MATRIX_COMPONENT_TYPES = {
+        "float": "float",
+        "f32": "float",
+        "double": "double",
+        "f64": "double",
+        "int": "int",
+        "i32": "int",
+        "int32": "int",
+        "int32_t": "int",
+        "uint": "uint",
+        "u32": "uint",
+        "uint32": "uint",
+        "uint32_t": "uint",
+        "i64": "int64_t",
+        "int64": "int64_t",
+        "int64_t": "int64_t",
+        "u64": "uint64_t",
+        "uint64": "uint64_t",
+        "uint64_t": "uint64_t",
+    }
 
-    def __init__(self):
+    def __init__(self, *, cooperative_matrix_software_lowering=False):
         """Initialize GLSL type maps and per-generation stage/resource state."""
+        if not isinstance(cooperative_matrix_software_lowering, bool):
+            raise TypeError("cooperative_matrix_software_lowering must be a boolean")
+        self.cooperative_matrix_software_lowering = cooperative_matrix_software_lowering
+        self.glsl_cooperative_matrix_fragment_contracts = {}
+        self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
+        self.required_glsl_cooperative_matrix_helpers = set()
         self.sampler_variables = set()
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
@@ -4252,6 +4282,9 @@ class GLSLCodeGen:
         self.local_variable_source_types = {}
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
+        self.glsl_cooperative_matrix_fragment_contracts = {}
+        self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
+        self.required_glsl_cooperative_matrix_helpers = set()
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.current_structured_buffer_access_parameters = {}
@@ -4473,6 +4506,7 @@ class GLSLCodeGen:
                 code += f"{line}\n"
         if extra_lines:
             code += "\n".join(extra_lines) + "\n"
+        cooperative_matrix_support_insertion_index = len(code)
         code += self.generate_glsl_enum_constants(
             self.plain_enums + self.struct_payload_enums,
             qualifier="const",
@@ -5370,6 +5404,15 @@ class GLSLCodeGen:
                 code[:generated_helper_insertion_index]
                 + generated_helpers
                 + code[generated_helper_insertion_index:]
+            )
+        cooperative_matrix_support = (
+            self.generate_glsl_cooperative_matrix_software_support()
+        )
+        if cooperative_matrix_support:
+            code = (
+                code[:cooperative_matrix_support_insertion_index]
+                + cooperative_matrix_support
+                + code[cooperative_matrix_support_insertion_index:]
             )
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)
@@ -16983,6 +17026,553 @@ class GLSLCodeGen:
         self.required_glsl_boolean_order_helpers.add((helper_name, func_name, width))
         return f"{helper_name}({left}, {right})"
 
+    def glsl_cooperative_matrix_error(
+        self,
+        message,
+        *,
+        operation,
+        matrix_type,
+        reason,
+        source_location=None,
+    ):
+        fragment_contract = _opengl_cooperative_matrix_fragment_contract(matrix_type)
+        raise OpenGLCooperativeMatrixError(
+            message,
+            operation=operation,
+            matrix_type=matrix_type,
+            **fragment_contract,
+            reason=reason,
+            source_location=(
+                source_location
+                if source_location is not None
+                else getattr(matrix_type, "source_location", None)
+            ),
+        )
+
+    @staticmethod
+    def glsl_cooperative_matrix_contract_label(value):
+        normalized = _opengl_cooperative_matrix_detail_value(value)
+        if normalized is None:
+            return None
+        return str(normalized).strip()
+
+    def glsl_cooperative_matrix_fragment_contract(
+        self,
+        matrix_type,
+        *,
+        operation="type",
+        source_location=None,
+    ):
+        matrix_type = _opengl_cooperative_matrix_contract_type(matrix_type)
+        if not isinstance(matrix_type, CooperativeMatrixType):
+            self.glsl_cooperative_matrix_error(
+                "OpenGL cooperative-matrix software lowering requires a canonical "
+                "CooperativeMatrix type contract",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="invalid-fragment-contract",
+                source_location=source_location,
+            )
+
+        fragment_contract = _opengl_cooperative_matrix_fragment_contract(matrix_type)
+        required_fields = {
+            "scope": matrix_type.scope,
+            "fragment_layout": fragment_contract["fragment_layout"],
+            "subgroup_size": fragment_contract["subgroup_size"],
+            "elements_per_lane": fragment_contract["elements_per_lane"],
+            "fragment_provenance": fragment_contract["fragment_provenance"],
+            "fragment_mapping": fragment_contract["fragment_mapping"],
+            "fragment_mapping_provenance": fragment_contract[
+                "fragment_mapping_provenance"
+            ],
+        }
+        missing_fields = sorted(
+            name
+            for name, value in required_fields.items()
+            if (
+                self.glsl_cooperative_matrix_contract_label(value) is None
+                or self.glsl_cooperative_matrix_contract_label(value).lower()
+                in {"", "unspecified"}
+            )
+        )
+        if missing_fields:
+            self.glsl_cooperative_matrix_error(
+                "OpenGL cooperative-matrix software lowering requires a complete "
+                "lane-fragment contract; missing " + ", ".join(missing_fields),
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="missing-fragment-contract",
+                source_location=source_location,
+            )
+
+        integer_fields = {
+            "rows": matrix_type.rows,
+            "columns": matrix_type.cols,
+            "subgroup_size": matrix_type.subgroup_size,
+            "elements_per_lane": matrix_type.elements_per_lane,
+        }
+        symbolic_fields = sorted(
+            name for name, value in integer_fields.items() if type(value) is not int
+        )
+        label_fields = {
+            "fragment_layout": matrix_type.fragment_layout,
+            "fragment_provenance": matrix_type.fragment_provenance,
+            "fragment_mapping": matrix_type.fragment_mapping,
+            "fragment_mapping_provenance": matrix_type.fragment_mapping_provenance,
+        }
+        symbolic_fields.extend(
+            sorted(
+                name
+                for name, value in label_fields.items()
+                if not isinstance(value, str)
+            )
+        )
+        if symbolic_fields:
+            self.glsl_cooperative_matrix_error(
+                "OpenGL cooperative-matrix software lowering requires concrete "
+                "lane-fragment values; symbolic " + ", ".join(symbolic_fields),
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="symbolic-fragment-contract",
+                source_location=source_location,
+            )
+
+        scope = self.glsl_cooperative_matrix_contract_label(matrix_type.scope)
+        if not isinstance(matrix_type.scope, str):
+            self.glsl_cooperative_matrix_error(
+                "OpenGL cooperative-matrix software lowering requires a concrete "
+                "execution scope",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="symbolic-fragment-contract",
+                source_location=source_location,
+            )
+        scope = scope.lower().replace("-", "_")
+        if scope != "subgroup":
+            self.glsl_cooperative_matrix_error(
+                "OpenGL cooperative-matrix software lowering requires subgroup "
+                f"scope for lane-local fragment ownership, got '{scope}'",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="incompatible-fragment-contract",
+                source_location=source_location,
+            )
+
+        mapping = get_cooperative_matrix_fragment_mapping(
+            matrix_type.fragment_mapping,
+            matrix_type.rows,
+            matrix_type.cols,
+            matrix_type.subgroup_size,
+            matrix_type.elements_per_lane,
+        )
+        if mapping is None:
+            mapping_name = self.glsl_cooperative_matrix_contract_label(
+                matrix_type.fragment_mapping
+            )
+            registered = has_cooperative_matrix_fragment_mapping(mapping_name)
+            reason = (
+                "incompatible-fragment-mapping"
+                if registered
+                else "unregistered-fragment-mapping"
+            )
+            qualifier = "incompatible" if registered else "unregistered"
+            self.glsl_cooperative_matrix_error(
+                "OpenGL cooperative-matrix software lowering cannot use "
+                f"{qualifier} fragment mapping '{mapping_name}' for "
+                f"{matrix_type.rows}x{matrix_type.cols}, subgroup_size="
+                f"{matrix_type.subgroup_size}, elements_per_lane="
+                f"{matrix_type.elements_per_lane}",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason=reason,
+                source_location=source_location,
+            )
+
+        component_source_type = str(
+            self.type_name_string(matrix_type.element_type) or ""
+        ).strip()
+        mapped_component_type = self.map_type(matrix_type.element_type)
+        expected_component_type = self.GLSL_COOPERATIVE_MATRIX_COMPONENT_TYPES.get(
+            component_source_type
+        )
+        if (
+            expected_component_type is None
+            or mapped_component_type != expected_component_type
+        ):
+            self.glsl_cooperative_matrix_error(
+                "OpenGL cooperative-matrix software lowering cannot represent "
+                f"component type '{component_source_type}' as a lane-local scalar",
+                operation=operation,
+                matrix_type=matrix_type,
+                reason="unsupported-component-type",
+                source_location=source_location,
+            )
+
+        use = self.glsl_cooperative_matrix_contract_label(matrix_type.use)
+        layout = self.glsl_cooperative_matrix_contract_label(matrix_type.layout)
+        fragment_layout = self.glsl_cooperative_matrix_contract_label(
+            matrix_type.fragment_layout
+        )
+        fragment_provenance = self.glsl_cooperative_matrix_contract_label(
+            matrix_type.fragment_provenance
+        )
+        fragment_mapping_provenance = self.glsl_cooperative_matrix_contract_label(
+            matrix_type.fragment_mapping_provenance
+        )
+        contract_key = (
+            component_source_type,
+            mapped_component_type,
+            matrix_type.rows,
+            matrix_type.cols,
+            scope,
+            use,
+            layout,
+            fragment_layout,
+            matrix_type.subgroup_size,
+            matrix_type.elements_per_lane,
+            fragment_provenance,
+            mapping.name,
+            fragment_mapping_provenance,
+        )
+        existing = self.glsl_cooperative_matrix_fragment_contracts_by_key.get(
+            contract_key
+        )
+        if existing is not None:
+            return existing
+
+        base_name = (
+            "crossgl_cooperative_matrix_fragment_"
+            f"{mapped_component_type}_{matrix_type.rows}x{matrix_type.cols}_"
+            f"{matrix_type.subgroup_size}x{matrix_type.elements_per_lane}_"
+            f"{mapping.name}"
+        )
+        type_name = self.glsl_generated_module_identifier(
+            ("cooperative-matrix-fragment-type", contract_key),
+            base_name,
+        )
+        contract = {
+            "type_name": type_name,
+            "contract_key": contract_key,
+            "matrix_type": matrix_type,
+            "component_type": component_source_type,
+            "mapped_component_type": mapped_component_type,
+            "rows": matrix_type.rows,
+            "columns": matrix_type.cols,
+            "scope": scope,
+            "use": use,
+            "layout": layout,
+            "fragment_layout": fragment_layout,
+            "subgroup_size": matrix_type.subgroup_size,
+            "elements_per_lane": matrix_type.elements_per_lane,
+            "fragment_provenance": fragment_provenance,
+            "fragment_mapping": mapping.name,
+            "fragment_mapping_provenance": fragment_mapping_provenance,
+            "fragment_mapping_contract": mapping,
+            "helpers": {},
+        }
+        self.glsl_cooperative_matrix_fragment_contracts[type_name] = contract
+        self.glsl_cooperative_matrix_fragment_contracts_by_key[contract_key] = contract
+        return contract
+
+    def glsl_cooperative_matrix_contract_for_type(
+        self,
+        type_value,
+        *,
+        operation,
+        source_location=None,
+    ):
+        if type_value is None:
+            return None
+        if isinstance(type_value, str):
+            existing = self.glsl_cooperative_matrix_fragment_contracts.get(type_value)
+            if existing is not None:
+                return existing
+        matrix_type = _opengl_cooperative_matrix_contract_type(type_value)
+        if not isinstance(matrix_type, CooperativeMatrixType):
+            return None
+        return self.glsl_cooperative_matrix_fragment_contract(
+            matrix_type,
+            operation=operation,
+            source_location=source_location,
+        )
+
+    def glsl_cooperative_matrix_expression_contract(self, expression, *, operation):
+        source_location = getattr(expression, "source_location", None)
+        candidates = [
+            getattr(expression, "result_type", None),
+            getattr(expression, "expression_type", None),
+            self.glsl_source_expression_type(expression),
+        ]
+        for candidate in candidates:
+            contract = self.glsl_cooperative_matrix_contract_for_type(
+                candidate,
+                operation=operation,
+                source_location=source_location,
+            )
+            if contract is not None:
+                return contract
+        if isinstance(expression, CooperativeMatrixOpNode) and expression.arguments:
+            if expression.operation != "element":
+                return self.glsl_cooperative_matrix_expression_contract(
+                    expression.arguments[0], operation=operation
+                )
+        return None
+
+    def glsl_cooperative_matrix_operation_error(
+        self,
+        node,
+        message,
+        *,
+        reason,
+        matrix_type=None,
+    ):
+        if matrix_type is None:
+            matrix_type = getattr(node, "result_type", None)
+        if matrix_type is None and getattr(node, "arguments", None):
+            operand_contract = self.glsl_cooperative_matrix_expression_contract(
+                node.arguments[0], operation=node.operation
+            )
+            if operand_contract is not None:
+                matrix_type = operand_contract["matrix_type"]
+        self.glsl_cooperative_matrix_error(
+            message,
+            operation=node.operation,
+            matrix_type=matrix_type,
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def glsl_cooperative_matrix_result_contract(self, node, operand_contracts):
+        result_candidates = (
+            ("result", getattr(node, "result_type", None)),
+            ("expression", getattr(node, "expression_type", None)),
+            ("contextual", self.current_expression_expected_type),
+        )
+        result_contract = None
+        for source, candidate in result_candidates:
+            if candidate is None:
+                continue
+            contract = self.glsl_cooperative_matrix_contract_for_type(
+                candidate,
+                operation=node.operation,
+                source_location=getattr(node, "source_location", None),
+            )
+            if contract is None:
+                candidate_name = self.type_name_string(candidate)
+                if source == "contextual" and candidate_name in {"auto", "var"}:
+                    continue
+                self.glsl_cooperative_matrix_operation_error(
+                    node,
+                    "OpenGL cooperative-matrix lane-local operation "
+                    f"'{node.operation}' received a non-cooperative {source} "
+                    f"result type '{candidate_name}'",
+                    reason="incompatible-result-contract",
+                    matrix_type=(
+                        operand_contracts[0]["matrix_type"]
+                        if operand_contracts
+                        else None
+                    ),
+                )
+            if result_contract is None:
+                result_contract = contract
+            elif contract["contract_key"] != result_contract["contract_key"]:
+                self.glsl_cooperative_matrix_operation_error(
+                    node,
+                    "OpenGL cooperative-matrix lane-local operation "
+                    f"'{node.operation}' has incompatible declared result "
+                    "contracts",
+                    reason="incompatible-result-contract",
+                    matrix_type=contract["matrix_type"],
+                )
+        return result_contract or (operand_contracts[0] if operand_contracts else None)
+
+    def glsl_cooperative_matrix_helper_name(self, contract, operation):
+        helper = contract["helpers"].get(operation)
+        if helper is not None:
+            return helper
+        helper = self.glsl_generated_module_identifier(
+            ("cooperative-matrix-fragment-helper", contract["contract_key"], operation),
+            f"{contract['type_name']}_{operation}",
+        )
+        contract["helpers"][operation] = helper
+        self.required_glsl_cooperative_matrix_helpers.add(
+            (contract["type_name"], operation)
+        )
+        return helper
+
+    def generate_glsl_cooperative_matrix_operation(self, node):
+        operation = node.operation
+        lane_local_arities = {
+            "element": 2,
+            "negate": 1,
+            "elementwise_add": 2,
+            "elementwise_subtract": 2,
+            "elementwise_multiply": 2,
+        }
+        expected_arity = lane_local_arities.get(operation)
+        if expected_arity is None:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                "OpenGL cooperative-matrix software lowering does not implement "
+                f"non-lane-local operation '{operation}'",
+                reason="non-lane-local-operation",
+            )
+        if len(node.arguments) != expected_arity:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                f"OpenGL cooperative-matrix operation '{operation}' expects "
+                f"{expected_arity} arguments, got {len(node.arguments)}",
+                reason="invalid-argument-count",
+            )
+
+        if operation == "element":
+            matrix_contract = self.glsl_cooperative_matrix_expression_contract(
+                node.arguments[0], operation=operation
+            )
+            if matrix_contract is None:
+                self.glsl_cooperative_matrix_operation_error(
+                    node,
+                    "OpenGL cooperative-matrix element access requires an operand "
+                    "with a complete lane-fragment contract",
+                    reason="missing-operand-contract",
+                )
+            declared_result_type = getattr(node, "expression_type", None)
+            if declared_result_type is not None:
+                declared_matrix_type = _opengl_cooperative_matrix_contract_type(
+                    declared_result_type
+                )
+                declared_component_type = (
+                    None
+                    if isinstance(declared_matrix_type, CooperativeMatrixType)
+                    else self.map_type(declared_result_type)
+                )
+                if declared_component_type != matrix_contract["mapped_component_type"]:
+                    self.glsl_cooperative_matrix_operation_error(
+                        node,
+                        "OpenGL cooperative-matrix element access result type "
+                        "does not match the lane-fragment component type",
+                        reason="incompatible-result-contract",
+                        matrix_type=matrix_contract["matrix_type"],
+                    )
+            index_node = node.arguments[1]
+            index_type = self.glsl_source_expression_type(index_node)
+            mapped_index_type = self.map_type(index_type) if index_type else None
+            if mapped_index_type not in {"int", "uint", "int64_t", "uint64_t"}:
+                self.glsl_cooperative_matrix_operation_error(
+                    node,
+                    "OpenGL cooperative-matrix element access requires a scalar "
+                    "integer lane-local index",
+                    reason="invalid-element-index-type",
+                    matrix_type=matrix_contract["matrix_type"],
+                )
+            literal_index = self.literal_int_value(
+                index_node,
+                getattr(self, "current_compile_time_int_constants", None),
+            )
+            if literal_index is not None and not (
+                0 <= literal_index < matrix_contract["elements_per_lane"]
+            ):
+                self.glsl_cooperative_matrix_operation_error(
+                    node,
+                    "OpenGL cooperative-matrix lane-local element index is out "
+                    f"of range: {literal_index}",
+                    reason="element-index-out-of-range",
+                    matrix_type=matrix_contract["matrix_type"],
+                )
+            matrix = self.generate_expression(node.arguments[0])
+            index = self.generate_expression(index_node)
+            return f"{matrix}.elements[{index}]"
+
+        operand_contracts = []
+        for argument in node.arguments:
+            contract = self.glsl_cooperative_matrix_expression_contract(
+                argument, operation=operation
+            )
+            if contract is None:
+                self.glsl_cooperative_matrix_operation_error(
+                    node,
+                    "OpenGL cooperative-matrix lane-local operation "
+                    f"'{operation}' requires complete operand contracts",
+                    reason="missing-operand-contract",
+                )
+            operand_contracts.append(contract)
+
+        result_contract = self.glsl_cooperative_matrix_result_contract(
+            node, operand_contracts
+        )
+        if result_contract is None:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                "OpenGL cooperative-matrix lane-local operation "
+                f"'{operation}' requires a complete result contract",
+                reason="missing-result-contract",
+            )
+        incompatible = [
+            contract
+            for contract in operand_contracts
+            if contract["contract_key"] != result_contract["contract_key"]
+        ]
+        if incompatible:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                "OpenGL cooperative-matrix lane-local operation "
+                f"'{operation}' requires identical operand and result fragment "
+                "contracts",
+                reason="incompatible-fragment-contract",
+                matrix_type=result_contract["matrix_type"],
+            )
+
+        helper_name = self.glsl_cooperative_matrix_helper_name(
+            result_contract, operation
+        )
+        arguments = ", ".join(
+            self.generate_expression(argument) for argument in node.arguments
+        )
+        return f"{helper_name}({arguments})"
+
+    def generate_glsl_cooperative_matrix_software_support(self):
+        if not self.cooperative_matrix_software_lowering:
+            return ""
+        blocks = []
+        for type_name, contract in sorted(
+            self.glsl_cooperative_matrix_fragment_contracts.items()
+        ):
+            blocks.append(
+                f"struct {type_name} {{\n"
+                f"    {contract['mapped_component_type']} "
+                f"elements[{contract['elements_per_lane']}];\n"
+                "};\n"
+            )
+
+        operators = {
+            "elementwise_add": "+",
+            "elementwise_subtract": "-",
+            "elementwise_multiply": "*",
+        }
+        for type_name, operation in sorted(
+            self.required_glsl_cooperative_matrix_helpers
+        ):
+            contract = self.glsl_cooperative_matrix_fragment_contracts[type_name]
+            helper_name = contract["helpers"][operation]
+            lines = [f"{type_name} {helper_name}("]
+            if operation == "negate":
+                lines[-1] += f"{type_name} value) {{"
+            else:
+                lines[-1] += f"{type_name} left, {type_name} right) {{"
+            lines.append(f"    {type_name} result;")
+            for index in range(contract["elements_per_lane"]):
+                if operation == "negate":
+                    expression = f"-value.elements[{index}]"
+                else:
+                    operator = operators[operation]
+                    expression = (
+                        f"left.elements[{index}] {operator} right.elements[{index}]"
+                    )
+                lines.append(f"    result.elements[{index}] = {expression};")
+            lines.extend(["    return result;", "}"])
+            blocks.append("\n".join(lines) + "\n")
+        return ("\n".join(blocks) + "\n") if blocks else ""
+
     def generate_glsl_boolean_order_helpers(self):
         helpers = []
         components = "xyzw"
@@ -20569,6 +21159,8 @@ complex64_t crossgl_complex64_mod_assign(
         if expr is None:
             return ""
         if isinstance(expr, CooperativeMatrixOpNode):
+            if self.cooperative_matrix_software_lowering:
+                return self.generate_glsl_cooperative_matrix_operation(expr)
             operation = getattr(expr, "operation", None)
             matrix_type = getattr(expr, "result_type", None)
             fragment_contract = _opengl_cooperative_matrix_fragment_contract(
@@ -29303,6 +29895,8 @@ complex64_t crossgl_complex64_mod_assign(
                 lexical_bindings,
                 intervals,
             )
+            if binding is None:
+                return None
             delta_expression = operand.index
             operator = "+"
         elif isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
@@ -31880,6 +32474,11 @@ complex64_t crossgl_complex64_mod_assign(
             return "float"
 
         if isinstance(vtype, CooperativeMatrixType):
+            if self.cooperative_matrix_software_lowering:
+                return self.glsl_cooperative_matrix_fragment_contract(
+                    vtype,
+                    source_location=getattr(vtype, "source_location", None),
+                )["type_name"]
             type_name = self.convert_type_node_to_string(vtype)
             fragment_contract = _opengl_cooperative_matrix_fragment_contract(vtype)
             fragment_contract_message = (
@@ -31912,6 +32511,11 @@ complex64_t crossgl_complex64_mod_assign(
             and cooperative_base.rsplit("::", 1)[-1] == "CooperativeMatrix"
         ):
             matrix_type = _opengl_cooperative_matrix_contract_type(vtype)
+            if self.cooperative_matrix_software_lowering:
+                return self.glsl_cooperative_matrix_fragment_contract(
+                    matrix_type,
+                    source_location=getattr(vtype, "source_location", None),
+                )["type_name"]
             fragment_contract = _opengl_cooperative_matrix_fragment_contract(
                 matrix_type
             )

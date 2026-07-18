@@ -961,29 +961,52 @@ for all 32 lanes and records `mlx_steel_BaseMMAFrag_get_coord` provenance. This
 is source-specific evidence for the pinned MLX specialization; it is not a
 universal layout claim for Metal cooperative matrices.
 
-The materialized CrossGL AST contains 16 `CooperativeMatrixType` nodes. Before
-the current contract-flow change, two nodes carried the complete 12-field
-contract. In the verified replay, all 16 carry the `metal_thread_elements`
-layout, subgroup size 32, two elements per lane,
-`metal_thread_elements_reference_view` provenance, the `tile_4x4_row_pair`
-mapping, and `mlx_steel_BaseMMAFrag_get_coord` mapping provenance. The same AST
-contains eight `CooperativeMatrixOpNode` operations: seven `element` operations
-and one `multiply_accumulate` operation. All eight still have an unset
-`result_type`; CrossGL/crosstl#1610 tracks that remaining expression-contract
-gap.
+The materialized CrossGL intermediate contains 16 source
+`CooperativeMatrixType` contract nodes. Before the current contract-flow change,
+two nodes carried the complete 12-field contract. In the verified replay, all 16
+carry the `metal_thread_elements` layout, subgroup size 32, two elements per
+lane, `metal_thread_elements_reference_view` provenance, the
+`tile_4x4_row_pair` mapping, and `mlx_steel_BaseMMAFrag_get_coord` mapping
+provenance.
 
-DirectX next fails closed with
-`project.translate.directx-cooperative-matrix-unsupported` and OpenGL with
-`project.translate.opengl-cooperative-matrix-unsupported`. Both diagnostics
-identify
-`CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view, tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>`;
-substituting an ordinary HLSL or GLSL matrix would change distributed fragment
-semantics. CrossGL/crosstl#1602 remains the immediate target-lowering blocker.
-CrossGL/crosstl#1820 remains open for target mapping policy, software fallback,
-and numerical verification. DirectX and OpenGL target policy and software
-fallback are not implemented. Neither run emits a target artifact. These replays
-do not establish successful source translation, runtime execution, or numerical
-parity.
+Parsing creates eight `CooperativeMatrixOpNode` operations: seven `element`
+operations and one `multiply_accumulate` operation. Each element operation now
+has scalar `expression_type` `float` and intentionally has no matrix
+`result_type`. The multiply-accumulate operation has complete cooperative-matrix
+`result_type` and `expression_type` contracts that preserve the accumulator and
+destination representation. Shared expression result inference therefore
+resolves CrossGL/crosstl#1610 on this branch without claiming that scalar element
+expressions require matrix result types.
+
+DirectX and OpenGL now provide an explicit opt-in lane-local cooperative-matrix
+software-lowering foundation for the exact registered 8-by-8, 32-lane,
+two-elements-per-lane mapping. Reduced target tests compile and validate type
+representation, element access, negation, and element-wise addition,
+subtraction, and multiplication. Cooperative-matrix load, store, multiply, and
+multiply-accumulate operations remain fail closed. The default behavior also
+remains fail closed, and the option is not wired through project profiles or
+configuration. Full software fallback, target policy, runtime execution, and
+numerical parity remain unimplemented. CrossGL/crosstl#1602 and
+CrossGL/crosstl#1820 remain open for that work.
+
+With the opt-in path enabled, full pinned `fp_quantized.metal` replays no longer
+stop at the earlier cooperative-matrix type-representation diagnostic. DirectX
+next reports
+`project.translate.directx-private-pointer-unsupported` with reason
+`missing-fixed-array-extent` at
+`qdot_float_values_per_thread_4.x_thread`. OpenGL next reports
+`project.translate.opengl-private-pointer-unsupported` with reason
+`missing-view-backing` at
+`load_vector_float_float_values_per_thread.x_thread`. Neither target emits an
+artifact. The OpenGL private-pointer analyzer now handles the unresolved base
+binding as a structured boundary instead of raising an exception, resolving
+CrossGL/crosstl#1823 on this branch.
+
+Both target boundaries originate in source materialization: the
+`values_per_thread` extent remains symbolic through a transitive local
+`constexpr` chain. CrossGL/crosstl#1824 tracks materializing that chain before
+target pointer analysis. These replays do not establish complete source
+translation, runtime integration, runtime execution, or numerical parity.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.
