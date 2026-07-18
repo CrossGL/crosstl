@@ -40,6 +40,7 @@ from crosstl.project.runtime_verification import (
     RuntimeAdapterContract,
     RuntimeAdapterDispatchError,
     RuntimeAdapterSetupError,
+    RuntimeAllocationView,
     RuntimeArtifactSelector,
     RuntimeDispatchGeometry,
     RuntimeExecutionRequest,
@@ -1045,6 +1046,34 @@ def test_prepare_directx_buffers_rejects_views_compushady_cannot_describe(
     assert excinfo.value.details["type"] == type_name
 
 
+def test_prepare_directx_buffers_rejects_allocation_subview_with_constraint(
+    tmp_path,
+):
+    request = _directx_dispatch_request(tmp_path)
+    lhs = request.buffers["lhs"]
+    binding = NativeRuntimeBufferBinding(
+        **{
+            **lhs.__dict__,
+            "allocation": RuntimeAllocationView(
+                allocation_id="working-set",
+                byte_offset=4,
+                byte_length=8,
+                allocation_byte_length=12,
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_directx_buffers({"lhs": binding})
+
+    assert excinfo.value.details["reasonKind"] == "unsupported-allocation-subview"
+    assert excinfo.value.details["allocationId"] == "working-set"
+    assert excinfo.value.details["byteOffset"] == 4
+    assert excinfo.value.details["byteLength"] == 8
+    assert excinfo.value.details["allocationByteLength"] == 12
+    assert excinfo.value.details["targetConstraint"] == ("compushady-buffer-view-range")
+
+
 def test_prepare_directx_buffers_rejects_sparse_registers(tmp_path):
     request = _directx_dispatch_request(tmp_path)
     lhs = request.buffers["lhs"]
@@ -1260,11 +1289,106 @@ def test_directx_compute_runtime_dispatches_and_reads_typed_output(tmp_path):
     assert compute.shader == b"DXBC\x00\x01"
     assert compute.dispatch_args == (2, 3, 1)
     assert len(compute.cbv) == len(compute.srv) == len(compute.uav) == 1
+    assert compute.srv[0] is not compute.uav[0]
     assert compute.cbv[0].size == 256
     assert compute.srv[0].stride == compute.uav[0].stride == 4
     assert all(buffer.device is module.device for buffer in module.buffers)
     assert all(buffer.released for buffer in module.buffers)
     assert compute.released is True
+
+
+def test_directx_compute_runtime_reuses_explicit_shared_allocation(tmp_path):
+    module = _FakeCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+    request = _directx_dispatch_request(tmp_path)
+    shared = RuntimeAllocationView(
+        allocation_id="working-set",
+        byte_length=8,
+        allocation_byte_length=8,
+    )
+    request = NativeRuntimeDispatchRequest(
+        **{
+            **request.__dict__,
+            "buffers": {
+                **request.buffers,
+                "lhs": NativeRuntimeBufferBinding(
+                    **{**request.buffers["lhs"].__dict__, "allocation": shared}
+                ),
+                "out": NativeRuntimeBufferBinding(
+                    **{**request.buffers["out"].__dict__, "allocation": shared}
+                ),
+            },
+        }
+    )
+
+    outputs = runtime.dispatch(None, None, request)
+
+    assert outputs == {
+        "result": {
+            "dtype": "float32",
+            "shape": [2],
+            "values": [3.0, 6.0],
+        }
+    }
+    compute = module.computes[0]
+    assert compute.srv[0] is compute.uav[0]
+    default_buffers = [
+        buffer for buffer in module.buffers if buffer.heap_type == module.HEAP_DEFAULT
+    ]
+    assert len(default_buffers) == 2
+    assert default_buffers[0] is compute.cbv[0]
+    assert default_buffers[1] is compute.srv[0]
+
+
+def test_directx_runtime_rejects_overlapping_writable_shared_allocation(tmp_path):
+    module = _FakeCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+    request = _directx_dispatch_request(tmp_path)
+    shared = RuntimeAllocationView(
+        allocation_id="working-set",
+        byte_length=8,
+        allocation_byte_length=8,
+    )
+    lhs = request.buffers["lhs"]
+    writable_lhs = NativeRuntimeBufferBinding(
+        **{
+            **lhs.__dict__,
+            "binding": RuntimeResourceBinding(
+                **{
+                    **lhs.binding.__dict__,
+                    "type_name": "RWStructuredBuffer<float>",
+                    "binding": 1,
+                    "access": "read_write",
+                }
+            ),
+            "allocation": shared,
+        }
+    )
+    request = NativeRuntimeDispatchRequest(
+        **{
+            **request.__dict__,
+            "buffers": {
+                **request.buffers,
+                "lhs": writable_lhs,
+                "out": NativeRuntimeBufferBinding(
+                    **{**request.buffers["out"].__dict__, "allocation": shared}
+                ),
+            },
+        }
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.dispatch(None, None, request)
+
+    assert excinfo.value.details["reasonKind"] == "allocation-write-conflict"
+    assert excinfo.value.details["allocationId"] == "working-set"
+    assert excinfo.value.details["targetConstraint"] == ("overlapping-writable-views")
 
 
 def test_directx_compute_runtime_uploads_and_reads_initialized_output(tmp_path):
@@ -2563,7 +2687,7 @@ def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation():
             self.payload = payload
             self.uniform_binding = None
 
-        def bind_to_uniform_block(self, binding):
+        def bind_to_uniform_block(self, binding, offset=0, size=-1):
             self.uniform_binding = binding
 
     class FakeContext:
@@ -2585,10 +2709,40 @@ def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation():
 
     buffer = OpenGLComputeRuntime()._create_buffer(context, prepared)
 
-    assert prepared.size == 4
+    assert prepared.size == 16
     assert prepared.allocation_size == 16
     assert context.received_payload == struct.pack("<I", 3) + b"\x00" * 12
     assert buffer.uniform_binding == 0
+
+
+def test_opengl_compute_runtime_binds_bounded_uniform_range_explicitly():
+    class RecordingBuffer:
+        def __init__(self):
+            self.uniform_calls = []
+
+        def bind_to_uniform_block(self, *args, **kwargs):
+            self.uniform_calls.append((args, kwargs))
+
+    binding = _scalar_constant_buffer_binding("opengl", _scalar_block_layout("std140"))
+    binding = NativeRuntimeBufferBinding(
+        **{
+            **binding.__dict__,
+            "allocation": RuntimeAllocationView(
+                allocation_id="uniform-arena",
+                byte_length=16,
+                allocation_byte_length=32,
+            ),
+        }
+    )
+    prepared = _prepare_opengl_buffers({"params": binding})[0]
+    buffer = RecordingBuffer()
+
+    OpenGLComputeRuntime._bind_buffer_view(buffer, prepared)
+
+    assert prepared.byte_offset == 0
+    assert prepared.size == 16
+    assert prepared.allocation_size == 32
+    assert buffer.uniform_calls == [((0,), {"offset": 0, "size": 16})]
 
 
 @pytest.mark.parametrize(
@@ -2817,10 +2971,232 @@ def test_opengl_compute_runtime_dispatches_and_reads_storage_buffer(tmp_path):
     assert context.shader.uniforms["scale"].value == 3.0
     assert context.barrier_called is True
     assert context.finish_called is True
+    assert len(context.buffers) == 2
+    assert context.buffers[0] is not context.buffers[1]
     assert all(buffer.released for buffer in context.buffers)
     assert context.shader.released is True
     assert context.released is True
     assert loaded_modules == ["moderngl"]
+
+
+def test_opengl_compute_runtime_reuses_shared_allocation_subviews(tmp_path):
+    class FakeBuffer:
+        def __init__(self, payload):
+            self.payload = bytearray(payload)
+            self.released = False
+            self.release_count = 0
+
+        def bind_to_storage_buffer(self, binding, offset=0, size=-1):
+            if size < 0:
+                size = len(self.payload) - offset
+            context.bindings[binding] = (self, offset, size)
+
+        def read(self, size, offset=0):
+            return bytes(self.payload[offset : offset + size])
+
+        def release(self):
+            self.released = True
+            self.release_count += 1
+
+    class FakeShader:
+        def __init__(self):
+            self.released = False
+
+        def run(self, **kwargs):
+            assert kwargs == {"group_x": 1, "group_y": 1, "group_z": 1}
+            source, source_offset, source_size = context.bindings[0]
+            output, output_offset, output_size = context.bindings[1]
+            assert source is output
+            assert (source_offset, source_size) == (0, 8)
+            assert (output_offset, output_size) == (8, 8)
+            values = struct.unpack(
+                "<2f",
+                source.payload[source_offset : source_offset + source_size],
+            )
+            output.payload[output_offset : output_offset + output_size] = struct.pack(
+                "<2f", *(value * 2.0 for value in values)
+            )
+
+        def release(self):
+            self.released = True
+
+    class FakeContext:
+        version_code = 460
+        info = {"GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 4}
+
+        def __init__(self):
+            self.buffers = []
+            self.bindings = {}
+            self.shader = FakeShader()
+            self.released = False
+
+        def compute_shader(self, source):
+            assert source.startswith("#version 430")
+            return self.shader
+
+        def buffer(self, payload):
+            buffer = FakeBuffer(payload)
+            self.buffers.append(buffer)
+            return buffer
+
+        def memory_barrier(self):
+            pass
+
+        def finish(self):
+            pass
+
+        def release(self):
+            self.released = True
+
+    context = FakeContext()
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context,
+    )
+    source_view = RuntimeAllocationView(
+        allocation_id="working-set",
+        byte_offset=0,
+        byte_length=8,
+        allocation_byte_length=16,
+    )
+    output_view = RuntimeAllocationView(
+        allocation_id="working-set",
+        byte_offset=8,
+        byte_length=8,
+        allocation_byte_length=16,
+    )
+    request = NativeRuntimeDispatchRequest(
+        target="opengl",
+        artifact={"target": "opengl"},
+        artifact_path=tmp_path / "shared.comp",
+        module_path=tmp_path / "shared.comp",
+        loaded_artifact="#version 430\nvoid main() {}\n",
+        buffers={
+            "source": NativeRuntimeBufferBinding(
+                name="source",
+                binding=RuntimeResourceBinding(
+                    name="source",
+                    kind="storage-buffer",
+                    set=0,
+                    binding=0,
+                    access="read",
+                ),
+                value=[1.0, 2.0],
+                source="input",
+                dtype="float32",
+                shape=(2,),
+                allocation=source_view,
+            ),
+            "destination": NativeRuntimeBufferBinding(
+                name="destination",
+                binding=RuntimeResourceBinding(
+                    name="destination",
+                    kind="storage-buffer",
+                    set=0,
+                    binding=1,
+                    access="write",
+                ),
+                source="expectedOutput",
+                dtype="float32",
+                shape=(2,),
+                metadata={"runtimeValueName": "result"},
+                allocation=output_view,
+            ),
+        },
+        constants={},
+        dispatch=RuntimeDispatchGeometry(entry_point="main", workgroup_count=(1, 1, 1)),
+        entry_point="main",
+    )
+
+    outputs = runtime.dispatch(None, None, request)
+
+    assert outputs == {
+        "result": {"dtype": "float32", "shape": [2], "values": [2.0, 4.0]}
+    }
+    assert len(context.buffers) == 1
+    assert context.bindings[0][0] is context.bindings[1][0]
+    assert context.buffers[0].released is True
+    assert context.buffers[0].release_count == 1
+    assert context.shader.released is True
+    assert context.released is True
+
+
+def test_opengl_runtime_rejects_context_misaligned_allocation_subview():
+    prepared = _prepare_opengl_buffers(
+        {
+            "source": NativeRuntimeBufferBinding(
+                name="source",
+                binding=RuntimeResourceBinding(
+                    name="source",
+                    kind="storage-buffer",
+                    set=0,
+                    binding=0,
+                    access="read",
+                ),
+                value=[1.0, 2.0],
+                source="input",
+                dtype="float32",
+                shape=(2,),
+                allocation=RuntimeAllocationView(
+                    allocation_id="working-set",
+                    byte_offset=8,
+                    byte_length=8,
+                    allocation_byte_length=16,
+                ),
+            )
+        }
+    )
+    context = SimpleNamespace(info={"GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 16})
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        OpenGLComputeRuntime()._create_buffer_resources(context, prepared)
+
+    assert excinfo.value.details["reasonKind"] == "allocation-view-misaligned"
+    assert excinfo.value.details["allocationId"] == "working-set"
+    assert excinfo.value.details["alignmentBytes"] == 16
+    assert excinfo.value.details["contextLimit"] == (
+        "GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT"
+    )
+    assert excinfo.value.details["targetConstraint"] == (
+        "buffer-range-offset-alignment"
+    )
+
+
+def test_opengl_runtime_rejects_overlapping_writable_shared_allocation():
+    shared = RuntimeAllocationView(
+        allocation_id="working-set",
+        byte_length=8,
+        allocation_byte_length=8,
+    )
+    prepared = _prepare_opengl_buffers(
+        {
+            name: NativeRuntimeBufferBinding(
+                name=name,
+                binding=RuntimeResourceBinding(
+                    name=name,
+                    kind="storage-buffer",
+                    set=0,
+                    binding=index,
+                    access="write",
+                ),
+                value=[1.0, 2.0],
+                source="input",
+                dtype="float32",
+                shape=(2,),
+                allocation=shared,
+            )
+            for index, name in enumerate(("left", "right"))
+        }
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        OpenGLComputeRuntime()._create_buffer_resources(
+            SimpleNamespace(info={}), prepared
+        )
+
+    assert excinfo.value.details["reasonKind"] == "allocation-write-conflict"
+    assert excinfo.value.details["allocationId"] == "working-set"
+    assert excinfo.value.details["targetConstraint"] == ("overlapping-writable-views")
 
 
 def test_opengl_compute_runtime_releases_buffer_when_binding_fails(tmp_path):

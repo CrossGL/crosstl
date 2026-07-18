@@ -23,12 +23,14 @@ from crosstl.project.runtime_verification import (
     NativeRuntimeParityAdapter,
     OpenGLRuntimeParityAdapter,
     RuntimeAdapterContract,
+    RuntimeAllocationView,
     RuntimeArtifactSelector,
     RuntimeDispatchGeometry,
     RuntimeEntryPoint,
     RuntimeExecutionAdapter,
     RuntimeExecutionError,
     RuntimeExecutionRequest,
+    RuntimeExecutionState,
     RuntimeExecutorAvailability,
     RuntimeExecutorResult,
     RuntimeExecutorSkipped,
@@ -375,6 +377,45 @@ def test_runtime_fixture_accepts_scalar_value_alias():
     assert parsed.to_json()["inputs"][0]["values"] == 3
 
 
+def test_runtime_fixture_round_trips_native_allocation_view():
+    parsed = parse_runtime_verification_fixtures(
+        {
+            "fixtures": [
+                _runtime_fixture(
+                    inputs=[
+                        {
+                            "name": "values",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [1.0, 2.0],
+                            "allocation": {
+                                "id": "working-set",
+                                "byteOffset": 8,
+                                "byteLength": 8,
+                                "allocationByteLength": 16,
+                            },
+                        }
+                    ]
+                )
+            ]
+        }
+    )[0]
+
+    assert parsed.inputs[0].allocation == RuntimeAllocationView(
+        allocation_id="working-set",
+        byte_offset=8,
+        byte_length=8,
+        allocation_byte_length=16,
+    )
+    assert parsed.to_json()["inputs"][0]["allocation"] == {
+        "id": "working-set",
+        "byteOffset": 8,
+        "byteLength": 8,
+        "allocationByteLength": 16,
+    }
+
+
 def test_parse_runtime_verification_fixtures_rejects_missing_selector():
     with pytest.raises(RuntimeVerificationError, match="selector must identify"):
         parse_runtime_verification_fixtures({"fixtures": [{"id": "missing"}]})
@@ -549,6 +590,453 @@ def test_prepare_runtime_execution_carries_initialized_read_write_contract():
     assert bound.expected_output is expected
     assert bound.to_json()["initialValue"]["shape"] == [4]
     assert bound.to_json()["expectedOutput"]["shape"] == [4]
+
+
+def _prepare_allocation_plan(inputs, expected_outputs, bindings, target="opengl"):
+    return prepare_runtime_execution(
+        RuntimeExecutionRequest(
+            fixture=RuntimeFixture(
+                id="allocation-views",
+                selector=RuntimeArtifactSelector(target=target),
+                inputs=tuple(inputs),
+                expected_outputs=tuple(expected_outputs),
+            ),
+            artifact={"target": target, "status": "translated"},
+            artifact_path=None,
+            project_root=None,
+            adapter_contract=RuntimeAdapterContract(resource_bindings=tuple(bindings)),
+        )
+    )
+
+
+def test_prepare_runtime_execution_coalesces_read_write_allocation_metadata():
+    plan = _prepare_allocation_plan(
+        [
+            RuntimeValue(
+                name="values",
+                allocation=RuntimeAllocationView(allocation_id="working-set"),
+            )
+        ],
+        [
+            RuntimeValue(
+                name="values",
+                allocation=RuntimeAllocationView(
+                    allocation_id="working-set",
+                    byte_length=8,
+                    allocation_byte_length=16,
+                ),
+            )
+        ],
+        [
+            RuntimeResourceBinding(
+                name="values", kind="buffer", binding=0, access="read_write"
+            )
+        ],
+    )
+
+    assert plan.diagnostics == ()
+    assert plan.resource_bindings[0].allocation == RuntimeAllocationView(
+        allocation_id="working-set",
+        byte_length=8,
+        allocation_byte_length=16,
+    )
+
+
+def test_prepare_runtime_execution_rejects_conflicting_allocation_metadata():
+    plan = _prepare_allocation_plan(
+        [
+            RuntimeValue(
+                name="values",
+                allocation=RuntimeAllocationView(
+                    allocation_id="working-set",
+                    byte_length=8,
+                    allocation_byte_length=16,
+                ),
+            )
+        ],
+        [
+            RuntimeValue(
+                name="values",
+                allocation=RuntimeAllocationView(
+                    allocation_id="working-set",
+                    byte_length=12,
+                    allocation_byte_length=24,
+                ),
+            )
+        ],
+        [
+            RuntimeResourceBinding(
+                name="values", kind="buffer", binding=0, access="read_write"
+            )
+        ],
+    )
+
+    assert plan.resource_bindings[0].status == "invalid"
+    diagnostic = plan.diagnostics[0]
+    assert diagnostic["code"] == (
+        "project.runtime-verification.resource-allocation-incompatible"
+    )
+    assert [item["field"] for item in diagnostic["mismatches"]] == [
+        "byteLength",
+        "allocationByteLength",
+    ]
+
+
+def test_prepare_runtime_execution_preserves_explicit_shared_allocation():
+    shared = RuntimeAllocationView(
+        allocation_id="working-set",
+        byte_length=8,
+        allocation_byte_length=8,
+    )
+    plan = _prepare_allocation_plan(
+        [
+            RuntimeValue(
+                name="source",
+                dtype="float32",
+                shape=(2,),
+                values=[1.0, 2.0],
+                allocation=shared,
+            )
+        ],
+        [
+            RuntimeValue(
+                name="destination",
+                dtype="float32",
+                shape=(2,),
+                values=[2.0, 4.0],
+                allocation=shared,
+            )
+        ],
+        [
+            RuntimeResourceBinding(
+                name="source", kind="buffer", binding=0, access="read"
+            ),
+            RuntimeResourceBinding(
+                name="destination", kind="buffer", binding=1, access="write"
+            ),
+        ],
+    )
+
+    assert plan.diagnostics == ()
+    assert [item.allocation.allocation_id for item in plan.resource_bindings] == [
+        "working-set",
+        "working-set",
+    ]
+    serialized = plan.to_json()["resourceBindings"]
+    assert [item["allocation"] for item in serialized] == [
+        {
+            "id": "working-set",
+            "byteOffset": 0,
+            "byteLength": 8,
+            "allocationByteLength": 8,
+        },
+        {
+            "id": "working-set",
+            "byteOffset": 0,
+            "byteLength": 8,
+            "allocationByteLength": 8,
+        },
+    ]
+    state = RuntimeExecutionState(
+        request=RuntimeExecutionRequest(
+            fixture=RuntimeFixture(
+                id="allocation-views",
+                selector=RuntimeArtifactSelector(target="opengl"),
+            ),
+            artifact={"target": "opengl"},
+            artifact_path=None,
+            project_root=None,
+        ),
+        plan=plan,
+    )
+    native_bindings = NativeRuntimeParityAdapter()._native_buffer_bindings(state)
+    assert native_bindings["source"].allocation == shared
+    assert native_bindings["destination"].allocation == shared
+    assert native_bindings["source"].to_json()["allocation"]["id"] == ("working-set")
+
+
+def test_prepare_runtime_execution_keeps_implicit_allocations_independent():
+    plan = _prepare_allocation_plan(
+        [RuntimeValue(name="source", dtype="float32", shape=(2,), values=[1.0, 2.0])],
+        [
+            RuntimeValue(
+                name="destination",
+                dtype="float32",
+                shape=(2,),
+                values=[2.0, 4.0],
+            )
+        ],
+        [
+            RuntimeResourceBinding(
+                name="source", kind="buffer", binding=0, access="read"
+            ),
+            RuntimeResourceBinding(
+                name="destination", kind="buffer", binding=1, access="write"
+            ),
+        ],
+    )
+
+    allocation_ids = [item.allocation.allocation_id for item in plan.resource_bindings]
+    assert plan.diagnostics == ()
+    assert allocation_ids == [
+        "binding:-:0:-:source",
+        "binding:-:1:-:destination",
+    ]
+    assert len(set(allocation_ids)) == 2
+
+
+def test_prepare_runtime_execution_accepts_aligned_nonoverlapping_views():
+    plan = _prepare_allocation_plan(
+        [
+            RuntimeValue(
+                name="source",
+                dtype="float32",
+                shape=(2,),
+                values=[1.0, 2.0],
+                allocation=RuntimeAllocationView(
+                    allocation_id="working-set",
+                    byte_offset=0,
+                    byte_length=8,
+                    allocation_byte_length=16,
+                ),
+            )
+        ],
+        [
+            RuntimeValue(
+                name="destination",
+                dtype="float32",
+                shape=(2,),
+                values=[2.0, 4.0],
+                allocation=RuntimeAllocationView(
+                    allocation_id="working-set",
+                    byte_offset=8,
+                    byte_length=8,
+                    allocation_byte_length=16,
+                ),
+            )
+        ],
+        [
+            RuntimeResourceBinding(
+                name="source", kind="buffer", binding=0, access="read"
+            ),
+            RuntimeResourceBinding(
+                name="destination", kind="buffer", binding=1, access="write"
+            ),
+        ],
+    )
+
+    assert plan.diagnostics == ()
+    assert [
+        (item.allocation.byte_offset, item.allocation.byte_length)
+        for item in plan.resource_bindings
+    ] == [(0, 8), (8, 8)]
+
+
+def test_prepare_runtime_execution_rejects_out_of_bounds_allocation_view():
+    plan = _prepare_allocation_plan(
+        [
+            RuntimeValue(
+                name="source",
+                dtype="float32",
+                shape=(2,),
+                values=[1.0, 2.0],
+                allocation=RuntimeAllocationView(
+                    allocation_id="working-set",
+                    byte_offset=4,
+                    byte_length=8,
+                    allocation_byte_length=8,
+                ),
+            )
+        ],
+        [],
+        [
+            RuntimeResourceBinding(
+                name="source", kind="buffer", binding=0, access="read"
+            )
+        ],
+    )
+
+    diagnostic = plan.diagnostics[0]
+    assert diagnostic["code"] == (
+        "project.runtime-verification.resource-allocation-view-out-of-bounds"
+    )
+    assert diagnostic["allocationId"] == "working-set"
+    assert diagnostic["byteRange"] == [4, 12]
+    assert diagnostic["allocationByteLength"] == 8
+    assert plan.resource_bindings[0].status == "invalid"
+
+
+def test_prepare_runtime_execution_rejects_misaligned_allocation_view():
+    plan = _prepare_allocation_plan(
+        [
+            RuntimeValue(
+                name="source",
+                dtype="float32",
+                shape=(2,),
+                values=[1.0, 2.0],
+                allocation=RuntimeAllocationView(
+                    allocation_id="working-set",
+                    byte_offset=2,
+                    byte_length=8,
+                    allocation_byte_length=10,
+                ),
+            )
+        ],
+        [],
+        [
+            RuntimeResourceBinding(
+                name="source", kind="buffer", binding=0, access="read"
+            )
+        ],
+    )
+
+    diagnostic = plan.diagnostics[0]
+    assert diagnostic["code"] == (
+        "project.runtime-verification.resource-allocation-view-misaligned"
+    )
+    assert diagnostic["allocationId"] == "working-set"
+    assert diagnostic["byteOffset"] == 2
+    assert diagnostic["alignmentBytes"] == 4
+
+
+def test_prepare_runtime_execution_rejects_misaligned_view_without_length():
+    plan = _prepare_allocation_plan(
+        [
+            RuntimeValue(
+                name="source",
+                dtype="float32",
+                allocation=RuntimeAllocationView(
+                    allocation_id="working-set",
+                    byte_offset=2,
+                    allocation_byte_length=16,
+                ),
+            )
+        ],
+        [],
+        [
+            RuntimeResourceBinding(
+                name="source", kind="buffer", binding=0, access="read"
+            )
+        ],
+    )
+
+    diagnostic = plan.diagnostics[0]
+    assert diagnostic["code"] == (
+        "project.runtime-verification.resource-allocation-view-misaligned"
+    )
+    assert diagnostic["byteOffset"] == 2
+    assert diagnostic["alignmentBytes"] == 4
+    assert plan.resource_bindings[0].status == "invalid"
+
+
+def test_prepare_runtime_execution_does_not_infer_size_from_unknown_length():
+    plan = _prepare_allocation_plan(
+        [
+            RuntimeValue(
+                name="source",
+                allocation=RuntimeAllocationView(allocation_id="working-set"),
+            )
+        ],
+        [],
+        [
+            RuntimeResourceBinding(
+                name="source", kind="buffer", binding=0, access="read"
+            )
+        ],
+    )
+
+    assert plan.diagnostics == ()
+    assert plan.resource_bindings[0].allocation == RuntimeAllocationView(
+        allocation_id="working-set"
+    )
+
+
+def test_prepare_runtime_execution_rejects_overlapping_writable_views():
+    allocation = RuntimeAllocationView(
+        allocation_id="working-set",
+        byte_length=8,
+        allocation_byte_length=8,
+    )
+    plan = _prepare_allocation_plan(
+        [],
+        [
+            RuntimeValue(
+                name="first",
+                dtype="uint32",
+                shape=(2,),
+                values=[1, 2],
+                allocation=allocation,
+            ),
+            RuntimeValue(
+                name="second",
+                dtype="uint32",
+                shape=(2,),
+                values=[3, 4],
+                allocation=allocation,
+            ),
+        ],
+        [
+            RuntimeResourceBinding(
+                name="first", kind="buffer", binding=0, access="write"
+            ),
+            RuntimeResourceBinding(
+                name="second", kind="buffer", binding=1, access="write"
+            ),
+        ],
+    )
+
+    diagnostic = plan.diagnostics[0]
+    assert diagnostic["code"] == (
+        "project.runtime-verification.resource-allocation-write-conflict"
+    )
+    assert diagnostic["allocationId"] == "working-set"
+    assert [view["coordinates"]["binding"] for view in diagnostic["views"]] == [
+        0,
+        1,
+    ]
+    assert all(item.status == "invalid" for item in plan.resource_bindings)
+
+
+def test_prepare_runtime_execution_rejects_incompatible_overlapping_layouts():
+    allocation = RuntimeAllocationView(
+        allocation_id="working-set",
+        byte_length=8,
+        allocation_byte_length=8,
+    )
+    plan = _prepare_allocation_plan(
+        [
+            RuntimeValue(
+                name="source",
+                dtype="float32",
+                shape=(2,),
+                values=[1.0, 2.0],
+                allocation=allocation,
+            )
+        ],
+        [
+            RuntimeValue(
+                name="destination",
+                dtype="uint32",
+                shape=(2,),
+                values=[1, 2],
+                allocation=allocation,
+            )
+        ],
+        [
+            RuntimeResourceBinding(
+                name="source", kind="buffer", binding=0, access="read"
+            ),
+            RuntimeResourceBinding(
+                name="destination", kind="buffer", binding=1, access="write"
+            ),
+        ],
+    )
+
+    diagnostic = plan.diagnostics[0]
+    assert diagnostic["code"] == (
+        "project.runtime-verification.resource-allocation-layout-incompatible"
+    )
+    assert diagnostic["allocationId"] == "working-set"
 
 
 @pytest.mark.parametrize(
