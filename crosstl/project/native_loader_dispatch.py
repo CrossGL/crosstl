@@ -772,15 +772,21 @@ def _validate_value_names(
     outputs: Mapping[str, RuntimeValue],
     bindings: Sequence[Mapping[str, Any]],
 ) -> None:
+    binding_by_name = {binding["name"]: binding for binding in bindings}
     overlap = sorted(set(inputs).intersection(outputs))
-    if overlap:
+    invalid_overlap = [
+        name
+        for name in overlap
+        if name not in binding_by_name
+        or binding_by_name[name].get("access") != "read_write"
+    ]
+    if invalid_overlap:
         raise NativeLoaderDispatchError(
             "value-duplicate",
-            "A binding cannot be provided as both an input and an output.",
+            "Only reflected read-write bindings may be provided as both an input and an output.",
             path="$.outputValues",
-            details={"bindings": overlap},
+            details={"bindings": invalid_overlap},
         )
-    binding_by_name = {binding["name"]: binding for binding in bindings}
     read_only_outputs = sorted(
         name
         for name in outputs
@@ -794,30 +800,21 @@ def _validate_value_names(
             details={"bindings": read_only_outputs},
         )
 
-    read_write_inputs = sorted(
-        name
-        for name in inputs
-        if name in binding_by_name
-        and binding_by_name[name].get("access") == "read_write"
-    )
-    if read_write_inputs:
-        raise NativeLoaderDispatchError(
-            "read-write-input-unsupported",
-            "Read-write descriptor bindings cannot currently combine input initialization and output readback.",
-            path="$.inputValues",
-            details={"bindings": read_write_inputs},
-        )
-
-    expected_inputs = {
+    required_inputs = {
         binding["name"] for binding in bindings if binding.get("access") == "read"
     }
-    expected_outputs = {
+    accepted_inputs = {
+        binding["name"]
+        for binding in bindings
+        if binding.get("access") in {"read", "read_write"}
+    }
+    required_outputs = {
         binding["name"]
         for binding in bindings
         if binding.get("access") in {"write", "read_write"}
     }
-    extra_inputs = sorted(set(inputs) - expected_inputs)
-    extra_outputs = sorted(set(outputs) - expected_outputs)
+    extra_inputs = sorted(set(inputs) - accepted_inputs)
+    extra_outputs = sorted(set(outputs) - required_outputs)
     if extra_inputs or extra_outputs:
         raise NativeLoaderDispatchError(
             "value-extra",
@@ -828,8 +825,8 @@ def _validate_value_names(
                 "extraOutputs": extra_outputs,
             },
         )
-    missing_inputs = sorted(expected_inputs - set(inputs))
-    missing_outputs = sorted(expected_outputs - set(outputs))
+    missing_inputs = sorted(required_inputs - set(inputs))
+    missing_outputs = sorted(required_outputs - set(outputs))
     if missing_inputs or missing_outputs:
         raise NativeLoaderDispatchError(
             "value-missing",
@@ -896,7 +893,9 @@ def _resource_bindings(
                 path=f"{path}.coordinates.set",
                 details={"target": target, "name": name, "set": coordinates["set"]},
             )
-        value = inputs.get(name) if access == "read" else outputs.get(name)
+        initial_value = inputs.get(name)
+        expected_value = outputs.get(name)
+        value = initial_value if access == "read" else expected_value
         if value is None:
             raise NativeLoaderDispatchError(
                 "value-missing",
@@ -904,6 +903,8 @@ def _resource_bindings(
                 path=path,
                 details={"name": name},
             )
+        if access == "read_write" and initial_value is not None:
+            _validate_read_write_value_contract(initial_value, expected_value)
         scalar_layout = _validated_scalar_layout(
             binding.get("scalarLayout"),
             runtime_value=value,
@@ -911,6 +912,14 @@ def _resource_bindings(
             resource_kind=kind,
             path=f"{path}.scalarLayout",
         )
+        if access == "read_write" and initial_value is not None:
+            _validated_scalar_layout(
+                binding.get("scalarLayout"),
+                runtime_value=initial_value,
+                target=target,
+                resource_kind=kind,
+                path=f"{path}.scalarLayout",
+            )
         result.append(
             RuntimeResourceBinding(
                 binding_id=name,
@@ -933,6 +942,51 @@ def _resource_bindings(
             )
         )
     return sorted(result, key=_resource_binding_order)
+
+
+def _validate_read_write_value_contract(
+    initial_value: RuntimeValue,
+    expected_value: RuntimeValue | None,
+) -> None:
+    if expected_value is None:
+        return
+    comparisons = (
+        (
+            "kind",
+            initial_value.kind,
+            expected_value.kind,
+            "read-write-kind-mismatch",
+        ),
+        (
+            "dtype",
+            initial_value.dtype,
+            expected_value.dtype,
+            "read-write-dtype-mismatch",
+        ),
+        (
+            "shape",
+            initial_value.shape,
+            expected_value.shape,
+            "read-write-shape-mismatch",
+        ),
+    )
+    for field_name, input_value, output_value, code in comparisons:
+        if input_value == output_value:
+            continue
+        raise NativeLoaderDispatchError(
+            code,
+            "Initialized read-write resources require compatible input and output value contracts.",
+            path=f"$.outputValues.{expected_value.name}.{field_name}",
+            details={
+                "binding": expected_value.name,
+                "inputValue": (
+                    list(input_value) if field_name == "shape" else input_value
+                ),
+                "outputValue": (
+                    list(output_value) if field_name == "shape" else output_value
+                ),
+            },
+        )
 
 
 def _validated_scalar_layout(

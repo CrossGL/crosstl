@@ -31,6 +31,7 @@ class _PreparedDirectXBuffer:
     dtype: str
     shape: tuple[int, ...]
     source: str | None
+    readback: bool
     output_name: str | None
     payload: bytes
     allocation_size: int
@@ -66,6 +67,7 @@ class _PreparedVulkanBuffer:
     dtype: str
     shape: tuple[int, ...]
     source: str | None
+    readback: bool
     output_name: str | None
     payload: bytes
 
@@ -89,6 +91,7 @@ class _PreparedOpenGLBuffer:
     dtype: str
     shape: tuple[int, ...]
     source: str | None
+    readback: bool
     output_name: str | None
     payload: bytes
     allocation_size: int
@@ -591,7 +594,7 @@ class DirectXComputeRuntime:
         outputs: dict[str, Mapping[str, Any]] = {}
         for resource in resources:
             prepared = resource.prepared
-            if prepared.source != "expectedOutput":
+            if not prepared.readback:
                 continue
             try:
                 readback = compushady.Buffer(
@@ -1292,7 +1295,7 @@ class OpenGLComputeRuntime:
     ) -> dict[str, Mapping[str, Any]]:
         outputs: dict[str, Mapping[str, Any]] = {}
         for prepared, buffer in resources:
-            if prepared.source != "expectedOutput":
+            if not prepared.readback:
                 continue
             payload = bytes(buffer.read(size=prepared.size))
             if len(payload) != prepared.size:
@@ -1768,7 +1771,7 @@ class _VulkanDispatchContext:
         outputs: dict[str, Mapping[str, Any]] = {}
         for resource in self.resources:
             prepared = resource.prepared
-            if prepared.source != "expectedOutput":
+            if not prepared.readback:
                 continue
             payload = self._read_memory(resource.memory, prepared.size)
             outputs[prepared.output_name or prepared.name] = {
@@ -1888,6 +1891,7 @@ def _prepare_directx_buffers(
     prepared = []
     for name, binding in bindings.items():
         resource = binding.binding
+        readback = _binding_requires_readback(binding)
         namespace = _directx_resource_namespace(name, binding)
         binding_value = resource.binding
         if binding_value is None:
@@ -1920,7 +1924,7 @@ def _prepare_directx_buffers(
                 binding=binding_index,
                 registerSpace=set_index,
             )
-        if namespace == "cbv" and binding.source == "expectedOutput":
+        if namespace == "cbv" and readback:
             raise _directx_setup_error(
                 "DirectX constant buffers cannot be runtime output resources.",
                 "unsupported-output-resource",
@@ -1955,7 +1959,7 @@ def _prepare_directx_buffers(
                 resource=name,
                 shape=list(shape),
             )
-        if binding.source == "expectedOutput":
+        if binding.value is None and readback:
             payload = b"\x00" * (element_count * _dtype_size(dtype))
         else:
             try:
@@ -1993,6 +1997,7 @@ def _prepare_directx_buffers(
                 dtype=dtype,
                 shape=shape,
                 source=binding.source,
+                readback=readback,
                 output_name=_runtime_value_name(binding),
                 payload=payload,
                 allocation_size=allocation_size,
@@ -2146,6 +2151,7 @@ def _prepare_directx_constants(
                 dtype="uint32",
                 shape=(),
                 source="constant",
+                readback=False,
                 output_name=None,
                 payload=bytes(payload),
                 allocation_size=_align_to(payload_size, 256),
@@ -2221,6 +2227,7 @@ def _complete_directx_register_layout(
                     dtype="uint32",
                     shape=(1,),
                     source="descriptor-gap",
+                    readback=False,
                     output_name=None,
                     payload=b"\x00" * 4,
                     allocation_size=allocation_size,
@@ -2282,7 +2289,7 @@ def _directx_resource_namespace(
         access_namespace = "srv"
 
     inferred = namespace or type_namespace or access_namespace
-    if binding.source == "expectedOutput":
+    if _binding_requires_readback(binding):
         if inferred == "srv":
             raise _directx_setup_error(
                 f"DirectX output resource {name!r} is reflected as read-only.",
@@ -2854,6 +2861,7 @@ def _prepare_vulkan_buffers(
     seen_bindings: set[tuple[int, int]] = set()
     for name, binding in bindings.items():
         resource = binding.binding
+        readback = _binding_requires_readback(binding)
         if resource.kind not in (
             None,
             "buffer",
@@ -2881,7 +2889,7 @@ def _prepare_vulkan_buffers(
         element_count = (
             math.prod(shape) if shape else len(_flatten_values(binding.value))
         )
-        if binding.source == "expectedOutput":
+        if binding.value is None and readback:
             payload = b"\x00" * (element_count * _dtype_size(dtype))
         else:
             payload = _pack_values(
@@ -2899,6 +2907,7 @@ def _prepare_vulkan_buffers(
                 dtype=dtype,
                 shape=shape,
                 source=binding.source,
+                readback=readback,
                 output_name=_runtime_value_name(binding),
                 payload=payload,
             )
@@ -2915,6 +2924,7 @@ def _prepare_opengl_buffers(
     seen_bindings: set[tuple[str, int]] = set()
     for name, binding in bindings.items():
         resource = binding.binding
+        readback = _binding_requires_readback(binding)
         if resource.kind not in (
             None,
             "buffer",
@@ -2938,7 +2948,7 @@ def _prepare_opengl_buffers(
         namespace = (
             "uniform" if resource.kind in {"constant-buffer", "uniform"} else "storage"
         )
-        if binding.source == "expectedOutput" and namespace == "uniform":
+        if readback and namespace == "uniform":
             raise _opengl_setup_error(
                 f"OpenGL uniform buffer {name!r} cannot be a runtime output resource.",
                 "unsupported-output-resource",
@@ -2947,7 +2957,7 @@ def _prepare_opengl_buffers(
                 binding=binding_index,
             )
         access = str(resource.access or "").strip().lower().replace("-", "_")
-        if binding.source == "expectedOutput" and access in {
+        if readback and access in {
             "read",
             "read_only",
             "readonly",
@@ -2971,7 +2981,7 @@ def _prepare_opengl_buffers(
         element_count = (
             math.prod(shape) if shape else len(_flatten_values(binding.value))
         )
-        if binding.source == "expectedOutput":
+        if binding.value is None and readback:
             payload = b"\x00" * (element_count * _dtype_size(dtype))
         else:
             payload = _pack_values(
@@ -2996,6 +3006,7 @@ def _prepare_opengl_buffers(
                 dtype=dtype,
                 shape=shape,
                 source=binding.source,
+                readback=readback,
                 output_name=_runtime_value_name(binding),
                 payload=payload,
                 allocation_size=allocation_size,
@@ -3177,10 +3188,18 @@ def _scalar_block_error(
 
 
 def _runtime_value_name(binding: NativeRuntimeBufferBinding) -> str | None:
+    expected_output = binding.expected_output
+    expected_output_name = expected_output.name if expected_output is not None else None
+    if isinstance(expected_output_name, str) and expected_output_name.strip():
+        return expected_output_name.strip()
     value_name = binding.metadata.get("runtimeValueName")
     if isinstance(value_name, str) and value_name.strip():
         return value_name.strip()
     return None
+
+
+def _binding_requires_readback(binding: NativeRuntimeBufferBinding) -> bool:
+    return binding.expected_output is not None or binding.source == "expectedOutput"
 
 
 def _workgroup_count(

@@ -40444,7 +40444,9 @@ def test_inspect_runtime_package_reflects_spirv_assembly_metadata(tmp_path):
     assert host_interface["diagnostics"] == []
 
 
-def test_reflect_spirv_assembly_preserves_flag_decorations(tmp_path):
+def test_reflect_spirv_assembly_classifies_uniform_buffer_block_as_read_write(
+    tmp_path,
+):
     artifact_path = tmp_path / "kernel.spvasm"
     artifact_path.write_text(
         textwrap.dedent("""
@@ -40477,7 +40479,7 @@ def test_reflect_spirv_assembly_preserves_flag_decorations(tmp_path):
             "type": "out_Buffer",
             "set": 0,
             "binding": 2,
-            "access": "read",
+            "access": "read_write",
             "metadata": {
                 "id": "%out",
                 "storageClass": "Uniform",
@@ -40543,6 +40545,12 @@ def test_reflect_spirv_assembly_scopes_repeated_entry_point_layouts(tmp_path):
         "buffer",
         "constant-buffer",
         "buffer",
+    ]
+    assert [resource["access"] for resource in host_interface["resources"]] == [
+        "read",
+        "read_write",
+        "read",
+        "read_write",
     ]
 
 

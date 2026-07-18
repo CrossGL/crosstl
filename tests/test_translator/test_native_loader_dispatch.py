@@ -138,6 +138,14 @@ def _outputs():
     }
 
 
+def _initialized_read_write_values():
+    return {
+        "dtype": "float32",
+        "shape": [4],
+        "values": [1.0, 2.0, 3.0, 4.0],
+    }
+
+
 def _build(tmp_path, target="directx", **overrides):
     descriptor = overrides.pop("descriptor", None) or _write_descriptor(
         tmp_path, target
@@ -437,6 +445,54 @@ def test_accepts_read_write_bindings_as_output_only(tmp_path, target, namespace)
 
 
 @pytest.mark.parametrize(
+    ("target", "namespace"),
+    [("directx", "uav"), ("opengl", "storage-buffer")],
+)
+def test_accepts_initialized_read_write_bindings_once(tmp_path, target, namespace):
+    descriptor = _write_descriptor(tmp_path, target)
+    descriptor["bindings"][1]["access"] = "read_write"
+    inputs = {
+        **_inputs(),
+        "output_values": _initialized_read_write_values(),
+    }
+
+    request = _build(
+        tmp_path,
+        target,
+        descriptor=descriptor,
+        input_values=inputs,
+    )
+
+    bindings = [
+        binding
+        for binding in request.adapter_contract.resource_bindings
+        if binding.name == "output_values"
+    ]
+    assert len(bindings) == 1
+    assert bindings[0].access == "read_write"
+    assert bindings[0].metadata["bindingNamespace"] == namespace
+    assert (bindings[0].set, bindings[0].binding) == (0, 1)
+    assert [value.name for value in request.fixture.inputs] == [
+        "input_values",
+        "output_values",
+    ]
+    assert [value.name for value in request.fixture.expected_outputs] == [
+        "output_values"
+    ]
+    planned = [
+        binding
+        for binding in request.execution_plan.resource_bindings
+        if binding.binding.name == "output_values"
+    ]
+    assert len(planned) == 1
+    assert planned[0].source == "input"
+    assert planned[0].initial_value is not None
+    assert planned[0].initial_value.values == [1.0, 2.0, 3.0, 4.0]
+    assert planned[0].expected_output is not None
+    assert planned[0].expected_output.name == "output_values"
+
+
+@pytest.mark.parametrize(
     ("target", "input_kind", "input_namespace"),
     [
         ("directx", "constantbuffer", "cbv"),
@@ -511,8 +567,11 @@ def test_rejects_read_write_binding_supplied_only_as_input(tmp_path, target):
             output_values={},
         )
 
-    assert caught.value.code.endswith(".read-write-input-unsupported")
-    assert caught.value.details == {"bindings": ["output_values"]}
+    assert caught.value.code.endswith(".value-missing")
+    assert caught.value.details == {
+        "missingInputs": [],
+        "missingOutputs": ["output_values"],
+    }
 
 
 def test_rejects_empty_resource_contract(tmp_path):
@@ -580,14 +639,94 @@ def test_rejects_missing_extra_and_read_only_output_values(
     assert caught.value.code == f"project.native-loader-dispatch.{code}"
 
 
-def test_rejects_input_output_name_overlap(tmp_path):
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_rejects_input_output_name_overlap_for_non_read_write_binding(tmp_path, target):
     outputs = _outputs()
     outputs["input_values"] = {"dtype": "float32", "shape": [4]}
 
     with pytest.raises(NativeLoaderDispatchError) as caught:
-        _build(tmp_path, output_values=outputs)
+        _build(tmp_path, target, output_values=outputs)
 
     assert caught.value.code.endswith(".value-duplicate")
+    assert caught.value.path == "$.outputValues"
+    assert caught.value.details == {"bindings": ["input_values"]}
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "value", "code", "input_value", "output_value"),
+    [
+        (
+            "directx",
+            "dtype",
+            "int32",
+            "read-write-dtype-mismatch",
+            "float32",
+            "int32",
+        ),
+        (
+            "opengl",
+            "shape",
+            [2, 2],
+            "read-write-shape-mismatch",
+            [4],
+            [2, 2],
+        ),
+    ],
+)
+def test_rejects_incompatible_initialized_read_write_value_contracts(
+    tmp_path, target, field, value, code, input_value, output_value
+):
+    descriptor = _write_descriptor(tmp_path, target)
+    descriptor["bindings"][1]["access"] = "read_write"
+    inputs = {
+        **_inputs(),
+        "output_values": _initialized_read_write_values(),
+    }
+    outputs = _outputs()
+    outputs["output_values"][field] = value
+
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(
+            tmp_path,
+            target,
+            descriptor=descriptor,
+            input_values=inputs,
+            output_values=outputs,
+        )
+
+    assert caught.value.code.endswith(f".{code}")
+    assert caught.value.path == f"$.outputValues.output_values.{field}"
+    assert caught.value.details == {
+        "binding": "output_values",
+        "inputValue": input_value,
+        "outputValue": output_value,
+    }
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_validates_initialized_read_write_values_against_scalar_layout(
+    tmp_path, target
+):
+    descriptor = _write_descriptor(tmp_path, target)
+    descriptor["bindings"][1]["access"] = "read_write"
+    descriptor["bindings"][1]["scalarLayout"]["physicalType"] = "int"
+    descriptor["scalarLayout"]["bindings"][1]["layout"]["physicalType"] = "int"
+    inputs = {
+        **_inputs(),
+        "output_values": _initialized_read_write_values(),
+    }
+
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(
+            tmp_path,
+            target,
+            descriptor=descriptor,
+            input_values=inputs,
+        )
+
+    assert caught.value.code.endswith(".resource-layout-mismatch")
+    assert caught.value.path == "$.bindings[1].scalarLayout"
+    assert caught.value.details["binding"] == "output_values"
 
 
 def test_rejects_runtime_value_dtype_mismatched_with_scalar_layout(tmp_path):
