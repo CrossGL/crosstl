@@ -166,6 +166,27 @@ class RuntimeTolerance:
 
 
 @dataclass(frozen=True)
+class RuntimeAllocationView:
+    """A typed fixture view into one stable native allocation."""
+
+    allocation_id: str
+    byte_offset: int = 0
+    byte_length: int | None = None
+    allocation_byte_length: int | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "id": self.allocation_id,
+            "byteOffset": self.byte_offset,
+        }
+        if self.byte_length is not None:
+            payload["byteLength"] = self.byte_length
+        if self.allocation_byte_length is not None:
+            payload["allocationByteLength"] = self.allocation_byte_length
+        return payload
+
+
+@dataclass(frozen=True)
 class RuntimeValue:
     """Repository-neutral tensor, buffer, image, or scalar fixture value."""
 
@@ -176,6 +197,7 @@ class RuntimeValue:
     values: Any = None
     tolerance: RuntimeTolerance | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    allocation: RuntimeAllocationView | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"name": self.name, "kind": self.kind}
@@ -189,6 +211,8 @@ class RuntimeValue:
             payload["tolerance"] = self.tolerance.to_json()
         if self.metadata:
             payload["metadata"] = dict(self.metadata)
+        if self.allocation is not None:
+            payload["allocation"] = self.allocation.to_json()
         return payload
 
 
@@ -457,6 +481,7 @@ class RuntimeBoundResource:
     diagnostics: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
     initial_value: RuntimeValue | None = None
     expected_output: RuntimeValue | None = None
+    allocation: RuntimeAllocationView | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -471,6 +496,8 @@ class RuntimeBoundResource:
             payload["initialValue"] = _runtime_value_reference(self.initial_value)
         if self.expected_output is not None:
             payload["expectedOutput"] = _runtime_value_reference(self.expected_output)
+        if self.allocation is not None:
+            payload["allocation"] = self.allocation.to_json()
         if self.diagnostics:
             payload["diagnostics"] = [
                 dict(diagnostic) for diagnostic in self.diagnostics
@@ -549,6 +576,7 @@ class NativeRuntimeBufferBinding:
     shape: tuple[int, ...] = field(default_factory=tuple)
     metadata: Mapping[str, Any] = field(default_factory=dict)
     expected_output: RuntimeValue | None = None
+    allocation: RuntimeAllocationView | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -565,6 +593,8 @@ class NativeRuntimeBufferBinding:
             payload["metadata"] = dict(self.metadata)
         if self.expected_output is not None:
             payload["expectedOutput"] = _runtime_value_reference(self.expected_output)
+        if self.allocation is not None:
+            payload["allocation"] = self.allocation.to_json()
         return payload
 
 
@@ -1455,6 +1485,7 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                     else {}
                 ),
                 expected_output=expected_output,
+                allocation=resource.allocation,
             )
         return bindings
 
@@ -4162,6 +4193,10 @@ def _parse_runtime_value(
     values = value.get("values")
     if "values" not in value and "value" in value:
         values = value.get("value")
+    allocation = _parse_runtime_allocation_view(
+        value.get("allocation"),
+        field_name=f"{field_name}.allocation",
+    )
     return RuntimeValue(
         name=name,
         kind=kind,
@@ -4170,6 +4205,7 @@ def _parse_runtime_value(
         values=values,
         tolerance=tolerance,
         metadata=metadata,
+        allocation=allocation,
     )
 
 
@@ -4182,6 +4218,44 @@ _RUNTIME_RESOURCE_LOGICAL_SUFFIXES = (
     "_Args",
     "Args",
 )
+
+
+def _parse_runtime_allocation_view(
+    value: Any, *, field_name: str
+) -> RuntimeAllocationView | None:
+    if value is None:
+        return None
+    if isinstance(value, RuntimeAllocationView):
+        return value
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"{field_name} must be an object.")
+    allocation_id = _required_string(value.get("id"), field_name=f"{field_name}.id")
+
+    def byte_field(name: str, *, default: int | None = None) -> int | None:
+        raw = value.get(name, default)
+        if raw is None:
+            return None
+        if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
+            raise RuntimeVerificationError(
+                f"{field_name}.{name} must be a non-negative integer."
+            )
+        return raw
+
+    byte_offset = byte_field("byteOffset", default=0)
+    byte_length = byte_field("byteLength")
+    allocation_byte_length = byte_field("allocationByteLength")
+    if byte_length == 0:
+        raise RuntimeVerificationError(f"{field_name}.byteLength must be positive.")
+    if allocation_byte_length == 0:
+        raise RuntimeVerificationError(
+            f"{field_name}.allocationByteLength must be positive."
+        )
+    return RuntimeAllocationView(
+        allocation_id=allocation_id,
+        byte_offset=byte_offset or 0,
+        byte_length=byte_length,
+        allocation_byte_length=allocation_byte_length,
+    )
 
 
 def _parse_runtime_aliases(value: Any, *, field_name: str) -> tuple[str, ...]:
@@ -5660,6 +5734,24 @@ def _runtime_bound_resources(
             source = "input" if initial_value is not None else "expectedOutput"
 
         binding_diagnostics: list[dict[str, Any]] = []
+        allocation, allocation_mismatches = _runtime_resource_allocation_view(
+            binding,
+            initial_value=initial_value,
+            expected_output=expected_output,
+        )
+        if allocation_mismatches:
+            diagnostic = _runtime_execution_diagnostic(
+                "error",
+                "project.runtime-verification.resource-allocation-incompatible",
+                "Runtime fixture allocation views are incompatible with the resource binding contract.",
+                artifact,
+                resource=_runtime_resource_binding_name(binding),
+                binding=binding.to_json(),
+                allocation=allocation.to_json(),
+                mismatches=allocation_mismatches,
+            )
+            diagnostics.append(diagnostic)
+            binding_diagnostics.append(diagnostic)
         if access == "read_write" and expected_output is None:
             diagnostic = _runtime_execution_diagnostic(
                 "error" if _runtime_resource_required(binding) else "warning",
@@ -5704,6 +5796,7 @@ def _runtime_bound_resources(
                         or source == "expectedOutput"
                         else None
                     ),
+                    allocation=allocation,
                     status="invalid" if binding_diagnostics else "bound",
                     diagnostics=tuple(binding_diagnostics),
                 )
@@ -5721,11 +5814,17 @@ def _runtime_bound_resources(
         bindings.append(
             RuntimeBoundResource(
                 binding=binding,
+                allocation=allocation,
                 status="missing",
                 diagnostics=(diagnostic,),
             )
         )
-    return tuple(bindings), diagnostics
+    validated_bindings, allocation_diagnostics = _validate_runtime_allocations(
+        bindings,
+        artifact,
+    )
+    diagnostics.extend(allocation_diagnostics)
+    return validated_bindings, diagnostics
 
 
 def _runtime_fixture_values_by_name(
@@ -5747,6 +5846,413 @@ def _runtime_fixture_values_by_name(
     return indexed(fixture.inputs, "input"), indexed(
         fixture.expected_outputs, "expectedOutput"
     )
+
+
+_RUNTIME_SCALAR_BYTE_SIZES = {
+    "bool": 1,
+    "float16": 2,
+    "half": 2,
+    "int8": 1,
+    "int16": 2,
+    "int32": 4,
+    "int64": 8,
+    "uint8": 1,
+    "uint16": 2,
+    "uint32": 4,
+    "uint64": 8,
+    "float32": 4,
+    "float64": 8,
+}
+
+
+def _runtime_resource_allocation_view(
+    binding: RuntimeResourceBinding,
+    *,
+    initial_value: RuntimeValue | None,
+    expected_output: RuntimeValue | None,
+) -> tuple[RuntimeAllocationView, list[dict[str, Any]]]:
+    values = tuple(
+        value for value in (initial_value, expected_output) if value is not None
+    )
+    explicit = tuple(
+        (value, value.allocation) for value in values if value.allocation is not None
+    )
+    mismatches: list[dict[str, Any]] = []
+    default_id = _runtime_default_allocation_id(binding)
+    selected = explicit[0][1] if explicit else None
+    allocation_id = selected.allocation_id if selected is not None else default_id
+    if not isinstance(allocation_id, str) or not allocation_id.strip():
+        mismatches.append({"field": "id", "value": allocation_id, "reason": "invalid"})
+        allocation_id = default_id
+    else:
+        allocation_id = allocation_id.strip()
+
+    byte_offset = selected.byte_offset if selected is not None else 0
+    byte_length = selected.byte_length if selected is not None else None
+    allocation_byte_length = (
+        selected.allocation_byte_length if selected is not None else None
+    )
+    for value, view in explicit[1:]:
+        comparisons = (
+            ("id", allocation_id, view.allocation_id),
+            ("byteOffset", byte_offset, view.byte_offset),
+        )
+        for field_name, first, current in comparisons:
+            if first != current:
+                mismatches.append(
+                    {
+                        "field": field_name,
+                        "value": value.name,
+                        "first": first,
+                        "current": current,
+                    }
+                )
+        if view.byte_length is not None:
+            if byte_length is None:
+                byte_length = view.byte_length
+            elif byte_length != view.byte_length:
+                mismatches.append(
+                    {
+                        "field": "byteLength",
+                        "value": value.name,
+                        "first": byte_length,
+                        "current": view.byte_length,
+                    }
+                )
+        if view.allocation_byte_length is not None:
+            if allocation_byte_length is None:
+                allocation_byte_length = view.allocation_byte_length
+            elif allocation_byte_length != view.allocation_byte_length:
+                mismatches.append(
+                    {
+                        "field": "allocationByteLength",
+                        "value": value.name,
+                        "first": allocation_byte_length,
+                        "current": view.allocation_byte_length,
+                    }
+                )
+
+    for field_name, field_value in (
+        ("byteOffset", byte_offset),
+        ("byteLength", byte_length),
+        ("allocationByteLength", allocation_byte_length),
+    ):
+        if field_value is None and field_name != "byteOffset":
+            continue
+        if (
+            not isinstance(field_value, int)
+            or isinstance(field_value, bool)
+            or field_value < 0
+            or (field_name != "byteOffset" and field_value == 0)
+        ):
+            mismatches.append(
+                {"field": field_name, "value": field_value, "reason": "invalid"}
+            )
+            if field_name == "byteOffset":
+                byte_offset = 0
+            elif field_name == "byteLength":
+                byte_length = None
+            else:
+                allocation_byte_length = None
+
+    inferred_lengths = []
+    for value in values:
+        inferred = _runtime_value_physical_byte_length(value, binding)
+        if inferred is None:
+            continue
+        inferred_lengths.append(inferred)
+        view = value.allocation
+        if (
+            view is not None
+            and view.byte_length is not None
+            and view.byte_length != inferred
+        ):
+            mismatches.append(
+                {
+                    "field": "byteLength",
+                    "value": value.name,
+                    "declared": view.byte_length,
+                    "required": inferred,
+                }
+            )
+    if byte_length is None and inferred_lengths:
+        byte_length = max(inferred_lengths)
+    return (
+        RuntimeAllocationView(
+            allocation_id=allocation_id,
+            byte_offset=byte_offset,
+            byte_length=byte_length,
+            allocation_byte_length=allocation_byte_length,
+        ),
+        mismatches,
+    )
+
+
+def _runtime_default_allocation_id(binding: RuntimeResourceBinding) -> str:
+    coordinates = ":".join(
+        str(value) if value is not None else "-"
+        for value in (binding.set, binding.binding, binding.index)
+    )
+    name = _runtime_resource_binding_name(binding) or "resource"
+    return f"binding:{coordinates}:{name}"
+
+
+def _runtime_value_physical_byte_length(
+    value: RuntimeValue,
+    binding: RuntimeResourceBinding,
+) -> int | None:
+    shape = value.shape or _infer_shape(value.values)
+    if shape:
+        element_count = math.prod(shape)
+    elif value.values is not None:
+        element_count = len(_flatten_values(value.values))
+    else:
+        return None
+    layout = _runtime_scalar_layout_signature(value.metadata)
+    if not layout:
+        layout = _runtime_scalar_layout_signature(binding.metadata)
+    stride = layout.get("elementStrideBytes")
+    if not isinstance(stride, int) or isinstance(stride, bool) or stride <= 0:
+        dtype = _runtime_compatible_dtype(value.dtype)
+        stride = _RUNTIME_SCALAR_BYTE_SIZES.get(dtype or "")
+    if stride is None:
+        return None
+    byte_length = element_count * stride
+    block_size = layout.get("blockSizeBytes")
+    if (
+        isinstance(block_size, int)
+        and not isinstance(block_size, bool)
+        and block_size > byte_length
+        and str(binding.kind or "").strip().lower() in {"constant-buffer", "uniform"}
+    ):
+        return block_size
+    return byte_length
+
+
+def _runtime_value_alignment(
+    resource: RuntimeBoundResource,
+) -> int | None:
+    value = resource.initial_value or resource.expected_output or resource.value
+    if value is None:
+        return None
+    layout = _runtime_scalar_layout_signature(value.metadata)
+    if not layout:
+        layout = _runtime_scalar_layout_signature(resource.binding.metadata)
+    alignment = layout.get("alignmentBytes")
+    if isinstance(alignment, int) and not isinstance(alignment, bool) and alignment > 0:
+        return alignment
+    return _RUNTIME_SCALAR_BYTE_SIZES.get(_runtime_compatible_dtype(value.dtype) or "")
+
+
+def _validate_runtime_allocations(
+    bindings: Sequence[RuntimeBoundResource],
+    artifact: Mapping[str, Any],
+) -> tuple[tuple[RuntimeBoundResource, ...], list[dict[str, Any]]]:
+    groups: dict[str, list[int]] = {}
+    for index, resource in enumerate(bindings):
+        if resource.allocation is not None:
+            groups.setdefault(resource.allocation.allocation_id, []).append(index)
+
+    updated = list(bindings)
+    diagnostics: list[dict[str, Any]] = []
+    binding_diagnostics: dict[int, list[dict[str, Any]]] = {}
+
+    def record(indices: Sequence[int], diagnostic: dict[str, Any]) -> None:
+        diagnostics.append(diagnostic)
+        for index in indices:
+            binding_diagnostics.setdefault(index, []).append(diagnostic)
+
+    for allocation_id, indices in groups.items():
+        resources = [updated[index] for index in indices]
+        declared_sizes = {
+            resource.allocation.allocation_byte_length
+            for resource in resources
+            if resource.allocation is not None
+            and resource.allocation.allocation_byte_length is not None
+        }
+        required_size = max(
+            (
+                resource.allocation.byte_offset + resource.allocation.byte_length
+                for resource in resources
+                if resource.allocation is not None
+                and resource.allocation.byte_length is not None
+            ),
+            default=0,
+        )
+        if len(declared_sizes) > 1:
+            record(
+                indices,
+                _runtime_execution_diagnostic(
+                    "error",
+                    "project.runtime-verification.resource-allocation-size-conflict",
+                    "Resource views declare conflicting sizes for one native allocation.",
+                    artifact,
+                    allocationId=allocation_id,
+                    allocationByteLengths=sorted(declared_sizes),
+                    views=[
+                        _runtime_allocation_binding_payload(item) for item in resources
+                    ],
+                    targetConstraint="allocation-size-consistency",
+                ),
+            )
+        allocation_size = (
+            max(declared_sizes)
+            if declared_sizes
+            else (required_size if required_size > 0 else None)
+        )
+        for index in indices:
+            resource = updated[index]
+            view = resource.allocation
+            if view is None:
+                continue
+            if (
+                allocation_size is not None
+                and view.allocation_byte_length != allocation_size
+            ):
+                updated[index] = replace(
+                    resource,
+                    allocation=replace(view, allocation_byte_length=allocation_size),
+                )
+                resource = updated[index]
+                view = resource.allocation
+            if view is None:
+                continue
+            if view.byte_length is not None and allocation_size is not None:
+                end = view.byte_offset + view.byte_length
+                if end > allocation_size:
+                    record(
+                        (index,),
+                        _runtime_execution_diagnostic(
+                            "error",
+                            "project.runtime-verification.resource-allocation-view-out-of-bounds",
+                            "Resource view exceeds its declared native allocation.",
+                            artifact,
+                            allocationId=allocation_id,
+                            binding=_runtime_allocation_binding_payload(resource),
+                            byteRange=[view.byte_offset, end],
+                            allocationByteLength=allocation_size,
+                            targetConstraint="allocation-bounds",
+                        ),
+                    )
+            alignment = _runtime_value_alignment(resource)
+            if alignment is not None and view.byte_offset % alignment:
+                record(
+                    (index,),
+                    _runtime_execution_diagnostic(
+                        "error",
+                        "project.runtime-verification.resource-allocation-view-misaligned",
+                        "Resource view offset does not satisfy its physical alignment.",
+                        artifact,
+                        allocationId=allocation_id,
+                        binding=_runtime_allocation_binding_payload(resource),
+                        byteOffset=view.byte_offset,
+                        alignmentBytes=alignment,
+                        targetConstraint="view-offset-alignment",
+                    ),
+                )
+
+        for left_position, left_index in enumerate(indices):
+            left = updated[left_index]
+            for right_index in indices[left_position + 1 :]:
+                right = updated[right_index]
+                if not _runtime_allocation_views_overlap(left, right):
+                    continue
+                if _runtime_allocation_layout_signature(
+                    left
+                ) != _runtime_allocation_layout_signature(right):
+                    record(
+                        (left_index, right_index),
+                        _runtime_execution_diagnostic(
+                            "error",
+                            "project.runtime-verification.resource-allocation-layout-incompatible",
+                            "Overlapping resource views require compatible physical layouts.",
+                            artifact,
+                            allocationId=allocation_id,
+                            views=[
+                                _runtime_allocation_binding_payload(left),
+                                _runtime_allocation_binding_payload(right),
+                            ],
+                            targetConstraint="overlapping-view-layout",
+                        ),
+                    )
+                if _runtime_resource_is_writable(
+                    left
+                ) and _runtime_resource_is_writable(right):
+                    record(
+                        (left_index, right_index),
+                        _runtime_execution_diagnostic(
+                            "error",
+                            "project.runtime-verification.resource-allocation-write-conflict",
+                            "Overlapping writable resource views require an explicit synchronization plan.",
+                            artifact,
+                            allocationId=allocation_id,
+                            views=[
+                                _runtime_allocation_binding_payload(left),
+                                _runtime_allocation_binding_payload(right),
+                            ],
+                            targetConstraint="overlapping-writable-views",
+                        ),
+                    )
+
+    for index, extra in binding_diagnostics.items():
+        resource = updated[index]
+        updated[index] = replace(
+            resource,
+            status="invalid",
+            diagnostics=tuple((*resource.diagnostics, *extra)),
+        )
+    return tuple(updated), diagnostics
+
+
+def _runtime_allocation_views_overlap(
+    left: RuntimeBoundResource,
+    right: RuntimeBoundResource,
+) -> bool:
+    if left.allocation is None or right.allocation is None:
+        return False
+    if left.allocation.byte_length is None or right.allocation.byte_length is None:
+        return False
+    left_start = left.allocation.byte_offset
+    left_end = left_start + left.allocation.byte_length
+    right_start = right.allocation.byte_offset
+    right_end = right_start + right.allocation.byte_length
+    return left_start < right_end and right_start < left_end
+
+
+def _runtime_allocation_layout_signature(
+    resource: RuntimeBoundResource,
+) -> tuple[Any, ...]:
+    value = resource.initial_value or resource.expected_output or resource.value
+    dtype = _runtime_compatible_dtype(value.dtype) if value is not None else None
+    layout = _runtime_scalar_layout_signature(resource.binding.metadata)
+    if value is not None:
+        layout = _runtime_scalar_layout_signature(value.metadata) or layout
+    return dtype, json.dumps(layout, sort_keys=True, separators=(",", ":"))
+
+
+def _runtime_resource_is_writable(resource: RuntimeBoundResource) -> bool:
+    access = _runtime_resource_access(resource.binding.access)
+    if access in {"write", "read_write"}:
+        return True
+    return resource.expected_output is not None or resource.source == "expectedOutput"
+
+
+def _runtime_allocation_binding_payload(
+    resource: RuntimeBoundResource,
+) -> dict[str, Any]:
+    payload = {
+        "name": _runtime_resource_binding_name(resource.binding),
+        "access": _runtime_resource_access(resource.binding.access),
+        "coordinates": {
+            "set": resource.binding.set,
+            "binding": resource.binding.binding,
+            "index": resource.binding.index,
+        },
+    }
+    if resource.allocation is not None:
+        payload["byteOffset"] = resource.allocation.byte_offset
+        payload["byteLength"] = resource.allocation.byte_length
+    return payload
 
 
 def _runtime_resource_access(value: str | None) -> str | None:

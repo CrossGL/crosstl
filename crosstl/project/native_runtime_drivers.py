@@ -8,7 +8,7 @@ import math
 import re
 import struct
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -36,10 +36,15 @@ class _PreparedDirectXBuffer:
     payload: bytes
     allocation_size: int
     stride: int = 0
+    allocation_id: str | None = None
+    byte_offset: int = 0
+    byte_length: int | None = None
+    upload: bool = True
+    writable: bool = False
 
     @property
     def size(self) -> int:
-        return len(self.payload)
+        return self.byte_length if self.byte_length is not None else len(self.payload)
 
 
 @dataclass
@@ -95,10 +100,15 @@ class _PreparedOpenGLBuffer:
     output_name: str | None
     payload: bytes
     allocation_size: int
+    allocation_id: str | None = None
+    byte_offset: int = 0
+    byte_length: int | None = None
+    upload: bool = True
+    writable: bool = False
 
     @property
     def size(self) -> int:
-        return len(self.payload)
+        return self.byte_length if self.byte_length is not None else len(self.payload)
 
 
 @dataclass(frozen=True)
@@ -425,29 +435,26 @@ class DirectXComputeRuntime:
                     },
                 ) from exc
 
-            for item in prepared:
-                try:
-                    resource = self._create_buffer_resource(
+            try:
+                resources.extend(
+                    self._create_buffer_resources(
                         compushady,
                         device,
-                        item,
+                        prepared,
                         owned_objects,
                     )
-                except (RuntimeAdapterSetupError, RuntimeExecutorUnavailable):
-                    raise
-                except Exception as exc:
-                    raise RuntimeAdapterSetupError(
-                        f"DirectX resource creation failed for {item.name!r}: {exc}",
-                        details={
-                            "target": "directx",
-                            "runtime": self.name,
-                            "reasonKind": "resource-creation-failed",
-                            "resource": item.name,
-                            "namespace": item.namespace,
-                            "binding": item.binding_index,
-                        },
-                    ) from exc
-                resources.append(resource)
+                )
+            except (RuntimeAdapterSetupError, RuntimeExecutorUnavailable):
+                raise
+            except Exception as exc:
+                raise RuntimeAdapterSetupError(
+                    f"DirectX resource creation failed: {exc}",
+                    details={
+                        "target": "directx",
+                        "runtime": self.name,
+                        "reasonKind": "resource-creation-failed",
+                    },
+                ) from exc
 
             bound_resources = {
                 namespace: [
@@ -583,6 +590,46 @@ class DirectXComputeRuntime:
             upload_buffer=upload_buffer,
             device_buffer=device_buffer,
         )
+
+    def _create_buffer_resources(
+        self,
+        compushady: Any,
+        device: Any,
+        prepared_buffers: Sequence[_PreparedDirectXBuffer],
+        owned_objects: list[Any],
+    ) -> list[_DirectXBufferResource]:
+        resources: list[_DirectXBufferResource] = []
+        for allocation_id, views in _prepared_allocation_groups(prepared_buffers):
+            _validate_directx_allocation_views(allocation_id, views)
+            allocation_payload = _prepared_allocation_payload(
+                allocation_id,
+                views,
+                target="directx",
+            )
+            representative = views[0]
+            allocation = replace(
+                representative,
+                name=allocation_id,
+                payload=allocation_payload,
+                byte_offset=0,
+                byte_length=representative.allocation_size,
+                upload=True,
+            )
+            physical = self._create_buffer_resource(
+                compushady,
+                device,
+                allocation,
+                owned_objects,
+            )
+            resources.extend(
+                _DirectXBufferResource(
+                    prepared=view,
+                    upload_buffer=physical.upload_buffer,
+                    device_buffer=physical.device_buffer,
+                )
+                for view in views
+            )
+        return resources
 
     def _read_outputs(
         self,
@@ -873,21 +920,21 @@ class OpenGLComputeRuntime:
                     },
                 ) from exc
 
-            for prepared in prepared_buffers:
-                try:
-                    buffer = self._create_buffer(context, prepared)
-                except Exception as exc:
-                    raise RuntimeAdapterSetupError(
-                        f"OpenGL resource binding failed for {prepared.name!r}: {exc}",
-                        details={
-                            "target": "opengl",
-                            "runtime": self.name,
-                            "reasonKind": "resource-binding-failed",
-                            "resource": prepared.name,
-                            "binding": prepared.binding_index,
-                        },
-                    ) from exc
-                resources.append((prepared, buffer))
+            try:
+                resources.extend(
+                    self._create_buffer_resources(context, prepared_buffers)
+                )
+            except (RuntimeAdapterSetupError, RuntimeExecutorUnavailable):
+                raise
+            except Exception as exc:
+                raise RuntimeAdapterSetupError(
+                    f"OpenGL resource binding failed: {exc}",
+                    details={
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "reasonKind": "resource-binding-failed",
+                    },
+                ) from exc
             self._bind_constants(shader, uniform_bindings)
             try:
                 shader.run(
@@ -941,7 +988,11 @@ class OpenGLComputeRuntime:
                 details={"target": "opengl", "runtime": self.name},
             ) from exc
         finally:
+            released_buffers: set[int] = set()
             for _prepared, buffer in reversed(resources):
+                if id(buffer) in released_buffers:
+                    continue
+                released_buffers.add(id(buffer))
                 _release_opengl_object(buffer)
             _release_opengl_object(shader)
             _release_opengl_object(context)
@@ -1230,20 +1281,76 @@ class OpenGLComputeRuntime:
         return self.load_artifact(None, None, request.module_path)
 
     def _create_buffer(self, context: Any, prepared: _PreparedOpenGLBuffer) -> Any:
-        if prepared.payload:
-            payload = prepared.payload.ljust(prepared.allocation_size, b"\x00")
-            buffer = context.buffer(payload)
-        else:
-            buffer = context.buffer(reserve=max(prepared.allocation_size, 1))
+        payload = _prepared_allocation_payload(
+            _prepared_allocation_id(prepared),
+            (prepared,),
+            target="opengl",
+        )
+        buffer = self._create_allocation_buffer(context, payload)
         try:
-            if prepared.resource_kind in {"constant-buffer", "uniform"}:
-                buffer.bind_to_uniform_block(prepared.binding_index)
-            else:
-                buffer.bind_to_storage_buffer(prepared.binding_index)
+            self._bind_buffer_view(buffer, prepared)
         except Exception:
             _release_opengl_object(buffer)
             raise
         return buffer
+
+    def _create_buffer_resources(
+        self,
+        context: Any,
+        prepared_buffers: Sequence[_PreparedOpenGLBuffer],
+    ) -> list[tuple[_PreparedOpenGLBuffer, Any]]:
+        resources: list[tuple[_PreparedOpenGLBuffer, Any]] = []
+        for allocation_id, views in _prepared_allocation_groups(prepared_buffers):
+            _validate_opengl_allocation_views(allocation_id, views)
+            _validate_opengl_context_view_alignment(context, allocation_id, views)
+            payload = _prepared_allocation_payload(
+                allocation_id,
+                views,
+                target="opengl",
+            )
+            buffer = self._create_allocation_buffer(context, payload)
+            try:
+                for view in views:
+                    try:
+                        self._bind_buffer_view(buffer, view)
+                    except Exception as exc:
+                        raise RuntimeAdapterSetupError(
+                            f"OpenGL resource binding failed for {view.name!r}: {exc}",
+                            details={
+                                "target": "opengl",
+                                "runtime": self.name,
+                                "reasonKind": "resource-binding-failed",
+                                "resource": view.name,
+                                "binding": view.binding_index,
+                                "allocationId": allocation_id,
+                            },
+                        ) from exc
+            except Exception:
+                _release_opengl_object(buffer)
+                raise
+            resources.extend((view, buffer) for view in views)
+        return resources
+
+    @staticmethod
+    def _create_allocation_buffer(context: Any, payload: bytes) -> Any:
+        if payload:
+            return context.buffer(payload)
+        return context.buffer(reserve=1)
+
+    @staticmethod
+    def _bind_buffer_view(buffer: Any, prepared: _PreparedOpenGLBuffer) -> None:
+        if prepared.resource_kind in {"constant-buffer", "uniform"}:
+            bind = buffer.bind_to_uniform_block
+        else:
+            bind = buffer.bind_to_storage_buffer
+        if prepared.byte_offset == 0 and prepared.size == prepared.allocation_size:
+            bind(prepared.binding_index)
+            return
+        bind(
+            prepared.binding_index,
+            offset=prepared.byte_offset,
+            size=prepared.size,
+        )
 
     def _bind_constants(self, shader: Any, constants: Mapping[str, Any]) -> None:
         for name, binding in constants.items():
@@ -1297,7 +1404,12 @@ class OpenGLComputeRuntime:
         for prepared, buffer in resources:
             if not prepared.readback:
                 continue
-            payload = bytes(buffer.read(size=prepared.size))
+            if prepared.byte_offset:
+                payload = bytes(
+                    buffer.read(size=prepared.size, offset=prepared.byte_offset)
+                )
+            else:
+                payload = bytes(buffer.read(size=prepared.size))
             if len(payload) != prepared.size:
                 raise RuntimeAdapterDispatchError(
                     f"OpenGL output readback for {prepared.name!r} returned "
@@ -1885,6 +1997,246 @@ def _release_directx_object(value: Any) -> None:
             return
 
 
+def _prepared_allocation_id(prepared: Any) -> str:
+    allocation_id = getattr(prepared, "allocation_id", None)
+    if isinstance(allocation_id, str) and allocation_id:
+        return allocation_id
+    namespace = getattr(prepared, "namespace", None) or getattr(
+        prepared, "resource_kind", None
+    )
+    return (
+        f"binding:{namespace or 'buffer'}:" f"{prepared.binding_index}:{prepared.name}"
+    )
+
+
+def _prepared_allocation_groups(
+    prepared_buffers: Sequence[Any],
+) -> tuple[tuple[str, tuple[Any, ...]], ...]:
+    groups: dict[tuple[str, Any], list[Any]] = {}
+    display_ids: dict[tuple[str, Any], str] = {}
+    for index, prepared in enumerate(prepared_buffers):
+        explicit_id = getattr(prepared, "allocation_id", None)
+        if isinstance(explicit_id, str) and explicit_id:
+            key = ("allocation", explicit_id)
+        else:
+            key = ("binding", index)
+        groups.setdefault(key, []).append(prepared)
+        display_ids.setdefault(key, _prepared_allocation_id(prepared))
+    return tuple((display_ids[key], tuple(views)) for key, views in groups.items())
+
+
+def _prepared_allocation_payload(
+    allocation_id: str,
+    views: Sequence[Any],
+    *,
+    target: str,
+) -> bytes:
+    allocation_sizes = {view.allocation_size for view in views}
+    error = _directx_setup_error if target == "directx" else _opengl_setup_error
+    target_name = {"directx": "DirectX", "opengl": "OpenGL"}[target]
+    if len(allocation_sizes) != 1:
+        raise error(
+            f"{target_name} shared allocation views disagree on allocation size.",
+            "allocation-size-conflict",
+            allocationId=allocation_id,
+            allocationByteLengths=sorted(allocation_sizes),
+            views=[_prepared_allocation_view_payload(view) for view in views],
+        )
+    allocation_size = next(iter(allocation_sizes))
+    payload = bytearray(allocation_size)
+    written = bytearray(allocation_size)
+    owners: list[str | None] = [None] * allocation_size
+    for view in views:
+        if not view.upload:
+            continue
+        start = view.byte_offset
+        end = start + len(view.payload)
+        if len(view.payload) > view.size or end > allocation_size:
+            raise error(
+                f"{target_name} allocation upload exceeds its resource view.",
+                "allocation-upload-out-of-bounds",
+                allocationId=allocation_id,
+                binding=_prepared_allocation_view_payload(view),
+                uploadByteLength=len(view.payload),
+            )
+        conflicts = {
+            owners[index]
+            for index in range(start, end)
+            if written[index] and payload[index] != view.payload[index - start]
+        }
+        if conflicts:
+            raise error(
+                f"{target_name} shared allocation has conflicting upload values.",
+                "allocation-upload-conflict",
+                allocationId=allocation_id,
+                binding=_prepared_allocation_view_payload(view),
+                conflictingBindings=sorted(value for value in conflicts if value),
+                targetConstraint="overlapping-upload-bytes",
+            )
+        for index, value in enumerate(view.payload, start=start):
+            payload[index] = value
+            written[index] = 1
+            owners[index] = view.name
+    return bytes(payload)
+
+
+def _validate_directx_allocation_views(
+    allocation_id: str,
+    views: Sequence[_PreparedDirectXBuffer],
+) -> None:
+    if len(views) < 2:
+        return
+    if any(view.namespace == "cbv" for view in views):
+        raise _directx_setup_error(
+            "DirectX constant-buffer allocations cannot be shared with another binding.",
+            "unsupported-shared-allocation",
+            allocationId=allocation_id,
+            views=[_prepared_allocation_view_payload(view) for view in views],
+            targetConstraint="constant-buffer-resource-class",
+        )
+    layouts = {(view.dtype, view.stride) for view in views}
+    if len(layouts) != 1:
+        raise _directx_setup_error(
+            "DirectX shared allocation views require the same structured-buffer layout.",
+            "allocation-layout-incompatible",
+            allocationId=allocation_id,
+            layouts=[
+                {"dtype": dtype, "byteStride": stride}
+                for dtype, stride in sorted(layouts)
+            ],
+            views=[_prepared_allocation_view_payload(view) for view in views],
+            targetConstraint="structured-buffer-view-layout",
+        )
+    _validate_prepared_writable_overlaps(
+        allocation_id,
+        views,
+        target="directx",
+    )
+
+
+def _validate_opengl_allocation_views(
+    allocation_id: str,
+    views: Sequence[_PreparedOpenGLBuffer],
+) -> None:
+    if len(views) < 2:
+        return
+    namespaces = {
+        "uniform" if view.resource_kind in {"constant-buffer", "uniform"} else "storage"
+        for view in views
+    }
+    if len(namespaces) != 1:
+        raise _opengl_setup_error(
+            "OpenGL shared allocations cannot mix uniform and storage bindings.",
+            "allocation-resource-class-incompatible",
+            allocationId=allocation_id,
+            views=[_prepared_allocation_view_payload(view) for view in views],
+            targetConstraint="buffer-binding-target",
+        )
+    for left_index, left in enumerate(views):
+        for right in views[left_index + 1 :]:
+            if not _prepared_views_overlap(left, right) or left.dtype == right.dtype:
+                continue
+            raise _opengl_setup_error(
+                "OpenGL overlapping allocation views require the same scalar layout.",
+                "allocation-layout-incompatible",
+                allocationId=allocation_id,
+                views=[
+                    _prepared_allocation_view_payload(left),
+                    _prepared_allocation_view_payload(right),
+                ],
+                targetConstraint="overlapping-buffer-view-layout",
+            )
+    _validate_prepared_writable_overlaps(
+        allocation_id,
+        views,
+        target="opengl",
+    )
+
+
+def _validate_opengl_context_view_alignment(
+    context: Any,
+    allocation_id: str,
+    views: Sequence[_PreparedOpenGLBuffer],
+) -> None:
+    info = getattr(context, "info", None)
+    context_info = info if isinstance(info, Mapping) else {}
+    for view in views:
+        if view.byte_offset == 0:
+            continue
+        if view.resource_kind in {"constant-buffer", "uniform"}:
+            field = "GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT"
+        else:
+            field = "GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT"
+        alignment = context_info.get(field, 1)
+        if (
+            not isinstance(alignment, int)
+            or isinstance(alignment, bool)
+            or alignment <= 0
+        ):
+            alignment = 1
+        if view.byte_offset % alignment == 0:
+            continue
+        raise _opengl_setup_error(
+            "OpenGL allocation view does not satisfy the context offset alignment.",
+            "allocation-view-misaligned",
+            allocationId=allocation_id,
+            binding=_prepared_allocation_view_payload(view),
+            alignmentBytes=alignment,
+            contextLimit=field,
+            targetConstraint="buffer-range-offset-alignment",
+        )
+
+
+def _validate_prepared_writable_overlaps(
+    allocation_id: str,
+    views: Sequence[Any],
+    *,
+    target: str,
+) -> None:
+    error = _directx_setup_error if target == "directx" else _opengl_setup_error
+    target_name = {"directx": "DirectX", "opengl": "OpenGL"}[target]
+    for left_index, left in enumerate(views):
+        for right in views[left_index + 1 :]:
+            if not left.writable or not right.writable:
+                continue
+            if not _prepared_views_overlap(left, right):
+                continue
+            raise error(
+                f"{target_name} shared allocation has overlapping writable views.",
+                "allocation-write-conflict",
+                allocationId=allocation_id,
+                views=[
+                    _prepared_allocation_view_payload(left),
+                    _prepared_allocation_view_payload(right),
+                ],
+                targetConstraint="overlapping-writable-views",
+            )
+
+
+def _prepared_views_overlap(left: Any, right: Any) -> bool:
+    left_end = left.byte_offset + left.size
+    right_end = right.byte_offset + right.size
+    return left.byte_offset < right_end and right.byte_offset < left_end
+
+
+def _prepared_allocation_view_payload(view: Any) -> dict[str, Any]:
+    payload = {
+        "name": view.name,
+        "binding": view.binding_index,
+        "byteOffset": view.byte_offset,
+        "byteLength": view.size,
+        "readback": view.readback,
+        "writable": view.writable,
+    }
+    namespace = getattr(view, "namespace", None)
+    if namespace is not None:
+        payload["namespace"] = namespace
+    resource_kind = getattr(view, "resource_kind", None)
+    if resource_kind is not None:
+        payload["resourceKind"] = resource_kind
+    return payload
+
+
 def _prepare_directx_buffers(
     bindings: Mapping[str, NativeRuntimeBufferBinding],
 ) -> tuple[_PreparedDirectXBuffer, ...]:
@@ -1979,6 +2331,18 @@ def _prepare_directx_buffers(
                 ) from exc
 
         stride = _directx_buffer_stride(binding, namespace, dtype, len(payload))
+        (
+            allocation_id,
+            byte_offset,
+            byte_length,
+            requested_allocation_size,
+        ) = _native_buffer_allocation_view(
+            binding,
+            payload_size=len(payload),
+            target="directx",
+            alignment=stride or _dtype_size(dtype),
+            allow_padding=namespace == "cbv",
+        )
         if namespace == "cbv":
             block_size = _scalar_block_size(
                 binding,
@@ -1986,9 +2350,25 @@ def _prepare_directx_buffers(
                 dtype=dtype,
                 payload_size=len(payload),
             )
-            allocation_size = _align_to(max(len(payload), block_size), 256)
+            allocation_size = _align_to(max(requested_allocation_size, block_size), 256)
         else:
-            allocation_size = len(payload)
+            allocation_size = requested_allocation_size
+            if byte_offset or byte_length != allocation_size:
+                raise _directx_setup_error(
+                    "DirectX runtime buffer views currently require the complete allocation range.",
+                    "unsupported-allocation-subview",
+                    resource=name,
+                    allocationId=allocation_id,
+                    byteOffset=byte_offset,
+                    byteLength=byte_length,
+                    allocationByteLength=allocation_size,
+                    coordinates={
+                        "set": resource.set,
+                        "binding": resource.binding,
+                        "index": resource.index,
+                    },
+                    targetConstraint="compushady-buffer-view-range",
+                )
         prepared.append(
             _PreparedDirectXBuffer(
                 name=name,
@@ -2002,6 +2382,11 @@ def _prepare_directx_buffers(
                 payload=payload,
                 allocation_size=allocation_size,
                 stride=stride,
+                allocation_id=allocation_id,
+                byte_offset=byte_offset,
+                byte_length=byte_length,
+                upload=binding.value is not None,
+                writable=namespace == "uav",
             )
         )
     return tuple(
@@ -2990,13 +3375,45 @@ def _prepare_opengl_buffers(
                 expected_count=element_count,
                 target="OpenGL",
             )
-        allocation_size = len(payload)
+        (
+            allocation_id,
+            byte_offset,
+            byte_length,
+            allocation_size,
+        ) = _native_buffer_allocation_view(
+            binding,
+            payload_size=len(payload),
+            target="opengl",
+            alignment=_dtype_size(dtype),
+            allow_padding=namespace == "uniform",
+        )
         if namespace == "uniform":
-            allocation_size = _scalar_block_size(
-                binding,
-                target="opengl",
-                dtype=dtype,
-                payload_size=len(payload),
+            block_size = _scalar_block_size(
+                binding, target="opengl", dtype=dtype, payload_size=len(payload)
+            )
+            if (
+                binding.allocation is not None
+                and binding.allocation.byte_length is not None
+                and byte_length < block_size
+            ):
+                raise _opengl_setup_error(
+                    "OpenGL uniform allocation view is smaller than its reflected block.",
+                    "allocation-view-payload-mismatch",
+                    resource=name,
+                    allocationId=allocation_id,
+                    byteOffset=byte_offset,
+                    byteLength=byte_length,
+                    blockSizeBytes=block_size,
+                    coordinates={
+                        "set": resource.set,
+                        "binding": resource.binding,
+                        "index": resource.index,
+                    },
+                )
+            if binding.allocation is None or binding.allocation.byte_length is None:
+                byte_length = max(byte_length, block_size)
+            allocation_size = max(
+                allocation_size, byte_offset + max(byte_length, block_size)
             )
         prepared.append(
             _PreparedOpenGLBuffer(
@@ -3010,6 +3427,11 @@ def _prepare_opengl_buffers(
                 output_name=_runtime_value_name(binding),
                 payload=payload,
                 allocation_size=allocation_size,
+                allocation_id=allocation_id,
+                byte_offset=byte_offset,
+                byte_length=byte_length,
+                upload=binding.value is not None,
+                writable=access in {"write", "read_write", "readwrite"},
             )
         )
     return tuple(
@@ -3185,6 +3607,88 @@ def _scalar_block_error(
     if target == "directx":
         return _directx_setup_error(message, reason_kind, **details)
     return _opengl_setup_error(message, reason_kind, **details)
+
+
+def _native_buffer_allocation_view(
+    binding: NativeRuntimeBufferBinding,
+    *,
+    payload_size: int,
+    target: str,
+    alignment: int,
+    allow_padding: bool = False,
+) -> tuple[str, int, int, int]:
+    view = binding.allocation
+    allocation_id = (
+        view.allocation_id if view is not None else f"binding:{binding.name}"
+    )
+    byte_offset = view.byte_offset if view is not None else 0
+    byte_length = (
+        view.byte_length
+        if view is not None and view.byte_length is not None
+        else payload_size
+    )
+    allocation_size = (
+        view.allocation_byte_length
+        if view is not None and view.allocation_byte_length is not None
+        else byte_offset + byte_length
+    )
+
+    details = {
+        "resource": binding.name,
+        "allocationId": allocation_id,
+        "byteOffset": byte_offset,
+        "byteLength": byte_length,
+        "allocationByteLength": allocation_size,
+        "coordinates": {
+            "set": binding.binding.set,
+            "binding": binding.binding.binding,
+            "index": binding.binding.index,
+        },
+    }
+    error = _directx_setup_error if target == "directx" else _opengl_setup_error
+    target_name = {"directx": "DirectX", "opengl": "OpenGL"}[target]
+    if not isinstance(allocation_id, str) or not allocation_id.strip():
+        raise error(
+            f"{target_name} runtime allocation IDs must be non-empty strings.",
+            "allocation-id-invalid",
+            **details,
+        )
+    if (
+        any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in (byte_offset, byte_length, allocation_size)
+        )
+        or byte_length == 0
+        or allocation_size == 0
+    ):
+        raise error(
+            f"{target_name} runtime allocation ranges must use positive byte lengths.",
+            "allocation-range-invalid",
+            **details,
+        )
+    if byte_offset % alignment or byte_length % alignment:
+        raise error(
+            f"{target_name} runtime allocation view is not element-aligned.",
+            "allocation-view-misaligned",
+            alignmentBytes=alignment,
+            **details,
+        )
+    if byte_offset + byte_length > allocation_size:
+        raise error(
+            f"{target_name} runtime allocation view exceeds its allocation.",
+            "allocation-view-out-of-bounds",
+            **details,
+        )
+    if payload_size > byte_length or (
+        not allow_padding and payload_size != byte_length
+    ):
+        raise error(
+            f"{target_name} runtime payload does not match its allocation view.",
+            "allocation-view-payload-mismatch",
+            payloadByteLength=payload_size,
+            **details,
+        )
+    return allocation_id.strip(), byte_offset, byte_length, allocation_size
 
 
 def _runtime_value_name(binding: NativeRuntimeBufferBinding) -> str | None:

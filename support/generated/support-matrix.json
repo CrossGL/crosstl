@@ -1340,7 +1340,89 @@
       }
     }
   ],
-  "backlog": [],
+  "backlog": [
+    {
+      "backend": "WebGL / GLSL ES",
+      "backend_id": "webgl",
+      "category": "project",
+      "feature": "Shared native allocation views",
+      "feature_id": "project.shared_native_allocation_views",
+      "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WebGL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WebGL.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "WebGPU / WGSL",
+      "backend_id": "wgsl",
+      "category": "project",
+      "feature": "Shared native allocation views",
+      "feature_id": "project.shared_native_allocation_views",
+      "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WGSL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WGSL.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "project",
+      "feature": "Shared native allocation views",
+      "feature_id": "project.shared_native_allocation_views",
+      "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Vulkan SPIR-V",
+      "backend_id": "vulkan",
+      "category": "project",
+      "feature": "Shared native allocation views",
+      "feature_id": "project.shared_native_allocation_views",
+      "notes": "The backend-neutral runtime planner preserves and validates allocation views, but the built-in Vulkan reference driver currently prepares one buffer per binding and does not consume allocation IDs or bounded ranges. Plan serialization alone is not evidence of Vulkan physical allocation reuse.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "CUDA",
+      "backend_id": "cuda",
+      "category": "project",
+      "feature": "Shared native allocation views",
+      "feature_id": "project.shared_native_allocation_views",
+      "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in CUDA runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for CUDA.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "HIP",
+      "backend_id": "hip",
+      "category": "project",
+      "feature": "Shared native allocation views",
+      "feature_id": "project.shared_native_allocation_views",
+      "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in HIP runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for HIP.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Mojo",
+      "backend_id": "mojo",
+      "category": "project",
+      "feature": "Shared native allocation views",
+      "feature_id": "project.shared_native_allocation_views",
+      "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Mojo runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Mojo.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Rust",
+      "backend_id": "rust",
+      "category": "project",
+      "feature": "Shared native allocation views",
+      "feature_id": "project.shared_native_allocation_views",
+      "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Rust runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Rust.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Slang",
+      "backend_id": "slang",
+      "category": "project",
+      "feature": "Shared native allocation views",
+      "feature_id": "project.shared_native_allocation_views",
+      "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang.",
+      "status": "unsupported"
+    }
+  ],
   "features": [
     {
       "category": "target",
@@ -12213,6 +12295,115 @@
     },
     {
       "category": "project",
+      "description": "Represent fixture resources as typed byte-range views of stable native allocations, reject unsafe relationships before dispatch, and reuse compatible allocations in supported native reference runtimes.",
+      "id": "project.shared_native_allocation_views",
+      "name": "Shared native allocation views",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ],
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in CUDA runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for CUDA.",
+          "status": "unsupported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_runtime_fixture_round_trips_native_allocation_view",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_coalesces_read_write_allocation_metadata",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_conflicting_allocation_metadata",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_keeps_implicit_allocations_independent",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_out_of_bounds_allocation_view",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_misaligned_allocation_view",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_overlapping_writable_views",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_incompatible_overlapping_layouts",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_rejects_allocation_subview_with_constraint",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_directx_compute_runtime_reuses_explicit_shared_allocation",
+            "tests/test_translator/test_shared_native_allocations_runtime.py::def test_directx_shared_native_allocation_executes_on_device"
+          ],
+          "notes": "RuntimeAllocationView preserves explicit id, byteOffset, byteLength, and allocationByteLength fields while RuntimeValue and RuntimeResourceBinding retain dtype, shape, physical layout, access, and binding coordinates. Runtime planning assigns deterministic per-binding allocation IDs when the field is absent and rejects conflicting sizes, out-of-bounds or misaligned views, incompatible overlapping layouts, and overlapping writable views before dispatch. The DirectX reference driver groups full-allocation structured-buffer bindings by allocation ID, combines non-conflicting uploads, creates one physical device allocation, and binds it at each SRV or UAV coordinate. Shared constant-buffer allocations and ranged structured-buffer views are unsupported; incompatible sizes or layouts, conflicting uploads, and overlapping writable views fail with structured target constraints. This bounded resource-binding contract does not provide repository scheduling, framework memory management, host-code rewriting, or full MLX runtime integration.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ],
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in HIP runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for HIP.",
+          "status": "unsupported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ],
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal.",
+          "status": "unsupported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ],
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Mojo runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Mojo.",
+          "status": "unsupported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_runtime_fixture_round_trips_native_allocation_view",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_coalesces_read_write_allocation_metadata",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_conflicting_allocation_metadata",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_keeps_implicit_allocations_independent",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_accepts_aligned_nonoverlapping_views",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_out_of_bounds_allocation_view",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_misaligned_allocation_view",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_overlapping_writable_views",
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_rejects_incompatible_overlapping_layouts",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_binds_bounded_uniform_range_explicitly",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_reuses_shared_allocation_subviews",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_runtime_rejects_context_misaligned_allocation_subview",
+            "tests/test_translator/test_shared_native_allocations_runtime.py::def test_opengl_shared_native_allocation_executes_on_device"
+          ],
+          "notes": "RuntimeAllocationView preserves explicit id, byteOffset, byteLength, and allocationByteLength fields while RuntimeValue and RuntimeResourceBinding retain dtype, shape, physical layout, access, and binding coordinates. Runtime planning assigns deterministic per-binding allocation IDs when the field is absent and rejects conflicting sizes, out-of-bounds or misaligned views, incompatible overlapping layouts, and overlapping writable views before dispatch. The OpenGL reference driver groups compatible bindings by allocation ID, combines non-conflicting uploads, creates one physical buffer, and binds full or bounded ranges at uniform-block or storage-buffer coordinates while enforcing context-reported offset alignment. Mixed uniform/storage groups, incompatible overlapping scalar layouts, conflicting uploads, and overlapping writable views fail with structured target constraints. This bounded resource-binding contract does not provide repository scheduling, framework memory management, host-code rewriting, or full MLX runtime integration.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ],
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Rust runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Rust.",
+          "status": "unsupported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ],
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang.",
+          "status": "unsupported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ],
+          "notes": "The backend-neutral runtime planner preserves and validates allocation views, but the built-in Vulkan reference driver currently prepares one buffer per binding and does not consume allocation IDs or bounded ranges. Plan serialization alone is not evidence of Vulkan physical allocation reuse.",
+          "status": "unsupported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ],
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WebGL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WebGL.",
+          "status": "unsupported"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ],
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WGSL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WGSL.",
+          "status": "unsupported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Build deterministic native loader ABI metadata, C declarations, and multi-unit packages from ready runtime loader units without creating runtime objects or dispatching device work.",
       "id": "project.native_loader_abi",
       "name": "Native loader ABI descriptors",
@@ -17031,21 +17222,21 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 0,
-    "feature_count": 79,
+    "backlog_count": 9,
+    "feature_count": 80,
     "status_counts": {
       "cuda": {
         "diagnostic": 8,
         "partial": 0,
         "supported": 66,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 5
       },
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 77,
+        "supported": 78,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -17055,7 +17246,7 @@
         "partial": 0,
         "supported": 66,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 5
       },
       "metal": {
@@ -17063,7 +17254,7 @@
         "partial": 0,
         "supported": 70,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 5
       },
       "mojo": {
@@ -17071,13 +17262,13 @@
         "partial": 0,
         "supported": 68,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 5
       },
       "opengl": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 76,
+        "supported": 77,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1
@@ -17087,7 +17278,7 @@
         "partial": 0,
         "supported": 69,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 5
       },
       "slang": {
@@ -17095,7 +17286,7 @@
         "partial": 0,
         "supported": 70,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 5
       },
       "vulkan": {
@@ -17103,7 +17294,7 @@
         "partial": 0,
         "supported": 72,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 5
       },
       "webgl": {
@@ -17111,7 +17302,7 @@
         "partial": 0,
         "supported": 42,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 14
       },
       "wgsl": {
@@ -17119,7 +17310,7 @@
         "partial": 0,
         "supported": 46,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 12
       }
     }

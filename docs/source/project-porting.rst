@@ -724,13 +724,132 @@ backend runtime driver consumed by the native adapter after artifact validation.
 Use ``--no-native-runtime-validation`` only when the caller has already handled
 toolchain validation or is running a controlled test fixture.
 
-CrossTL includes ``crosstl.project.native_runtime_drivers:VulkanComputeRuntime``
-as an optional reference driver for simple Vulkan compute fixtures. The driver
-imports the Python ``vulkan`` binding lazily, reports structured unavailability
-when the binding, loader, or a compute-capable device is unavailable, and
-currently supports storage-buffer fixtures with 32-bit scalar element types and
-a single descriptor set. DirectX and OpenGL native dispatch drivers remain
-downstream or follow-up integration work.
+CrossTL includes optional ``DirectXComputeRuntime``, ``OpenGLComputeRuntime``,
+and ``VulkanComputeRuntime`` reference drivers for bounded compute fixtures.
+They import target dependencies lazily and report structured unavailability or
+setup failures when the required API, loader, device, or resource contract is
+not available. Their supported resource shapes are intentionally narrower than
+the translated shader languages; a successful translation does not imply that
+one of these reference drivers can execute the complete host workload.
+
+Shared Native Allocation Views
+------------------------------
+
+A runtime fixture value can include an optional ``allocation`` object to keep
+native allocation identity separate from the reflected resource name and
+binding coordinate. The allocation object has the following fields:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Field
+     - Purpose
+   * - ``id``
+     - Required, stable allocation identity. Values attached to separate
+       bindings refer to one allocation only when this value is identical.
+   * - ``byteOffset``
+     - Byte offset of the typed resource view. The default is ``0``.
+   * - ``byteLength``
+     - Bounded view length in bytes. When omitted, runtime planning derives it
+       from the fixture shape and exact scalar layout when possible.
+   * - ``allocationByteLength``
+     - Total allocation size in bytes. When omitted, runtime planning derives
+       it from the greatest known end offset among views with the same ``id``.
+
+The view remains typed by the surrounding fixture value's ``kind``, ``dtype``,
+``shape``, and physical layout metadata. Its access mode and binding coordinates
+remain part of the corresponding ``resourceBindings`` entry. The allocation
+object does not replace those contracts or permit a fixture to reinterpret an
+incompatible physical layout.
+
+For example, separate reflected input and output bindings can intentionally
+refer to the same full allocation while retaining distinct binding coordinates:
+
+.. code-block:: json
+
+   {
+     "inputs": [
+       {
+         "name": "source",
+         "kind": "buffer",
+         "dtype": "float32",
+         "shape": [2],
+         "values": [1.0, 2.0],
+         "allocation": {
+           "id": "working-set",
+           "byteOffset": 0,
+           "byteLength": 8,
+           "allocationByteLength": 8
+         }
+       }
+     ],
+     "expectedOutputs": [
+       {
+         "name": "destination",
+         "kind": "buffer",
+         "dtype": "float32",
+         "shape": [2],
+         "values": [2.0, 4.0],
+         "allocation": {
+           "id": "working-set",
+           "byteOffset": 0,
+           "byteLength": 8,
+           "allocationByteLength": 8
+         }
+       }
+     ],
+     "runtimeAdapter": {
+       "resourceBindings": [
+         {
+           "name": "source",
+           "kind": "buffer",
+           "binding": 0,
+           "access": "read"
+         },
+         {
+           "name": "destination",
+           "kind": "buffer",
+           "binding": 1,
+           "access": "write"
+         }
+       ]
+     }
+   }
+
+Runtime planning preserves the explicit allocation ID on each bound resource
+and validates the complete group before adapter execution. It rejects malformed
+ranges, conflicting total sizes, out-of-bounds or misaligned views, explicit
+input/output views that disagree for one binding, incompatible overlapping
+physical layouts, and overlapping writable views without a synchronization
+plan. Validation diagnostics identify the allocation and affected binding
+coordinates or byte ranges. Driver-specific failures also identify the
+applicable target constraint. A plan containing these errors is not dispatched.
+
+The DirectX and OpenGL reference drivers group compatible bindings by allocation
+ID, combine non-conflicting fixture uploads, create one physical device
+allocation for the group, and bind that allocation at each reflected coordinate.
+Conflicting upload bytes fail setup instead of causing an implicit conversion or
+per-binding allocation. DirectX currently requires every structured-buffer view
+to cover the complete allocation, requires one dtype and stride across the
+group, and rejects shared constant-buffer allocations. OpenGL supports bounded
+uniform-block and storage-buffer ranges, subject to the offset-alignment limits
+reported by the active context. It rejects mixed uniform/storage groups,
+incompatible overlapping scalar layouts, and overlapping writable ranges.
+
+The built-in Vulkan driver does not currently realize shared allocation IDs or
+bounded allocation views, and no native shared-allocation support is claimed for
+Metal, WebGL, WGSL, CUDA, HIP, Mojo, Rust, or Slang targets. Runtime-plan
+serialization on those targets is not evidence that one physical allocation was
+reused. Target-specific synchronization, resource-state transitions, allocation
+lifetime, and framework memory planning remain host-runtime responsibilities.
+
+The ``allocation`` field is optional for backward compatibility. When it is
+absent, runtime planning assigns a deterministic per-binding allocation ID, so
+existing independent bindings remain independent. A single initialized
+``read_write`` binding continues to use one allocation for upload and readback.
+Aliasing between separate bindings is never inferred from equal values or
+similar names; it requires an explicit shared ``id``.
 
 The translator stops at this contract boundary. Full framework rewrites,
 non-kernel host API ports, application command scheduling, target SDK
