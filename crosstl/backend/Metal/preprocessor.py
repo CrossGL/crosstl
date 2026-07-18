@@ -3109,12 +3109,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         include_file_scope: bool = False,
     ) -> Dict[str, List[_MetalIntegralConstantBinding]]:
         raw_declarations: List[Tuple[int, str, _MetalDataMember, bool]] = []
+        parameter_bindings: List[Tuple[int, str, int, int]] = []
         seen_declarations: Set[Tuple[int, str]] = set()
         lexical_scopes = self._find_lexical_brace_scopes(code)
         selected_owner_spans = sorted(owner_spans)
-        scan_spans = (
-            [(0, len(code))] if include_file_scope else selected_owner_spans
-        )
+        scan_spans = [(0, len(code))] if include_file_scope else selected_owner_spans
         file_scopes = {(0, len(code))}
         if include_file_scope:
             file_scopes.update(
@@ -3165,9 +3164,59 @@ class MetalPreprocessor(HLSLPreprocessor):
                     (declaration_position, name, member, file_scope_only)
                 )
 
-        if not raw_declarations:
+        template_spans = self._find_template_declaration_spans(code)
+        for function in self._find_non_template_function_definitions(
+            code,
+            template_spans,
+        ):
+            if (
+                self._containing_span(
+                    function.body_span[0],
+                    selected_owner_spans,
+                )
+                is None
+            ):
+                continue
+            header = code[function.span[0] : function.body_span[0] - 1]
+            parameter_span = self._function_parameter_list_span(header)
+            if parameter_span is None:
+                continue
+            parameter_start, parameter_end = parameter_span
+            for parameter in self._split_top_level_commas(
+                header[parameter_start + 1 : parameter_end]
+            ):
+                declaration = self._strip_metal_attributes(parameter)
+                name = self._declared_data_member_name(declaration)
+                if name and name != "void":
+                    parameter_bindings.append(
+                        (
+                            function.body_span[0],
+                            name,
+                            function.body_span[0],
+                            function.body_span[1],
+                        )
+                    )
+
+        if not raw_declarations and not parameter_bindings:
             return {}
         bindings: Dict[str, List[_MetalIntegralConstantBinding]] = {}
+        ordered_parameters = iter(sorted(parameter_bindings))
+        pending_parameter = next(ordered_parameters, None)
+
+        def record_parameters_through(position: int) -> None:
+            nonlocal pending_parameter
+            while pending_parameter is not None and pending_parameter[0] <= position:
+                declaration_position, name, scope_start, scope_end = pending_parameter
+                bindings.setdefault(name, []).append(
+                    _MetalIntegralConstantBinding(
+                        declaration_position=declaration_position,
+                        scope_start=scope_start,
+                        scope_end=scope_end,
+                        value=None,
+                    )
+                )
+                pending_parameter = next(ordered_parameters, None)
+
         ignored_type_tokens = {
             "const",
             "constant",
@@ -3182,6 +3231,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         for declaration_position, name, member, file_scope_only in sorted(
             raw_declarations
         ):
+            record_parameters_through(declaration_position)
             scope_start, scope_end = self._innermost_lexical_scope(
                 lexical_scopes, declaration_position, len(code)
             )
@@ -3243,6 +3293,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     value=value,
                 )
             )
+        record_parameters_through(len(code))
         return bindings
 
     def _substitute_local_integral_constant_array_extents(self, code: str) -> str:
@@ -16799,6 +16850,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         excluded_spans: List[Tuple[int, int]],
     ) -> List[_MetalFunctionDefinition]:
         functions: List[_MetalFunctionDefinition] = []
+        namespace_body_starts = {
+            start - 1 for start, _end, _name in self._find_namespace_spans(code)
+        }
         pos = 0
         while True:
             body_start = self._find_next_top_level_char(code, pos, "{")
@@ -16824,6 +16878,11 @@ class MetalPreprocessor(HLSLPreprocessor):
                         is_entry=METAL_ENTRY_FUNCTION_RE.search(header) is not None,
                     )
                 )
+                pos = body_end
+                continue
+            if body_start in namespace_body_starts:
+                pos = body_start + 1
+                continue
             pos = body_end
         return functions
 

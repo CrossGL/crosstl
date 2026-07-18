@@ -3036,6 +3036,100 @@ def test_preprocessor_does_not_treat_file_scope_type_alias_as_local_constant():
     assert "consume_type_bfloat16_t();" in output
 
 
+def test_preprocessor_resolves_namespace_constexpr_during_materialization():
+    code = """
+    namespace kernels {
+    constexpr int word_bits = 32;
+
+    template <typename T, int Count>
+    void consume(thread T* values) {
+        values[0] = T(Count);
+    }
+
+    template <typename T, int Bits>
+    [[kernel]] void dispatch(device T* output [[buffer(0)]]) {
+        constexpr int values_per_thread = word_bits / Bits;
+        thread T values[values_per_thread];
+        consume<T, values_per_thread>(values);
+        output[0] = values[0];
+    }
+
+    instantiate_kernel("dispatch_float_4", dispatch, float, 4)
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert re.search(r"thread\s+float\s+values\s*\[\s*8\s*\]\s*;", output)
+    assert "consume_float_8(values)" in output
+    assert "consume_float_values_per_thread" not in output
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        pytest.param(
+            "namespace other { constexpr int word_bits = 32; }",
+            id="sibling-namespace",
+        ),
+        pytest.param(
+            "",
+            id="undeclared",
+        ),
+    ],
+)
+def test_preprocessor_does_not_import_constexpr_from_unrelated_namespace(
+    declaration,
+):
+    code = f"""
+    {declaration}
+
+    namespace kernels {{
+    template <int Count>
+    void consume(device int* output) {{}}
+
+    template <int Bits>
+    [[kernel]] void dispatch(device int* output [[buffer(0)]]) {{
+        constexpr int values_per_thread = word_bits / Bits;
+        consume<values_per_thread>(output);
+    }}
+
+    instantiate_kernel("dispatch_4", dispatch, 4)
+    }}
+    """
+
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        MetalPreprocessor().preprocess(code)
+
+    assert exc_info.value.unresolved_local_constants == ("values_per_thread",)
+
+
+def test_preprocessor_parameter_shadows_namespace_constexpr_during_materialization():
+    code = """
+    namespace kernels {
+    constexpr int word_bits = 32;
+
+    template <int Count>
+    void consume(device int* output) {}
+
+    template <int Bits>
+    [[kernel]] void dispatch(
+        device int* output [[buffer(0)]],
+        int word_bits) {
+        constexpr int values_per_thread = word_bits / Bits;
+        consume<values_per_thread>(output);
+    }
+
+    instantiate_kernel("dispatch_4", dispatch, 4)
+    }
+    """
+
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        MetalPreprocessor().preprocess(code)
+
+    assert exc_info.value.unresolved_local_constants == ("values_per_thread",)
+
+
 @pytest.mark.parametrize(
     "function_body",
     [
