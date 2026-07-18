@@ -18,6 +18,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalBuiltinResultTypeResolutionError,
     MetalCallableAliasLoweringError,
     MetalCallableLoweringError,
+    MetalConstructorContractError,
     MetalIndexedComponentTypeResolutionError,
     MetalOutOfLineCallOperatorLoweringError,
     MetalSizeofResolutionError,
@@ -8025,6 +8026,82 @@ def test_codegen_auto_pointer_arithmetic_preserves_threadgroup_address_space():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_constructor_binding_preserves_cast_and_array_qualifiers():
+    source = """
+    struct Loader {
+      Loader(
+          device const uint8_t* weights,
+          threadgroup float* shared,
+          ushort lane) {}
+    };
+
+    void build_loader(
+        device const void* raw_weights,
+        device void* mutable_raw_weights,
+        uint lane) {
+      auto weights = (device const uint8_t*)raw_weights;
+      auto mutable_weights = (device uint8_t*)mutable_raw_weights;
+      threadgroup float fixed_shared[32];
+      constexpr int BK_padded = 36;
+      constexpr int BN_padded = 40;
+      threadgroup float dependent_shared[
+          true ? 32 * BK_padded : 32 * BN_padded];
+      Loader fixed_loader(weights + lane, fixed_shared, lane);
+      Loader dependent_loader(weights + lane, dependent_shared, lane);
+      Loader const_loader(mutable_weights + lane, fixed_shared, lane);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "const device uint8* weights = (uint8*)raw_weights;" in normalized
+    assert (
+        "Loader fixed_loader = crosstl_ctor_Loader_1("
+        "weights + lane, fixed_shared, lane);" in normalized
+    )
+    assert (
+        "Loader dependent_loader = crosstl_ctor_Loader_1("
+        "weights + lane, dependent_shared, lane);" in normalized
+    )
+    assert (
+        "Loader const_loader = crosstl_ctor_Loader_1("
+        "mutable_weights + lane, fixed_shared, lane);" in normalized
+    )
+    assert parse_crossgl(crossgl) is not None
+
+
+@pytest.mark.parametrize(
+    ("actual_qualifiers", "parameter_qualifiers"),
+    [
+        pytest.param("thread const", "device const", id="address-space"),
+        pytest.param("device const", "device", id="cv-removal"),
+    ],
+)
+def test_codegen_constructor_binding_rejects_pointer_qualifier_mismatch(
+    actual_qualifiers, parameter_qualifiers
+):
+    source = f"""
+    struct Loader {{
+      Loader({parameter_qualifiers} uint8_t* weights) {{}}
+    }};
+
+    void build_loader(void* raw_weights) {{
+      auto weights = ({actual_qualifiers} uint8_t*)raw_weights;
+      Loader loader(weights);
+    }}
+    """
+
+    with pytest.raises(MetalConstructorContractError) as raised:
+        convert_without_preprocessing(source)
+
+    assert raised.value.owner == "Loader"
+    assert raised.value.argument_types == ("uint8_t*",)
+    assert raised.value.reason == (
+        "no source-compatible constructor matches the inferred types"
+    )
+
+
 def test_codegen_auto_pointer_dereference_infers_pointee_type():
     source = """
     void read_offset(
@@ -10413,6 +10490,75 @@ def test_codegen_resolves_unique_namespaced_static_constant_owner():
     assert "_u3a_u3amax" not in crossgl
 
 
+def test_codegen_resolves_equivalent_duplicate_concrete_static_constant_owner():
+    crossgl = convert("""
+        namespace mlx {
+        namespace steel {
+        struct BaseMMAFrag_float_8_8 {
+            static constexpr int kFragRows = 8;
+            static constexpr int kFragCols = 8;
+        };
+        }
+        }
+
+        namespace mlx {
+        namespace steel {
+        struct BaseMMAFrag_float_8_8 {
+            static constexpr int kFragCols = 4 + 4;
+            static constexpr int kFragRows = kFragCols;
+            static constexpr int kElemsPerFrag = 2;
+        };
+        }
+        }
+
+        using namespace mlx::steel;
+
+        int fragment_rows() {
+            return BaseMMAFrag_float_8_8::kFragRows;
+        }
+        """)
+
+    assert "return 8;" in crossgl
+    assert "BaseMMAFrag_float_8_8_u3a_u3akFragRows" not in crossgl
+
+
+def test_codegen_rejects_conflicting_duplicate_concrete_static_constant_owner():
+    code = """
+    namespace mlx {
+    namespace steel {
+    struct BaseMMAFrag_float_8_8 {
+        static constexpr int kFragRows = 8;
+    };
+    }
+    }
+
+    namespace mlx {
+    namespace steel {
+    struct BaseMMAFrag_float_8_8 {
+        static constexpr int kFragRows = 16;
+    };
+    }
+    }
+
+    using namespace mlx::steel;
+
+    int fragment_rows() {
+        return BaseMMAFrag_float_8_8::kFragRows;
+    }
+    """
+
+    with pytest.raises(MetalStaticConstantResolutionError) as error:
+        convert(code)
+
+    assert error.value.owner == "BaseMMAFrag_float_8_8"
+    assert error.value.member == "kFragRows"
+    assert "conflicting compile-time values" in error.value.reason
+    assert (
+        error.value.project_diagnostic_code
+        == "project.translate.metal-static-constant-unresolved"
+    )
+
+
 def test_codegen_rejects_ambiguous_namespaced_static_constant_owner():
     code = """
     namespace First {
@@ -10435,14 +10581,16 @@ def test_codegen_rejects_ambiguous_namespaced_static_constant_owner():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            r"Cannot materialize Metal static constant Limits::max: "
-            r"multiple visible struct declarations"
-        ),
-    ):
+    with pytest.raises(MetalStaticConstantResolutionError) as error:
         convert(code)
+
+    assert error.value.owner == "Limits"
+    assert error.value.member == "max"
+    assert "multiple visible struct declarations" in error.value.reason
+    assert (
+        error.value.project_diagnostic_code
+        == "project.translate.metal-static-constant-unresolved"
+    )
 
 
 def test_const_for_loop_nonzero_indices_reach_vulkan_stores(tmp_path):

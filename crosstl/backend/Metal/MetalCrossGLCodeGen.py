@@ -1244,6 +1244,8 @@ class MetalToCrossGLConverter:
         self.ambiguous_struct_names = set()
         self.struct_static_constants = {}
         self.struct_static_constant_members = {}
+        self.struct_static_constant_owner_candidates = {}
+        self.equivalent_struct_static_constants = {}
         self.struct_static_constant_resolution_stack = []
         self.struct_static_constexpr_member_keys = set()
         self.current_struct_static_constant_owner = None
@@ -1551,10 +1553,9 @@ class MetalToCrossGLConverter:
             if unqualified_struct in self.struct_name_map:
                 resolved_struct = unqualified_struct
         if resolved_struct in self.ambiguous_struct_names:
-            raise MetalStaticConstantResolutionError(
+            return self.render_equivalent_struct_static_constant(
                 resolved_struct,
                 member_name,
-                "multiple visible struct declarations match the qualified owner",
             )
         if resolved_struct not in self.struct_name_map:
             if require_constant:
@@ -1802,6 +1803,10 @@ class MetalToCrossGLConverter:
                 member,
                 "the selected declaration has no constant initializer",
             )
+        return self.render_static_constant_value(constant)
+
+    @staticmethod
+    def render_static_constant_value(constant):
         if re.fullmatch(
             r"(?:true|false|[-+]?\d+(?:[uU])?|"
             r"0[xX][0-9a-fA-F]+[uU]?|0[bB][01]+[uU]?)",
@@ -3929,11 +3934,18 @@ class MetalToCrossGLConverter:
     def collect_struct_static_constants(self, structs):
         members = {}
         template_parameters = {}
+        owner_candidates = {}
         for struct_node in structs or []:
             struct_name = getattr(struct_node, "name", None)
             if not struct_name:
                 continue
             mapped_name = self.map_struct_name(struct_name)
+            for owner_name in self.struct_static_constant_declaration_names(
+                struct_node
+            ):
+                candidates = owner_candidates.setdefault(owner_name, [])
+                if not any(candidate is struct_node for candidate in candidates):
+                    candidates.append(struct_node)
             template_parameters[mapped_name] = {
                 name: kind
                 for kind, name in (
@@ -3950,11 +3962,143 @@ class MetalToCrossGLConverter:
 
         self.struct_static_constants = {}
         self.struct_static_constant_members = members
+        self.struct_static_constant_owner_candidates = owner_candidates
+        self.equivalent_struct_static_constants = {}
         self.struct_static_constant_resolution_stack = []
         self.struct_static_constexpr_member_keys = set()
         self.struct_template_parameters = template_parameters
         for key in members:
             self.resolve_struct_static_constant(key)
+
+    def struct_static_constant_declaration_names(self, struct_node):
+        raw_name = self.normalize_qualified_type_name(
+            getattr(struct_node, "name", None)
+        )
+        qualified_name = self.normalize_qualified_type_name(
+            getattr(struct_node, "qualified_name", None)
+        )
+        mapped_name = self.normalize_qualified_type_name(self.map_struct_name(raw_name))
+        return {name for name in (raw_name, qualified_name, mapped_name) if name}
+
+    def struct_static_constant_owner_identity(self, struct_node):
+        return self.normalize_qualified_type_name(
+            getattr(struct_node, "qualified_name", None)
+            or getattr(struct_node, "name", None)
+        )
+
+    def struct_compile_time_static_members(self, struct_node):
+        members = {}
+        duplicates = set()
+        for member in getattr(struct_node, "members", None) or []:
+            if not self.is_compile_time_static_member(member):
+                continue
+            member_name = getattr(member, "name", None)
+            if not member_name:
+                continue
+            if member_name in members:
+                duplicates.add(member_name)
+            members[member_name] = member
+        return members, duplicates
+
+    def resolve_struct_static_constant_candidate(self, struct_node, member_name):
+        candidate_members, duplicate_members = self.struct_compile_time_static_members(
+            struct_node
+        )
+        if member_name in duplicate_members:
+            return None, None, "the declaration repeats the compile-time member"
+        if member_name not in candidate_members:
+            return None, None, "the declaration has no compile-time static member"
+
+        values = {}
+        resolved = {}
+        pending = dict(candidate_members)
+        owner_names = self.struct_static_constant_declaration_names(struct_node)
+        while pending:
+            progress = False
+            for name, member in list(pending.items()):
+                member_type = self.normalized_metal_type(
+                    self.resolve_type_alias(getattr(member, "vtype", None))
+                )
+                if member_type not in self.constexpr_integral_type_names():
+                    continue
+                value = evaluate_literal_int_expression(
+                    getattr(member, "default_value", None),
+                    values,
+                )
+                if value is None:
+                    continue
+                value = int(value)
+                values[name] = value
+                for owner_name in owner_names:
+                    values[f"{owner_name}::{name}"] = value
+                resolved[name] = (
+                    (member_type, value),
+                    self.render_static_integral_value(member, value),
+                )
+                del pending[name]
+                progress = True
+            if not progress:
+                break
+
+        identity_and_value = resolved.get(member_name)
+        if identity_and_value is None:
+            return (
+                None,
+                None,
+                "the member value is not a resolved integral constant",
+            )
+        identity, rendered = identity_and_value
+        return identity, rendered, None
+
+    def render_equivalent_struct_static_constant(self, owner, member_name):
+        cache_key = (owner, member_name)
+        if cache_key in self.equivalent_struct_static_constants:
+            return self.render_static_constant_value(
+                self.equivalent_struct_static_constants[cache_key]
+            )
+
+        candidates = self.struct_static_constant_owner_candidates.get(owner, [])
+        owner_identities = {
+            self.struct_static_constant_owner_identity(candidate)
+            for candidate in candidates
+        }
+        if len(candidates) < 2 or len(owner_identities) != 1:
+            raise MetalStaticConstantResolutionError(
+                owner,
+                member_name,
+                "multiple visible struct declarations match the qualified owner",
+            )
+
+        resolved_candidates = []
+        for candidate in candidates:
+            identity, rendered, reason = (
+                self.resolve_struct_static_constant_candidate(
+                    candidate,
+                    member_name,
+                )
+            )
+            if reason is not None:
+                raise MetalStaticConstantResolutionError(
+                    owner,
+                    member_name,
+                    "multiple visible struct declarations remain ambiguous: " + reason,
+                )
+            resolved_candidates.append((identity, rendered))
+
+        identities = {identity for identity, _rendered in resolved_candidates}
+        if len(identities) != 1:
+            raise MetalStaticConstantResolutionError(
+                owner,
+                member_name,
+                "multiple visible struct declarations define conflicting "
+                "compile-time values",
+            )
+
+        rendered = resolved_candidates[0][1]
+        self.equivalent_struct_static_constants[cache_key] = rendered
+        mapped_owner = self.map_struct_name(candidates[0].name)
+        self.propagate_struct_static_constexpr_dependency((mapped_owner, member_name))
+        return self.render_static_constant_value(rendered)
 
     def is_compile_time_static_member(self, member):
         qualifiers = {
@@ -6488,6 +6632,8 @@ class MetalToCrossGLConverter:
         self.ambiguous_struct_names = set()
         self.struct_static_constants = {}
         self.struct_static_constant_members = {}
+        self.struct_static_constant_owner_candidates = {}
+        self.equivalent_struct_static_constants = {}
         self.struct_static_constant_resolution_stack = []
         self.struct_static_constexpr_member_keys = set()
         self.current_struct_static_constant_owner = None
@@ -13389,6 +13535,14 @@ class MetalToCrossGLConverter:
         return None
 
     def expression_metal_type_qualifiers(self, expr):
+        if isinstance(expr, CastNode):
+            target_type = self.resolve_type_alias(expr.target_type)
+            if self.metal_pointer_pointee_type_once(target_type) is not None:
+                return self.normalized_metal_address_qualifiers(
+                    getattr(expr, "qualifiers", ()),
+                    getattr(expr, "source_location", None),
+                    target_type,
+                )
         if isinstance(expr, str):
             return self.current_variable_type_qualifiers.get(
                 expr, self.global_variable_type_qualifiers.get(expr, ())
