@@ -27,6 +27,7 @@ from crosstl.backend.Metal.MetalAst import (
     CallableTypeAliasNode,
     EnumNode,
     LambdaNode,
+    StructNode,
     TypeAliasNode,
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
@@ -635,6 +636,31 @@ def test_parse_block_scope_typedef_preserves_declarator_metadata():
     assert len(array_alias.array_sizes) == 1
     assert array_alias.array_sizes[0] == "4"
     assert array_alias.source_location is not None
+
+
+def test_parse_block_scope_typedef_struct_retains_members_and_source_location():
+    ast = parse_ok("""
+        void prepare() {
+            using Word = uint32_t;
+            typedef struct LocalWords {
+                Word values[1 + 1];
+            } WordView;
+            thread WordView local;
+        }
+        """)
+
+    scalar_alias, aggregate, local = ast.functions[0].body
+    assert isinstance(scalar_alias, TypeAliasNode)
+    assert isinstance(aggregate, StructNode)
+    assert aggregate.name == "WordView"
+    assert aggregate.typedef_tag == "LocalWords"
+    assert aggregate.declaration_source_location is not None
+    assert len(aggregate.members) == 1
+    assert aggregate.members[0].vtype == "Word"
+    assert aggregate.members[0].name == "values"
+    assert isinstance(aggregate.members[0].array_sizes[0], BinaryOpNode)
+    assert aggregate.members[0].array_sizes[0].op == "+"
+    assert local.vtype == "WordView"
 
 
 def test_parse_block_scope_typedef_does_not_leak_to_sibling_function():

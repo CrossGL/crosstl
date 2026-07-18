@@ -1917,7 +1917,13 @@ class MetalParser:
         start_token = self.current_token
         self.eat("TYPEDEF")
         if self.current_token[0] == "STRUCT":
-            return self.parse_typedef_struct()
+            declaration = self.parse_typedef_struct()
+            if isinstance(declaration, StructNode):
+                self.annotate_declaration_scope(declaration)
+                declaration.declaration_source_location = self.source_span_from_tokens(
+                    start_token, self.tokens[self.pos - 1]
+                )
+            return declaration
         if self.is_union_alias_start():
             return self.parse_typedef_union()
         if self.current_token[0] == "ENUM":
@@ -4095,7 +4101,7 @@ class MetalParser:
             # later declarations and expressions must resolve them in lexical
             # order before CrossGL generation.
             alias = self.parse_typedef()
-            return alias if isinstance(alias, TypeAliasNode) else None
+            return alias if isinstance(alias, (TypeAliasNode, StructNode)) else None
         if self.is_nested_aggregate_declaration_start():
             self.skip_nested_aggregate_declaration()
             return None

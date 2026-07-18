@@ -20,6 +20,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalCallableLoweringError,
     MetalConstructorContractError,
     MetalCooperativeMatrixFragmentLoweringError,
+    MetalFunctionLocalTypeResolutionError,
     MetalIndexedComponentTypeResolutionError,
     MetalOutOfLineCallOperatorLoweringError,
     MetalSizeofResolutionError,
@@ -5878,6 +5879,180 @@ def test_codegen_isolates_function_local_typedefs_between_siblings():
     assert "int converted = int(value);" in crossgl
     assert "typedef" not in crossgl
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_hoists_function_local_typedef_struct_for_project_targets(tmp_path):
+    crossgl = convert("""
+        kernel void copy_words(
+            const device uint* input [[buffer(0)]],
+            device uint* output [[buffer(1)]]) {
+            constexpr int word_count = 1 + 1;
+            using Word = uint32_t;
+            typedef struct {
+                Word values[word_count];
+            } WordBlock;
+            thread WordBlock local =
+                *((const device WordBlock*)input);
+            output[0] = local.values[0];
+        }
+        """)
+
+    canonical = "MetalLocal_copy_words_WordBlock"
+    assert f"struct {canonical} {{" in crossgl
+    assert "uint[2] values;" in crossgl
+    assert f"thread {canonical} local" in crossgl
+    assert f"({canonical}*)input" in crossgl
+    assert "local.values[0]" in crossgl
+    assert "WordBlock" not in crossgl.replace(canonical, "")
+    assert "Word values" not in crossgl
+
+    shader = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(shader)
+    glsl = GLSLCodeGen().generate(shader)
+    assert f"struct {canonical}" in hlsl
+    assert f"struct {canonical}" in glsl
+    assert "uint values[2];" in hlsl
+    assert "uint values[2];" in glsl
+    assert "local.values[0]" in hlsl
+    assert "local.values[0]" in glsl
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+    assert_opengl_compute_validates_if_available(glsl, tmp_path, "local-typedef-struct")
+
+
+def test_codegen_materializes_local_typedef_struct_per_value_specialization():
+    crossgl = convert("""
+        template <int Width>
+        [[kernel]] void make_block(device uint* output [[buffer(0)]]) {
+            constexpr int word_count = Width + 1;
+            typedef struct {
+                uint words[word_count];
+            } Block;
+            thread Block local;
+            output[0] = local.words[0];
+        }
+
+        template [[host_name("make_block_2")]] [[kernel]]
+        decltype(make_block<2>) make_block<2>;
+        template [[host_name("make_block_4")]] [[kernel]]
+        decltype(make_block<4>) make_block<4>;
+        """)
+
+    assert "struct MetalLocal_make_block_2_Block" in crossgl
+    assert "struct MetalLocal_make_block_4_Block" in crossgl
+    assert "uint[3] words;" in crossgl
+    assert "uint[5] words;" in crossgl
+    assert "thread MetalLocal_make_block_2_Block local" in crossgl
+    assert "thread MetalLocal_make_block_4_Block local" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_isolates_same_named_local_structs_between_sibling_functions():
+    crossgl = convert("""
+        uint first() {
+            typedef struct { uint values[2]; } Block;
+            thread Block local;
+            return local.values[0];
+        }
+
+        float second() {
+            typedef struct { float values[3]; } Block;
+            thread Block local;
+            return local.values[0];
+        }
+        """)
+
+    assert "struct MetalLocal_first_Block" in crossgl
+    assert "uint[2] values;" in crossgl
+    assert "struct MetalLocal_second_Block" in crossgl
+    assert "float[3] values;" in crossgl
+    assert "thread MetalLocal_first_Block local" in crossgl
+    assert "thread MetalLocal_second_Block local" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_binds_named_local_struct_tag_and_typedef_alias():
+    crossgl = convert("""
+        uint read_word() {
+            typedef struct WordTag {
+                uint value;
+            } WordAlias;
+            thread WordTag tagged;
+            thread WordAlias aliased;
+            return tagged.value + aliased.value;
+        }
+        """)
+
+    canonical = "MetalLocal_read_word_WordAlias"
+    assert f"struct {canonical}" in crossgl
+    assert f"thread {canonical} tagged" in crossgl
+    assert f"thread {canonical} aliased" in crossgl
+    assert "WordTag" not in crossgl
+    assert "WordAlias" not in crossgl.replace(canonical, "")
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_restores_shadowed_local_struct_after_nested_block():
+    crossgl = convert("""
+        uint select_word() {
+            typedef struct { uint values[2]; } Block;
+            thread Block outer;
+            {
+                typedef struct { float values[3]; } Block;
+                thread Block inner;
+                inner.values[0] = 1.0f;
+            }
+            thread Block restored;
+            return outer.values[0] + restored.values[1];
+        }
+        """)
+
+    outer = "MetalLocal_select_word_Block"
+    inner = "MetalLocal_select_word_Block_2"
+    assert f"struct {outer}" in crossgl
+    assert f"struct {inner}" in crossgl
+    assert f"thread {outer} outer" in crossgl
+    assert f"thread {inner} inner" in crossgl
+    assert f"thread {outer} restored" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_rejects_unresolved_function_local_struct_dependency():
+    with pytest.raises(MetalFunctionLocalTypeResolutionError) as exc_info:
+        convert("""
+            template <typename T>
+            void prepare() {
+                using Element = T;
+                typedef struct {
+                    Element value;
+                } LocalValue;
+                thread LocalValue local;
+            }
+            """)
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "prepare"
+    assert diagnostic.type_name == "LocalValue"
+    assert diagnostic.unresolved_dependencies == ("Element",)
+    assert diagnostic.source_location is not None
+
+
+def test_codegen_rejects_unresolved_function_local_struct_extent():
+    with pytest.raises(MetalFunctionLocalTypeResolutionError) as exc_info:
+        convert("""
+            template <int Width>
+            void prepare() {
+                typedef struct {
+                    uint values[Width + 1];
+                } LocalValue;
+                thread LocalValue local;
+            }
+            """)
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "prepare"
+    assert diagnostic.type_name == "LocalValue"
+    assert diagnostic.unresolved_dependencies == ("Width",)
+    assert diagnostic.source_location is not None
 
 
 def test_codegen_switch_typedef_scope_spans_cases():
