@@ -27929,9 +27929,20 @@ def _runtime_manifest_resource_bindings(
             "status": _runtime_manifest_binding_status(resource),
             "source": "hostInterface.resources",
         }
-        metadata = resource.get("metadata")
-        if isinstance(metadata, Mapping) and metadata:
-            binding["metadata"] = dict(metadata)
+        resource_metadata = resource.get("metadata")
+        metadata = (
+            dict(resource_metadata) if isinstance(resource_metadata, Mapping) else {}
+        )
+        if "scalarLayout" in metadata:
+            metadata["scalarLayout"] = _runtime_host_interface_json_value(
+                metadata["scalarLayout"]
+            )
+        if "scalarLayout" in resource:
+            metadata["scalarLayout"] = _runtime_host_interface_json_value(
+                resource.get("scalarLayout")
+            )
+        if metadata:
+            binding["metadata"] = metadata
         bindings.append(binding)
     return bindings
 

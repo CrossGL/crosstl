@@ -1282,9 +1282,17 @@ def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path)
         ],
     }
 
+    fixture_metadata = json.loads(
+        (fixture_dir / "arange_directx.fixture-metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    fixture_metadata["fixtures"][0]["runtimeAdapter"]["metadata"][
+        "artifactContractMode"
+    ] = "replace"
     manifest = build_runtime_test_manifest(
         artifact_report,
-        fixture_dir / "arange_directx.fixture-metadata.json",
+        fixture_metadata,
         project_root=tmp_path,
     )
     plan = plan_runtime_test_manifest(
@@ -1893,6 +1901,7 @@ def test_mlx_file_scope_immutable_lookup_fixture_is_value_sensitive():
         "set": 0,
         "binding": 0,
         "access": "write",
+        "value": "output",
     }
 
 

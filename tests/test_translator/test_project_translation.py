@@ -39173,6 +39173,16 @@ def test_inspect_runtime_package_reflects_hlsl_artifact_metadata(tmp_path):
             "set": 1,
             "binding": 0,
             "access": "read_write",
+            "scalarLayout": {
+                "physicalType": "float",
+                "elementType": "float32",
+                "elementSizeBytes": 4,
+                "elementStrideBytes": 4,
+                "alignmentBytes": 4,
+                "memberOffsetBytes": 0,
+                "storageLayout": "hlsl-structured-buffer",
+                "runtimeSized": True,
+            },
         }
     ]
     assert host_interface["constants"] == [

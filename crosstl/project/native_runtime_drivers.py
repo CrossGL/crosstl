@@ -91,6 +91,7 @@ class _PreparedOpenGLBuffer:
     source: str | None
     output_name: str | None
     payload: bytes
+    allocation_size: int
 
     @property
     def size(self) -> int:
@@ -1227,9 +1228,10 @@ class OpenGLComputeRuntime:
 
     def _create_buffer(self, context: Any, prepared: _PreparedOpenGLBuffer) -> Any:
         if prepared.payload:
-            buffer = context.buffer(prepared.payload)
+            payload = prepared.payload.ljust(prepared.allocation_size, b"\x00")
+            buffer = context.buffer(payload)
         else:
-            buffer = context.buffer(reserve=max(prepared.size, 1))
+            buffer = context.buffer(reserve=max(prepared.allocation_size, 1))
         try:
             if prepared.resource_kind in {"constant-buffer", "uniform"}:
                 buffer.bind_to_uniform_block(prepared.binding_index)
@@ -1973,9 +1975,16 @@ def _prepare_directx_buffers(
                 ) from exc
 
         stride = _directx_buffer_stride(binding, namespace, dtype, len(payload))
-        allocation_size = (
-            _align_to(len(payload), 256) if namespace == "cbv" else len(payload)
-        )
+        if namespace == "cbv":
+            block_size = _scalar_block_size(
+                binding,
+                target="directx",
+                dtype=dtype,
+                payload_size=len(payload),
+            )
+            allocation_size = _align_to(max(len(payload), block_size), 256)
+        else:
+            allocation_size = len(payload)
         prepared.append(
             _PreparedDirectXBuffer(
                 name=name,
@@ -2971,6 +2980,14 @@ def _prepare_opengl_buffers(
                 expected_count=element_count,
                 target="OpenGL",
             )
+        allocation_size = len(payload)
+        if namespace == "uniform":
+            allocation_size = _scalar_block_size(
+                binding,
+                target="opengl",
+                dtype=dtype,
+                payload_size=len(payload),
+            )
         prepared.append(
             _PreparedOpenGLBuffer(
                 name=name,
@@ -2981,6 +2998,7 @@ def _prepare_opengl_buffers(
                 source=binding.source,
                 output_name=_runtime_value_name(binding),
                 payload=payload,
+                allocation_size=allocation_size,
             )
         )
     return tuple(
@@ -2992,6 +3010,170 @@ def _prepare_opengl_buffers(
             ),
         )
     )
+
+
+def _scalar_block_size(
+    binding: NativeRuntimeBufferBinding,
+    *,
+    target: str,
+    dtype: str,
+    payload_size: int,
+) -> int:
+    resource = binding.binding
+    target_name = {"directx": "DirectX", "opengl": "OpenGL"}[target]
+    raw_layout = resource.metadata.get("scalarLayout")
+    if raw_layout is None:
+        raise _scalar_block_error(
+            target,
+            f"{target_name} scalar block {binding.name!r} has no physical layout metadata.",
+            "scalar-block-layout-missing",
+            resource=binding.name,
+        )
+    if not isinstance(raw_layout, Mapping):
+        raise _scalar_block_error(
+            target,
+            f"{target_name} scalar block {binding.name!r} has malformed physical layout metadata.",
+            "scalar-block-layout-invalid",
+            resource=binding.name,
+            scalarLayout=raw_layout,
+        )
+
+    required_fields = {
+        "physicalType",
+        "elementType",
+        "elementSizeBytes",
+        "elementStrideBytes",
+        "storageLayout",
+        "alignmentBytes",
+        "blockSizeBytes",
+        "memberOffsetBytes",
+        "runtimeSized",
+    }
+    missing_fields = sorted(required_fields.difference(raw_layout))
+    if missing_fields:
+        raise _scalar_block_error(
+            target,
+            f"{target_name} scalar block {binding.name!r} has incomplete physical layout metadata.",
+            "scalar-block-layout-invalid",
+            resource=binding.name,
+            missingFields=missing_fields,
+        )
+
+    storage_layout = raw_layout["storageLayout"]
+    expected_storage_layout = {
+        "directx": "hlsl-constant-buffer",
+        "opengl": "std140",
+    }[target]
+    if storage_layout != expected_storage_layout:
+        raise _scalar_block_error(
+            target,
+            f"{target_name} scalar block {binding.name!r} has an incompatible storage layout.",
+            "scalar-block-storage-layout-unsupported",
+            resource=binding.name,
+            storageLayout=storage_layout,
+            expectedStorageLayout=expected_storage_layout,
+        )
+
+    integer_fields = {}
+    for field_name in (
+        "elementSizeBytes",
+        "elementStrideBytes",
+        "alignmentBytes",
+        "blockSizeBytes",
+        "memberOffsetBytes",
+    ):
+        value = raw_layout[field_name]
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise _scalar_block_error(
+                target,
+                f"{target_name} scalar block {binding.name!r} has a non-integer {field_name}.",
+                "scalar-block-layout-invalid",
+                resource=binding.name,
+                field=field_name,
+                value=value,
+            )
+        integer_fields[field_name] = value
+
+    element_type = str(raw_layout["elementType"] or "").strip().lower()
+    physical_type = str(raw_layout["physicalType"] or "").strip().lower()
+    expected_physical_type = {
+        "float32": "float",
+        "int32": "int",
+        "uint32": "uint",
+    }[dtype]
+    element_size = integer_fields["elementSizeBytes"]
+    element_stride = integer_fields["elementStrideBytes"]
+    if (
+        element_type != dtype
+        or physical_type != expected_physical_type
+        or element_size != _dtype_size(dtype)
+        or element_stride != element_size
+        or payload_size != element_size
+    ):
+        raise _scalar_block_error(
+            target,
+            f"{target_name} constant and uniform buffers support one reflected scalar value.",
+            "scalar-block-element-layout-unsupported",
+            resource=binding.name,
+            dtype=dtype,
+            payloadSizeBytes=payload_size,
+            elementType=raw_layout["elementType"],
+            physicalType=raw_layout["physicalType"],
+            expectedPhysicalType=expected_physical_type,
+            elementSizeBytes=element_size,
+            elementStrideBytes=element_stride,
+        )
+
+    member_offset = integer_fields["memberOffsetBytes"]
+    if member_offset != 0:
+        raise _scalar_block_error(
+            target,
+            f"{target_name} scalar block {binding.name!r} requires member offset zero.",
+            "scalar-block-member-offset-unsupported",
+            resource=binding.name,
+            memberOffsetBytes=member_offset,
+        )
+    if raw_layout["runtimeSized"] is not False:
+        raise _scalar_block_error(
+            target,
+            f"{target_name} scalar block {binding.name!r} cannot be runtime-sized.",
+            "scalar-block-runtime-size-invalid",
+            resource=binding.name,
+            runtimeSized=raw_layout["runtimeSized"],
+        )
+
+    alignment = integer_fields["alignmentBytes"]
+    if alignment < 16 or alignment & (alignment - 1):
+        raise _scalar_block_error(
+            target,
+            f"{target_name} scalar block {binding.name!r} has an invalid alignment.",
+            "scalar-block-alignment-invalid",
+            resource=binding.name,
+            alignmentBytes=alignment,
+        )
+    block_size = integer_fields["blockSizeBytes"]
+    if block_size < payload_size or block_size % alignment:
+        raise _scalar_block_error(
+            target,
+            f"{target_name} scalar block {binding.name!r} has an invalid block size.",
+            "scalar-block-size-invalid",
+            resource=binding.name,
+            payloadSizeBytes=payload_size,
+            blockSizeBytes=block_size,
+            alignmentBytes=alignment,
+        )
+    return block_size
+
+
+def _scalar_block_error(
+    target: str,
+    message: str,
+    reason_kind: str,
+    **details: Any,
+) -> RuntimeAdapterSetupError:
+    if target == "directx":
+        return _directx_setup_error(message, reason_kind, **details)
+    return _opengl_setup_error(message, reason_kind, **details)
 
 
 def _runtime_value_name(binding: NativeRuntimeBufferBinding) -> str | None:

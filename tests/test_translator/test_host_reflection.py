@@ -56,6 +56,18 @@ def test_hlsl_reflection_preserves_entry_points_resources_and_constants(tmp_path
             "set": 3,
             "binding": 2,
             "access": "read",
+            "scalarLayout": {
+                "physicalType": "float",
+                "elementType": "float32",
+                "elementSizeBytes": 4,
+                "elementStrideBytes": 4,
+                "alignmentBytes": 16,
+                "memberOffsetBytes": 0,
+                "storageLayout": "hlsl-constant-buffer",
+                "runtimeSized": False,
+                "memberName": "exposure",
+                "blockSizeBytes": 16,
+            },
         },
         {
             "name": "sourceTexture",
@@ -72,6 +84,16 @@ def test_hlsl_reflection_preserves_entry_points_resources_and_constants(tmp_path
             "set": 0,
             "binding": 4,
             "access": "read_write",
+            "scalarLayout": {
+                "physicalType": "float",
+                "elementType": "float32",
+                "elementSizeBytes": 4,
+                "elementStrideBytes": 4,
+                "alignmentBytes": 4,
+                "memberOffsetBytes": 0,
+                "storageLayout": "hlsl-structured-buffer",
+                "runtimeSized": True,
+            },
         },
         {
             "name": "linearSampler",
@@ -124,6 +146,89 @@ def test_glsl_reflection_canonicalizes_c_family_specialization_ids(tmp_path):
         ("hexadecimal", 16),
         ("binary", 16),
     ]
+
+
+def test_glsl_reflection_records_exact_mlx_scalar_block_layouts(tmp_path):
+    artifact = tmp_path / "arangeuint32.glsl"
+    artifact.write_text(
+        textwrap.dedent("""
+            #version 450 core
+            layout(std430, binding = 2) buffer out_Buffer { uint out_[]; };
+            layout(std140, binding = 0) uniform arangeuint32_start_Args {
+                uint start;
+            };
+            layout(std140, binding = 1) uniform arangeuint32_step_Args {
+                uint step;
+            };
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    reflection = reflect_target_host_interface(
+        artifact, target="opengl", stage="compute"
+    )
+
+    by_name = {resource["name"]: resource for resource in reflection["resources"]}
+    assert by_name["out_Buffer"]["scalarLayout"] == {
+        "physicalType": "uint",
+        "elementType": "uint32",
+        "elementSizeBytes": 4,
+        "elementStrideBytes": 4,
+        "alignmentBytes": 4,
+        "memberOffsetBytes": 0,
+        "storageLayout": "std430",
+        "runtimeSized": True,
+        "memberName": "out_",
+    }
+    assert by_name["arangeuint32_start_Args"]["scalarLayout"] == {
+        "physicalType": "uint",
+        "elementType": "uint32",
+        "elementSizeBytes": 4,
+        "elementStrideBytes": 4,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "std140",
+        "runtimeSized": False,
+        "memberName": "start",
+        "blockSizeBytes": 16,
+    }
+    assert by_name["arangeuint32_step_Args"]["scalarLayout"]["memberName"] == "step"
+
+
+def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts(tmp_path):
+    hlsl = _reflect_hlsl(
+        tmp_path,
+        """
+        cbuffer Multiple : register(b0) {
+            uint first;
+            uint second;
+        };
+        RWStructuredBuffer<uint2> vectors : register(u0);
+        ByteAddressBuffer bytes : register(t0);
+        [numthreads(1, 1, 1)] void CSMain() {}
+        """,
+    )
+    assert all("scalarLayout" not in resource for resource in hlsl["resources"])
+
+    artifact = tmp_path / "unsupported.comp"
+    artifact.write_text(
+        textwrap.dedent("""
+            #version 450 core
+            layout(std140, binding = 0) uniform Multiple {
+                uint first;
+                uint second;
+            };
+            layout(std430, binding = 1) buffer Vectors { uvec2 values[]; };
+            layout(binding = 2) buffer Implicit { uint values[]; };
+            layout(local_size_x = 1) in;
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    glsl = reflect_target_host_interface(artifact, target="opengl", stage="compute")
+    assert all("scalarLayout" not in resource for resource in glsl["resources"])
 
 
 def test_hlsl_reflection_excludes_malformed_function_declarations(tmp_path):
