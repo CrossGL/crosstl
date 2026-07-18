@@ -30,7 +30,7 @@ PROOF_CASES = {
     "local-struct-byte-view": {
         "source": "private_pointer_word_view.metal",
         "manifest_suffix": ".local-struct-byte-view",
-        "expected_values": [36],
+        "expected_values": [204],
     },
 }
 
@@ -67,11 +67,13 @@ def _assert_generated_contract(generated: str, target: str, proof: str) -> None:
         assert "uint sum_bytes(in uint bytes[2], int bytes_base)" in generated
         assert "output[tid] = sum_bytes(block.words, 0);" in generated
         assert "& 255u" in generated
+        assert "* (index + 1)" in generated
     else:
         assert target == "opengl"
         assert "uint sum_bytes(inout WordBlock bytes, int bytes_base)" in generated
         assert "output_[tid] = sum_bytes(block, 0);" in generated
         assert "bitfieldExtract(bytes.words" in generated
+        assert "* (index + 1)" in generated
     assert "uint8_t" not in generated
 
 
@@ -251,4 +253,4 @@ def test_required_private_pointer_runtime_fails_closed(monkeypatch, target, stat
     )
 
     with pytest.raises(pytest.fail.Exception, match="runtime was required"):
-        _assert_native_readback({"results": [{"status": status}]}, target, [36])
+        _assert_native_readback({"results": [{"status": status}]}, target, [204])
