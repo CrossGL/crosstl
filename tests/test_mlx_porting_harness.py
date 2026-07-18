@@ -2566,24 +2566,89 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     source_materialization_issue = "https://github.com/CrossGL/crosstl/issues/1824"
     partition_view_issue = "https://github.com/CrossGL/crosstl/issues/1826"
     byte_reinterpretation_issue = "https://github.com/CrossGL/crosstl/issues/1546"
+    local_typedef_issue = "https://github.com/CrossGL/crosstl/issues/1567"
+    directx_workgroup_issue = "https://github.com/CrossGL/crosstl/issues/1518"
+    opengl_aggregate_issue = "https://github.com/CrossGL/crosstl/issues/1544"
+    opengl_workgroup_issue = "https://github.com/CrossGL/crosstl/issues/1671"
+    branch_analysis_issue = "https://github.com/CrossGL/crosstl/issues/1829"
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1807"
 
     status = expected_gaps["fp_quantized_contextual_materialization_status"]
 
     assert status == {
-        "status": "blocked-at-private-pointer-lowering",
+        "status": "blocked-at-target-workgroup-pointer-boundaries",
         "source": "mlx/backend/metal/kernels/fp_quantized.metal",
         "repository_commit": PINNED_MLX_COMMIT,
         "targets": ["directx", "opengl"],
         "translation_mode": "full-source-exact-high-budget",
         "replay": {
             "mode": "explicit-opt-in",
-            "elapsed_seconds": 765.091,
             "codegen_factory_overrides": [
                 "crosstl.project.pipeline.get_codegen",
                 "crosstl._crosstl.get_codegen",
             ],
             "project_configuration_wired": False,
+            "intermediate_runs": [
+                {
+                    "translator_commit": "16d4df7b1bca4412350410a94fd4cc01f15d97a9",
+                    "status": "blocked-at-symbolic-local-struct-extent",
+                    "diagnostic_code": "project.translate.metal-local-type-unresolved",
+                    "local_type": "vec_w",
+                    "extent_expression": "tn * bytes_per_pack",
+                    "tracked_by": local_typedef_issue,
+                    "target_runs": {
+                        "directx": {"elapsed_seconds": 292.953},
+                        "opengl": {"elapsed_seconds": 286.175},
+                    },
+                },
+                {
+                    "translator_commit": "0509feabb863b988649444cd5e559eeb45eb8b54",
+                    "status": "advanced-symbolic-local-struct-extent",
+                    "local_type": "vec_w",
+                    "extent_expression": "(2) * bytes_per_pack",
+                    "resolved_values": {"tn": 2},
+                    "tracked_by": local_typedef_issue,
+                    "target_runs": {
+                        "directx": {"elapsed_seconds": 286.54},
+                        "opengl": {"elapsed_seconds": 283.718},
+                    },
+                },
+                {
+                    "translator_commit": "710a16ee75731d6a12ea48aa9688e1c3223a9691",
+                    "status": "blocked-by-branch-insensitive-private-pointer-analysis",
+                    "tracked_by": branch_analysis_issue,
+                    "target_runs": {
+                        "directx": {
+                            "elapsed_seconds": 418.54,
+                            "diagnostic_code": (
+                                "project.translate."
+                                "directx-private-pointer-unsupported"
+                            ),
+                            "function": "qouter_float_2_8_4",
+                            "parameter": "w",
+                            "reason": "view-out-of-bounds",
+                        },
+                        "opengl": {
+                            "elapsed_seconds": 364.117,
+                            "diagnostic_code": (
+                                "project.translate."
+                                "opengl-private-pointer-unsupported"
+                            ),
+                            "function": "qouter_float_2_8_4",
+                            "parameter": "w",
+                            "reason": "view-out-of-bounds",
+                        },
+                    },
+                },
+            ],
+            "exact_run": {
+                "translator_commit": "7b1779a22c49cf445384f02d50c2116d426f43fc",
+                "status": "completed",
+                "target_runs": {
+                    "directx": {"elapsed_seconds": 429.507},
+                    "opengl": {"elapsed_seconds": 417.522},
+                },
+            },
         },
         "resolved_contracts": [
             "helper-array-decay-template-deduction",
@@ -2612,7 +2677,29 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             "transitive-local-constexpr-materialization",
             "directx-concrete-ternary-condition-selection",
             "opengl-compile-time-global-preparation-before-private-pointer-analysis",
+            "function-local-struct-hoisting",
+            "concrete-constexpr-local-extents",
+            "defaulted-zero-argument-helper-materialization",
+            "statically-unreachable-private-pointer-branch-pruning",
         ],
+        "resolved_contract_evidence": {
+            "function-local-struct-hoisting": {
+                "translator_commit": "16d4df7b1bca4412350410a94fd4cc01f15d97a9"
+            },
+            "concrete-constexpr-local-extents": {
+                "translator_commit": "0509feabb863b988649444cd5e559eeb45eb8b54"
+            },
+            "defaulted-zero-argument-helper-materialization": {
+                "translator_commit": "a8410478d359a629dac83b94fb153acd6a7c0705"
+            },
+            "statically-unreachable-private-pointer-branch-pruning": {
+                "issue": branch_analysis_issue,
+                "status": "resolved-on-branch-pending-merge",
+                "directx_commit": "3386410857e6ed42e4e0e89488b1011858cb38a4",
+                "opengl_commit": "88241864b7f79d00c53f979ad5faf60e1c7fa114",
+                "project_regression_commit": "7b1779a22c49cf445384f02d50c2116d426f43fc",
+            },
+        },
         "contextual_receiver_resolved_by_commit": (
             "c7a3c61addf9ca523e09bc81252ab76340c3f82c"
         ),
@@ -2670,7 +2757,6 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
                 "source_contract": "contracts/cooperative-matrix-fragment-mapping.json",
             },
-            "materialized_specialization_count": 604,
             "transitive_local_constexpr": {
                 "symbol": "values_per_thread",
                 "fixed_array_extents_materialized": True,
@@ -2693,6 +2779,13 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                         "private-pointer-analysis"
                     ),
                 },
+            },
+            "branch_insensitive_private_pointer_analysis": {
+                "function": "qouter_float_2_8_4",
+                "parameter": "w",
+                "previous_reason": "view-out-of-bounds",
+                "resolved_on_branch_by": branch_analysis_issue,
+                "project_regression_commit": "7b1779a22c49cf445384f02d50c2116d426f43fc",
             },
         },
         "coordinate_mapping_status": {
@@ -2788,91 +2881,188 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
         "current_boundaries": {
             "directx": {
                 "diagnostic_code": (
-                    "project.translate.directx-private-pointer-unsupported"
+                    "project.translate.directx-workgroup-pointer-unsupported"
                 ),
-                "missing_capability": "directx.private-pointer-parameter-lowering",
-                "private_pointer": {
-                    "function": "qouter_float_2_8_4",
-                    "parameter": "w",
-                    "reason": "missing-view-backing",
-                    "source_expression": "(thread uint8_t*)&w_local",
-                    "source": "mlx/backend/metal/kernels/fp_quantized.h",
+                "missing_capability": "directx.workgroup-pointer-lowering",
+                "workgroup_pointer": {
+                    "function": (
+                        "BlockMMA_float_float_16_32_32_1_2_" "false_true_36_36__mma"
+                    ),
+                    "parameter": "As",
+                    "reason": "dynamic-control-flow-reassignment",
                 },
-                "advanced_past": [
-                    "transitive-local-constexpr-materialization",
-                    "private-pointer-missing-fixed-array-extent",
-                    "private-pointer-missing-view-backing",
-                    "directx-concrete-ternary-condition-selection",
-                    "qdot-private-pointer-partition-view",
-                ],
-                "artifact_emitted": False,
-                "blocked_by": [byte_reinterpretation_issue],
+                "scope_classification": {
+                    "groupshared_alias_lowering": directx_workgroup_issue,
+                    "alias_reassignment": directx_workgroup_issue,
+                    "structured_rejection": directx_workgroup_issue,
+                },
+                "blocked_by": [directx_workgroup_issue],
             },
             "opengl": {
                 "diagnostic_code": (
-                    "project.translate.opengl-private-pointer-unsupported"
+                    "project.translate.opengl-workgroup-pointer-unsupported"
                 ),
-                "missing_capability": "opengl.private-pointer-parameter-lowering",
-                "private_pointer": {
-                    "function": "qouter_float_2_8_4",
-                    "parameter": "w",
-                    "reason": "missing-view-backing",
-                    "source_expression": "(thread uint8_t*)&w_local",
-                    "source": "mlx/backend/metal/kernels/fp_quantized.h",
+                "missing_capability": "opengl.workgroup-pointer-lowering",
+                "workgroup_pointer": {
+                    "parameter": "dst_",
+                    "reason": "bare-pointer-expression",
                 },
-                "advanced_past": [
-                    "transitive-local-constexpr-materialization",
-                    "private-pointer-unresolved-base-analysis",
-                    "private-pointer-missing-view-backing",
-                    (
-                        "opengl-compile-time-global-preparation-before-"
-                        "private-pointer-analysis"
-                    ),
-                    "qdot-private-pointer-partition-view",
-                ],
-                "analyzer_guard": {
-                    "status": "resolved-on-branch",
-                    "issue": opengl_analyzer_issue,
+                "scope_classification": {
+                    "pointer_bearing_aggregate_provenance": opengl_aggregate_issue,
+                    "helper_backing_provenance": opengl_workgroup_issue,
                 },
-                "artifact_emitted": False,
-                "blocked_by": [byte_reinterpretation_issue],
+                "blocked_by": [opengl_aggregate_issue, opengl_workgroup_issue],
             },
         },
-        "reduced_runtime_proof": {
-            "status": "native-execution-wired-not-locally-executed",
-            "source": (
-                "tests/fixtures/runtime_verification/private_pointer_partition/"
-                "private_pointer_partition.cgl"
-            ),
-            "expected_readback": [100, 101, 102, 103, 200, 201, 202, 203],
-            "targets": {
-                "directx": {
-                    "ci_platform": "windows",
-                    "runtime": "direct3d",
-                    "native_execution_wired": True,
+        "reduced_runtime_proofs": {
+            "partition_view": {
+                "status": "native-execution-observed-in-ci",
+                "source": (
+                    "tests/fixtures/runtime_verification/"
+                    "private_pointer_partition/private_pointer_partition.cgl"
+                ),
+                "expected_readback": [100, 101, 102, 103, 200, 201, 202, 203],
+                "ci_run_url": (
+                    "https://github.com/CrossGL/crosstl/actions/runs/29641172600"
+                ),
+                "targets": {
+                    "directx": {
+                        "ci_platform": "windows-latest",
+                        "runtime": "direct3d",
+                        "workflow_step": (
+                            "Prove Direct3D private-pointer partition writeback"
+                        ),
+                        "native_execution_wired": True,
+                        "native_execution_observed": True,
+                    },
+                    "opengl": {
+                        "ci_platform": "ubuntu-latest",
+                        "runtime": "opengl",
+                        "workflow_step": (
+                            "Prove OpenGL private-pointer partition writeback"
+                        ),
+                        "native_execution_wired": True,
+                        "native_execution_observed": True,
+                    },
                 },
-                "opengl": {
-                    "ci_platform": "linux",
-                    "runtime": "opengl",
-                    "native_execution_wired": True,
-                },
+                "local_execution_attempted": False,
+                "local_execution_verified": False,
+                "mlx_runtime_included": False,
+                "numerical_parity_claimed": False,
             },
-            "local_execution_attempted": False,
-            "local_execution_verified": False,
-            "mlx_runtime_included": False,
+            "local_struct_byte_view": {
+                "status": "target-native-execution-pending-ci",
+                "source": (
+                    "tests/fixtures/runtime_verification/"
+                    "private_pointer_partition/private_pointer_word_view.metal"
+                ),
+                "expected_readback": [204],
+                "readback_contract": (
+                    "sum(byte[index] * (index + 1)) for index 0 through 7"
+                ),
+                "order_sensitive": True,
+                "source_validation": {
+                    "platform": "macos",
+                    "compiler": "xcrun metal",
+                    "compiler_version": "32023.918",
+                    "language_standard": "metal3.2",
+                    "status": "compiled",
+                },
+                "targets": {
+                    "directx": {
+                        "ci_platform": "windows-latest",
+                        "runtime": "direct3d",
+                        "native_execution_wired": True,
+                        "native_execution_observed": False,
+                        "verification_status": "pending-branch-ci",
+                    },
+                    "opengl": {
+                        "ci_platform": "ubuntu-latest",
+                        "runtime": "opengl",
+                        "native_execution_wired": True,
+                        "native_execution_observed": False,
+                        "verification_status": "pending-branch-ci",
+                    },
+                },
+                "local_execution_attempted": False,
+                "local_execution_verified": False,
+                "mlx_runtime_included": False,
+                "numerical_parity_claimed": False,
+            },
         },
         "target_results": {
             "directx": {
-                "status": "blocked-at-private-pointer-lowering",
+                "translator_commit": "7b1779a22c49cf445384f02d50c2116d426f43fc",
+                "elapsed_seconds": 429.507,
+                "template_materialization": {
+                    "status": "materialized",
+                    "specialization_count": 606,
+                    "unsupported_specialization_count": 0,
+                },
+                "project_translation": {
+                    "artifact_record_count": 1,
+                    "translated_count": 0,
+                    "failed_count": 1,
+                    "emitted_target_file_count": 0,
+                    "project_diagnostic_count": 1,
+                    "error_count": 1,
+                },
+                "diagnostic": {
+                    "code": "project.translate.directx-workgroup-pointer-unsupported",
+                    "missing_capability": "directx.workgroup-pointer-lowering",
+                    "workgroup_pointer": {
+                        "function": (
+                            "BlockMMA_float_float_16_32_32_1_2_" "false_true_36_36__mma"
+                        ),
+                        "parameter": "As",
+                        "reason": "dynamic-control-flow-reassignment",
+                    },
+                    "message": (
+                        "DirectX cannot preserve workgroup pointer reassignment "
+                        "for 'As' across nested control flow"
+                    ),
+                },
                 "artifact_emitted": False,
-                "specialization_count": 604,
-                "unsupported_specialization_count": 0,
+                "native_validation_attempted": False,
+                "native_validation_status": "not-run-no-artifact",
+                "mlx_host_runtime_included": False,
+                "runtime_execution_attempted": False,
+                "numerical_parity_claimed": False,
             },
             "opengl": {
-                "status": "blocked-at-private-pointer-lowering",
+                "translator_commit": "7b1779a22c49cf445384f02d50c2116d426f43fc",
+                "elapsed_seconds": 417.522,
+                "template_materialization": {
+                    "status": "materialized",
+                    "specialization_count": 606,
+                    "unsupported_specialization_count": 0,
+                },
+                "project_translation": {
+                    "artifact_record_count": 1,
+                    "translated_count": 0,
+                    "failed_count": 1,
+                    "emitted_target_file_count": 0,
+                    "project_diagnostic_count": 1,
+                    "error_count": 1,
+                },
+                "diagnostic": {
+                    "code": "project.translate.opengl-workgroup-pointer-unsupported",
+                    "missing_capability": "opengl.workgroup-pointer-lowering",
+                    "workgroup_pointer": {
+                        "parameter": "dst_",
+                        "reason": "bare-pointer-expression",
+                    },
+                    "message": (
+                        "OpenGL cannot emit a workgroup pointer as a first-class "
+                        "value: dst_"
+                    ),
+                },
                 "artifact_emitted": False,
-                "specialization_count": 604,
-                "unsupported_specialization_count": 0,
+                "native_validation_attempted": False,
+                "native_validation_status": "not-run-no-artifact",
+                "mlx_host_runtime_included": False,
+                "runtime_execution_attempted": False,
+                "numerical_parity_claimed": False,
             },
         },
         "target_artifact_count": 0,
@@ -2891,6 +3081,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             dependent_value_issue,
             opengl_issue,
             directx_issue,
+            local_typedef_issue,
             source_specialization_issue,
             constructor_issue,
             const_member_issue,
@@ -2898,8 +3089,15 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             pointer_cast_issue,
             coordinate_mapping_issue,
         ],
-        "remaining_blocked_by": [byte_reinterpretation_issue],
+        "branch_resolved_issues": [branch_analysis_issue],
+        "remaining_blocked_by": [
+            directx_workgroup_issue,
+            opengl_aggregate_issue,
+            opengl_workgroup_issue,
+        ],
         "source_translation_claimed": False,
+        "native_validation_attempted": False,
+        "mlx_host_runtime_included": False,
         "runtime_integration_included": False,
         "runtime_execution_verified": False,
         "numerical_parity_claimed": False,
@@ -2927,6 +3125,12 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert partition_view_issue in expected_gaps["resolved_issues"]
     assert partition_view_issue not in expected_gaps["tracked_issues"]
     assert byte_reinterpretation_issue in expected_gaps["tracked_issues"]
+    assert local_typedef_issue in expected_gaps["tracked_issues"]
+    assert directx_workgroup_issue in expected_gaps["tracked_issues"]
+    assert opengl_aggregate_issue in expected_gaps["tracked_issues"]
+    assert opengl_workgroup_issue in expected_gaps["tracked_issues"]
+    assert branch_analysis_issue in expected_gaps["tracked_issues"]
+    assert branch_analysis_issue not in expected_gaps["resolved_issues"]
     assert source_materialization_issue not in expected_gaps["tracked_issues"]
     assert operation_result_type_issue in expected_gaps["resolved_issues"]
     assert operation_result_type_issue not in expected_gaps["tracked_issues"]
@@ -2934,17 +3138,26 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert opengl_analyzer_issue not in expected_gaps["tracked_issues"]
     assert source_materialization_issue in expected_gaps["resolved_issues"]
     assert partition_view_issue in status["resolved_issues"]
-    assert status["remaining_blocked_by"] == [byte_reinterpretation_issue]
+    assert local_typedef_issue in status["advanced_issue_contracts"]
+    assert local_typedef_issue not in status["resolved_issues"]
+    assert status["branch_resolved_issues"] == [branch_analysis_issue]
+    assert status["remaining_blocked_by"] == [
+        directx_workgroup_issue,
+        opengl_aggregate_issue,
+        opengl_workgroup_issue,
+    ]
+    assert byte_reinterpretation_issue not in status["remaining_blocked_by"]
 
-    assert status["replay"] == {
-        "mode": "explicit-opt-in",
-        "elapsed_seconds": 765.091,
-        "codegen_factory_overrides": [
-            "crosstl.project.pipeline.get_codegen",
-            "crosstl._crosstl.get_codegen",
-        ],
-        "project_configuration_wired": False,
-    }
+    assert [
+        run["translator_commit"] for run in status["replay"]["intermediate_runs"]
+    ] == [
+        "16d4df7b1bca4412350410a94fd4cc01f15d97a9",
+        "0509feabb863b988649444cd5e559eeb45eb8b54",
+        "710a16ee75731d6a12ea48aa9688e1c3223a9691",
+    ]
+    assert status["replay"]["exact_run"]["translator_commit"] == (
+        "7b1779a22c49cf445384f02d50c2116d426f43fc"
+    )
     resolved_boundaries = status["advanced_past"]["transitive_local_constexpr"][
         "resolved_boundaries"
     ]
@@ -2953,22 +3166,15 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
         "missing-fixed-array-extent",
         "missing-view-backing",
     ]
-    for target, boundary in status["current_boundaries"].items():
-        assert boundary["diagnostic_code"] == (
-            f"project.translate.{target}-private-pointer-unsupported"
-        )
-        assert boundary["missing_capability"] == (
-            f"{target}.private-pointer-parameter-lowering"
-        )
-        assert boundary["private_pointer"] == {
-            "function": "qouter_float_2_8_4",
-            "parameter": "w",
-            "reason": "missing-view-backing",
-            "source_expression": "(thread uint8_t*)&w_local",
-            "source": "mlx/backend/metal/kernels/fp_quantized.h",
-        }
-        assert "cooperative_matrix" not in boundary
-        assert boundary["blocked_by"] == [byte_reinterpretation_issue]
+    assert status["current_boundaries"]["directx"]["blocked_by"] == [
+        directx_workgroup_issue
+    ]
+    assert status["current_boundaries"]["opengl"]["blocked_by"] == [
+        opengl_aggregate_issue,
+        opengl_workgroup_issue,
+    ]
+    assert set(status["target_results"]) == {"directx", "opengl"}
+    assert status["target_artifact_count"] == 0
 
     readme = MLX_README_PATH.read_text(encoding="utf-8")
     assert PINNED_MLX_COMMIT in readme
@@ -2982,11 +3188,9 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "`align_M` (ID 200)" in readme
     assert "`align_N` (ID 201)" in readme
     assert "`align_K` (ID 202)" in readme
-    assert "`project.translate.directx-private-pointer-unsupported`" in readme
-    assert "`project.translate.opengl-private-pointer-unsupported`" in readme
-    assert "`directx.private-pointer-parameter-lowering`" in readme
-    assert "`opengl.private-pointer-parameter-lowering`" in readme
-    assert "604 function specializations" in " ".join(readme.split())
+    assert "`project.translate.metal-local-type-unresolved`" in readme
+    assert "`tn * bytes_per_pack`" in readme
+    assert "`(2) * bytes_per_pack`" in readme
     assert "`BaseMMAFrag_float_8_8::kFragRows`" in readme
     assert "CrossGL/crosstl#1479" in readme
     assert "CrossGL/crosstl#1490" in readme
@@ -3007,6 +3211,10 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "CrossGL/crosstl#1824" in readme
     assert "CrossGL/crosstl#1826" in readme
     assert "CrossGL/crosstl#1546" in readme
+    assert "CrossGL/crosstl#1518" in readme
+    assert "CrossGL/crosstl#1544" in readme
+    assert "CrossGL/crosstl#1671" in readme
+    assert "CrossGL/crosstl#1829" in readme
     assert "ordered `cooperative_matrix_element` operations" in " ".join(readme.split())
     assert "`metal_thread_elements` layout" in " ".join(readme.split())
     assert "a 32-lane subgroup, two elements per lane" in " ".join(readme.split())
@@ -3040,32 +3248,82 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "not wired through project profiles or configuration" in " ".join(
         readme.split()
     )
-    assert (
-        "transitive local `constexpr` chain defining the symbolic "
-        "`values_per_thread`" in " ".join(readme.split())
+    assert "transitive local `constexpr` materialization contract" in " ".join(
+        readme.split()
     )
-    assert "including its fixed array extents" in " ".join(readme.split())
-    assert "765.091 seconds" in " ".join(readme.split())
+    assert "proving that `tn` had resolved to `2`" in " ".join(readme.split())
+    assert "292.953 seconds" in " ".join(readme.split())
+    assert "286.175 seconds" in " ".join(readme.split())
+    assert "286.540 seconds" in " ".join(readme.split())
+    assert "283.718 seconds" in " ".join(readme.split())
+    assert "`16d4df7b1`" in readme
+    assert "`0509feabb`" in readme
+    assert "`a8410478d`" in readme
+    assert "`710a16ee7`" in readme
     assert "both code-generation factory paths" in " ".join(readme.split())
     assert "`qdot_float_16_4.x_thread`" in readme
     assert "`unprovable-view-offset`" in readme
-    assert "selects the concrete branch" in " ".join(readme.split())
-    assert "prepares compile-time globals" in " ".join(readme.split())
+    assert "function-local struct hoisting" in " ".join(readme.split())
+    assert "concrete `constexpr` local extents" in " ".join(readme.split())
+    assert "defaulted zero-argument helper materialization" in " ".join(readme.split())
+    assert "are not current-boundary claims" in " ".join(readme.split())
+    assert "418.540 seconds" in " ".join(readme.split())
+    assert "364.117 seconds" in " ".join(readme.split())
+    assert "`view-out-of-bounds`" in readme
+    assert "branch-insensitive private-pointer analysis" in " ".join(readme.split())
     assert "`qouter_float_2_8_4.w`" in readme
-    assert "`(thread uint8_t*)&w_local`" in readme
-    assert "`mlx/backend/metal/kernels/fp_quantized.h`" in readme
-    assert "symbolic `values_per_thread`" in " ".join(readme.split())
-    assert "`missing-fixed-array-extent`" in readme
-    assert "`missing-view-backing`" in readme
-    assert "[100, 101, 102, 103, 200, 201, 202, 203]" in readme
-    assert "Windows Direct3D and Linux OpenGL CI" in " ".join(readme.split())
-    assert "were not executed during this local replay" in " ".join(readme.split())
-    assert "compile with the native Xcode Metal compiler" in " ".join(readme.split())
-    assert "neither emitted an artifact" in " ".join(readme.split())
-    assert "does not establish complete source translation" in " ".join(readme.split())
-    assert "runtime integration, runtime execution, or numerical parity" in " ".join(
+    assert "`338641085`" in readme
+    assert "`88241864b`" in readme
+    assert "`7b1779a22`" in readme
+    assert "issue remains open until these changes merge" in " ".join(
+        readme.lower().split()
+    )
+    assert "429.507 seconds" in " ".join(readme.split())
+    assert "417.522 seconds" in " ".join(readme.split())
+    assert "no unsupported specializations" in " ".join(readme.split())
+    assert "`project.translate.directx-workgroup-pointer-unsupported`" in readme
+    assert "`directx.workgroup-pointer-lowering`" in readme
+    assert "`BlockMMA_float_float_16_32_32_1_2_false_true_36_36__mma`" in readme
+    assert "`dynamic-control-flow-reassignment`" in readme
+    assert (
+        "`DirectX cannot preserve workgroup pointer reassignment for 'As' across "
+        "nested control flow`" in " ".join(readme.split())
+    )
+    assert "`project.translate.opengl-workgroup-pointer-unsupported`" in readme
+    assert "`opengl.workgroup-pointer-lowering`" in readme
+    assert "`bare-pointer-expression`" in readme
+    assert (
+        "`OpenGL cannot emit a workgroup pointer as a first-class value: dst_`"
+        in " ".join(readme.split())
+    )
+    assert (
+        "one failed artifact/provenance record, zero translated artifacts, and "
+        "one error" in " ".join(readme.split())
+    )
+    assert "no target artifact was emitted" in " ".join(readme.lower().split())
+    assert "Native validation was not attempted" in " ".join(readme.split())
+    assert "MLX host runtime integration and execution were not attempted" in " ".join(
         readme.split()
     )
+    assert "numerical parity was not evaluated" in " ".join(readme.split())
+    assert "it is not the current exact boundary" in " ".join(readme.split())
+    assert "CrossGL/crosstl#1567 remains open" in " ".join(readme.split())
+    assert "[100, 101, 102, 103, 200, 201, 202, 203]" in readme
+    assert "GitHub Actions run 29641172600" in " ".join(readme.split())
+    assert "`Prove Direct3D private-pointer partition writeback`" in readme
+    assert "`Prove OpenGL private-pointer partition writeback`" in readme
+    assert "`private_pointer_word_view.metal`" in readme
+    assert "`sum(byte[index] * (index + 1))`" in readme
+    assert "required readback is `[204]`" in " ".join(readme.split())
+    assert "compiles locally as Metal 3.2 with Apple metal `32023.918`" in " ".join(
+        readme.split()
+    )
+    assert "remains pending this branch's CI" in " ".join(readme.split())
+    assert "do not establish complete MLX artifact translation" in " ".join(
+        readme.split()
+    )
+    assert "MLX host runtime integration" in " ".join(readme.split())
+    assert "numerical parity for MLX workloads" in " ".join(readme.split())
 
 
 def test_arange_reference_runtime_resolves_fixture_resource_aliases():
