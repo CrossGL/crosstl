@@ -47,6 +47,7 @@ from crosstl.project.runtime_verification import (
     RuntimeFixture,
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
+    RuntimeValue,
     VulkanRuntimeParityAdapter,
     build_runtime_test_manifest,
     plan_runtime_test_manifest,
@@ -636,10 +637,12 @@ class _FakeDirectXCompute:
         self.uav = uav
         self.device = device
         self.dispatch_args = None
+        self.initial_uav_payloads = ()
         self.released = False
 
     def dispatch(self, x, y, z):
         self.dispatch_args = (x, y, z)
+        self.initial_uav_payloads = tuple(bytes(buffer.payload) for buffer in self.uav)
         if self.runtime.fail_dispatch:
             raise RuntimeError("dispatch rejected")
         scale = struct.unpack("<I", self.cbv[0].payload[:4])[0]
@@ -850,7 +853,68 @@ def test_prepare_directx_buffers_maps_and_packs_descriptor_namespaces(tmp_path):
     assert prepared[1].payload == struct.pack("<2f", 1.0, 2.0)
     assert prepared[1].stride == 4
     assert prepared[2].payload == b"\x00" * 8
+    assert prepared[2].readback is True
     assert prepared[2].output_name == "result"
+
+
+def test_prepare_directx_buffers_rejects_initialized_unwritable_outputs():
+    for binding, reason_kind in (
+        (
+            NativeRuntimeBufferBinding(
+                name="params",
+                binding=RuntimeResourceBinding(
+                    name="params",
+                    kind="constant-buffer",
+                    type_name="Params",
+                    set=0,
+                    binding=0,
+                    access="read",
+                    metadata={
+                        "scalarLayout": _scalar_block_layout("hlsl-constant-buffer")
+                    },
+                ),
+                value=[1],
+                source="input",
+                dtype="uint32",
+                shape=(1,),
+                expected_output=RuntimeValue(
+                    name="result",
+                    dtype="uint32",
+                    shape=(1,),
+                    values=[2],
+                ),
+            ),
+            "unsupported-output-resource",
+        ),
+        (
+            NativeRuntimeBufferBinding(
+                name="values",
+                binding=RuntimeResourceBinding(
+                    name="values",
+                    kind="buffer",
+                    type_name="StructuredBuffer<float>",
+                    set=0,
+                    binding=0,
+                    access="read",
+                ),
+                value=[1.0],
+                source="input",
+                dtype="float32",
+                shape=(1,),
+                expected_output=RuntimeValue(
+                    name="result",
+                    dtype="float32",
+                    shape=(1,),
+                    values=[2.0],
+                ),
+            ),
+            "resource-access-mismatch",
+        ),
+    ):
+        with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+            _prepare_directx_buffers({binding.name: binding})
+
+        assert excinfo.value.details["reasonKind"] == reason_kind
 
 
 def test_prepare_directx_buffers_rejects_missing_scalar_block_layout():
@@ -1201,6 +1265,47 @@ def test_directx_compute_runtime_dispatches_and_reads_typed_output(tmp_path):
     assert all(buffer.device is module.device for buffer in module.buffers)
     assert all(buffer.released for buffer in module.buffers)
     assert compute.released is True
+
+
+def test_directx_compute_runtime_uploads_and_reads_initialized_output(tmp_path):
+    module = _FakeCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+    request = _directx_dispatch_request(tmp_path)
+    output = NativeRuntimeBufferBinding(
+        **{
+            **request.buffers["out"].__dict__,
+            "value": [8.0, 9.0],
+            "source": "input",
+            "expected_output": RuntimeValue(
+                name="updated",
+                dtype="float32",
+                shape=(2,),
+                values=[3.0, 6.0],
+            ),
+        }
+    )
+    request = NativeRuntimeDispatchRequest(
+        **{
+            **request.__dict__,
+            "buffers": {**request.buffers, "out": output},
+        }
+    )
+
+    outputs = runtime.dispatch(None, None, request)
+
+    assert outputs == {
+        "updated": {
+            "dtype": "float32",
+            "shape": [2],
+            "values": [3.0, 6.0],
+        }
+    }
+    compute = module.computes[0]
+    assert len(compute.uav) == 1
+    assert compute.initial_uav_payloads == (struct.pack("<2f", 8.0, 9.0),)
 
 
 def test_directx_runtime_adapter_compiles_dxil_and_dispatches_fixture(tmp_path):
@@ -2399,6 +2504,7 @@ def test_prepare_opengl_buffers_packs_storage_and_uniform_buffers():
     ]
     assert buffers[0].payload == b"\x00\x00\x80?\x00\x00\x00@"
     assert buffers[1].payload == b"\x00" * 8
+    assert buffers[1].readback is True
     assert buffers[1].output_name == "result"
     assert buffers[2].payload == b"\x03\x00\x00\x00"
     assert buffers[2].allocation_size == 16
@@ -2492,7 +2598,13 @@ def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation():
         ("storage-buffer", "read", "resource-access-mismatch"),
     ],
 )
-def test_prepare_opengl_buffers_rejects_unwritable_outputs(kind, access, reason_kind):
+@pytest.mark.parametrize("initialized", [False, True])
+def test_prepare_opengl_buffers_rejects_unwritable_outputs(
+    kind,
+    access,
+    reason_kind,
+    initialized,
+):
     binding = NativeRuntimeBufferBinding(
         name="out",
         binding=RuntimeResourceBinding(
@@ -2502,9 +2614,20 @@ def test_prepare_opengl_buffers_rejects_unwritable_outputs(kind, access, reason_
             binding=0,
             access=access,
         ),
-        source="expectedOutput",
+        value=[1] if initialized else None,
+        source="input" if initialized else "expectedOutput",
         dtype="uint32",
         shape=(1,),
+        expected_output=(
+            RuntimeValue(
+                name="result",
+                dtype="uint32",
+                shape=(1,),
+                values=[2],
+            )
+            if initialized
+            else None
+        ),
     )
 
     with pytest.raises(RuntimeAdapterSetupError) as excinfo:
@@ -2513,6 +2636,50 @@ def test_prepare_opengl_buffers_rejects_unwritable_outputs(kind, access, reason_
     assert excinfo.value.details["reasonKind"] == reason_kind
     assert excinfo.value.details["resource"] == "out"
     assert excinfo.value.details["binding"] == 0
+
+
+def test_opengl_runtime_uploads_and_reads_initialized_output():
+    binding = NativeRuntimeBufferBinding(
+        name="values",
+        binding=RuntimeResourceBinding(
+            name="values",
+            kind="storage-buffer",
+            set=0,
+            binding=0,
+            access="read_write",
+        ),
+        value=[4.0, 5.0],
+        source="input",
+        dtype="float32",
+        shape=(2,),
+        metadata={"runtimeValueName": "legacy_name"},
+        expected_output=RuntimeValue(
+            name="updated",
+            dtype="float32",
+            shape=(2,),
+            values=[8.0, 10.0],
+        ),
+    )
+    prepared = _prepare_opengl_buffers({"values": binding})
+
+    class FakeBuffer:
+        def read(self, size):
+            assert size == 8
+            return struct.pack("<2f", 8.0, 10.0)
+
+    outputs = OpenGLComputeRuntime()._read_outputs([(prepared[0], FakeBuffer())])
+
+    assert len(prepared) == 1
+    assert prepared[0].payload == struct.pack("<2f", 4.0, 5.0)
+    assert prepared[0].readback is True
+    assert prepared[0].output_name == "updated"
+    assert outputs == {
+        "updated": {
+            "dtype": "float32",
+            "shape": [2],
+            "values": [8.0, 10.0],
+        }
+    }
 
 
 def test_opengl_compute_runtime_dispatches_and_reads_storage_buffer(tmp_path):
@@ -3563,7 +3730,39 @@ def test_prepare_vulkan_buffers_packs_inputs_and_zeroes_outputs():
     assert buffers[1].resource_kind == "constant-buffer"
     assert buffers[1].payload == b"\x03\x00\x00\x00"
     assert buffers[2].payload == b"\x00" * 8
+    assert buffers[2].readback is True
     assert buffers[2].output_name == "out"
+
+
+def test_prepare_vulkan_buffers_uploads_initialized_output():
+    binding = NativeRuntimeBufferBinding(
+        name="values",
+        binding=RuntimeResourceBinding(
+            name="values",
+            kind="storage-buffer",
+            set=0,
+            binding=0,
+            access="read_write",
+        ),
+        value=[4, 5],
+        source="input",
+        dtype="uint32",
+        shape=(2,),
+        metadata={"runtimeValueName": "legacy_name"},
+        expected_output=RuntimeValue(
+            name="updated",
+            dtype="uint32",
+            shape=(2,),
+            values=[8, 10],
+        ),
+    )
+
+    buffers = _prepare_vulkan_buffers({"values": binding})
+
+    assert len(buffers) == 1
+    assert buffers[0].payload == struct.pack("<2I", 4, 5)
+    assert buffers[0].readback is True
+    assert buffers[0].output_name == "updated"
 
 
 def test_vulkan_handle_array_unwraps_first_handle():

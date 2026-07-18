@@ -36,6 +36,7 @@ from crosstl.project.runtime_verification import (
     RuntimeParityAdapter,
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
+    RuntimeValue,
     RuntimeVerificationError,
     VulkanRuntimeParityAdapter,
     build_runtime_test_manifest,
@@ -497,6 +498,245 @@ def test_prepare_runtime_execution_maps_artifact_metadata_to_plan(tmp_path):
         "dtype": "float32",
         "shape": [8],
     }
+
+
+def test_prepare_runtime_execution_carries_initialized_read_write_contract():
+    initial = RuntimeValue(
+        name="values",
+        dtype="float32",
+        shape=(4,),
+        values=[1.0, 2.0, 3.0, 4.0],
+    )
+    expected = RuntimeValue(
+        name="values",
+        dtype="float32",
+        shape=(4,),
+        values=[2.0, 3.0, 4.0, 5.0],
+    )
+    fixture = RuntimeFixture(
+        id="in-place",
+        selector=RuntimeArtifactSelector(target="directx"),
+        inputs=(initial,),
+        expected_outputs=(expected,),
+    )
+    contract = RuntimeAdapterContract(
+        resource_bindings=(
+            RuntimeResourceBinding(
+                name="values",
+                kind="buffer",
+                binding=0,
+                access="read_write",
+                metadata={"required": True},
+            ),
+        )
+    )
+    request = RuntimeExecutionRequest(
+        fixture=fixture,
+        artifact={"target": "directx", "status": "translated"},
+        artifact_path=None,
+        project_root=None,
+        adapter_contract=contract,
+    )
+
+    plan = prepare_runtime_execution(request)
+
+    assert plan.diagnostics == ()
+    assert len(plan.resource_bindings) == 1
+    bound = plan.resource_bindings[0]
+    assert bound.value is initial
+    assert bound.source == "input"
+    assert bound.initial_value is initial
+    assert bound.expected_output is expected
+    assert bound.to_json()["initialValue"]["shape"] == [4]
+    assert bound.to_json()["expectedOutput"]["shape"] == [4]
+
+
+@pytest.mark.parametrize(
+    ("expected", "field"),
+    [
+        (
+            RuntimeValue(
+                name="values",
+                dtype="uint32",
+                shape=(4,),
+                values=[2, 3, 4, 5],
+            ),
+            "dtype",
+        ),
+        (
+            RuntimeValue(
+                name="values",
+                dtype="float32",
+                shape=(2, 2),
+                values=[[2.0, 3.0], [4.0, 5.0]],
+            ),
+            "shape",
+        ),
+    ],
+)
+def test_prepare_runtime_execution_rejects_incompatible_read_write_values(
+    expected, field
+):
+    fixture = RuntimeFixture(
+        id="in-place",
+        selector=RuntimeArtifactSelector(target="opengl"),
+        inputs=(
+            RuntimeValue(
+                name="values",
+                dtype="float32",
+                shape=(4,),
+                values=[1.0, 2.0, 3.0, 4.0],
+            ),
+        ),
+        expected_outputs=(expected,),
+    )
+    contract = RuntimeAdapterContract(
+        resource_bindings=(
+            RuntimeResourceBinding(
+                name="values",
+                kind="buffer",
+                binding=0,
+                access="read_write",
+                metadata={"required": True},
+            ),
+        )
+    )
+
+    plan = prepare_runtime_execution(
+        RuntimeExecutionRequest(
+            fixture=fixture,
+            artifact={"target": "opengl", "status": "translated"},
+            artifact_path=None,
+            project_root=None,
+            adapter_contract=contract,
+        )
+    )
+
+    assert plan.resource_bindings[0].status == "invalid"
+    diagnostic = plan.diagnostics[0]
+    assert diagnostic["code"] == (
+        "project.runtime-verification.resource-value-incompatible"
+    )
+    assert [item["field"] for item in diagnostic["mismatches"]] == [field]
+
+
+def test_prepare_runtime_execution_requires_read_write_expected_output():
+    fixture = RuntimeFixture(
+        id="in-place",
+        selector=RuntimeArtifactSelector(target="directx"),
+        inputs=(
+            RuntimeValue(name="values", dtype="float32", shape=(1,), values=[1.0]),
+        ),
+    )
+    contract = RuntimeAdapterContract(
+        resource_bindings=(
+            RuntimeResourceBinding(
+                name="values",
+                kind="buffer",
+                binding=0,
+                access="read_write",
+                metadata={"required": True},
+            ),
+        )
+    )
+
+    plan = prepare_runtime_execution(
+        RuntimeExecutionRequest(
+            fixture=fixture,
+            artifact={"target": "directx", "status": "translated"},
+            artifact_path=None,
+            project_root=None,
+            adapter_contract=contract,
+        )
+    )
+
+    assert plan.resource_bindings[0].status == "invalid"
+    assert plan.diagnostics[0]["code"] == (
+        "project.runtime-verification.resource-output-unbound"
+    )
+
+
+def test_native_runtime_adapter_preserves_initialized_read_write_roles(tmp_path):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("#version 430\nvoid main() {}\n", encoding="utf-8")
+    artifact = _native_runtime_artifact(
+        path="out/opengl/debug/add.glsl",
+        resourceBindings=[
+            {
+                "name": "values",
+                "kind": "buffer",
+                "binding": 0,
+                "access": "read_write",
+                "required": True,
+            }
+        ],
+        specializationConstants=[],
+    )
+    fixture = _native_runtime_fixture(
+        inputs=[
+            {
+                "name": "values",
+                "dtype": "float32",
+                "shape": [2],
+                "values": [1.0, 2.0],
+            }
+        ],
+        expectedOutputs=[
+            {
+                "name": "values",
+                "dtype": "float32",
+                "shape": [2],
+                "values": [2.0, 3.0],
+            }
+        ],
+    )
+
+    class InPlaceRuntime:
+        name = "in-place-runtime"
+
+        def __init__(self):
+            self.prepared = None
+
+        def is_available(self, adapter, request):
+            return RuntimeExecutorAvailability(True)
+
+        def load_artifact(self, adapter, state, module_path):
+            return module_path
+
+        def dispatch(self, adapter, state, prepared):
+            self.prepared = prepared
+            assert list(prepared.buffers) == ["values"]
+            binding = prepared.buffers["values"]
+            assert binding.value == [1.0, 2.0]
+            assert binding.expected_output is not None
+            assert binding.expected_output.values == [2.0, 3.0]
+            return {
+                "values": {
+                    "dtype": "float32",
+                    "shape": [2],
+                    "values": [2.0, 3.0],
+                }
+            }
+
+    runtime = InPlaceRuntime()
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=runtime,
+        required_tools=(),
+        validate=False,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [artifact]),
+        _native_runtime_manifest(fixture=fixture),
+        executors={"opengl": adapter},
+    )
+
+    assert report["success"] is True
+    assert runtime.prepared is not None
+    execution = report["results"][0]["runtimeExecution"]
+    assert execution["resourceBindings"][0]["initialValue"]["name"] == "values"
+    assert execution["resourceBindings"][0]["expectedOutput"]["name"] == "values"
 
 
 def test_verify_runtime_fixtures_reports_pass_and_writes_json(tmp_path):

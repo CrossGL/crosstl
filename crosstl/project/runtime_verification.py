@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -454,6 +455,8 @@ class RuntimeBoundResource:
     source: str | None = None
     status: str = "bound"
     diagnostics: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    initial_value: RuntimeValue | None = None
+    expected_output: RuntimeValue | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -464,6 +467,10 @@ class RuntimeBoundResource:
             payload["value"] = _runtime_value_reference(self.value)
         if self.source is not None:
             payload["source"] = self.source
+        if self.initial_value is not None:
+            payload["initialValue"] = _runtime_value_reference(self.initial_value)
+        if self.expected_output is not None:
+            payload["expectedOutput"] = _runtime_value_reference(self.expected_output)
         if self.diagnostics:
             payload["diagnostics"] = [
                 dict(diagnostic) for diagnostic in self.diagnostics
@@ -541,6 +548,7 @@ class NativeRuntimeBufferBinding:
     dtype: str | None = None
     shape: tuple[int, ...] = field(default_factory=tuple)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    expected_output: RuntimeValue | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -555,6 +563,8 @@ class NativeRuntimeBufferBinding:
             payload["shape"] = list(self.shape)
         if self.metadata:
             payload["metadata"] = dict(self.metadata)
+        if self.expected_output is not None:
+            payload["expectedOutput"] = _runtime_value_reference(self.expected_output)
         return payload
 
 
@@ -1408,7 +1418,8 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 "outputBufferCount": sum(
                     1
                     for binding in buffers.values()
-                    if binding.source == "expectedOutput"
+                    if binding.expected_output is not None
+                    or binding.source == "expectedOutput"
                 ),
             },
         )
@@ -1421,26 +1432,29 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
         for resource in state.plan.resource_bindings:
             binding = resource.binding
             key = _native_resource_key(binding)
-            runtime_value = resource.value
+            upload_value = resource.initial_value
+            if upload_value is None and resource.source != "expectedOutput":
+                upload_value = resource.value
+            expected_output = resource.expected_output
+            if expected_output is None and resource.source == "expectedOutput":
+                expected_output = resource.value
+            allocation_value = upload_value or expected_output or resource.value
             bindings[key] = NativeRuntimeBufferBinding(
                 name=key,
                 binding=binding,
-                value=(
-                    None
-                    if resource.source == "expectedOutput" or runtime_value is None
-                    else runtime_value.values
-                ),
+                value=upload_value.values if upload_value is not None else None,
                 source=resource.source,
-                dtype=runtime_value.dtype if runtime_value is not None else None,
-                shape=runtime_value.shape if runtime_value is not None else (),
+                dtype=allocation_value.dtype if allocation_value is not None else None,
+                shape=allocation_value.shape if allocation_value is not None else (),
                 metadata=(
                     {
-                        **dict(runtime_value.metadata),
-                        "runtimeValueName": runtime_value.name,
+                        **dict(allocation_value.metadata),
+                        "runtimeValueName": allocation_value.name,
                     }
-                    if runtime_value is not None
+                    if allocation_value is not None
                     else {}
                 ),
+                expected_output=expected_output,
             )
         return bindings
 
@@ -5627,14 +5641,72 @@ def _runtime_bound_resources(
     contract: RuntimeAdapterContract,
     artifact: Mapping[str, Any],
 ) -> tuple[tuple[RuntimeBoundResource, ...], list[dict[str, Any]]]:
-    values_by_name = _runtime_fixture_values_by_name(fixture)
+    input_values, output_values = _runtime_fixture_values_by_name(fixture)
     bindings: list[RuntimeBoundResource] = []
     diagnostics: list[dict[str, Any]] = []
     for binding in contract.resource_bindings:
-        value, source = _runtime_resource_value(binding, values_by_name)
+        initial_value, _ = _runtime_resource_value(binding, input_values)
+        expected_output, _ = _runtime_resource_value(binding, output_values)
+        access = _runtime_resource_access(binding.access)
+        if access == "read":
+            value, source = initial_value, "input"
+        elif access == "write":
+            value, source = expected_output, "expectedOutput"
+        elif access == "read_write":
+            value = initial_value or expected_output
+            source = "input" if initial_value is not None else "expectedOutput"
+        else:
+            value = initial_value or expected_output
+            source = "input" if initial_value is not None else "expectedOutput"
+
+        binding_diagnostics: list[dict[str, Any]] = []
+        if access == "read_write" and expected_output is None:
+            diagnostic = _runtime_execution_diagnostic(
+                "error" if _runtime_resource_required(binding) else "warning",
+                "project.runtime-verification.resource-output-unbound",
+                "Runtime fixture does not provide an expected output for a read-write resource binding.",
+                artifact,
+                resource=_runtime_resource_binding_name(binding),
+                binding=binding.to_json(),
+            )
+            diagnostics.append(diagnostic)
+            binding_diagnostics.append(diagnostic)
+        if (
+            access == "read_write"
+            and initial_value is not None
+            and expected_output is not None
+        ):
+            mismatches = _runtime_resource_value_mismatches(
+                binding, initial_value, expected_output
+            )
+            if mismatches:
+                diagnostic = _runtime_execution_diagnostic(
+                    "error",
+                    "project.runtime-verification.resource-value-incompatible",
+                    "Runtime fixture initialization and expected output are incompatible for a read-write resource binding.",
+                    artifact,
+                    resource=_runtime_resource_binding_name(binding),
+                    binding=binding.to_json(),
+                    mismatches=mismatches,
+                )
+                diagnostics.append(diagnostic)
+                binding_diagnostics.append(diagnostic)
         if value is not None:
             bindings.append(
-                RuntimeBoundResource(binding=binding, value=value, source=source)
+                RuntimeBoundResource(
+                    binding=binding,
+                    value=value,
+                    source=source,
+                    initial_value=(initial_value if access == "read_write" else None),
+                    expected_output=(
+                        expected_output
+                        if access in {"write", "read_write"}
+                        or source == "expectedOutput"
+                        else None
+                    ),
+                    status="invalid" if binding_diagnostics else "bound",
+                    diagnostics=tuple(binding_diagnostics),
+                )
             )
             continue
         diagnostic = _runtime_execution_diagnostic(
@@ -5658,17 +5730,135 @@ def _runtime_bound_resources(
 
 def _runtime_fixture_values_by_name(
     fixture: RuntimeFixture,
-) -> dict[str, tuple[RuntimeValue, str]]:
-    values: dict[str, tuple[RuntimeValue, str]] = {}
-    for value in fixture.inputs:
-        values[value.name] = (value, "input")
-        for alias in _runtime_value_aliases(value):
-            values.setdefault(alias, (value, "input"))
-    for value in fixture.expected_outputs:
-        values.setdefault(value.name, (value, "expectedOutput"))
-        for alias in _runtime_value_aliases(value):
-            values.setdefault(alias, (value, "expectedOutput"))
-    return values
+) -> tuple[
+    dict[str, tuple[RuntimeValue, str]],
+    dict[str, tuple[RuntimeValue, str]],
+]:
+    def indexed(
+        runtime_values: Sequence[RuntimeValue], source: str
+    ) -> dict[str, tuple[RuntimeValue, str]]:
+        values: dict[str, tuple[RuntimeValue, str]] = {}
+        for value in runtime_values:
+            values[value.name] = (value, source)
+            for alias in _runtime_value_aliases(value):
+                values.setdefault(alias, (value, source))
+        return values
+
+    return indexed(fixture.inputs, "input"), indexed(
+        fixture.expected_outputs, "expectedOutput"
+    )
+
+
+def _runtime_resource_access(value: str | None) -> str | None:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in {"readonly", "read_only"}:
+        return "read"
+    if normalized in {"writeonly", "write_only"}:
+        return "write"
+    if normalized in {"readwrite", "rw"}:
+        return "read_write"
+    return normalized or None
+
+
+def _runtime_resource_value_mismatches(
+    binding: RuntimeResourceBinding,
+    initial_value: RuntimeValue,
+    expected_output: RuntimeValue,
+) -> list[dict[str, Any]]:
+    mismatches: list[dict[str, Any]] = []
+    initial_kind = str(initial_value.kind).strip().lower().replace("_", "-")
+    expected_kind = str(expected_output.kind).strip().lower().replace("_", "-")
+    if initial_kind != expected_kind:
+        mismatches.append(
+            {
+                "field": "kind",
+                "initial": initial_value.kind,
+                "expected": expected_output.kind,
+            }
+        )
+
+    initial_dtype = _runtime_compatible_dtype(initial_value.dtype)
+    expected_dtype = _runtime_compatible_dtype(expected_output.dtype)
+    if (
+        initial_dtype is not None
+        and expected_dtype is not None
+        and initial_dtype != expected_dtype
+    ):
+        mismatches.append(
+            {
+                "field": "dtype",
+                "initial": initial_value.dtype,
+                "expected": expected_output.dtype,
+            }
+        )
+
+    initial_shape = initial_value.shape or _infer_shape(initial_value.values)
+    expected_shape = expected_output.shape or _infer_shape(expected_output.values)
+    if initial_shape and expected_shape and initial_shape != expected_shape:
+        mismatches.append(
+            {
+                "field": "shape",
+                "initial": list(initial_shape),
+                "expected": list(expected_shape),
+            }
+        )
+
+    initial_layout = _runtime_scalar_layout_signature(initial_value.metadata)
+    expected_layout = _runtime_scalar_layout_signature(expected_output.metadata)
+    binding_layout = _runtime_scalar_layout_signature(binding.metadata)
+    if initial_layout and expected_layout and initial_layout != expected_layout:
+        mismatches.append(
+            {
+                "field": "scalarLayout",
+                "initial": initial_layout,
+                "expected": expected_layout,
+            }
+        )
+    for role, layout in (
+        ("initial", initial_layout),
+        ("expected", expected_layout),
+    ):
+        if layout and binding_layout and layout != binding_layout:
+            mismatches.append(
+                {
+                    "field": "scalarLayout",
+                    "role": role,
+                    "value": layout,
+                    "binding": binding_layout,
+                }
+            )
+    return mismatches
+
+
+def _runtime_compatible_dtype(value: str | None) -> str | None:
+    normalized = re.sub(r"\s+", "", str(value or "")).lower()
+    aliases = {
+        "float": "float32",
+        "f32": "float32",
+        "int": "int32",
+        "i32": "int32",
+        "uint": "uint32",
+        "u32": "uint32",
+    }
+    return aliases.get(normalized, normalized or None)
+
+
+def _runtime_scalar_layout_signature(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    layout = metadata.get("scalarLayout")
+    if not isinstance(layout, Mapping):
+        return {}
+    fields = (
+        "physicalType",
+        "elementType",
+        "elementSizeBytes",
+        "elementStrideBytes",
+        "alignmentBytes",
+        "memberOffsetBytes",
+        "storageLayout",
+        "runtimeSized",
+        "blockSizeBytes",
+    )
+    return {name: layout[name] for name in fields if name in layout}
 
 
 def _runtime_resource_value(

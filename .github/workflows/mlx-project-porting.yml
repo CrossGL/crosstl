@@ -27,6 +27,7 @@ on:
       - "tests/fixtures/runtime_verification/**"
       - "tests/fixtures/project_porting/mlx/**"
       - "tests/test_translator/test_native_runtime_drivers.py"
+      - "tests/test_translator/test_initialized_read_write_runtime.py"
       - "tests/test_translator/test_native_loader_dispatch_integration.py"
       - "tests/test_translator/test_mlx_arange_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
@@ -54,6 +55,7 @@ on:
       - "tests/fixtures/runtime_verification/**"
       - "tests/fixtures/project_porting/mlx/**"
       - "tests/test_translator/test_native_runtime_drivers.py"
+      - "tests/test_translator/test_initialized_read_write_runtime.py"
       - "tests/test_translator/test_native_loader_dispatch_integration.py"
       - "tests/test_translator/test_mlx_arange_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
@@ -302,6 +304,14 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_directx_on_device
 
+      - name: Prove initialized read-write Direct3D native execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_RUN_INITIALIZED_READ_WRITE_DIRECTX_DEVICE_TEST: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_initialized_read_write_runtime.py::test_directx_initialized_read_write_resource_executes_on_device
+
       - name: Prove pinned MLX arange Direct3D native-loader execution
         if: runner.os == 'Windows'
         env:
@@ -364,6 +374,17 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_opengl_on_device
+
+      - name: Prove initialized read-write OpenGL native execution
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_RUN_INITIALIZED_READ_WRITE_OPENGL_DEVICE_TEST: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_initialized_read_write_runtime.py::test_opengl_initialized_read_write_resource_executes_on_device
 
       - name: Prove pinned MLX arange OpenGL native-loader execution
         if: runner.os == 'Linux'
