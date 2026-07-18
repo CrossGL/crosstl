@@ -1539,8 +1539,96 @@ def test_hlsl_cooperative_matrix_type_reports_structured_diagnostic():
     )
     assert diagnostic.missing_capabilities == ("directx.cooperative-matrix-lowering",)
     assert diagnostic.operation == "type"
+    assert diagnostic.matrix_type is matrix_type
     assert diagnostic.source_location == source_location
+    assert diagnostic.fragment_layout is None
+    assert diagnostic.subgroup_size is None
+    assert diagnostic.elements_per_lane is None
+    assert diagnostic.fragment_provenance is None
+    assert diagnostic.details == {}
+    assert diagnostic.reason == "unsupported-type"
     assert "cooperative matrix type lowering is unavailable" in str(diagnostic)
+    assert "subgroup_size=unspecified" in str(diagnostic)
+    assert "32" not in str(diagnostic)
+
+
+def test_hlsl_cooperative_matrix_type_reports_known_fragment_requirements():
+    matrix_type = CooperativeMatrixType(
+        PrimitiveType("float"),
+        8,
+        8,
+        scope="subgroup",
+        use="accumulator",
+        fragment_layout="metal_simdgroup_8x8_f32",
+        subgroup_size=32,
+        elements_per_lane=2,
+        fragment_provenance="mlx_fragment_contract",
+    )
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        HLSLCodeGen().map_type(matrix_type)
+
+    diagnostic = excinfo.value
+    assert diagnostic.matrix_type is matrix_type
+    assert diagnostic.fragment_layout == "metal_simdgroup_8x8_f32"
+    assert diagnostic.subgroup_size == 32
+    assert diagnostic.elements_per_lane == 2
+    assert diagnostic.fragment_provenance == "mlx_fragment_contract"
+    assert diagnostic.details == {
+        "fragmentLayout": "metal_simdgroup_8x8_f32",
+        "subgroupSize": 32,
+        "elementsPerLane": 2,
+        "fragmentProvenance": "mlx_fragment_contract",
+    }
+    assert diagnostic.reason == "unsupported-type"
+    assert "fragment_layout=metal_simdgroup_8x8_f32" in str(diagnostic)
+    assert "subgroup_size=32" in str(diagnostic)
+    assert "elements_per_lane=2" in str(diagnostic)
+    assert "fragment_provenance=mlx_fragment_contract" in str(diagnostic)
+
+
+def test_hlsl_cooperative_matrix_diagnostic_normalizes_symbolic_fragment_values():
+    matrix_type = CooperativeMatrixType(
+        PrimitiveType("float"),
+        NamedType("ROWS"),
+        NamedType("COLS"),
+        fragment_layout="source_profile",
+        subgroup_size=NamedType("SUBGROUP_SIZE"),
+        elements_per_lane=NamedType("ELEMENTS_PER_LANE"),
+        fragment_provenance="source_manifest",
+    )
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        HLSLCodeGen().map_type(matrix_type)
+
+    assert excinfo.value.details == {
+        "fragmentLayout": "source_profile",
+        "subgroupSize": "SUBGROUP_SIZE",
+        "elementsPerLane": "ELEMENTS_PER_LANE",
+        "fragmentProvenance": "source_manifest",
+    }
+
+
+def test_hlsl_cooperative_matrix_string_retains_fragment_contract():
+    source_type = (
+        "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, "
+        "metal_thread_elements, 32, 2, metal_thread_elements_reference_view>"
+    )
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        HLSLCodeGen().map_type(source_type)
+
+    diagnostic = excinfo.value
+    assert isinstance(diagnostic.matrix_type, CooperativeMatrixType)
+    assert diagnostic.matrix_type.element_type.name == "float"
+    assert diagnostic.matrix_type.rows == 8
+    assert diagnostic.matrix_type.cols == 8
+    assert diagnostic.details == {
+        "fragmentLayout": "metal_thread_elements",
+        "subgroupSize": 32,
+        "elementsPerLane": 2,
+        "fragmentProvenance": "metal_thread_elements_reference_view",
+    }
 
 
 def test_hlsl_cooperative_matrix_shader_fails_before_generic_type_emission():
@@ -1565,9 +1653,21 @@ def test_hlsl_cooperative_matrix_shader_fails_before_generic_type_emission():
 
 def test_hlsl_cooperative_matrix_operation_reports_structured_diagnostic():
     source_location = {"line": 13, "column": 17}
+    result_type = CooperativeMatrixType(
+        PrimitiveType("float"),
+        8,
+        8,
+        scope="subgroup",
+        use="accumulator",
+        fragment_layout="metal_simdgroup_8x8_f32",
+        subgroup_size=32,
+        elements_per_lane=2,
+        fragment_provenance="mlx_fragment_contract",
+    )
     matrix_op = CooperativeMatrixOpNode(
         "multiply_accumulate",
         [IdentifierNode("left"), IdentifierNode("right"), IdentifierNode("acc")],
+        result_type=result_type,
         source_location=source_location,
     )
 
@@ -1581,8 +1681,24 @@ def test_hlsl_cooperative_matrix_operation_reports_structured_diagnostic():
     )
     assert diagnostic.missing_capabilities == ("directx.cooperative-matrix-lowering",)
     assert diagnostic.operation == "multiply_accumulate"
+    assert diagnostic.matrix_type is result_type
     assert diagnostic.source_location == source_location
+    assert diagnostic.fragment_layout == "metal_simdgroup_8x8_f32"
+    assert diagnostic.subgroup_size == 32
+    assert diagnostic.elements_per_lane == 2
+    assert diagnostic.fragment_provenance == "mlx_fragment_contract"
+    assert diagnostic.details == {
+        "fragmentLayout": "metal_simdgroup_8x8_f32",
+        "subgroupSize": 32,
+        "elementsPerLane": 2,
+        "fragmentProvenance": "mlx_fragment_contract",
+    }
+    assert diagnostic.reason == "unsupported-operation"
     assert "operation 'multiply_accumulate'" in str(diagnostic)
+    assert "fragment_layout=metal_simdgroup_8x8_f32" in str(diagnostic)
+    assert "subgroup_size=32" in str(diagnostic)
+    assert "elements_per_lane=2" in str(diagnostic)
+    assert "fragment_provenance=mlx_fragment_contract" in str(diagnostic)
 
 
 def test_hlsl_codegen_drops_metal_system_includes_but_preserves_hlsl_includes():

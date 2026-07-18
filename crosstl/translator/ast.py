@@ -155,6 +155,9 @@ class MatrixType(TypeNode):
 class CooperativeMatrixType(TypeNode):
     """A matrix value distributed across an execution scope."""
 
+    UNSPECIFIED_FRAGMENT_CONTRACT = "unspecified"
+    COMPLETE_FRAGMENT_LAYOUTS = frozenset({"dense", "metal_thread_elements"})
+
     def __init__(
         self,
         element_type: TypeNode,
@@ -163,6 +166,10 @@ class CooperativeMatrixType(TypeNode):
         scope: str = "subgroup",
         use: str = "unspecified",
         layout: str = "unspecified",
+        fragment_layout: Optional[str] = None,
+        subgroup_size: Optional[Union[int, ASTNode]] = None,
+        elements_per_lane: Optional[Union[int, ASTNode]] = None,
+        fragment_provenance: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -172,16 +179,94 @@ class CooperativeMatrixType(TypeNode):
         self.scope = scope
         self.use = use
         self.layout = layout
+        self.fragment_layout = (
+            None
+            if fragment_layout == self.UNSPECIFIED_FRAGMENT_CONTRACT
+            else fragment_layout
+        )
+        self.subgroup_size = subgroup_size
+        self.elements_per_lane = elements_per_lane
+        self.fragment_provenance = (
+            None
+            if fragment_provenance == self.UNSPECIFIED_FRAGMENT_CONTRACT
+            else fragment_provenance
+        )
+
+        self._validate_fragment_contract()
 
         # Generic aliases keep legacy generators able to preserve the contract.
         self.name = "CooperativeMatrix"
         self.generic_args = [element_type, rows, cols, scope, use, layout]
+        fragment_contract = [
+            self.fragment_layout or self.UNSPECIFIED_FRAGMENT_CONTRACT,
+            (
+                subgroup_size
+                if subgroup_size is not None
+                else self.UNSPECIFIED_FRAGMENT_CONTRACT
+            ),
+            (
+                elements_per_lane
+                if elements_per_lane is not None
+                else self.UNSPECIFIED_FRAGMENT_CONTRACT
+            ),
+            self.fragment_provenance or self.UNSPECIFIED_FRAGMENT_CONTRACT,
+        ]
+        while (
+            fragment_contract
+            and fragment_contract[-1] == self.UNSPECIFIED_FRAGMENT_CONTRACT
+        ):
+            fragment_contract.pop()
+        self.generic_args.extend(fragment_contract)
+
+    def _validate_fragment_contract(self):
+        """Reject inconsistent fully concrete dense fragment contracts."""
+        for name, value in (
+            ("subgroup_size", self.subgroup_size),
+            ("elements_per_lane", self.elements_per_lane),
+        ):
+            if isinstance(value, bool) or (type(value) is int and value <= 0):
+                raise ValueError(
+                    f"CooperativeMatrix {name} must be a positive integer, "
+                    f"got {value}"
+                )
+
+        if (
+            self.fragment_layout is None
+            or self.fragment_layout.lower() not in self.COMPLETE_FRAGMENT_LAYOUTS
+        ):
+            return
+
+        dimensions = (
+            self.rows,
+            self.cols,
+            self.subgroup_size,
+            self.elements_per_lane,
+        )
+        if not all(type(value) is int for value in dimensions):
+            return
+
+        matrix_elements = self.rows * self.cols
+        distributed_elements = self.subgroup_size * self.elements_per_lane
+        if matrix_elements != distributed_elements:
+            raise ValueError(
+                f"CooperativeMatrix {self.fragment_layout} fragment layout is "
+                "inconsistent: "
+                f"rows={self.rows} * columns={self.cols} produces "
+                f"{matrix_elements} matrix elements, but "
+                f"subgroup_size={self.subgroup_size} * "
+                f"elements_per_lane={self.elements_per_lane} produces "
+                f"{distributed_elements} distributed elements"
+            )
 
     def __repr__(self):
         return (
             "CooperativeMatrixType("
             f"element_type={self.element_type}, rows={self.rows}, cols={self.cols}, "
-            f"scope={self.scope!r}, use={self.use!r}, layout={self.layout!r})"
+            f"scope={self.scope!r}, use={self.use!r}, layout={self.layout!r}, "
+            f"fragment_layout={self.fragment_layout!r}, "
+            f"subgroup_size={self.subgroup_size}, "
+            f"elements_per_lane={self.elements_per_lane}, "
+            f"fragment_provenance={self.fragment_provenance!r})"
         )
 
 

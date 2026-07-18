@@ -19,6 +19,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalCallableAliasLoweringError,
     MetalCallableLoweringError,
     MetalConstructorContractError,
+    MetalCooperativeMatrixFragmentLoweringError,
     MetalIndexedComponentTypeResolutionError,
     MetalOutOfLineCallOperatorLoweringError,
     MetalSizeofResolutionError,
@@ -42,6 +43,7 @@ from crosstl.project import reflect_target_host_interface, translate_project
 from crosstl.translator.ast import ArrayAccessNode as CrossGLArrayAccessNode
 from crosstl.translator.ast import AssignmentNode as CrossGLAssignmentNode
 from crosstl.translator.ast import BinaryOpNode as CrossGLBinaryOpNode
+from crosstl.translator.ast import CooperativeMatrixType
 from crosstl.translator.ast import FunctionCallNode as CrossGLFunctionCallNode
 from crosstl.translator.ast import IdentifierNode as CrossGLIdentifierNode
 from crosstl.translator.ast import LiteralNode as CrossGLLiteralNode
@@ -11383,6 +11385,242 @@ def test_metal_cooperative_matrix_operations_round_trip_through_shared_ir():
     )
     assert "simdgroup_store(accumulator, output, 8, 0, true);" in regenerated
     assert "cooperative_matrix_" not in regenerated
+
+
+def test_codegen_lowers_whole_cooperative_matrix_fragment_transfers_once(tmp_path):
+    source = """
+    using fragment_type = metal::vec<float, 2>;
+    using matrix_type = metal::simdgroup_matrix<float, 8, 8>;
+
+    uint matrix_index() {
+      return 0u;
+    }
+
+    kernel void transfer_fragments(
+        device fragment_type* fragments [[buffer(0)]]) {
+      matrix_type matrices[2];
+      reinterpret_cast<thread fragment_type&>(
+          matrices[matrix_index()].thread_elements()) = fragments[0];
+      fragments[1] = reinterpret_cast<const thread fragment_type&>(
+          matrices[matrix_index()].thread_elements());
+    }
+    """
+
+    crossgl = convert(source)
+
+    write_helper = "_crosstl_metal_cooperative_matrix_fragment_write_float_8_8_2"
+    read_helper = "_crosstl_metal_cooperative_matrix_fragment_read_float_8_8_2"
+    assert ".thread_elements()" not in crossgl
+    assert "(vec2&)" not in crossgl
+    assert crossgl.count("cooperative_matrix_element(matrix, 0)") == 2
+    assert crossgl.count("cooperative_matrix_element(matrix, 1)") == 2
+    assert (
+        f"{write_helper}(buffer_load(fragments, 0), matrices[matrix_index()]);"
+        in crossgl
+    )
+    assert (
+        f"buffer_store(fragments, 1, {read_helper}(matrices[matrix_index()]));"
+        in crossgl
+    )
+    assert crossgl.count("matrices[matrix_index()]") == 2
+    assert crossgl.count("buffer_load(fragments, 0)") == 1
+    assert (
+        "CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified,"
+        "metal_thread_elements,32,2,metal_thread_elements_reference_view>"
+    ) in crossgl
+
+    regenerated = MetalCodeGen().generate(parse_crossgl(crossgl))
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        metal_path = tmp_path / "cooperative-matrix-fragment-transfer.metal"
+        air_path = tmp_path / "cooperative-matrix-fragment-transfer.air"
+        metal_path.write_text(regenerated, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-c",
+                str(metal_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_codegen_whole_cooperative_matrix_fragment_helpers_round_trip(tmp_path):
+    source = """
+    using fragment_type = metal::vec<float, 2>;
+    using matrix_type = metal::simdgroup_matrix<float, 8, 8>;
+
+    void copy_fragment(
+        const thread matrix_type& matrix,
+        thread fragment_type& fragment) {
+      fragment = reinterpret_cast<const thread fragment_type&>(
+          matrix.thread_elements());
+    }
+    """
+
+    crossgl = convert(source)
+    shader = parse_crossgl(crossgl)
+    regenerated = MetalCodeGen().generate(shader)
+    matrix_types = [
+        node for node in shader.walk() if isinstance(node, CooperativeMatrixType)
+    ]
+
+    assert ".thread_elements()" not in crossgl
+    assert "reinterpret_cast" not in crossgl
+    assert "cooperative_matrix_element(matrix, 0)" in crossgl
+    assert "cooperative_matrix_element(matrix, 1)" in crossgl
+    assert "matrix.thread_elements()[0]" in regenerated
+    assert "matrix.thread_elements()[1]" in regenerated
+    assert "reinterpret_cast" not in regenerated
+    assert any(
+        matrix_type.fragment_layout == "metal_thread_elements"
+        and matrix_type.subgroup_size == 32
+        and matrix_type.elements_per_lane == 2
+        and matrix_type.fragment_provenance == "metal_thread_elements_reference_view"
+        for matrix_type in matrix_types
+    )
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        metal_path = tmp_path / "cooperative-matrix-fragment.metal"
+        air_path = tmp_path / "cooperative-matrix-fragment.air"
+        metal_path.write_text(regenerated, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-c",
+                str(metal_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("cast_type", "reason"),
+    [
+        (
+            "float3&",
+            "matrix shape 8x8 cannot be distributed into 3 elements per lane "
+            "with an integral SIMD-group width",
+        ),
+        (
+            "half2&",
+            "fragment component type 'half' does not match matrix component "
+            "type 'float'",
+        ),
+        ("float2", "the cast target is not an lvalue reference"),
+    ],
+)
+def test_codegen_rejects_incompatible_whole_cooperative_matrix_fragment_writes(
+    cast_type, reason
+):
+    source = f"""
+    void invalid_fragment_write(
+        thread metal::simdgroup_matrix<float, 8, 8>& matrix,
+        thread float2& fragment) {{
+      reinterpret_cast<thread {cast_type}>(matrix.thread_elements()) = fragment;
+    }}
+    """
+
+    with pytest.raises(MetalCooperativeMatrixFragmentLoweringError) as exc_info:
+        convert_without_preprocessing(source, file_path="fragment_write.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-cooperative-matrix-fragment-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "metal.cooperative-matrix-fragment-lowering",
+    )
+    assert diagnostic.matrix_type == "metal::simdgroup_matrix<float,8,8>"
+    assert diagnostic.fragment_type == cast_type
+    assert diagnostic.direction == "write"
+    assert reason in diagnostic.reason
+    assert diagnostic.qualifiers == ("thread",)
+    assert diagnostic.source_location["file"] == "fragment_write.metal"
+    assert diagnostic.source_location["line"] == 2
+
+
+@pytest.mark.parametrize(
+    ("template_parameter", "matrix_type", "fragment_type", "reason"),
+    [
+        (
+            "int Rows",
+            "metal::simdgroup_matrix<float, Rows, 8>",
+            "float2",
+            "row or column count remains dependent",
+        ),
+        (
+            "int Width",
+            "metal::simdgroup_matrix<float, 8, 8>",
+            "metal::vec<float, Width>",
+            "fragment width remains dependent",
+        ),
+    ],
+)
+def test_codegen_rejects_dependent_whole_cooperative_matrix_fragment_shapes(
+    template_parameter, matrix_type, fragment_type, reason
+):
+    source = f"""
+    template <{template_parameter}>
+    void invalid_fragment_read(
+        thread {matrix_type}& matrix,
+        thread {fragment_type}& fragment) {{
+      fragment = reinterpret_cast<thread {fragment_type}&>(
+          matrix.thread_elements());
+    }}
+    """
+
+    with pytest.raises(MetalCooperativeMatrixFragmentLoweringError) as exc_info:
+        convert_without_preprocessing(source, file_path="dependent_fragment.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.direction == "read"
+    assert reason in diagnostic.reason
+    assert diagnostic.source_location["file"] == "dependent_fragment.metal"
+    assert diagnostic.source_location["line"] == 2
+
+
+def test_codegen_rejects_conflicting_whole_cooperative_matrix_fragment_contracts():
+    source = """
+    void conflicting_fragment_contracts(
+        thread metal::simdgroup_matrix<float, 8, 8>& matrix,
+        thread float2& narrow_fragment,
+        thread float4& wide_fragment) {
+      narrow_fragment = reinterpret_cast<thread float2&>(
+          matrix.thread_elements());
+      wide_fragment = reinterpret_cast<thread float4&>(
+          matrix.thread_elements());
+    }
+    """
+
+    with pytest.raises(MetalCooperativeMatrixFragmentLoweringError) as exc_info:
+        convert_without_preprocessing(source, file_path="conflicting_fragment.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.direction == "read"
+    assert (
+        "conflicting whole-fragment contracts: subgroup_size=32, "
+        "elements_per_lane=2 and subgroup_size=16, elements_per_lane=4"
+        in diagnostic.reason
+    )
+    assert diagnostic.source_location["file"] == "conflicting_fragment.metal"
 
 
 def test_codegen_materializes_defaulted_bool_and_explicit_specialization():

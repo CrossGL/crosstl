@@ -44,6 +44,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    NamedType,
     PointerAccessNode,
     PointerReinterpretNode,
     PointerType,
@@ -1007,14 +1008,134 @@ class OpenGLCooperativeMatrixError(ValueError):
         *,
         operation=None,
         matrix_type=None,
+        fragment_layout=None,
+        subgroup_size=None,
+        elements_per_lane=None,
+        fragment_provenance=None,
         reason=None,
         source_location=None,
     ):
         super().__init__(message)
+        if fragment_layout is None:
+            fragment_layout = getattr(matrix_type, "fragment_layout", None)
+        if subgroup_size is None:
+            subgroup_size = getattr(matrix_type, "subgroup_size", None)
+        if elements_per_lane is None:
+            elements_per_lane = getattr(matrix_type, "elements_per_lane", None)
+        if fragment_provenance is None:
+            fragment_provenance = getattr(matrix_type, "fragment_provenance", None)
+
         self.operation = operation
         self.matrix_type = matrix_type
+        self.fragment_layout = fragment_layout
+        self.subgroup_size = subgroup_size
+        self.elements_per_lane = elements_per_lane
+        self.fragment_provenance = fragment_provenance
         self.reason = reason
         self.source_location = source_location
+        details = {
+            "fragmentLayout": _opengl_cooperative_matrix_detail_value(fragment_layout),
+            "subgroupSize": _opengl_cooperative_matrix_detail_value(subgroup_size),
+            "elementsPerLane": _opengl_cooperative_matrix_detail_value(
+                elements_per_lane
+            ),
+            "fragmentProvenance": _opengl_cooperative_matrix_detail_value(
+                fragment_provenance
+            ),
+        }
+        self.details = {
+            name: value for name, value in details.items() if value is not None
+        }
+
+
+def _opengl_cooperative_matrix_detail_value(value):
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    literal_value = getattr(value, "value", None)
+    if literal_value is not None:
+        return literal_value
+    name = getattr(value, "name", None)
+    if name is not None:
+        return name
+    if isinstance(value, (int, float, str)):
+        return value
+    return str(value)
+
+
+def _opengl_cooperative_matrix_fragment_contract(matrix_type):
+    """Return the lane-fragment contract retained by a cooperative matrix type."""
+    return {
+        "fragment_layout": getattr(matrix_type, "fragment_layout", None),
+        "subgroup_size": getattr(matrix_type, "subgroup_size", None),
+        "elements_per_lane": getattr(matrix_type, "elements_per_lane", None),
+        "fragment_provenance": getattr(matrix_type, "fragment_provenance", None),
+    }
+
+
+def _opengl_cooperative_matrix_contract_type(matrix_type):
+    if isinstance(matrix_type, CooperativeMatrixType):
+        return matrix_type
+
+    base_name, generic_args = generic_type_parts(str(matrix_type).strip())
+    if base_name.rsplit("::", 1)[-1] != "CooperativeMatrix" or not (
+        3 <= len(generic_args) <= 10
+    ):
+        return matrix_type
+
+    defaults = [
+        "subgroup",
+        "unspecified",
+        "unspecified",
+        "unspecified",
+        "unspecified",
+        "unspecified",
+        "unspecified",
+    ]
+    generic_args = [*generic_args, *defaults[len(generic_args) - 3 :]]
+
+    def dimension(value):
+        value = str(value).strip()
+        return int(value) if re.fullmatch(r"[+-]?\d+", value) else NamedType(value)
+
+    def optional_label(value):
+        value = str(value).strip()
+        return None if value == "unspecified" else value
+
+    def optional_dimension(value):
+        value = str(value).strip()
+        return None if value == "unspecified" else dimension(value)
+
+    try:
+        return CooperativeMatrixType(
+            NamedType(str(generic_args[0]).strip()),
+            dimension(generic_args[1]),
+            dimension(generic_args[2]),
+            str(generic_args[3]).strip(),
+            str(generic_args[4]).strip(),
+            str(generic_args[5]).strip(),
+            optional_label(generic_args[6]),
+            optional_dimension(generic_args[7]),
+            optional_dimension(generic_args[8]),
+            optional_label(generic_args[9]),
+        )
+    except ValueError:
+        return matrix_type
+
+
+def _opengl_cooperative_matrix_fragment_contract_message(contract):
+    """Render retained requirements without supplying target-specific defaults."""
+
+    def render(value):
+        normalized = _opengl_cooperative_matrix_detail_value(value)
+        return "unspecified" if normalized is None else str(normalized)
+
+    return (
+        "required fragment contract: "
+        f"fragment_layout={render(contract['fragment_layout'])}, "
+        f"subgroup_size={render(contract['subgroup_size'])}, "
+        f"elements_per_lane={render(contract['elements_per_lane'])}, "
+        f"fragment_provenance={render(contract['fragment_provenance'])}"
+    )
 
 
 class GLSLCodeGen:
@@ -13075,8 +13196,14 @@ class GLSLCodeGen:
             )
             self.update_compile_time_offset_constants(stmt, var_type)
 
+            declared_type_node = getattr(stmt, "var_type", None)
+            mapped_var_type = (
+                declared_type_node
+                if isinstance(declared_type_node, CooperativeMatrixType)
+                else var_type
+            )
             declaration = format_c_style_array_declaration(
-                self.map_type(var_type), local_name
+                self.map_type(mapped_var_type), local_name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             initial_value = getattr(stmt, "initial_value", None)
@@ -20416,12 +20543,21 @@ complex64_t crossgl_complex64_mod_assign(
             return ""
         if isinstance(expr, CooperativeMatrixOpNode):
             operation = getattr(expr, "operation", None)
+            matrix_type = getattr(expr, "result_type", None)
+            fragment_contract = _opengl_cooperative_matrix_fragment_contract(
+                matrix_type
+            )
+            fragment_contract_message = (
+                _opengl_cooperative_matrix_fragment_contract_message(fragment_contract)
+            )
             raise OpenGLCooperativeMatrixError(
                 "OpenGL cooperative-matrix lowering is not available for "
                 f"operation '{operation}'; emitting an ordinary GLSL call would "
-                "change distributed matrix semantics",
+                "change distributed matrix semantics; "
+                f"{fragment_contract_message}",
                 operation=operation,
-                matrix_type=getattr(expr, "result_type", None),
+                matrix_type=matrix_type,
+                **fragment_contract,
                 reason="unsupported-operation",
                 source_location=getattr(expr, "source_location", None),
             )
@@ -31718,11 +31854,18 @@ complex64_t crossgl_complex64_mod_assign(
 
         if isinstance(vtype, CooperativeMatrixType):
             type_name = self.convert_type_node_to_string(vtype)
+            fragment_contract = _opengl_cooperative_matrix_fragment_contract(vtype)
+            fragment_contract_message = (
+                _opengl_cooperative_matrix_fragment_contract_message(fragment_contract)
+            )
             raise OpenGLCooperativeMatrixError(
                 "OpenGL cooperative-matrix lowering is not available for type "
                 f"'{type_name}'; substituting an ordinary GLSL matrix would change "
-                "distributed matrix semantics",
+                "distributed matrix semantics; "
+                f"{fragment_contract_message}",
+                operation="type",
                 matrix_type=vtype,
+                **fragment_contract,
                 reason="unsupported-type",
                 source_location=getattr(vtype, "source_location", None),
             )
@@ -31741,11 +31884,21 @@ complex64_t crossgl_complex64_mod_assign(
             cooperative_args
             and cooperative_base.rsplit("::", 1)[-1] == "CooperativeMatrix"
         ):
+            matrix_type = _opengl_cooperative_matrix_contract_type(vtype)
+            fragment_contract = _opengl_cooperative_matrix_fragment_contract(
+                matrix_type
+            )
+            fragment_contract_message = (
+                _opengl_cooperative_matrix_fragment_contract_message(fragment_contract)
+            )
             raise OpenGLCooperativeMatrixError(
                 "OpenGL cooperative-matrix lowering is not available for type "
                 f"'{vtype_str}'; substituting an ordinary GLSL matrix would change "
-                "distributed matrix semantics",
-                matrix_type=vtype,
+                "distributed matrix semantics; "
+                f"{fragment_contract_message}",
+                operation="type",
+                matrix_type=matrix_type,
+                **fragment_contract,
                 reason="unsupported-type",
                 source_location=getattr(vtype, "source_location", None),
             )

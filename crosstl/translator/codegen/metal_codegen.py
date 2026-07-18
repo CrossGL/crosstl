@@ -23486,21 +23486,44 @@ class MetalCodeGen:
                 matrix_type.scope,
                 matrix_type.use,
                 matrix_type.layout,
+                matrix_type.fragment_layout,
+                matrix_type.subgroup_size,
+                matrix_type.elements_per_lane,
+                matrix_type.fragment_provenance,
             )
 
         type_name = str(matrix_type).strip()
         base_name, generic_args = generic_type_parts(type_name)
         if base_name.rsplit("::", 1)[-1] != "CooperativeMatrix" or not (
-            3 <= len(generic_args) <= 6
+            3 <= len(generic_args) <= 10
         ):
             return None
-        defaults = ("subgroup", "unspecified", "unspecified")
+        defaults = (
+            "subgroup",
+            "unspecified",
+            "unspecified",
+            "unspecified",
+            "unspecified",
+            "unspecified",
+            "unspecified",
+        )
         generic_args = [*generic_args, *defaults[len(generic_args) - 3 :]]
         return tuple(generic_args)
 
     def map_cooperative_matrix_type(self, matrix_type, contract):
         """Map the native subset of the canonical cooperative-matrix contract."""
-        element_type, rows, cols, scope, use, layout = contract
+        (
+            element_type,
+            rows,
+            cols,
+            scope,
+            use,
+            layout,
+            fragment_layout,
+            subgroup_size,
+            elements_per_lane,
+            fragment_provenance,
+        ) = contract
         metadata = (scope, use, layout)
         if metadata != ("subgroup", "unspecified", "unspecified"):
             raise UnsupportedMetalFeatureError(
@@ -23510,6 +23533,39 @@ class MetalCodeGen:
                 f"{metadata!r}",
                 missing_capabilities=("metal.cooperative-matrix-contract-mapping",),
                 reason="unsupported-type-contract",
+                source_location=getattr(matrix_type, "source_location", None),
+            )
+
+        def fragment_label(value):
+            if value is None:
+                return "unspecified"
+            name = getattr(value, "name", None)
+            return str(name if name is not None else value)
+
+        fragment_metadata = (
+            fragment_label(fragment_layout),
+            fragment_label(subgroup_size),
+            fragment_label(elements_per_lane),
+            fragment_label(fragment_provenance),
+        )
+        if (
+            fragment_metadata
+            != (
+                "unspecified",
+                "unspecified",
+                "unspecified",
+                "unspecified",
+            )
+            and fragment_metadata[0] != "metal_thread_elements"
+        ):
+            raise UnsupportedMetalFeatureError(
+                "cooperative-matrix-fragment-contract",
+                "Metal simdgroup_matrix cannot preserve cooperative-matrix "
+                f"fragment contract {fragment_metadata!r}",
+                missing_capabilities=(
+                    "metal.cooperative-matrix-fragment-contract-mapping",
+                ),
+                reason="unsupported-fragment-contract",
                 source_location=getattr(matrix_type, "source_location", None),
             )
 

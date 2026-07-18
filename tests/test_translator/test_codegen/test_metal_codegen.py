@@ -32728,6 +32728,55 @@ def test_metal_cooperative_matrix_rejects_unrepresentable_type_contract():
     assert error.missing_capabilities == ("metal.cooperative-matrix-contract-mapping",)
 
 
+def test_metal_cooperative_matrix_preserves_thread_elements_fragment_contract():
+    source = """
+    shader MetalCooperativeMatrixFragmentContract {
+        void consume(
+            CooperativeMatrix<
+                float,
+                8,
+                8,
+                subgroup,
+                unspecified,
+                unspecified,
+                metal_thread_elements,
+                32,
+                2,
+                metal_thread_elements_reference_view
+            > matrix
+        ) {}
+    }
+    """
+
+    generated = MetalCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "simdgroup_matrix<float, 8, 8> matrix" in generated
+    assert "CooperativeMatrix<" not in generated
+
+
+def test_metal_cooperative_matrix_rejects_foreign_fragment_contract():
+    source = """
+    shader UnsupportedCooperativeMatrixFragmentContract {
+        void consume(
+            CooperativeMatrix<
+                float, 8, 8, subgroup, unspecified, unspecified,
+                dense, 32, 2, source_fixture
+            > matrix
+        ) {}
+    }
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as exc_info:
+        MetalCodeGen().generate(crosstl.translator.parse(source))
+
+    error = exc_info.value
+    assert error.feature == "cooperative-matrix-fragment-contract"
+    assert error.missing_capabilities == (
+        "metal.cooperative-matrix-fragment-contract-mapping",
+    )
+    assert error.reason == "unsupported-fragment-contract"
+
+
 def test_metal_cooperative_matrix_rejects_unrepresentable_operation():
     operation = CooperativeMatrixOpNode(
         "elementwise_multiply",
