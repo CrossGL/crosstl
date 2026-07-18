@@ -1,0 +1,107 @@
+{
+  "kind": "crosstl-cooperative-matrix-fragment-mapping-contract",
+  "schemaVersion": 1,
+  "id": "mlx-steel-base-mma-frag-8x8-row-pair",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx",
+    "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+    "source": "mlx/backend/metal/kernels/steel/gemm/mma.h",
+    "sourceLines": {
+      "start": 37,
+      "end": 54
+    },
+    "sourceSymbol": "mlx::steel::BaseMMAFrag<T, 8, 8>::get_coord",
+    "sourceUrl": "https://github.com/ml-explore/mlx/blob/4367c73b60541ddd5a266ce4644fd93d20223b6e/mlx/backend/metal/kernels/steel/gemm/mma.h#L37-L54"
+  },
+  "mapping": {
+    "name": "tile_4x4_row_pair",
+    "matrixShape": [
+      8,
+      8
+    ],
+    "subgroupSize": 32,
+    "elementsPerLane": 2,
+    "coordinateOrder": [
+      "row",
+      "column"
+    ],
+    "formula": {
+      "qid": "lane / 4",
+      "row": "(qid & 4) + ((lane / 2) % 4)",
+      "columnBase": "(qid & 2) * 2 + (lane % 2) * 2",
+      "element": "[row, columnBase + elementIndex]",
+      "elementIndexRange": [
+        0,
+        1
+      ]
+    },
+    "laneCoordinates": [
+      [[0, 0], [0, 1]],
+      [[0, 2], [0, 3]],
+      [[1, 0], [1, 1]],
+      [[1, 2], [1, 3]],
+      [[2, 0], [2, 1]],
+      [[2, 2], [2, 3]],
+      [[3, 0], [3, 1]],
+      [[3, 2], [3, 3]],
+      [[0, 4], [0, 5]],
+      [[0, 6], [0, 7]],
+      [[1, 4], [1, 5]],
+      [[1, 6], [1, 7]],
+      [[2, 4], [2, 5]],
+      [[2, 6], [2, 7]],
+      [[3, 4], [3, 5]],
+      [[3, 6], [3, 7]],
+      [[4, 0], [4, 1]],
+      [[4, 2], [4, 3]],
+      [[5, 0], [5, 1]],
+      [[5, 2], [5, 3]],
+      [[6, 0], [6, 1]],
+      [[6, 2], [6, 3]],
+      [[7, 0], [7, 1]],
+      [[7, 2], [7, 3]],
+      [[4, 4], [4, 5]],
+      [[4, 6], [4, 7]],
+      [[5, 4], [5, 5]],
+      [[5, 6], [5, 7]],
+      [[6, 4], [6, 5]],
+      [[6, 6], [6, 7]],
+      [[7, 4], [7, 5]],
+      [[7, 6], [7, 7]]
+    ]
+  },
+  "translationEvidence": {
+    "source": "mlx/backend/metal/kernels/fp_quantized.metal",
+    "elementType": "float",
+    "fragmentLayout": "metal_thread_elements",
+    "fragmentProvenance": "metal_thread_elements_reference_view",
+    "fragmentMapping": "tile_4x4_row_pair",
+    "fragmentMappingProvenance": "mlx_steel_BaseMMAFrag_get_coord",
+    "cooperativeMatrixType": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view, tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>",
+    "materializedSpecializationCount": 588,
+    "unsupportedSpecializationCount": 0,
+    "targets": {
+      "directx": {
+        "boundaryDiagnostic": "project.translate.directx-cooperative-matrix-unsupported",
+        "missingCapability": "directx.cooperative-matrix-lowering",
+        "artifactEmitted": false
+      },
+      "opengl": {
+        "boundaryDiagnostic": "project.translate.opengl-cooperative-matrix-unsupported",
+        "missingCapability": "opengl.cooperative-matrix-lowering",
+        "artifactEmitted": false
+      }
+    }
+  },
+  "scope": {
+    "sourceCoordinateMappingVerified": true,
+    "targetPolicyImplemented": false,
+    "softwareFallbackImplemented": false,
+    "runtimeIntegrationIncluded": false,
+    "numericalParityVerified": false,
+    "trackedIssues": [
+      "https://github.com/CrossGL/crosstl/issues/1602",
+      "https://github.com/CrossGL/crosstl/issues/1820"
+    ]
+  }
+}

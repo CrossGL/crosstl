@@ -949,16 +949,28 @@ Reduced read and write helpers compile with the native Xcode Metal compiler.
 This resolves CrossGL/crosstl#1815 and CrossGL/crosstl#1816 for the pinned
 frontier.
 
+The checked-in
+[`contracts/cooperative-matrix-fragment-mapping.json`](contracts/cooperative-matrix-fragment-mapping.json)
+contract records the concrete `tile_4x4_row_pair` mapping used by this pinned
+MLX source. In `mlx/backend/metal/kernels/steel/gemm/mma.h`,
+`BaseMMAFrag<T, 8, 8>::get_coord` defines `qid = lane / 4`,
+`fm = (qid & 4) + ((lane / 2) % 4)`, and
+`fn = (qid & 2) * 2 + (lane % 2) * 2`. The two lane elements therefore map to
+`(fm, fn)` and `(fm, fn + 1)`. The contract contains the resulting coordinates
+for all 32 lanes and records `mlx_steel_BaseMMAFrag_get_coord` provenance. This
+is source-specific evidence for the pinned MLX specialization; it is not a
+universal layout claim for Metal cooperative matrices.
+
 DirectX next fails closed with
 `project.translate.directx-cooperative-matrix-unsupported` and OpenGL with
 `project.translate.opengl-cooperative-matrix-unsupported`. Both diagnostics
 identify
-`CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view>`;
+`CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view, tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>`;
 substituting an ordinary HLSL or GLSL matrix would change distributed fragment
-semantics. CrossGL/crosstl#1602 remains the only boundary blocker and tracks the
-required target-independent lane layout and software-fallback contract. Neither
-run emits a target artifact. This evidence does not claim runtime integration
-or numerical parity.
+semantics. CrossGL/crosstl#1602 remains the immediate target-lowering blocker.
+CrossGL/crosstl#1820 remains open for target mapping policy, software fallback,
+and numerical verification. Neither run emits a target artifact. This evidence
+does not claim runtime integration or numerical parity.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.
