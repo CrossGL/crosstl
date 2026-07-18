@@ -970,10 +970,20 @@ native parity adapters:
                "dtype": "float32",
                "shape": [4],
                "values": [1.0, 2.0, 3.0, 4.0],
-           }
+           },
+           # The descriptor reflects this binding as read_write.
+           "output_values": {
+               "dtype": "float32",
+               "shape": [4],
+               "values": [1.0, 2.0, 3.0, 4.0],
+           },
        },
        output_values={
-           "output_values": {"dtype": "float32", "shape": [4]}
+           "output_values": {
+               "dtype": "float32",
+               "shape": [4],
+               "values": [2.0, 4.0, 6.0, 8.0],
+           }
        },
        dispatch_geometry={"workgroupCount": [1, 1, 1]},
        specialization_values={3: 4},
@@ -988,15 +998,23 @@ returns a preflighted ``RuntimeExecutionRequest``. Buffer bindings require a
 complete, tightly packed 32-bit scalar layout; missing or ambiguous physical
 layout metadata is a structured error rather than an inferred ABI.
 
-This API prepares one request. Repository scheduling, application loader and
-host integration, and device execution remain downstream responsibilities. A
-read-write resource may be used as an output, but initializing and reading back
-the same read-write resource in one request is not supported. Generated
-descriptors for the exact HLSL and GLSL scalar forms described above carry the
-complete physical layout into request construction; unsupported resource
-shapes remain rejected rather than inferred. The pinned MLX ``arangeuint32``
-proof establishes native DirectX and OpenGL execution for that one contract,
-not full MLX runtime integration or numerical parity across the MLX test suite.
+An exact binding name may appear in both ``input_values`` and ``output_values``
+only when the descriptor reflects that resource as ``read_write``. In the
+example above, the input payload initializes one native allocation and the
+expected output contract marks that same allocation for readback and
+comparison. Request construction requires the two roles to agree on dtype and
+shape and validates both against the complete reflected physical scalar layout.
+An overlap for another access mode, or an incompatible contract, produces a
+structured diagnostic.
+
+This API prepares one request and its native resource contract. Repository
+scheduling, host application rewriting, and full MLX test-suite parity remain
+outside its scope. Generated descriptors for the exact HLSL and GLSL scalar
+forms described above carry the complete physical layout into request
+construction; unsupported resource shapes remain rejected rather than
+inferred. The pinned MLX ``arangeuint32`` proof establishes native DirectX and
+OpenGL execution for that one contract, not full MLX runtime integration or
+numerical parity across the MLX test suite.
 
 Build a deterministic runtime variant registry from either a ready runtime
 package or loader manifest:
