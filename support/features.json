@@ -10884,6 +10884,9 @@
           "notes": "build_native_loader_dispatch_request constructs a preflighted RuntimeExecutionRequest from one complete schema-v1 native loader ABI descriptor. It verifies the package-contained HLSL artifact size and SHA-256 digest before binding, requires exact reflected names and complete tightly packed 32-bit scalar layouts, and validates DirectX binding namespaces, coordinates, access modes, materialized specialization values, and dispatch geometry. Repository scheduling, host integration, device execution, and combined read-write initialization plus readback remain outside this API. Generated MLX descriptors without physical scalar layout reflection are rejected rather than inferred.",
           "evidence": [
             "tests/test_native_loader_dispatch_public_api.py::def test_project_exports_native_loader_dispatch_contract",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_complete_package_descriptor_builds_preflighted_request",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_tampered_package_artifact_fails_before_runtime_consultation",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_loader_descriptor_executes_directx_on_device",
             "tests/test_translator/test_native_loader_dispatch.py::def test_builds_preflighted_native_runtime_request",
             "tests/test_translator/test_native_loader_dispatch.py::def test_attests_artifact_size_and_hash_before_building_request",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_missing_extra_and_read_only_output_values",
@@ -10896,6 +10899,9 @@
           "notes": "build_native_loader_dispatch_request constructs a preflighted RuntimeExecutionRequest from one complete schema-v1 native loader ABI descriptor. It verifies the package-contained GLSL artifact size and SHA-256 digest before binding, requires exact reflected names and complete tightly packed 32-bit scalar layouts, and validates OpenGL binding namespaces, coordinates, access modes, specialization values, and dispatch geometry. Repository scheduling, host integration, device execution, and combined read-write initialization plus readback remain outside this API. Generated MLX descriptors without physical scalar layout reflection are rejected rather than inferred.",
           "evidence": [
             "tests/test_native_loader_dispatch_public_api.py::def test_project_exports_native_loader_dispatch_contract",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_complete_package_descriptor_builds_preflighted_request",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_tampered_package_artifact_fails_before_runtime_consultation",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_loader_descriptor_executes_opengl_on_device",
             "tests/test_translator/test_native_loader_dispatch.py::def test_builds_preflighted_native_runtime_request",
             "tests/test_translator/test_native_loader_dispatch.py::def test_specialization_provenance_distinguishes_descriptor_default_and_explicit",
             "tests/test_translator/test_native_loader_dispatch.py::def test_attests_artifact_size_and_hash_before_building_request",
