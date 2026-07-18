@@ -1078,6 +1078,10 @@ configuration contract is intentionally small:
    [project.source_options.metal.source_patterns."kernels/scan*.metal"]
    max_template_specializations = 4096
 
+   [project.source_options.metal.source_patterns."kernels/proven-layout.metal"]
+   cooperative_matrix_fragment_mapping = "tile_4x4_row_pair"
+   cooperative_matrix_fragment_mapping_provenance = "project_source_contract"
+
    [project.source_options.metal.target_options.opengl]
    max_template_materialization_work = 65536
 
@@ -1353,7 +1357,8 @@ supported translation units in the repository.
 Include directories, defines, and named
 variants are recorded in project reports. Source frontend options can also be
 set under ``[project.source_options.<source-backend>]`` and are forwarded only
-to source lexers that expose matching keyword options. Metal source imports
+to source frontend and reverse-codegen callables that expose matching keyword
+options. Metal source imports
 support ``max_template_specializations`` as the project-specific unique concrete
 helper specialization cap and ``max_template_materialization_work`` as the
 project template materialization work budget. Materialization work is charged
@@ -1366,6 +1371,17 @@ concrete signature are therefore deduplicated. The budget does not precharge a
 whole-source ``source instantiations x template declarations`` Cartesian
 estimate, and repeated scans of progressively expanded source text are not work
 items merely because the text was scanned again.
+
+Metal cooperative-matrix fragment mappings are opt-in. Configure
+``cooperative_matrix_fragment_mapping`` together with
+``cooperative_matrix_fragment_mapping_provenance`` only for source files whose
+lane-coordinate contract has been established independently. The built-in
+``tile_4x4_row_pair`` profile is exact for an 8x8 matrix distributed over 32
+lanes with two adjacent row elements per lane. The Metal
+``thread_elements()`` identity and matching cardinality do not select that
+profile automatically. Unknown, incomplete, or shape-incompatible profiles
+fail before target emission, and selected profile metadata is retained in
+project diagnostics.
 
 Direct ``translate()`` calls from Metal to template-hostile targets use the
 same reachable-specialization preparation as one-unit project translation.

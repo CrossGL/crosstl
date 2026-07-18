@@ -56,7 +56,9 @@ following ordered arguments::
        fragment_layout,
        subgroup_size,
        elements_per_lane,
-       fragment_provenance
+       fragment_provenance,
+       fragment_mapping,
+       fragment_mapping_provenance
    >
 
 The first three arguments are required. Existing three- through six-argument
@@ -73,6 +75,21 @@ whole-fragment ``thread_elements()`` reference views use the
 ``cooperative_matrix_element`` operations. Incompatible component types,
 dependent widths, and conflicting fragment contracts produce structured
 diagnostics instead of ordinary casts.
+
+``fragment_mapping`` identifies an exact, source-neutral mapping from each
+``(lane, lane_element)`` pair to a logical ``(row, column)`` coordinate.
+``fragment_mapping_provenance`` records the source declaration, project
+profile, or characterized environment that selected it. A mapping name is
+usable for target lowering only when its complete shape, subgroup width, and
+lane-coordinate table are registered. Unknown names round-trip as opaque
+metadata and remain fail-closed.
+
+The built-in ``tile_4x4_row_pair`` profile describes an 8x8 matrix distributed
+over 32 lanes with two adjacent columns per lane inside row-major 4x4 tiles.
+The profile name describes the coordinate mapping rather than a source backend
+or repository. Frontends must prove that a source fragment uses this mapping;
+the ``metal_thread_elements`` identity and a 32-by-2 element count alone do not
+select it.
 
 Declaration nodes
 -----------------

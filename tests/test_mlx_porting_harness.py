@@ -2277,6 +2277,143 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     )
 
 
+def test_cooperative_matrix_fragment_mapping_contract_tracks_pinned_source():
+    contract = json.loads(
+        (
+            ROOT
+            / "demos"
+            / "integrations"
+            / "mlx"
+            / "contracts"
+            / "cooperative-matrix-fragment-mapping.json"
+        ).read_text(encoding="utf-8")
+    )
+    matrix_type = (
+        "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, "
+        "metal_thread_elements, 32, 2, metal_thread_elements_reference_view, "
+        "tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>"
+    )
+
+    assert contract == {
+        "kind": "crosstl-cooperative-matrix-fragment-mapping-contract",
+        "schemaVersion": 1,
+        "id": "mlx-steel-base-mma-frag-8x8-row-pair",
+        "provenance": {
+            "repository": "https://github.com/ml-explore/mlx",
+            "commit": PINNED_MLX_COMMIT,
+            "source": "mlx/backend/metal/kernels/steel/gemm/mma.h",
+            "sourceLines": {"start": 37, "end": 54},
+            "sourceSymbol": "mlx::steel::BaseMMAFrag<T, 8, 8>::get_coord",
+            "sourceUrl": (
+                "https://github.com/ml-explore/mlx/blob/"
+                f"{PINNED_MLX_COMMIT}/mlx/backend/metal/kernels/steel/gemm/"
+                "mma.h#L37-L54"
+            ),
+        },
+        "mapping": {
+            "name": "tile_4x4_row_pair",
+            "matrixShape": [8, 8],
+            "subgroupSize": 32,
+            "elementsPerLane": 2,
+            "coordinateOrder": ["row", "column"],
+            "formula": {
+                "qid": "lane / 4",
+                "row": "(qid & 4) + ((lane / 2) % 4)",
+                "columnBase": "(qid & 2) * 2 + (lane % 2) * 2",
+                "element": "[row, columnBase + elementIndex]",
+                "elementIndexRange": [0, 1],
+            },
+            "laneCoordinates": [
+                [[0, 0], [0, 1]],
+                [[0, 2], [0, 3]],
+                [[1, 0], [1, 1]],
+                [[1, 2], [1, 3]],
+                [[2, 0], [2, 1]],
+                [[2, 2], [2, 3]],
+                [[3, 0], [3, 1]],
+                [[3, 2], [3, 3]],
+                [[0, 4], [0, 5]],
+                [[0, 6], [0, 7]],
+                [[1, 4], [1, 5]],
+                [[1, 6], [1, 7]],
+                [[2, 4], [2, 5]],
+                [[2, 6], [2, 7]],
+                [[3, 4], [3, 5]],
+                [[3, 6], [3, 7]],
+                [[4, 0], [4, 1]],
+                [[4, 2], [4, 3]],
+                [[5, 0], [5, 1]],
+                [[5, 2], [5, 3]],
+                [[6, 0], [6, 1]],
+                [[6, 2], [6, 3]],
+                [[7, 0], [7, 1]],
+                [[7, 2], [7, 3]],
+                [[4, 4], [4, 5]],
+                [[4, 6], [4, 7]],
+                [[5, 4], [5, 5]],
+                [[5, 6], [5, 7]],
+                [[6, 4], [6, 5]],
+                [[6, 6], [6, 7]],
+                [[7, 4], [7, 5]],
+                [[7, 6], [7, 7]],
+            ],
+        },
+        "translationEvidence": {
+            "source": "mlx/backend/metal/kernels/fp_quantized.metal",
+            "elementType": "float",
+            "fragmentLayout": "metal_thread_elements",
+            "fragmentProvenance": "metal_thread_elements_reference_view",
+            "fragmentMapping": "tile_4x4_row_pair",
+            "fragmentMappingProvenance": "mlx_steel_BaseMMAFrag_get_coord",
+            "cooperativeMatrixType": matrix_type,
+            "materializedSpecializationCount": 588,
+            "unsupportedSpecializationCount": 0,
+            "targets": {
+                "directx": {
+                    "boundaryDiagnostic": (
+                        "project.translate.directx-cooperative-matrix-unsupported"
+                    ),
+                    "missingCapability": "directx.cooperative-matrix-lowering",
+                    "artifactEmitted": False,
+                },
+                "opengl": {
+                    "boundaryDiagnostic": (
+                        "project.translate.opengl-cooperative-matrix-unsupported"
+                    ),
+                    "missingCapability": "opengl.cooperative-matrix-lowering",
+                    "artifactEmitted": False,
+                },
+            },
+        },
+        "scope": {
+            "sourceCoordinateMappingVerified": True,
+            "targetPolicyImplemented": False,
+            "softwareFallbackImplemented": False,
+            "runtimeIntegrationIncluded": False,
+            "numericalParityVerified": False,
+            "trackedIssues": [
+                "https://github.com/CrossGL/crosstl/issues/1602",
+                "https://github.com/CrossGL/crosstl/issues/1820",
+            ],
+        },
+    }
+
+    from crosstl.translator.cooperative_matrix import (
+        get_cooperative_matrix_fragment_mapping,
+    )
+
+    mapping = get_cooperative_matrix_fragment_mapping(
+        contract["mapping"]["name"],
+        *contract["mapping"]["matrixShape"],
+        contract["mapping"]["subgroupSize"],
+        contract["mapping"]["elementsPerLane"],
+    )
+    assert mapping is not None
+    assert contract["mapping"]["laneCoordinates"] == [
+        [list(coordinate) for coordinate in lane] for lane in mapping.lane_coordinates
+    ]
+
+
 def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundary():
     expected_gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -2296,6 +2433,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     whole_fragment_issue = "https://github.com/CrossGL/crosstl/issues/1815"
     fragment_contract_issue = "https://github.com/CrossGL/crosstl/issues/1816"
     cooperative_matrix_issue = "https://github.com/CrossGL/crosstl/issues/1602"
+    coordinate_mapping_issue = "https://github.com/CrossGL/crosstl/issues/1820"
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1807"
 
     status = expected_gaps["fp_quantized_contextual_materialization_status"]
@@ -2325,6 +2463,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             "generic-crossgl-pointer-cast-parsing",
             "whole-fragment-thread-elements-canonicalization",
             "cooperative-matrix-fragment-contract-provenance",
+            "source-proven-cooperative-matrix-coordinate-mapping",
         ],
         "contextual_receiver_resolved_by_commit": (
             "c7a3c61addf9ca523e09bc81252ab76340c3f82c"
@@ -2379,8 +2518,19 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 "subgroup_size": 32,
                 "elements_per_lane": 2,
                 "provenance": "metal_thread_elements_reference_view",
+                "mapping": "tile_4x4_row_pair",
+                "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
+                "source_contract": "contracts/cooperative-matrix-fragment-mapping.json",
             },
             "materialized_specialization_count": 588,
+        },
+        "coordinate_mapping_status": {
+            "source_contract": "contracts/cooperative-matrix-fragment-mapping.json",
+            "source_coordinates_verified": True,
+            "target_policy_implemented": False,
+            "software_fallback_implemented": False,
+            "numerical_parity_verified": False,
+            "tracked_by": coordinate_mapping_issue,
         },
         "current_boundaries": {
             "directx": {
@@ -2391,13 +2541,16 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 "cooperative_matrix_type": (
                     "CooperativeMatrix<float, 8, 8, subgroup, unspecified, "
                     "unspecified, metal_thread_elements, 32, 2, "
-                    "metal_thread_elements_reference_view>"
+                    "metal_thread_elements_reference_view, "
+                    "tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>"
                 ),
                 "fragment_contract": {
                     "layout": "metal_thread_elements",
                     "subgroup_size": 32,
                     "elements_per_lane": 2,
                     "provenance": "metal_thread_elements_reference_view",
+                    "mapping": "tile_4x4_row_pair",
+                    "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
                 },
                 "blocked_by": cooperative_matrix_issue,
             },
@@ -2409,13 +2562,16 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 "cooperative_matrix_type": (
                     "CooperativeMatrix<float, 8, 8, subgroup, unspecified, "
                     "unspecified, metal_thread_elements, 32, 2, "
-                    "metal_thread_elements_reference_view>"
+                    "metal_thread_elements_reference_view, "
+                    "tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>"
                 ),
                 "fragment_contract": {
                     "layout": "metal_thread_elements",
                     "subgroup_size": 32,
                     "elements_per_lane": 2,
                     "provenance": "metal_thread_elements_reference_view",
+                    "mapping": "tile_4x4_row_pair",
+                    "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
                 },
                 "blocked_by": cooperative_matrix_issue,
             },
@@ -2451,6 +2607,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             const_member_issue,
             member_array_issue,
             pointer_cast_issue,
+            coordinate_mapping_issue,
         ],
         "remaining_blocked_by": [cooperative_matrix_issue],
         "runtime_integration_included": False,
@@ -2475,6 +2632,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert member_array_issue in expected_gaps["tracked_issues"]
     assert pointer_cast_issue in expected_gaps["tracked_issues"]
     assert cooperative_matrix_issue in expected_gaps["tracked_issues"]
+    assert coordinate_mapping_issue in expected_gaps["tracked_issues"]
 
     readme = MLX_README_PATH.read_text(encoding="utf-8")
     assert PINNED_MLX_COMMIT in readme
@@ -2505,12 +2663,15 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "CrossGL/crosstl#1815" in readme
     assert "CrossGL/crosstl#1816" in readme
     assert "CrossGL/crosstl#1602" in readme
+    assert "CrossGL/crosstl#1820" in readme
     assert "ordered `cooperative_matrix_element` operations" in " ".join(readme.split())
     assert "`metal_thread_elements` layout" in " ".join(readme.split())
     assert "a 32-lane subgroup, two elements per lane" in " ".join(readme.split())
     assert "`metal_thread_elements_reference_view` provenance" in " ".join(
         readme.split()
     )
+    assert "`tile_4x4_row_pair` mapping" in " ".join(readme.split())
+    assert "`mlx_steel_BaseMMAFrag_get_coord` provenance" in " ".join(readme.split())
     assert "compile with the native Xcode Metal compiler" in " ".join(readme.split())
     assert "Neither run emits a target artifact" in " ".join(readme.split())
     assert "does not claim runtime integration or numerical parity" in " ".join(

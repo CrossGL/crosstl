@@ -944,7 +944,8 @@
       "fixed-member-array-constructor-initialization",
       "generic-crossgl-pointer-cast-parsing",
       "whole-fragment-thread-elements-canonicalization",
-      "cooperative-matrix-fragment-contract-provenance"
+      "cooperative-matrix-fragment-contract-provenance",
+      "source-proven-cooperative-matrix-coordinate-mapping"
     ],
     "contextual_receiver_resolved_by_commit": "c7a3c61addf9ca523e09bc81252ab76340c3f82c",
     "dependent_values_resolved_in": "https://github.com/CrossGL/crosstl/pull/1808",
@@ -994,32 +995,47 @@
         "layout": "metal_thread_elements",
         "subgroup_size": 32,
         "elements_per_lane": 2,
-        "provenance": "metal_thread_elements_reference_view"
+        "provenance": "metal_thread_elements_reference_view",
+        "mapping": "tile_4x4_row_pair",
+        "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
+        "source_contract": "contracts/cooperative-matrix-fragment-mapping.json"
       },
       "materialized_specialization_count": 588
+    },
+    "coordinate_mapping_status": {
+      "source_contract": "contracts/cooperative-matrix-fragment-mapping.json",
+      "source_coordinates_verified": true,
+      "target_policy_implemented": false,
+      "software_fallback_implemented": false,
+      "numerical_parity_verified": false,
+      "tracked_by": "https://github.com/CrossGL/crosstl/issues/1820"
     },
     "current_boundaries": {
       "directx": {
         "diagnostic_code": "project.translate.directx-cooperative-matrix-unsupported",
         "missing_capability": "directx.cooperative-matrix-lowering",
-        "cooperative_matrix_type": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view>",
+        "cooperative_matrix_type": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view, tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>",
         "fragment_contract": {
           "layout": "metal_thread_elements",
           "subgroup_size": 32,
           "elements_per_lane": 2,
-          "provenance": "metal_thread_elements_reference_view"
+          "provenance": "metal_thread_elements_reference_view",
+          "mapping": "tile_4x4_row_pair",
+          "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord"
         },
         "blocked_by": "https://github.com/CrossGL/crosstl/issues/1602"
       },
       "opengl": {
         "diagnostic_code": "project.translate.opengl-cooperative-matrix-unsupported",
         "missing_capability": "opengl.cooperative-matrix-lowering",
-        "cooperative_matrix_type": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view>",
+        "cooperative_matrix_type": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view, tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>",
         "fragment_contract": {
           "layout": "metal_thread_elements",
           "subgroup_size": 32,
           "elements_per_lane": 2,
-          "provenance": "metal_thread_elements_reference_view"
+          "provenance": "metal_thread_elements_reference_view",
+          "mapping": "tile_4x4_row_pair",
+          "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord"
         },
         "blocked_by": "https://github.com/CrossGL/crosstl/issues/1602"
       }
@@ -1054,7 +1070,8 @@
       "https://github.com/CrossGL/crosstl/issues/1810",
       "https://github.com/CrossGL/crosstl/issues/1812",
       "https://github.com/CrossGL/crosstl/issues/1813",
-      "https://github.com/CrossGL/crosstl/issues/1814"
+      "https://github.com/CrossGL/crosstl/issues/1814",
+      "https://github.com/CrossGL/crosstl/issues/1820"
     ],
     "remaining_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1602"
@@ -1720,6 +1737,7 @@
     "https://github.com/CrossGL/crosstl/issues/1569",
     "https://github.com/CrossGL/crosstl/issues/1574",
     "https://github.com/CrossGL/crosstl/issues/1602",
+    "https://github.com/CrossGL/crosstl/issues/1820",
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [

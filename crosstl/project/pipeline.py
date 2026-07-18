@@ -20639,6 +20639,14 @@ def _cooperative_matrix_failure_details(
             getattr(exc, "fragment_provenance", None)
             or getattr(matrix_type, "fragment_provenance", None)
         ),
+        "fragmentMapping": (
+            getattr(exc, "fragment_mapping", None)
+            or getattr(matrix_type, "fragment_mapping", None)
+        ),
+        "fragmentMappingProvenance": (
+            getattr(exc, "fragment_mapping_provenance", None)
+            or getattr(matrix_type, "fragment_mapping_provenance", None)
+        ),
         "reason": getattr(exc, "reason", None),
     }
     for name, value in fields.items():
@@ -22939,6 +22947,7 @@ def _entry_scoped_specialization_names(
     source_ast: Any,
     entry_point: str,
     target: str,
+    source_options: Mapping[str, Any],
 ) -> set[str] | None:
     try:
         if unit.source_backend in {"cgl", "crossgl"}:
@@ -22952,7 +22961,10 @@ def _entry_scoped_specialization_names(
                 or cgl_spec is None
             ):
                 return None
-            intermediate = source_spec.reverse_codegen_factory().generate(source_ast)
+            reverse_codegen = source_spec.create_reverse_codegen(source_options)
+            if reverse_codegen is None:
+                return None
+            intermediate = reverse_codegen.generate(source_ast)
             crossgl_ast = cgl_spec.parse(
                 intermediate,
                 source_options={
@@ -23057,7 +23069,7 @@ def _project_specialization_metadata_for_input(
     )
     if entry_point is not None:
         reachable_names = _entry_scoped_specialization_names(
-            unit, ast, entry_point, target
+            unit, ast, entry_point, target, source_options
         )
         if reachable_names is None and declarations:
             declarations = []
@@ -23326,7 +23338,12 @@ def _crossgl_ast_for_project_target(
             raise ValueError(
                 f"Reverse translation not supported for source backend {source_backend}"
             )
-        intermediate = source_spec.reverse_codegen_factory().generate(source_ast)
+        reverse_codegen = source_spec.create_reverse_codegen(parser_options)
+        if reverse_codegen is None:
+            raise ValueError(
+                f"Reverse translation not supported for source backend {source_backend}"
+            )
+        intermediate = reverse_codegen.generate(source_ast)
 
     return cgl_spec.parse(
         intermediate,

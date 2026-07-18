@@ -12,7 +12,11 @@ import crosstl.translator
 import crosstl.translator.codegen as codegen
 from crosstl.project import translate_project
 from crosstl.translator.ast import ShaderStage
-from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from crosstl.translator.source_registry import (
+    SOURCE_REGISTRY,
+    SourceSpec,
+    register_default_sources,
+)
 from tests.test_translator.spirv_wgsl_contract import (
     SPIRV_VERTEX_POSITION_OUTPUT_SOURCE,
     assert_spirv_position_output_wgsl_contract,
@@ -275,8 +279,89 @@ def test_registered_native_sources_have_reverse_codegen_factories():
         assert spec is not None
         assert spec.reverse_codegen_factory is not None
 
-        converter = spec.reverse_codegen_factory()
+        converter = spec.create_reverse_codegen(
+            {
+                "preprocess": False,
+                "strict_preprocessor": True,
+                "max_template_specializations": 1,
+            }
+        )
+        assert converter is not None
         assert callable(getattr(converter, "generate", None))
+
+
+def test_source_spec_create_reverse_codegen_returns_none_when_unsupported():
+    spec = SourceSpec(
+        name="parser-only",
+        extensions=(".parser-only",),
+        load_lexer_parser=lambda: (object, object),
+    )
+
+    assert spec.create_reverse_codegen({"preprocess": False}) is None
+
+
+@pytest.mark.parametrize("target", ("cgl", "opengl"))
+def test_translate_forwards_supported_options_to_reverse_codegen(
+    tmp_path, monkeypatch, target
+):
+    register_default_sources()
+    cgl_spec = SOURCE_REGISTRY.get("cgl")
+    assert cgl_spec is not None
+    factory_calls = []
+
+    class SyntheticReverseCodegen:
+        def __init__(self, mode):
+            self.mode = mode
+
+        def generate(self, _ast):
+            return textwrap.dedent(f"""
+                shader ReverseOptions {{
+                    float {self.mode}(float value) {{
+                        return value;
+                    }}
+                }}
+                """)
+
+    def create_synthetic_reverse_codegen(*, reverse_mode="default_mode"):
+        factory_calls.append(reverse_mode)
+        return SyntheticReverseCodegen(reverse_mode)
+
+    source_spec = SourceSpec(
+        name="synthetic",
+        extensions=(".synthetic",),
+        load_lexer_parser=cgl_spec.load_lexer_parser,
+        reverse_codegen_factory=create_synthetic_reverse_codegen,
+    )
+    monkeypatch.setattr(
+        SOURCE_REGISTRY,
+        "get_by_extension",
+        lambda _file_path: source_spec,
+    )
+    source_path = _write_source(
+        tmp_path,
+        "options.synthetic",
+        """
+        shader SourceOptions {
+            float source_value(float value) {
+                return value;
+            }
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend=target,
+        format_output=False,
+        source_options={
+            "strict_function_bodies": True,
+            "preprocess": False,
+            "reverse_mode": "selected_mode",
+        },
+    )
+
+    assert factory_calls == ["selected_mode"]
+    assert "selected_mode" in generated
 
 
 def test_source_registry_reports_lexer_option_support():

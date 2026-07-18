@@ -827,6 +827,8 @@ def test_opengl_cooperative_matrix_type_reports_structured_error():
     assert error.subgroup_size is None
     assert error.elements_per_lane is None
     assert error.fragment_provenance is None
+    assert error.fragment_mapping is None
+    assert error.fragment_mapping_provenance is None
     assert error.details == {}
     assert error.reason == "unsupported-type"
     assert error.source_location == source_location
@@ -845,6 +847,8 @@ def test_opengl_cooperative_matrix_type_reports_known_fragment_requirements():
         subgroup_size=32,
         elements_per_lane=2,
         fragment_provenance="mlx_fragment_contract",
+        fragment_mapping="tile_4x4_row_pair",
+        fragment_mapping_provenance="source_coordinate_helper",
     )
 
     with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
@@ -857,16 +861,22 @@ def test_opengl_cooperative_matrix_type_reports_known_fragment_requirements():
     assert error.subgroup_size == 32
     assert error.elements_per_lane == 2
     assert error.fragment_provenance == "mlx_fragment_contract"
+    assert error.fragment_mapping == "tile_4x4_row_pair"
+    assert error.fragment_mapping_provenance == "source_coordinate_helper"
     assert error.details == {
         "fragmentLayout": "metal_simdgroup_8x8_f32",
         "subgroupSize": 32,
         "elementsPerLane": 2,
         "fragmentProvenance": "mlx_fragment_contract",
+        "fragmentMapping": "tile_4x4_row_pair",
+        "fragmentMappingProvenance": "source_coordinate_helper",
     }
     assert "fragment_layout=metal_simdgroup_8x8_f32" in str(error)
     assert "subgroup_size=32" in str(error)
     assert "elements_per_lane=2" in str(error)
     assert "fragment_provenance=mlx_fragment_contract" in str(error)
+    assert "fragment_mapping=tile_4x4_row_pair" in str(error)
+    assert "fragment_mapping_provenance=source_coordinate_helper" in str(error)
 
 
 def test_opengl_cooperative_matrix_error_normalizes_symbolic_fragment_values():
@@ -878,6 +888,8 @@ def test_opengl_cooperative_matrix_error_normalizes_symbolic_fragment_values():
         subgroup_size=NamedType("SUBGROUP_SIZE"),
         elements_per_lane=NamedType("ELEMENTS_PER_LANE"),
         fragment_provenance="source_manifest",
+        fragment_mapping="source_lane_map",
+        fragment_mapping_provenance="source_mapping_manifest",
     )
 
     with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
@@ -888,14 +900,77 @@ def test_opengl_cooperative_matrix_error_normalizes_symbolic_fragment_values():
         "subgroupSize": "SUBGROUP_SIZE",
         "elementsPerLane": "ELEMENTS_PER_LANE",
         "fragmentProvenance": "source_manifest",
+        "fragmentMapping": "source_lane_map",
+        "fragmentMappingProvenance": "source_mapping_manifest",
     }
 
 
-def test_opengl_cooperative_matrix_string_retains_fragment_contract():
-    source_type = (
-        "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, "
-        "metal_thread_elements, 32, 2, metal_thread_elements_reference_view>"
-    )
+@pytest.mark.parametrize(
+    ("generic_args", "expected_details"),
+    [
+        ("float, 8, 8", {}),
+        ("float, 8, 8, subgroup", {}),
+        ("float, 8, 8, subgroup, accumulator", {}),
+        ("float, 8, 8, subgroup, accumulator, row_major", {}),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, " "metal_thread_elements",
+            {"fragmentLayout": "metal_thread_elements"},
+        ),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, "
+            "metal_thread_elements, 32",
+            {"fragmentLayout": "metal_thread_elements", "subgroupSize": 32},
+        ),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, "
+            "metal_thread_elements, 32, 2",
+            {
+                "fragmentLayout": "metal_thread_elements",
+                "subgroupSize": 32,
+                "elementsPerLane": 2,
+            },
+        ),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, "
+            "metal_thread_elements, 32, 2, metal_reference_view",
+            {
+                "fragmentLayout": "metal_thread_elements",
+                "subgroupSize": 32,
+                "elementsPerLane": 2,
+                "fragmentProvenance": "metal_reference_view",
+            },
+        ),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, "
+            "metal_thread_elements, 32, 2, metal_reference_view, "
+            "tile_4x4_row_pair",
+            {
+                "fragmentLayout": "metal_thread_elements",
+                "subgroupSize": 32,
+                "elementsPerLane": 2,
+                "fragmentProvenance": "metal_reference_view",
+                "fragmentMapping": "tile_4x4_row_pair",
+            },
+        ),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, "
+            "metal_thread_elements, 32, 2, metal_reference_view, "
+            "tile_4x4_row_pair, source_coordinate_helper",
+            {
+                "fragmentLayout": "metal_thread_elements",
+                "subgroupSize": 32,
+                "elementsPerLane": 2,
+                "fragmentProvenance": "metal_reference_view",
+                "fragmentMapping": "tile_4x4_row_pair",
+                "fragmentMappingProvenance": "source_coordinate_helper",
+            },
+        ),
+    ],
+)
+def test_opengl_cooperative_matrix_string_contract_arities_fail_closed(
+    generic_args, expected_details
+):
+    source_type = f"CooperativeMatrix<{generic_args}>"
 
     with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
         GLSLCodeGen().map_type(source_type)
@@ -905,12 +980,13 @@ def test_opengl_cooperative_matrix_string_retains_fragment_contract():
     assert error.matrix_type.element_type.name == "float"
     assert error.matrix_type.rows == 8
     assert error.matrix_type.cols == 8
-    assert error.details == {
-        "fragmentLayout": "metal_thread_elements",
-        "subgroupSize": 32,
-        "elementsPerLane": 2,
-        "fragmentProvenance": "metal_thread_elements_reference_view",
-    }
+    assert error.operation == "type"
+    assert error.reason == "unsupported-type"
+    assert error.details == expected_details
+    assert error.fragment_mapping == expected_details.get("fragmentMapping")
+    assert error.fragment_mapping_provenance == expected_details.get(
+        "fragmentMappingProvenance"
+    )
 
 
 def test_opengl_cooperative_matrix_shader_fails_before_generic_type_emission():
@@ -943,6 +1019,8 @@ def test_opengl_cooperative_matrix_operation_reports_structured_error():
         subgroup_size=32,
         elements_per_lane=2,
         fragment_provenance="mlx_fragment_contract",
+        fragment_mapping="tile_4x4_row_pair",
+        fragment_mapping_provenance="source_coordinate_helper",
     )
     operation = CooperativeMatrixOpNode(
         "multiply_accumulate",
@@ -971,11 +1049,15 @@ def test_opengl_cooperative_matrix_operation_reports_structured_error():
     assert error.subgroup_size == 32
     assert error.elements_per_lane == 2
     assert error.fragment_provenance == "mlx_fragment_contract"
+    assert error.fragment_mapping == "tile_4x4_row_pair"
+    assert error.fragment_mapping_provenance == "source_coordinate_helper"
     assert error.details == {
         "fragmentLayout": "metal_simdgroup_8x8_f32",
         "subgroupSize": 32,
         "elementsPerLane": 2,
         "fragmentProvenance": "mlx_fragment_contract",
+        "fragmentMapping": "tile_4x4_row_pair",
+        "fragmentMappingProvenance": "source_coordinate_helper",
     }
     assert error.reason == "unsupported-operation"
     assert error.source_location == source_location
@@ -983,6 +1065,8 @@ def test_opengl_cooperative_matrix_operation_reports_structured_error():
     assert "subgroup_size=32" in str(error)
     assert "elements_per_lane=2" in str(error)
     assert "fragment_provenance=mlx_fragment_contract" in str(error)
+    assert "fragment_mapping=tile_4x4_row_pair" in str(error)
+    assert "fragment_mapping_provenance=source_coordinate_helper" in str(error)
 
 
 def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value):

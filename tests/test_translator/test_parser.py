@@ -6073,6 +6073,8 @@ def test_cooperative_matrix_type_three_argument_form_uses_canonical_defaults():
     assert matrix_type.subgroup_size is None
     assert matrix_type.elements_per_lane is None
     assert matrix_type.fragment_provenance is None
+    assert matrix_type.fragment_mapping is None
+    assert matrix_type.fragment_mapping_provenance is None
     assert matrix_type.name == "CooperativeMatrix"
     assert matrix_type.generic_args == [
         matrix_type.element_type,
@@ -6149,6 +6151,68 @@ def test_cooperative_matrix_type_extended_form_round_trips_fragment_contract():
     assert round_trip_type.elements_per_lane == matrix_type.elements_per_lane
     assert round_trip_type.fragment_provenance == matrix_type.fragment_provenance
     assert parser.format_type_argument(round_trip_type) == serialized_type
+
+
+def test_cooperative_matrix_type_round_trips_coordinate_mapping_contract():
+    code = """
+    shader CooperativeMatrixCoordinateMapping {
+        void consume(
+            CooperativeMatrix<
+                float, 8, 8, subgroup, accumulator, unspecified,
+                metal_thread_elements, 32, 2,
+                metal_thread_elements_reference_view,
+                tile_4x4_row_pair,
+                source_coordinate_helper
+            > matrix
+        ) {}
+    }
+    """
+
+    parser = Parser(tokenize_code(code))
+    ast = parser.parse()
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert matrix_type.fragment_mapping == "tile_4x4_row_pair"
+    assert matrix_type.fragment_mapping_provenance == "source_coordinate_helper"
+    assert matrix_type.generic_args[10:] == [
+        "tile_4x4_row_pair",
+        "source_coordinate_helper",
+    ]
+
+    serialized_type = parser.format_type_argument(matrix_type)
+    round_trip_ast = parse_code(tokenize_code(f"""
+        shader CooperativeMatrixCoordinateMappingRoundTrip {{
+            void consume({serialized_type} matrix) {{}}
+        }}
+        """))
+    round_trip_type = round_trip_ast.functions[0].parameters[0].param_type
+
+    assert round_trip_type.fragment_mapping == matrix_type.fragment_mapping
+    assert (
+        round_trip_type.fragment_mapping_provenance
+        == matrix_type.fragment_mapping_provenance
+    )
+    assert parser.format_type_argument(round_trip_type) == serialized_type
+
+
+def test_cooperative_matrix_type_preserves_unregistered_mapping_as_opaque():
+    code = """
+    shader CooperativeMatrixOpaqueCoordinateMapping {
+        void consume(
+            CooperativeMatrix<
+                float, 8, 8, subgroup, unspecified, unspecified,
+                source_fragment, 32, 2, source_fragment_manifest,
+                external_mapping, external_mapping_manifest
+            > matrix
+        ) {}
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert matrix_type.fragment_mapping == "external_mapping"
+    assert matrix_type.fragment_mapping_provenance == "external_mapping_manifest"
 
 
 def test_cooperative_matrix_type_extended_form_preserves_symbolic_values():
@@ -6246,6 +6310,8 @@ def test_cooperative_matrix_type_omits_fully_unspecified_fragment_contract():
     assert matrix_type.subgroup_size is None
     assert matrix_type.elements_per_lane is None
     assert matrix_type.fragment_provenance is None
+    assert matrix_type.fragment_mapping is None
+    assert matrix_type.fragment_mapping_provenance is None
     assert len(matrix_type.generic_args) == 6
 
 
@@ -6382,7 +6448,7 @@ def test_cooperative_matrix_nodes_participate_in_walk_and_parent_binding():
         "float, 16",
         (
             "float, 16, 8, subgroup, matrix_a, row_major, dense, 32, 8, "
-            "source_fixture, extra"
+            "source_fixture, tile_4x4_row_pair, source_helper, extra"
         ),
     ],
 )
@@ -6397,9 +6463,77 @@ def test_cooperative_matrix_type_rejects_invalid_arity(generic_arguments):
         parse_code(tokenize_code(code))
 
     assert str(exc_info.value) == (
-        "CooperativeMatrix expects 3 to 10 generic arguments: "
+        "CooperativeMatrix expects 3 to 12 generic arguments: "
         "element type, rows, columns, scope, use, layout, fragment layout, "
-        "subgroup size, elements per lane, and fragment provenance"
+        "subgroup size, elements per lane, fragment provenance, fragment "
+        "mapping, and fragment mapping provenance"
+    )
+
+
+def test_cooperative_matrix_type_rejects_known_mapping_contract_mismatch():
+    code = """
+    shader InvalidCooperativeMatrixCoordinateMapping {
+        void consume(
+            CooperativeMatrix<
+                float, 8, 8, subgroup, unspecified, unspecified,
+                metal_thread_elements, 16, 4,
+                metal_thread_elements_reference_view,
+                tile_4x4_row_pair,
+                source_coordinate_helper
+            > matrix
+        ) {}
+    }
+    """
+
+    with pytest.raises(SyntaxError) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert str(exc_info.value) == (
+        "CooperativeMatrix fragment mapping 'tile_4x4_row_pair' has no "
+        "registered contract for rows=8, columns=8, subgroup_size=16, "
+        "elements_per_lane=4"
+    )
+
+
+def test_cooperative_matrix_type_rejects_mapping_without_fragment_layout():
+    code = """
+    shader InvalidCooperativeMatrixCoordinateMapping {
+        void consume(
+            CooperativeMatrix<
+                float, 8, 8, subgroup, unspecified, unspecified,
+                unspecified, 32, 2, source_fragment,
+                tile_4x4_row_pair
+            > matrix
+        ) {}
+    }
+    """
+
+    with pytest.raises(SyntaxError) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert str(exc_info.value) == (
+        "CooperativeMatrix fragment_mapping requires a fragment_layout"
+    )
+
+
+def test_cooperative_matrix_type_rejects_mapping_provenance_without_mapping():
+    code = """
+    shader InvalidCooperativeMatrixCoordinateMappingProvenance {
+        void consume(
+            CooperativeMatrix<
+                float, 8, 8, subgroup, unspecified, unspecified,
+                metal_thread_elements, 32, 2, source_fragment,
+                unspecified, source_coordinate_helper
+            > matrix
+        ) {}
+    }
+    """
+
+    with pytest.raises(SyntaxError) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert str(exc_info.value) == (
+        "CooperativeMatrix fragment_mapping_provenance requires a " "fragment_mapping"
     )
 
 

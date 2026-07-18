@@ -130,8 +130,8 @@ def translate(
             Defaults to None.
         defines (Mapping[str, str], optional): Source parser preprocessor defines.
             Defaults to None.
-        source_options (Mapping[str, object], optional): Source parser-specific
-            lexer options. Defaults to None.
+        source_options (Mapping[str, object], optional): Source frontend and
+            reverse code generator options. Defaults to None.
         entry_point (str, optional): Emit one independently loadable source entry
             when the target backend supports entry-scoped generation.
 
@@ -215,9 +215,9 @@ def translate(
             generated_code = _generate_target_code(codegen, ast, entry_point)
     else:
         if normalized_backend in ["cgl", "crossgl"]:
-            if not source_spec.reverse_codegen_factory:
+            codegen = source_spec.create_reverse_codegen(source_options)
+            if codegen is None:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
-            codegen = source_spec.reverse_codegen_factory()
             if source_spec.name == "opencl":
                 codegen.normalize_target_safe_cgl = True
             generated_code = codegen.generate(ast)
@@ -228,13 +228,13 @@ def translate(
                 cgl_ast = cgl_spec.parse(generated_code)
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
         else:
-            if not source_spec.reverse_codegen_factory:
+            reverse_codegen = source_spec.create_reverse_codegen(source_options)
+            if reverse_codegen is None:
                 raise ValueError(
                     f"Unsupported translation scenario: {file_path} to {backend}"
                 )
             # Translate to CrossGL first, then to target backend
             lower_default_arguments(ast)
-            reverse_codegen = source_spec.reverse_codegen_factory()
             intermediate_code = reverse_codegen.generate(ast)
             cgl_spec = SOURCE_REGISTRY.get("cgl")
             if not cgl_spec:
