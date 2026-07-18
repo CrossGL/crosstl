@@ -38964,6 +38964,224 @@ def test_project_function_constant_variant_materializes_before_target_codegen(
     ]
 
 
+def test_project_source_specialization_constants_isolate_reused_ids(tmp_path):
+    kernels = tmp_path / "kernels"
+    kernels.mkdir()
+    (kernels / "boolean.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant bool mode [[function_constant(1)]];
+
+            kernel void write_boolean(device int* output [[buffer(0)]]) {
+                output[0] = mode ? 1 : 0;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (kernels / "integer.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant int mode [[function_constant(1)]];
+
+            kernel void write_integer(device int* output [[buffer(0)]]) {
+                output[0] = mode;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["kernels/*.metal"]
+            targets = ["directx"]
+
+            [project.specialization_constants]
+            "1" = 99
+
+            [project.source_specialization_constants."kernels/boolean.metal"]
+            "1" = true
+
+            [project.source_specialization_constants."kernels/integer.metal"]
+            "1" = 7
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    config = load_project_config(tmp_path)
+    assert config.source_specialization_constants == {
+        "kernels/boolean.metal": {"1": True},
+        "kernels/integer.metal": {"1": 7},
+    }
+
+    report = translate_project(config, format_output=False)
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["project"]["sourceSpecializationConstants"] == {
+        "kernels/boolean.metal": {"1": True},
+        "kernels/integer.metal": {"1": 7},
+    }
+    assert payload["project"]["sourceSpecializationPatternCount"] == 2
+    assert payload["project"]["sourceSpecializationConstantCounts"] == {
+        "kernels/boolean.metal": 1,
+        "kernels/integer.metal": 1,
+    }
+
+    artifacts = {artifact["source"]: artifact for artifact in payload["artifacts"]}
+    expected = {
+        "kernels/boolean.metal": (True, "static const bool mode = true;"),
+        "kernels/integer.metal": (7, "static const int mode = 7;"),
+    }
+    for source, (value, generated_declaration) in expected.items():
+        artifact = artifacts[source]
+        constant = artifact["specializationConstants"][0]
+        assert constant["concreteValue"] == value
+        assert constant["valueProvenance"] == {
+            "kind": "project-source-pattern",
+            "path": (
+                "project.source_specialization_constants" f'[{json.dumps(source)}]["1"]'
+            ),
+            "sourcePattern": source,
+            "selector": "1",
+            "selectorKind": "id",
+        }
+        generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
+        assert generated_declaration in generated
+        HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+    report_path = tmp_path / "report.json"
+    report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True
+
+    forged = copy.deepcopy(payload)
+    forged["project"]["sourceSpecializationConstantCounts"]["kernels/boolean.metal"] = 0
+    forged_path = tmp_path / "forged-report.json"
+    forged_path.write_text(json.dumps(forged), encoding="utf-8")
+    validation = validate_project_report(forged_path)
+    assert validation["success"] is False
+    assert "project.sourceSpecializationConstantCounts must match" in (
+        validation["diagnostics"][0]["message"]
+    )
+
+
+def test_project_source_specialization_exact_path_overrides_glob(tmp_path):
+    shaders = tmp_path / "shaders"
+    shaders.mkdir()
+    (shaders / "exact.cgl").write_text(
+        textwrap.dedent("""
+            shader ScopedSpecialization {
+                int mode @function_constant(1);
+                fragment {
+                    vec4 main() @ gl_FragColor {
+                        return vec4(float(mode));
+                    }
+                }
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("shaders/exact.cgl",),
+        targets=("directx",),
+        specialization_constants={"1": 1},
+        source_specialization_constants={
+            "shaders/*.cgl": {"1": 2},
+            r"shaders\exact.cgl": {"1": 3},
+        },
+    )
+
+    payload = translate_project(config, format_output=False).to_json()
+
+    assert config.source_specialization_constants == {
+        "shaders/*.cgl": {"1": 2},
+        "shaders/exact.cgl": {"1": 3},
+    }
+    constant = payload["artifacts"][0]["specializationConstants"][0]
+    assert constant["concreteValue"] == 3
+    assert constant["valueProvenance"]["sourcePattern"] == "shaders/exact.cgl"
+
+
+def test_project_source_specialization_conflicting_equal_patterns_fail_closed(
+    tmp_path,
+):
+    shaders = tmp_path / "shaders"
+    shaders.mkdir()
+    (shaders / "aa.cgl").write_text(
+        textwrap.dedent("""
+            shader AmbiguousSpecialization {
+                int mode @function_constant(1);
+                fragment {
+                    vec4 main() @ gl_FragColor {
+                        return vec4(float(mode));
+                    }
+                }
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("shaders/aa.cgl",),
+        targets=("directx",),
+        source_specialization_constants={
+            "shaders/*a.cgl": {"1": 2},
+            "shaders/a*.cgl": {"1": 3},
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "conflicting equally specific values for selector '1' and source "
+            "'shaders/aa.cgl'"
+        ),
+    ):
+        translate_project(config, format_output=False)
+
+
+def test_project_variant_specialization_overrides_source_pattern(tmp_path):
+    (tmp_path / "shader.cgl").write_text(
+        textwrap.dedent("""
+            shader VariantSpecialization {
+                int mode @function_constant(1);
+                fragment {
+                    vec4 main() @ gl_FragColor {
+                        return vec4(float(mode));
+                    }
+                }
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("shader.cgl",),
+        targets=("directx",),
+        specialization_constants={"1": 1},
+        source_specialization_constants={"shader.cgl": {"1": 2}},
+        variants={"release": {}},
+        variant_specialization_constants={"release": {"1": 3}},
+    )
+
+    payload = translate_project(config, format_output=False).to_json()
+
+    constant = payload["artifacts"][0]["specializationConstants"][0]
+    assert constant["concreteValue"] == 3
+    assert constant["valueProvenance"] == {
+        "kind": "project-variant",
+        "path": "project.variants.release.specialization_constants.1",
+        "selector": "1",
+        "selectorKind": "id",
+        "variant": "release",
+    }
+
+
 def test_metal_project_function_constant_values_reach_directx_codegen(tmp_path):
     (tmp_path / "function_constants.metal").write_text(
         textwrap.dedent("""

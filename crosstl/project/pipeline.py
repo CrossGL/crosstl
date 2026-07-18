@@ -1461,6 +1461,9 @@ REPORT_PROJECT_FIELDS = frozenset(
         "variantDefineCounts",
         "specializationConstants",
         "specializationConstantCount",
+        "sourceSpecializationConstants",
+        "sourceSpecializationPatternCount",
+        "sourceSpecializationConstantCounts",
         "variantSpecializationConstants",
         "variantSpecializationConstantCounts",
         "workgroupSize",
@@ -1489,6 +1492,7 @@ SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
+SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY = "source_specialization_constants"
 WORKGROUP_SIZE_CONFIG_KEY = "workgroup_size"
 WORKGROUP_SIZE_RULES_CONFIG_KEY = "workgroup_size_rules"
 WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY = "execution.workgroup-size-specialization"
@@ -3578,6 +3582,50 @@ def _as_specialization_value_mapping(
     return result
 
 
+def _specialization_values_match(left: Any, right: Any) -> bool:
+    return type(left) is type(right) and left == right
+
+
+def _specialization_value_mappings_match(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+) -> bool:
+    return left.keys() == right.keys() and all(
+        _specialization_values_match(left[key], right[key]) for key in left
+    )
+
+
+def _as_source_specialization_value_mapping(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, dict[str, bool | int | float | str]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+
+    result: dict[str, dict[str, bool | int | float | str]] = {}
+    for raw_pattern, raw_values in value.items():
+        if not isinstance(raw_pattern, str) or not raw_pattern.strip():
+            raise ValueError(f"{field_name} keys must be non-empty source patterns")
+        pattern = _normalize_project_relative_path(raw_pattern)
+        pattern_path = _mapping_key_path(field_name, pattern)
+        values = _as_specialization_value_mapping(
+            raw_values,
+            field_name=pattern_path,
+        )
+        existing = result.get(pattern)
+        if existing is not None and not _specialization_value_mappings_match(
+            existing, values
+        ):
+            raise ValueError(
+                f"{field_name} contains conflicting normalized pattern '{pattern}'"
+            )
+        result[pattern] = values
+    return result
+
+
 def _as_workgroup_size(
     value: Any,
     *,
@@ -3762,6 +3810,16 @@ def _variant_specialization_constant_counts(
         name: len(values)
         for name, values in sorted(variants.items())
         if _is_non_empty_string(name) and isinstance(values, Mapping)
+    }
+
+
+def _source_specialization_constant_counts(
+    source_patterns: Mapping[str, Any],
+) -> dict[str, int]:
+    return {
+        pattern: len(values)
+        for pattern, values in sorted(source_patterns.items())
+        if _is_non_empty_string(pattern) and isinstance(values, Mapping)
     }
 
 
@@ -7370,6 +7428,9 @@ class ProjectConfig:
     source_options: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     variants: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     specialization_constants: Mapping[str, Any] = field(default_factory=dict)
+    source_specialization_constants: Mapping[str, Mapping[str, Any]] = field(
+        default_factory=dict
+    )
     variant_specialization_constants: Mapping[str, Mapping[str, Any]] = field(
         default_factory=dict
     )
@@ -7542,6 +7603,14 @@ class ProjectConfig:
             _as_specialization_value_mapping(
                 self.specialization_constants,
                 field_name="ProjectConfig.specialization_constants",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "source_specialization_constants",
+            _as_source_specialization_value_mapping(
+                self.source_specialization_constants,
+                field_name="ProjectConfig.source_specialization_constants",
             ),
         )
         if not isinstance(self.variant_specialization_constants, Mapping):
@@ -8234,6 +8303,21 @@ def _scan_pattern_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                 missing_capabilities=["artifact.entry-point-selection"],
             )
         )
+    for pattern in config.source_specialization_constants:
+        if _is_repository_relative_glob(pattern):
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code=("project.config.source-specialization-pattern-outside-project"),
+                message=(
+                    f"Configured source specialization pattern '{pattern}' is not "
+                    "repository-relative."
+                ),
+                location=location,
+                missing_capabilities=["specialization.constant.materialization"],
+            )
+        )
     for pattern in config.workgroup_size_rules:
         if _is_repository_relative_glob(pattern):
             continue
@@ -8487,6 +8571,20 @@ class ProjectPortabilityReport:
                 "specializationConstantCount": len(
                     self.config.specialization_constants
                 ),
+                "sourceSpecializationConstants": {
+                    pattern: dict(sorted(values.items()))
+                    for pattern, values in sorted(
+                        self.config.source_specialization_constants.items()
+                    )
+                },
+                "sourceSpecializationPatternCount": len(
+                    self.config.source_specialization_constants
+                ),
+                "sourceSpecializationConstantCounts": (
+                    _source_specialization_constant_counts(
+                        self.config.source_specialization_constants
+                    )
+                ),
                 "variantSpecializationConstants": {
                     name: dict(sorted(values.items()))
                     for name, values in sorted(
@@ -8679,6 +8777,12 @@ def load_project_config(
         project.get(SPECIALIZATION_CONSTANTS_CONFIG_KEY),
         field_name=(f"crosstl.toml [project.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"),
     )
+    source_specialization_constants = _as_source_specialization_value_mapping(
+        project.get(SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY),
+        field_name=(
+            "crosstl.toml " f"[project.{SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"
+        ),
+    )
     workgroup_size = _as_workgroup_size(
         project.get(WORKGROUP_SIZE_CONFIG_KEY),
         field_name=f"crosstl.toml [project].{WORKGROUP_SIZE_CONFIG_KEY}",
@@ -8741,6 +8845,7 @@ def load_project_config(
         source_options=source_options,
         variants=_variant_defines(variants),
         specialization_constants=specialization_constants,
+        source_specialization_constants=source_specialization_constants,
         variant_specialization_constants=_variant_specialization_constants(variants),
         workgroup_size=workgroup_size,
         variant_workgroup_sizes=_variant_workgroup_sizes(variants),
@@ -9263,6 +9368,11 @@ def _regular_project_translation_jobs(
             variant=variant,
             defines=defines,
             entry_point=entry_point,
+            specialization_values=_variant_specialization_values(
+                config,
+                variant,
+                relative_path=relative_path,
+            ),
         )
         for variant, defines in _variant_jobs(config)
     ]
@@ -9342,10 +9452,16 @@ def _dispatch_project_translation_jobs(
                 },
             )
         provenance = _dispatch_artifact_provenance(index, artifact)
-        specialization_values = _variant_specialization_values(config, None)
+        specialization_values = _variant_specialization_values(
+            config,
+            None,
+            relative_path=relative_path,
+        )
         for selector, value in artifact.specialization_constants.items():
             existing = specialization_values.get(selector)
-            if existing is not None and existing[0] != value:
+            if existing is not None and not _specialization_values_match(
+                existing[0], value
+            ):
                 raise DispatchArtifactPlanError(
                     "dispatch-specialization-config-conflict",
                     "Host dispatch specialization conflicts with project config.",
@@ -9423,6 +9539,8 @@ def _variant_define_sources(
 def _variant_specialization_values(
     config: ProjectConfig,
     variant: str | None,
+    *,
+    relative_path: str | None = None,
 ) -> dict[str, tuple[Any, dict[str, Any]]]:
     values = {
         selector: (
@@ -9436,6 +9554,57 @@ def _variant_specialization_values(
         )
         for selector, value in config.specialization_constants.items()
     }
+    if relative_path is not None:
+        normalized_path = _normalize_project_relative_path(relative_path)
+        matches_by_selector: dict[str, list[tuple[str, Any, tuple[Any, ...]]]] = {}
+        for pattern, pattern_values in sorted(
+            config.source_specialization_constants.items()
+        ):
+            if not fnmatch.fnmatch(normalized_path, pattern):
+                continue
+            specificity = _entry_point_selector_priority(pattern, normalized_path)[:-1]
+            for selector, value in pattern_values.items():
+                matches_by_selector.setdefault(selector, []).append(
+                    (pattern, value, specificity)
+                )
+
+        for selector, matches in sorted(matches_by_selector.items()):
+            selected_specificity = max(match[2] for match in matches)
+            selected_matches = [
+                match for match in matches if match[2] == selected_specificity
+            ]
+            selected_value = selected_matches[0][1]
+            if any(
+                not _specialization_values_match(selected_value, match[1])
+                for match in selected_matches[1:]
+            ):
+                matches_text = ", ".join(
+                    f"{pattern!r}={value!r}"
+                    for pattern, value, _specificity in selected_matches
+                )
+                raise ValueError(
+                    "ProjectConfig.source_specialization_constants has conflicting "
+                    f"equally specific values for selector {selector!r} and source "
+                    f"{normalized_path!r}: {matches_text}"
+                )
+            pattern, value, _specificity = max(
+                selected_matches,
+                key=lambda match: match[0],
+            )
+            pattern_path = _mapping_key_path(
+                f"project.{SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY}",
+                pattern,
+            )
+            values[selector] = (
+                value,
+                {
+                    "kind": "project-source-pattern",
+                    "path": _mapping_key_path(pattern_path, selector),
+                    "sourcePattern": pattern,
+                    "selector": selector,
+                    "selectorKind": "id" if selector.isdigit() else "name",
+                },
+            )
     if variant is None:
         return values
     for selector, value in config.variant_specialization_constants.get(
@@ -22083,7 +22252,11 @@ def _resolved_project_specialization_constants(
     configured = (
         dict(configured_values)
         if configured_values is not None
-        else _variant_specialization_values(config, variant)
+        else _variant_specialization_values(
+            config,
+            variant,
+            relative_path=unit.relative_path,
+        )
     )
     deferred = target in DEFERRED_SPECIALIZATION_TARGETS
     diagnostics: list[ProjectDiagnostic] = []
@@ -23579,6 +23752,7 @@ def translate_project(
             source_options=config.source_options,
             variants=config.variants,
             specialization_constants=config.specialization_constants,
+            source_specialization_constants=(config.source_specialization_constants),
             variant_specialization_constants=(config.variant_specialization_constants),
             workgroup_size=config.workgroup_size,
             variant_workgroup_sizes=config.variant_workgroup_sizes,
@@ -41831,6 +42005,12 @@ def _project_config_for_scan_validation(
         "project.specializationConstants", specialization_constants
     ):
         return None
+    source_specialization_constants = project.get("sourceSpecializationConstants", {})
+    if _source_specialization_mapping_contract_reasons(
+        "project.sourceSpecializationConstants",
+        source_specialization_constants,
+    ):
+        return None
     raw_variant_specializations = project.get("variantSpecializationConstants", {})
     if _variant_specialization_mapping_contract_reasons(
         "project.variantSpecializationConstants", raw_variant_specializations
@@ -41905,6 +42085,11 @@ def _project_config_for_scan_validation(
         },
         variants=variants,
         specialization_constants=dict(specialization_constants),
+        source_specialization_constants={
+            str(pattern): dict(values)
+            for pattern, values in source_specialization_constants.items()
+            if isinstance(values, Mapping)
+        },
         variant_specialization_constants=variant_specializations,
         workgroup_size=workgroup_size,
         variant_workgroup_sizes={
@@ -44896,6 +45081,12 @@ def _project_config_for_include_validation(
         "project.specializationConstants", specialization_constants
     ):
         specialization_constants = {}
+    source_specialization_constants = project.get("sourceSpecializationConstants", {})
+    if _source_specialization_mapping_contract_reasons(
+        "project.sourceSpecializationConstants",
+        source_specialization_constants,
+    ):
+        source_specialization_constants = {}
     raw_variant_specializations = project.get("variantSpecializationConstants", {})
     if _variant_specialization_mapping_contract_reasons(
         "project.variantSpecializationConstants", raw_variant_specializations
@@ -44934,6 +45125,11 @@ def _project_config_for_include_validation(
         defines=dict(defines),
         variants=variants,
         specialization_constants=dict(specialization_constants),
+        source_specialization_constants={
+            str(pattern): dict(values)
+            for pattern, values in source_specialization_constants.items()
+            if isinstance(values, Mapping)
+        },
         variant_specialization_constants={
             str(name): dict(values)
             for name, values in raw_variant_specializations.items()
@@ -45748,6 +45944,32 @@ def _variant_specialization_mapping_contract_reasons(
             variant_prefix = _mapping_key_path(prefix, variant)
         reasons.extend(
             _specialization_value_mapping_contract_reasons(variant_prefix, constants)
+        )
+    return reasons
+
+
+def _source_specialization_mapping_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = []
+    for pattern, constants in value.items():
+        if not _is_non_empty_string(pattern):
+            reasons.append(f"{prefix} keys must be non-empty source patterns")
+            pattern_prefix = prefix
+        else:
+            pattern_prefix = _mapping_key_path(prefix, str(pattern))
+            if not _is_repository_relative_glob(str(pattern)):
+                reasons.append(f"{pattern_prefix} pattern must be repository-relative")
+            if _normalize_project_relative_path(str(pattern)) != pattern:
+                reasons.append(f"{pattern_prefix} pattern must be normalized")
+        reasons.extend(
+            _specialization_value_mapping_contract_reasons(
+                pattern_prefix,
+                constants,
+            )
         )
     return reasons
 
@@ -47114,6 +47336,58 @@ def _project_metadata_contract_reasons(
                 "project.specializationConstantCount must match "
                 "project.specializationConstants "
                 f"({_value_mismatch_context(count, len(specialization_constants))})"
+            )
+
+    source_specializations = project.get("sourceSpecializationConstants")
+    source_specializations_are_mapping = isinstance(source_specializations, Mapping)
+    if _optional_project_field(
+        project,
+        "sourceSpecializationConstants",
+        required=require_full_metadata,
+    ):
+        reasons.extend(
+            _source_specialization_mapping_contract_reasons(
+                "project.sourceSpecializationConstants",
+                source_specializations,
+            )
+        )
+    if _optional_project_field(
+        project,
+        "sourceSpecializationPatternCount",
+        required=require_full_metadata,
+    ):
+        count = project.get("sourceSpecializationPatternCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.sourceSpecializationPatternCount must be a "
+                "non-negative integer"
+            )
+        elif source_specializations_are_mapping and count != len(
+            source_specializations
+        ):
+            reasons.append(
+                "project.sourceSpecializationPatternCount must match "
+                "project.sourceSpecializationConstants "
+                f"({_value_mismatch_context(count, len(source_specializations))})"
+            )
+    if _optional_project_field(
+        project,
+        "sourceSpecializationConstantCounts",
+        required=require_full_metadata,
+    ):
+        counts = project.get("sourceSpecializationConstantCounts")
+        if source_specializations_are_mapping:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "project.sourceSpecializationConstantCounts",
+                    counts,
+                    _source_specialization_constant_counts(source_specializations),
+                    "project.sourceSpecializationConstants",
+                )
+            )
+        elif not isinstance(counts, Mapping):
+            reasons.append(
+                "project.sourceSpecializationConstantCounts must be an object"
             )
 
     variant_specializations = project.get("variantSpecializationConstants")
