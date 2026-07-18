@@ -3884,8 +3884,7 @@ class MetalToCrossGLConverter:
                 str(item).lower() for item in getattr(member, "qualifiers", []) or []
             }
             if (
-                "const" in qualifiers
-                or "constant" in qualifiers
+                "constant" in qualifiers
                 or self.reference_element_type(member.vtype) is not None
                 or getattr(member, "array_sizes", None)
             ):

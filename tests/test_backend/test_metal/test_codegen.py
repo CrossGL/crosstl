@@ -8072,6 +8072,75 @@ def test_codegen_constructor_binding_preserves_cast_and_array_qualifiers():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_constructor_factory_initializes_const_value_members(tmp_path):
+    source = """
+    struct Loader {
+      const int src_ld;
+      const int tile_stride;
+      const int lane;
+
+      Loader(int src_ld_, int lane_)
+          : src_ld(src_ld_),
+            tile_stride(src_ld * 2),
+            lane(lane_) {}
+    };
+
+    kernel void build_loader(
+        device int* output [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+      Loader loader(int(gid), int(gid));
+      output[gid] = loader.src_ld + loader.tile_stride + loader.lane;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    src_assignment = "crosstl_ctor_value.src_ld = int(src_ld_);"
+    stride_assignment = (
+        "crosstl_ctor_value.tile_stride = int(crosstl_ctor_value.src_ld * 2);"
+    )
+    lane_assignment = "crosstl_ctor_value.lane = int(lane_);"
+    assert src_assignment in normalized
+    assert stride_assignment in normalized
+    assert lane_assignment in normalized
+    assert normalized.index(src_assignment) < normalized.index(stride_assignment)
+    assert normalized.index(stride_assignment) < normalized.index(lane_assignment)
+
+    shader = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(shader)
+    glsl = GLSLCodeGen().generate(shader)
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "const-member-constructor.hlsl"
+        binary_path = tmp_path / "const-member-constructor.dxil"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(binary_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    assert_opengl_compute_validates_if_available(
+        glsl,
+        tmp_path,
+        "const-member-constructor",
+    )
+
+
 @pytest.mark.parametrize(
     ("actual_qualifiers", "parameter_qualifiers"),
     [
