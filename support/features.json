@@ -10830,39 +10830,66 @@
         },
         "webgl": {
           "status": "unsupported",
-          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WebGL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WebGL."
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WebGL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WebGL.",
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ]
         },
         "wgsl": {
           "status": "unsupported",
-          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WGSL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WGSL."
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WGSL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WGSL.",
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ]
         },
         "metal": {
           "status": "unsupported",
-          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal."
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal.",
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ]
         },
         "vulkan": {
           "status": "unsupported",
-          "notes": "The backend-neutral runtime planner preserves and validates allocation views, but the built-in Vulkan reference driver currently prepares one buffer per binding and does not consume allocation IDs or bounded ranges. Plan serialization alone is not evidence of Vulkan physical allocation reuse."
+          "notes": "The backend-neutral runtime planner preserves and validates allocation views, but the built-in Vulkan reference driver currently prepares one buffer per binding and does not consume allocation IDs or bounded ranges. Plan serialization alone is not evidence of Vulkan physical allocation reuse.",
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ]
         },
         "cuda": {
           "status": "unsupported",
-          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in CUDA runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for CUDA."
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in CUDA runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for CUDA.",
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ]
         },
         "hip": {
           "status": "unsupported",
-          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in HIP runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for HIP."
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in HIP runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for HIP.",
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ]
         },
         "mojo": {
           "status": "unsupported",
-          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Mojo runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Mojo."
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Mojo runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Mojo.",
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ]
         },
         "rust": {
           "status": "unsupported",
-          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Rust runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Rust."
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Rust runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Rust.",
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ]
         },
         "slang": {
           "status": "unsupported",
-          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang."
+          "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang.",
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ]
         }
       }
     },

@@ -601,6 +601,7 @@ def test_project_package_exposes_public_api_surface():
         "RuntimeAdapterSetupError",
         "RuntimeAdapterValidationError",
         "RuntimeAdapterContract",
+        "RuntimeAllocationView",
         "RuntimeArtifactSelector",
         "RuntimeBoundConstant",
         "RuntimeBoundResource",

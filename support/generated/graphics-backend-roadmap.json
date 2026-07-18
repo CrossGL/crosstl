@@ -3462,7 +3462,9 @@
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_prepare_runtime_execution_preserves_explicit_shared_allocation"
+          ],
           "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal.",
           "status": "unsupported"
         },
