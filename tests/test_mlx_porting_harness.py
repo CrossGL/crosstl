@@ -2285,12 +2285,14 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     )
     issue = "https://github.com/CrossGL/crosstl/issues/1479"
     dependent_value_issue = "https://github.com/CrossGL/crosstl/issues/1490"
+    directx_issue = "https://github.com/CrossGL/crosstl/issues/1538"
+    opengl_issue = "https://github.com/CrossGL/crosstl/issues/1491"
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1807"
 
     status = expected_gaps["fp_quantized_contextual_materialization_status"]
 
     assert status == {
-        "status": "blocked-after-contextual-receiver-resolution",
+        "status": "blocked-after-dependent-template-value-resolution",
         "source": "mlx/backend/metal/kernels/fp_quantized.metal",
         "repository_commit": PINNED_MLX_COMMIT,
         "targets": ["directx", "opengl"],
@@ -2303,52 +2305,61 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             "concrete-constructor-preservation",
             "line-wrapped-qualified-struct-receiver-materialization",
             "contextual-metal-method-receiver-resolution",
+            "dependent-template-value-argument-resolution",
+            "canonical-non-type-specialization-identity",
         ],
-        "resolved_by_commit": "c7a3c61addf9ca523e09bc81252ab76340c3f82c",
+        "contextual_receiver_resolved_by_commit": (
+            "c7a3c61addf9ca523e09bc81252ab76340c3f82c"
+        ),
+        "dependent_values_resolved_in": "https://github.com/CrossGL/crosstl/pull/1808",
         "advanced_past": {
             "member_call": "epilogue_op.apply",
             "receiver_declaration": (
                 "thread const TransformNone_float_float& epilogue_op"
             ),
+            "dependent_expressions": ["BK_padded", "BN_padded", "SIMD_SIZE"],
+            "materialized_specialization_count": 588,
         },
-        "current_boundary": {
-            "diagnostic_code": "project.translate.template-materialization-unsupported",
-            "source_location": {
-                "line": 1727,
-                "column": 1,
+        "current_boundaries": {
+            "directx": {
+                "diagnostic_code": "project.translate.specialization-value-required",
+                "missing_contract": "directx-specialization-constant-variant",
+                "required_values": [
+                    {"name": "align_M", "id": 200, "source_type": "bool"},
+                    {"name": "align_N", "id": 201, "source_type": "bool"},
+                    {"name": "align_K", "id": 202, "source_type": "bool"},
+                ],
+                "blocked_by": directx_issue,
             },
-            "missing_contract": "dependent-template-value-argument-resolution",
-            "residual_specializations": [
-                {
-                    "family": "BlockMMA",
-                    "missing_parameters": ["BK", "BN"],
+            "opengl": {
+                "diagnostic_code": "project.translate.metal-static-constant-unresolved",
+                "missing_contract": "unambiguous-qualified-static-owner-resolution",
+                "static_constant": {
+                    "owner": "BaseMMAFrag_float_8_8",
+                    "member": "kFragRows",
+                    "reason": (
+                        "multiple visible struct declarations match the qualified owner"
+                    ),
                 },
-                {
-                    "family": "BlockLoader",
-                    "missing_parameters": ["BK"],
-                },
-                {
-                    "family": "QuantizedBlockLoader",
-                    "missing_parameters": ["BK", "BN"],
-                },
-            ],
-            "dependent_expressions": ["BK_padded", "BN_padded"],
-            "blocked_by": issue,
-            "dependent_value_issue": dependent_value_issue,
+                "blocked_by": opengl_issue,
+            },
         },
         "target_results": {
             "directx": {
                 "status": "blocked-as-expected",
                 "artifact_emitted": False,
+                "specialization_count": 588,
             },
             "opengl": {
                 "status": "blocked-as-expected",
                 "artifact_emitted": False,
+                "specialization_count": 588,
             },
         },
         "target_artifact_count": 0,
         "resolved_issues": [resolved_issue],
-        "remaining_materialization_blocked_by": [issue, dependent_value_issue],
+        "advanced_issue_contracts": [issue, dependent_value_issue],
+        "remaining_blocked_by": [directx_issue, opengl_issue],
         "runtime_integration_included": False,
         "numerical_parity_claimed": False,
         "runtime_parity_claimed": False,
@@ -2356,20 +2367,28 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert resolved_issue in expected_gaps["resolved_issues"]
     assert resolved_issue not in expected_gaps["tracked_issues"]
     assert issue in expected_gaps["tracked_issues"]
+    assert dependent_value_issue in expected_gaps["tracked_issues"]
+    assert directx_issue in expected_gaps["tracked_issues"]
+    assert opengl_issue in expected_gaps["tracked_issues"]
 
     readme = MLX_README_PATH.read_text(encoding="utf-8")
     assert PINNED_MLX_COMMIT in readme
     assert "`epilogue_op.apply`" in readme
     assert "`thread const TransformNone_float_float& epilogue_op`" in readme
     assert "CrossTL commit\n`c7a3c61ad`" in readme
-    assert "at source line 1727,\ncolumn 1" in readme
-    assert "`BlockMMA`" in readme
-    assert "`BlockLoader`" in readme
-    assert "`QuantizedBlockLoader`" in readme
     assert "`BK_padded`" in readme
     assert "`BN_padded`" in readme
+    assert "`SIMD_SIZE`" in readme
+    assert "`project.translate.specialization-value-required`" in readme
+    assert "`align_M` (ID 200)" in readme
+    assert "`align_N` (ID 201)" in readme
+    assert "`align_K` (ID 202)" in readme
+    assert "`project.translate.metal-static-constant-unresolved`" in readme
+    assert "`BaseMMAFrag_float_8_8::kFragRows`" in readme
     assert "CrossGL/crosstl#1479" in readme
     assert "CrossGL/crosstl#1490" in readme
+    assert "CrossGL/crosstl#1538" in readme
+    assert "CrossGL/crosstl#1491" in readme
     assert "CrossGL/crosstl#1807" in readme
     assert "does not claim runtime integration or numerical parity" in readme
 

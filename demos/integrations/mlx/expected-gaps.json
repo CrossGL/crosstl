@@ -918,7 +918,7 @@
     "runtime_integration_included": false
   },
   "fp_quantized_contextual_materialization_status": {
-    "status": "blocked-after-contextual-receiver-resolution",
+    "status": "blocked-after-dependent-template-value-resolution",
     "source": "mlx/backend/metal/kernels/fp_quantized.metal",
     "repository_commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
     "targets": [
@@ -933,66 +933,79 @@
       "statement-bounded-member-template-parsing",
       "concrete-constructor-preservation",
       "line-wrapped-qualified-struct-receiver-materialization",
-      "contextual-metal-method-receiver-resolution"
+      "contextual-metal-method-receiver-resolution",
+      "dependent-template-value-argument-resolution",
+      "canonical-non-type-specialization-identity"
     ],
-    "resolved_by_commit": "c7a3c61addf9ca523e09bc81252ab76340c3f82c",
+    "contextual_receiver_resolved_by_commit": "c7a3c61addf9ca523e09bc81252ab76340c3f82c",
+    "dependent_values_resolved_in": "https://github.com/CrossGL/crosstl/pull/1808",
     "advanced_past": {
       "member_call": "epilogue_op.apply",
-      "receiver_declaration": "thread const TransformNone_float_float& epilogue_op"
-    },
-    "current_boundary": {
-      "diagnostic_code": "project.translate.template-materialization-unsupported",
-      "source_location": {
-        "line": 1727,
-        "column": 1
-      },
-      "missing_contract": "dependent-template-value-argument-resolution",
-      "residual_specializations": [
-        {
-          "family": "BlockMMA",
-          "missing_parameters": [
-            "BK",
-            "BN"
-          ]
-        },
-        {
-          "family": "BlockLoader",
-          "missing_parameters": [
-            "BK"
-          ]
-        },
-        {
-          "family": "QuantizedBlockLoader",
-          "missing_parameters": [
-            "BK",
-            "BN"
-          ]
-        }
-      ],
+      "receiver_declaration": "thread const TransformNone_float_float& epilogue_op",
       "dependent_expressions": [
         "BK_padded",
-        "BN_padded"
+        "BN_padded",
+        "SIMD_SIZE"
       ],
-      "blocked_by": "https://github.com/CrossGL/crosstl/issues/1479",
-      "dependent_value_issue": "https://github.com/CrossGL/crosstl/issues/1490"
+      "materialized_specialization_count": 588
+    },
+    "current_boundaries": {
+      "directx": {
+        "diagnostic_code": "project.translate.specialization-value-required",
+        "missing_contract": "directx-specialization-constant-variant",
+        "required_values": [
+          {
+            "name": "align_M",
+            "id": 200,
+            "source_type": "bool"
+          },
+          {
+            "name": "align_N",
+            "id": 201,
+            "source_type": "bool"
+          },
+          {
+            "name": "align_K",
+            "id": 202,
+            "source_type": "bool"
+          }
+        ],
+        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1538"
+      },
+      "opengl": {
+        "diagnostic_code": "project.translate.metal-static-constant-unresolved",
+        "missing_contract": "unambiguous-qualified-static-owner-resolution",
+        "static_constant": {
+          "owner": "BaseMMAFrag_float_8_8",
+          "member": "kFragRows",
+          "reason": "multiple visible struct declarations match the qualified owner"
+        },
+        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1491"
+      }
     },
     "target_results": {
       "directx": {
         "status": "blocked-as-expected",
-        "artifact_emitted": false
+        "artifact_emitted": false,
+        "specialization_count": 588
       },
       "opengl": {
         "status": "blocked-as-expected",
-        "artifact_emitted": false
+        "artifact_emitted": false,
+        "specialization_count": 588
       }
     },
     "target_artifact_count": 0,
     "resolved_issues": [
       "https://github.com/CrossGL/crosstl/issues/1807"
     ],
-    "remaining_materialization_blocked_by": [
+    "advanced_issue_contracts": [
       "https://github.com/CrossGL/crosstl/issues/1479",
       "https://github.com/CrossGL/crosstl/issues/1490"
+    ],
+    "remaining_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1538",
+      "https://github.com/CrossGL/crosstl/issues/1491"
     ],
     "runtime_integration_included": false,
     "numerical_parity_claimed": false,
@@ -1632,6 +1645,7 @@
     "https://github.com/CrossGL/crosstl/issues/1524",
     "https://github.com/CrossGL/crosstl/issues/1536",
     "https://github.com/CrossGL/crosstl/issues/1537",
+    "https://github.com/CrossGL/crosstl/issues/1538",
     "https://github.com/CrossGL/crosstl/issues/1540",
     "https://github.com/CrossGL/crosstl/issues/1541",
     "https://github.com/CrossGL/crosstl/issues/1542",

@@ -901,15 +901,26 @@ materialization, and contextual Metal method receiver resolution. CrossTL commit
 `c7a3c61ad` resolves the contextual receiver on this path. Specialized struct
 constexpr assertion evaluation resolves CrossGL/crosstl#1807.
 
-Both target runs now fail closed with
-`project.translate.template-materialization-unsupported` at source line 1727,
-column 1. The residual specializations are `BlockMMA`, with `BK` and `BN`
-missing; `BlockLoader`, with `BK` missing; and `QuantizedBlockLoader`, with `BK`
-and `BN` missing. Their dependent expressions include `BK_padded` and
-`BN_padded`. CrossGL/crosstl#1479 tracks recovery of the concrete template
-bindings, while CrossGL/crosstl#1490 tracks the dependent helper aliases and
-value expressions that must be resolved before code generation. Neither run
-emits a target artifact.
+Dependent helper deduction now resolves the function-local `BK_padded` and
+`BN_padded` expressions together with the file-scope `SIMD_SIZE` constant before
+specializing plain helper templates. Proven non-type arguments are serialized to
+canonical values, so equivalent Boolean and integer spellings identify the same
+concrete struct at the kernel call site and in the generated helper signature.
+The exact DirectX and OpenGL runs each materialize 588 function
+specializations with no unsupported template records. This advances the current
+frontier through the applicable CrossGL/crosstl#1479 and CrossGL/crosstl#1490
+contracts; both issues retain broader project-materialization scope.
+
+The targets now fail closed at distinct later contracts. DirectX reports
+`project.translate.specialization-value-required` for `align_M` (ID 200),
+`align_N` (ID 201), and `align_K` (ID 202), all Boolean Metal function
+constants. CrossGL/crosstl#1538 tracks concrete DirectX variants and preserved
+specialization provenance. OpenGL reports
+`project.translate.metal-static-constant-unresolved` for
+`BaseMMAFrag_float_8_8::kFragRows` because multiple visible concrete owner
+declarations match the qualified reference; CrossGL/crosstl#1491 tracks
+unambiguous qualified static-constant resolution. Neither run emits a target
+artifact.
 This evidence does not claim runtime integration or numerical parity.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
