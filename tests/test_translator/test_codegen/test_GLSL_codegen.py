@@ -6731,6 +6731,65 @@ def test_glsl_private_pointer_if_keeps_unknown_branches():
     )
 
 
+def test_glsl_private_pointer_block_preserves_shadowed_outer_interval():
+    code = """
+    shader ScopedPrivatePointerBranch {
+        float read_selected(thread float* values) {
+            int selector = 0;
+            {
+                int selector = 7;
+            }
+            return values[selector];
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float read_selected(inout float values[1], int values_base)" in generated
+
+
+def test_glsl_private_pointer_block_propagates_assignment_before_shadow():
+    code = """
+    shader OrderedPrivatePointerShadow {
+        float read_selected(thread float* values) {
+            int selector = 0;
+            {
+                selector = 2;
+                int selector = 1;
+            }
+            return values[selector];
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float read_selected(inout float values[3], int values_base)" in generated
+
+
+def test_glsl_private_pointer_if_keeps_unsigned_wraparound_branches():
+    code = """
+    shader UnsignedPrivatePointerBranch {
+        float read_selected(thread float* values) {
+            uint selector = 4294967295u;
+            selector += 1u;
+            if (selector == 0u) {
+                return values[7];
+            } else {
+                return values[0];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float read_selected(inout float values[8], int values_base)" in generated
+    assert "return values[(values_base + int(7))];" in generated
+    assert "return values[(values_base + int(0))];" in generated
+
+
 def test_glsl_private_pointer_view_rejects_unresolved_address_base():
     code = """
     shader UnresolvedPrivatePointerBase {

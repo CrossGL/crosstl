@@ -30503,6 +30503,8 @@ complex64_t crossgl_complex64_mod_assign(
         if value is not None:
             return value != 0
 
+        # Bounds intervals use unbounded arithmetic and cannot prove branch
+        # outcomes across source-width overflow.
         if isinstance(expression, UnaryOpNode) and expression.op == "!":
             operand = self.glsl_private_pointer_condition_value(
                 expression.operand, intervals, constants
@@ -30525,51 +30527,6 @@ complex64_t crossgl_complex64_mod_assign(
                 if left is None or right is None:
                     return None
                 return left and right if operator in {"&&", "and"} else left or right
-
-            if operator in {"==", "!=", "<", "<=", ">", ">="}:
-                left = self.glsl_private_pointer_interval(
-                    expression.left, intervals, constants
-                )
-                right = self.glsl_private_pointer_interval(
-                    expression.right, intervals, constants
-                )
-                if left is None or right is None:
-                    return None
-                if operator == "==":
-                    if left[1] < right[0] or right[1] < left[0]:
-                        return False
-                    if left[0] == left[1] == right[0] == right[1]:
-                        return True
-                elif operator == "!=":
-                    if left[1] < right[0] or right[1] < left[0]:
-                        return True
-                    if left[0] == left[1] == right[0] == right[1]:
-                        return False
-                elif operator == "<":
-                    if left[1] < right[0]:
-                        return True
-                    if left[0] >= right[1]:
-                        return False
-                elif operator == "<=":
-                    if left[1] <= right[0]:
-                        return True
-                    if left[0] > right[1]:
-                        return False
-                elif operator == ">":
-                    if left[0] > right[1]:
-                        return True
-                    if left[1] <= right[0]:
-                        return False
-                elif operator == ">=":
-                    if left[0] >= right[1]:
-                        return True
-                    if left[1] < right[0]:
-                        return False
-                return None
-
-        interval = self.glsl_private_pointer_interval(expression, intervals, constants)
-        if interval is not None and interval[0] == interval[1]:
-            return interval[0] != 0
         return None
 
     def glsl_private_pointer_static_binding(
@@ -31145,8 +31102,30 @@ complex64_t crossgl_complex64_mod_assign(
                 return
             if isinstance(value, BlockNode):
                 block_bindings = dict(active_bindings)
-                for statement in getattr(value, "statements", []) or []:
-                    visit(statement, active_intervals, block_bindings)
+                block_intervals = dict(active_intervals)
+                statements = list(getattr(value, "statements", []) or [])
+                # Bindings identify mutable names; intervals also contain constants.
+                outer_binding_names = set(active_bindings)
+                propagated_intervals = {
+                    name: active_intervals.get(name) for name in outer_binding_names
+                }
+                shadowed_names = set()
+                for statement in statements:
+                    declared_name = (
+                        getattr(statement, "name", None)
+                        if isinstance(statement, (VariableNode, ArrayNode))
+                        else None
+                    )
+                    visit(statement, block_intervals, block_bindings)
+                    if declared_name:
+                        shadowed_names.add(declared_name)
+                    for name in outer_binding_names - shadowed_names:
+                        propagated_intervals[name] = block_intervals.get(name)
+                for name, interval in propagated_intervals.items():
+                    if interval is not None:
+                        active_intervals[name] = interval
+                    else:
+                        active_intervals.pop(name, None)
                 return
             if isinstance(value, (VariableNode, ArrayNode)):
                 initial_value = getattr(value, "initial_value", None)
