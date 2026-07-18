@@ -79,6 +79,14 @@ _SPECIALIZATION_DTYPE_ALIASES = {
     "boolean": "bool",
 }
 _DTYPE_SIZES = {"float32": 4, "int32": 4, "uint32": 4}
+_PHYSICAL_TYPES = {"float32": "float", "int32": "int", "uint32": "uint"}
+_TARGET_STORAGE_LAYOUTS = {
+    "directx": {
+        "buffer": "hlsl-structured-buffer",
+        "constant-buffer": "hlsl-constant-buffer",
+    },
+    "opengl": {"buffer": "std430", "constant-buffer": "std140"},
+}
 _VALUE_FIELDS = frozenset(
     ("name", "kind", "dtype", "shape", "values", "value", "tolerance", "metadata")
 )
@@ -899,6 +907,8 @@ def _resource_bindings(
         scalar_layout = _validated_scalar_layout(
             binding.get("scalarLayout"),
             runtime_value=value,
+            target=target,
+            resource_kind=kind,
             path=f"{path}.scalarLayout",
         )
         result.append(
@@ -926,7 +936,12 @@ def _resource_bindings(
 
 
 def _validated_scalar_layout(
-    layout: Any, *, runtime_value: RuntimeValue, path: str
+    layout: Any,
+    *,
+    runtime_value: RuntimeValue,
+    target: str,
+    resource_kind: str,
+    path: str,
 ) -> dict[str, Any]:
     if not isinstance(layout, Mapping):
         raise NativeLoaderDispatchError(
@@ -938,6 +953,8 @@ def _validated_scalar_layout(
     element_type = _buffer_dtype(layout.get("elementType"), path=f"{path}.elementType")
     element_size = layout.get("elementSizeBytes")
     element_stride = layout.get("elementStrideBytes")
+    alignment = layout.get("alignmentBytes")
+    member_offset = layout.get("memberOffsetBytes")
     if (
         not isinstance(element_size, int)
         or isinstance(element_size, bool)
@@ -945,43 +962,98 @@ def _validated_scalar_layout(
         or not isinstance(element_stride, int)
         or isinstance(element_stride, bool)
         or element_stride <= 0
+        or not isinstance(alignment, int)
+        or isinstance(alignment, bool)
+        or alignment <= 0
+        or not isinstance(member_offset, int)
+        or isinstance(member_offset, bool)
+        or member_offset < 0
     ):
         raise NativeLoaderDispatchError(
             "resource-layout-invalid",
-            "Scalar layout element size and stride must be positive integers.",
+            "Scalar layout sizes, alignment, and member offset must be concrete integers.",
             path=path,
             details={
                 "binding": runtime_value.name,
                 "elementSizeBytes": element_size,
                 "elementStrideBytes": element_stride,
+                "alignmentBytes": alignment,
+                "memberOffsetBytes": member_offset,
             },
         )
+    physical_type = layout.get("physicalType")
+    storage_layout = layout.get("storageLayout")
+    runtime_sized = layout.get("runtimeSized")
+    expected_physical_type = _PHYSICAL_TYPES[runtime_value.dtype]
+    expected_storage_layout = _TARGET_STORAGE_LAYOUTS[target][resource_kind]
     if (
         element_type != runtime_value.dtype
         or element_size != _DTYPE_SIZES[runtime_value.dtype]
+        or physical_type != expected_physical_type
+        or storage_layout != expected_storage_layout
     ):
         raise NativeLoaderDispatchError(
             "resource-layout-mismatch",
-            "Runtime value dtype is incompatible with the descriptor scalar layout.",
+            "Runtime value or target storage is incompatible with the descriptor scalar layout.",
             path=path,
             details={
                 "binding": runtime_value.name,
                 "valueDtype": runtime_value.dtype,
                 "layoutElementType": element_type,
                 "layoutElementSizeBytes": element_size,
+                "layoutPhysicalType": physical_type,
+                "expectedPhysicalType": expected_physical_type,
+                "layoutStorage": storage_layout,
+                "expectedStorage": expected_storage_layout,
             },
         )
-    if element_stride != element_size:
+    if element_stride != element_size or member_offset != 0:
         raise NativeLoaderDispatchError(
             "resource-layout-unsupported",
-            "Native loader dispatch requires tightly packed scalar buffer layouts.",
-            path=f"{path}.elementStrideBytes",
+            "Native loader dispatch requires a tightly packed scalar at byte offset zero.",
+            path=path,
             details={
                 "binding": runtime_value.name,
                 "elementSizeBytes": element_size,
                 "elementStrideBytes": element_stride,
+                "memberOffsetBytes": member_offset,
             },
         )
+    if resource_kind == "buffer":
+        if runtime_sized is not True or alignment != element_size:
+            raise NativeLoaderDispatchError(
+                "resource-layout-unsupported",
+                "Native loader storage buffers require an exact scalar runtime-array layout.",
+                path=path,
+                details={
+                    "binding": runtime_value.name,
+                    "runtimeSized": runtime_sized,
+                    "alignmentBytes": alignment,
+                    "elementSizeBytes": element_size,
+                },
+            )
+    else:
+        block_size = layout.get("blockSizeBytes")
+        if (
+            runtime_sized is not False
+            or not isinstance(block_size, int)
+            or isinstance(block_size, bool)
+            or block_size < element_size
+            or block_size % alignment
+            or alignment < element_size
+        ):
+            raise NativeLoaderDispatchError(
+                "resource-layout-unsupported",
+                "Native loader constant buffers require an aligned fixed-size scalar block.",
+                path=path,
+                details={
+                    "binding": runtime_value.name,
+                    "runtimeSized": runtime_sized,
+                    "alignmentBytes": alignment,
+                    "blockSizeBytes": block_size,
+                    "elementSizeBytes": element_size,
+                },
+            )
     return copy.deepcopy(dict(layout))
 
 

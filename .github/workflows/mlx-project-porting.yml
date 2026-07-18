@@ -28,6 +28,7 @@ on:
       - "tests/fixtures/project_porting/mlx/**"
       - "tests/test_translator/test_native_runtime_drivers.py"
       - "tests/test_translator/test_native_loader_dispatch_integration.py"
+      - "tests/test_translator/test_mlx_arange_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
       - "tests/test_translator/test_project_translation.py"
       - "tests/test_translator/test_runtime_verification.py"
@@ -54,6 +55,7 @@ on:
       - "tests/fixtures/project_porting/mlx/**"
       - "tests/test_translator/test_native_runtime_drivers.py"
       - "tests/test_translator/test_native_loader_dispatch_integration.py"
+      - "tests/test_translator/test_mlx_arange_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
       - "tests/test_translator/test_project_translation.py"
       - "tests/test_translator/test_runtime_verification.py"
@@ -300,6 +302,15 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_directx_on_device
 
+      - name: Prove pinned MLX arange Direct3D native-loader execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_ARANGE_DIRECTX_NATIVE_LOADER: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_arange_native_loader.py::test_pinned_mlx_arange_executes_through_directx_native_loader
+
       - name: Prove Direct3D local-struct byte-view native readback
         if: runner.os == 'Windows'
         env:
@@ -353,6 +364,18 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_opengl_on_device
+
+      - name: Prove pinned MLX arange OpenGL native-loader execution
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_ARANGE_OPENGL_NATIVE_LOADER: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_arange_native_loader.py::test_pinned_mlx_arange_executes_through_opengl_native_loader
 
       - name: Validate generated OpenGL subgroup contract through Vulkan
         if: runner.os == 'Linux'

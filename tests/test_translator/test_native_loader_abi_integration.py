@@ -171,6 +171,22 @@ def test_runtime_packages_preserve_reflected_native_loader_contract(
             )
             for binding in descriptor["bindings"]
         ] == expected_bindings[target]
+        for binding in descriptor["bindings"]:
+            layout = binding["scalarLayout"]
+            assert layout["physicalType"] == "float"
+            assert layout["elementType"] == "float32"
+            assert layout["elementSizeBytes"] == 4
+            assert layout["elementStrideBytes"] == 4
+            assert layout["alignmentBytes"] == 4
+            assert layout["memberOffsetBytes"] == 0
+            assert layout["runtimeSized"] is True
+            assert (
+                layout["storageLayout"]
+                == {
+                    "directx": "hlsl-structured-buffer",
+                    "opengl": "std430",
+                }[target]
+            )
 
         artifact_path = package_dir / descriptor["artifact"]["packagePath"]
         assert descriptor["artifact"]["hash"] == {

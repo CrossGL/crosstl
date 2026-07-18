@@ -3907,6 +3907,16 @@ def _parse_runtime_resource_binding(
             f"{field_name} must identify a resource by id, name, or binding."
         )
     metadata = _parse_runtime_contract_item_metadata(value, field_name=field_name)
+    if "scalarLayout" in metadata:
+        metadata["scalarLayout"] = _parse_runtime_scalar_layout(
+            metadata["scalarLayout"],
+            field_name=f"{field_name}.metadata.scalarLayout",
+        )
+    if "scalarLayout" in value:
+        metadata["scalarLayout"] = _parse_runtime_scalar_layout(
+            value.get("scalarLayout"),
+            field_name=f"{field_name}.scalarLayout",
+        )
     if "required" in value:
         metadata["required"] = _optional_bool(
             value.get("required"), field_name=f"{field_name}.required"
@@ -3926,6 +3936,12 @@ def _parse_runtime_resource_binding(
         value=_optional_string(value.get("value"), field_name=f"{field_name}.value"),
         metadata=metadata,
     )
+
+
+def _parse_runtime_scalar_layout(value: Any, *, field_name: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"{field_name} must be an object.")
+    return dict(value)
 
 
 def _parse_runtime_specialization_constants(
@@ -5372,10 +5388,8 @@ def _merge_runtime_adapter_contract(
             override.entry_points,
             key=lambda item: (item.name, item.stage),
         ),
-        resource_bindings=_merge_runtime_contract_items(
-            base.resource_bindings,
-            override.resource_bindings,
-            key=_runtime_resource_binding_key,
+        resource_bindings=_merge_runtime_resource_bindings(
+            base.resource_bindings, override.resource_bindings
         ),
         specialization_constants=_merge_runtime_contract_items(
             base.specialization_constants,
@@ -5421,6 +5435,63 @@ def _runtime_resource_binding_key(binding: RuntimeResourceBinding) -> Any:
     if binding.name is not None:
         return ("name", binding.name)
     return ("binding", binding.set, binding.binding, binding.index)
+
+
+def _merge_runtime_resource_bindings(
+    base: tuple[RuntimeResourceBinding, ...],
+    override: tuple[RuntimeResourceBinding, ...],
+) -> tuple[RuntimeResourceBinding, ...]:
+    if not base:
+        return override
+    if not override:
+        return base
+    result = list(base)
+    for item in override:
+        position = next(
+            (
+                index
+                for index, existing in enumerate(result)
+                if _runtime_resource_bindings_match(existing, item)
+            ),
+            None,
+        )
+        if position is None:
+            result.append(item)
+        else:
+            result[position] = _merge_runtime_resource_binding(result[position], item)
+    return tuple(result)
+
+
+def _runtime_resource_bindings_match(
+    base: RuntimeResourceBinding, override: RuntimeResourceBinding
+) -> bool:
+    if base.binding_id is not None and override.binding_id is not None:
+        return base.binding_id == override.binding_id
+    if base.name is not None and override.name is not None:
+        return base.name == override.name
+    return _runtime_resource_binding_key(base) == _runtime_resource_binding_key(
+        override
+    )
+
+
+def _merge_runtime_resource_binding(
+    base: RuntimeResourceBinding, override: RuntimeResourceBinding
+) -> RuntimeResourceBinding:
+    def selected(override_value: Any, base_value: Any) -> Any:
+        return base_value if override_value is None else override_value
+
+    return RuntimeResourceBinding(
+        binding_id=selected(override.binding_id, base.binding_id),
+        name=selected(override.name, base.name),
+        kind=selected(override.kind, base.kind),
+        type_name=selected(override.type_name, base.type_name),
+        set=selected(override.set, base.set),
+        binding=selected(override.binding, base.binding),
+        index=selected(override.index, base.index),
+        access=selected(override.access, base.access),
+        value=selected(override.value, base.value),
+        metadata={**dict(base.metadata), **dict(override.metadata)},
+    )
 
 
 def _merge_runtime_dispatch(

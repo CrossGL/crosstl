@@ -489,6 +489,44 @@ def _opengl_dispatch_request(tmp_path: Path) -> NativeRuntimeDispatchRequest:
     )
 
 
+def _scalar_block_layout(storage_layout: str, **overrides):
+    layout = {
+        "physicalType": "uint",
+        "elementType": "uint32",
+        "elementSizeBytes": 4,
+        "elementStrideBytes": 4,
+        "storageLayout": storage_layout,
+        "alignmentBytes": 16,
+        "blockSizeBytes": 16,
+        "memberOffsetBytes": 0,
+        "runtimeSized": False,
+    }
+    layout.update(overrides)
+    return layout
+
+
+def _scalar_constant_buffer_binding(target: str, scalar_layout=None):
+    metadata = {}
+    if scalar_layout is not None:
+        metadata["scalarLayout"] = scalar_layout
+    return NativeRuntimeBufferBinding(
+        name="params",
+        binding=RuntimeResourceBinding(
+            name="params",
+            kind="constant-buffer",
+            type_name="Params" if target == "directx" else None,
+            set=0,
+            binding=0,
+            access="read",
+            metadata=metadata,
+        ),
+        value=[3],
+        source="input",
+        dtype="uint32",
+        shape=(1,),
+    )
+
+
 def _directx_dispatch_request(tmp_path: Path) -> NativeRuntimeDispatchRequest:
     return NativeRuntimeDispatchRequest(
         target="directx",
@@ -506,6 +544,9 @@ def _directx_dispatch_request(tmp_path: Path) -> NativeRuntimeDispatchRequest:
                     set=0,
                     binding=0,
                     access="read",
+                    metadata={
+                        "scalarLayout": _scalar_block_layout("hlsl-constant-buffer")
+                    },
                 ),
                 value=[3],
                 source="input",
@@ -810,6 +851,65 @@ def test_prepare_directx_buffers_maps_and_packs_descriptor_namespaces(tmp_path):
     assert prepared[1].stride == 4
     assert prepared[2].payload == b"\x00" * 8
     assert prepared[2].output_name == "result"
+
+
+def test_prepare_directx_buffers_rejects_missing_scalar_block_layout():
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_directx_buffers({"params": _scalar_constant_buffer_binding("directx")})
+
+    assert excinfo.value.details == {
+        "target": "directx",
+        "runtime": "directx-compute-runtime",
+        "reasonKind": "scalar-block-layout-missing",
+        "resource": "params",
+    }
+
+
+@pytest.mark.parametrize(
+    ("layout_overrides", "reason_kind"),
+    [
+        ({"blockSizeBytes": 2}, "scalar-block-size-invalid"),
+        ({"blockSizeBytes": 20}, "scalar-block-size-invalid"),
+        ({"alignmentBytes": 8}, "scalar-block-alignment-invalid"),
+        ({"memberOffsetBytes": 4}, "scalar-block-member-offset-unsupported"),
+        ({"runtimeSized": True}, "scalar-block-runtime-size-invalid"),
+        (
+            {"storageLayout": "std140"},
+            "scalar-block-storage-layout-unsupported",
+        ),
+        (
+            {"physicalType": "int"},
+            "scalar-block-element-layout-unsupported",
+        ),
+    ],
+)
+def test_prepare_directx_buffers_rejects_invalid_scalar_block_layout(
+    layout_overrides,
+    reason_kind,
+):
+    binding = _scalar_constant_buffer_binding(
+        "directx",
+        _scalar_block_layout("hlsl-constant-buffer", **layout_overrides),
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_directx_buffers({"params": binding})
+
+    assert excinfo.value.details["target"] == "directx"
+    assert excinfo.value.details["reasonKind"] == reason_kind
+    assert excinfo.value.details["resource"] == "params"
+
+
+def test_prepare_directx_buffers_uses_reflected_block_size_as_allocation_minimum():
+    binding = _scalar_constant_buffer_binding(
+        "directx",
+        _scalar_block_layout("hlsl-constant-buffer", blockSizeBytes=272),
+    )
+
+    prepared = _prepare_directx_buffers({"params": binding})
+
+    assert prepared[0].payload == struct.pack("<I", 3)
+    assert prepared[0].allocation_size == 512
 
 
 def test_prepare_directx_buffers_rejects_nonzero_register_space(tmp_path):
@@ -1147,6 +1247,11 @@ def test_directx_runtime_adapter_compiles_dxil_and_dispatches_fixture(tmp_path):
                             "set": 0,
                             "binding": 0,
                             "access": "read",
+                            "metadata": {
+                                "scalarLayout": _scalar_block_layout(
+                                    "hlsl-constant-buffer"
+                                )
+                            },
                         },
                         {
                             "name": "lhs",
@@ -1567,6 +1672,17 @@ def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device
             ("arangeuint32_step_Constants", "constant-buffer", 1),
             ("out_", "buffer", 2),
         }
+        reflected_layouts = {
+            binding["name"]: binding["metadata"]["scalarLayout"]
+            for binding in reflected["resourceBindings"]
+        }
+        assert reflected_layouts["arangeuint32_start_Constants"]["blockSizeBytes"] == 16
+        assert (
+            reflected_layouts["arangeuint32_step_Constants"]["storageLayout"]
+            == "hlsl-constant-buffer"
+        )
+        assert reflected_layouts["out_"]["elementStrideBytes"] == 4
+        assert reflected_layouts["out_"]["runtimeSized"] is True
 
         manifest = build_runtime_test_manifest(
             runtime_artifacts,
@@ -1594,6 +1710,10 @@ def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device
             ("arangeuint32_step_Constants", "constant-buffer", 1),
             ("out_", "buffer", 2),
         ]
+        assert {
+            item["binding"]["name"]: item["binding"]["metadata"]["scalarLayout"]
+            for item in case["runtimeExecution"]["resourceBindings"]
+        } == reflected_layouts
         assert case["runtimeAdapter"]["metadata"]["sourceEntryPoint"] == (
             "arangeuint32"
         )
@@ -2253,18 +2373,8 @@ def test_prepare_opengl_buffers_packs_storage_and_uniform_buffers():
                 dtype="float32",
                 shape=(2,),
             ),
-            "params": NativeRuntimeBufferBinding(
-                name="params",
-                binding=RuntimeResourceBinding(
-                    name="params",
-                    kind="constant-buffer",
-                    set=0,
-                    binding=0,
-                ),
-                value=[3],
-                source="input",
-                dtype="uint32",
-                shape=(1,),
+            "params": _scalar_constant_buffer_binding(
+                "opengl", _scalar_block_layout("std140")
             ),
             "out": NativeRuntimeBufferBinding(
                 name="out",
@@ -2291,6 +2401,88 @@ def test_prepare_opengl_buffers_packs_storage_and_uniform_buffers():
     assert buffers[1].payload == b"\x00" * 8
     assert buffers[1].output_name == "result"
     assert buffers[2].payload == b"\x03\x00\x00\x00"
+    assert buffers[2].allocation_size == 16
+
+
+def test_prepare_opengl_buffers_rejects_missing_scalar_block_layout():
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_opengl_buffers({"params": _scalar_constant_buffer_binding("opengl")})
+
+    assert excinfo.value.details == {
+        "target": "opengl",
+        "runtime": "opengl-compute-runtime",
+        "reasonKind": "scalar-block-layout-missing",
+        "resource": "params",
+    }
+
+
+@pytest.mark.parametrize(
+    ("layout_overrides", "reason_kind"),
+    [
+        ({"blockSizeBytes": 2}, "scalar-block-size-invalid"),
+        ({"blockSizeBytes": 20}, "scalar-block-size-invalid"),
+        ({"alignmentBytes": 8}, "scalar-block-alignment-invalid"),
+        ({"memberOffsetBytes": 4}, "scalar-block-member-offset-unsupported"),
+        ({"runtimeSized": True}, "scalar-block-runtime-size-invalid"),
+        (
+            {"storageLayout": "hlsl-constant-buffer"},
+            "scalar-block-storage-layout-unsupported",
+        ),
+        (
+            {"physicalType": "int"},
+            "scalar-block-element-layout-unsupported",
+        ),
+    ],
+)
+def test_prepare_opengl_buffers_rejects_invalid_scalar_block_layout(
+    layout_overrides,
+    reason_kind,
+):
+    binding = _scalar_constant_buffer_binding(
+        "opengl",
+        _scalar_block_layout("std140", **layout_overrides),
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_opengl_buffers({"params": binding})
+
+    assert excinfo.value.details["target"] == "opengl"
+    assert excinfo.value.details["reasonKind"] == reason_kind
+    assert excinfo.value.details["resource"] == "params"
+
+
+def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation():
+    class FakeBuffer:
+        def __init__(self, payload):
+            self.payload = payload
+            self.uniform_binding = None
+
+        def bind_to_uniform_block(self, binding):
+            self.uniform_binding = binding
+
+    class FakeContext:
+        def __init__(self):
+            self.received_payload = None
+
+        def buffer(self, payload):
+            self.received_payload = payload
+            return FakeBuffer(payload)
+
+    prepared = _prepare_opengl_buffers(
+        {
+            "params": _scalar_constant_buffer_binding(
+                "opengl", _scalar_block_layout("std140")
+            )
+        }
+    )[0]
+    context = FakeContext()
+
+    buffer = OpenGLComputeRuntime()._create_buffer(context, prepared)
+
+    assert prepared.size == 4
+    assert prepared.allocation_size == 16
+    assert context.received_payload == struct.pack("<I", 3) + b"\x00" * 12
+    assert buffer.uniform_binding == 0
 
 
 @pytest.mark.parametrize(

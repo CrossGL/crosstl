@@ -418,6 +418,20 @@ HLSL_CONSTANT_RE = re.compile(
     r"(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<value>[^;]+);",
     re.IGNORECASE,
 )
+HLSL_SCALAR_BLOCK_MEMBER_RE = re.compile(
+    r"\A\s*(?P<type>float|int|uint)\s+(?P<name>[A-Za-z_]\w*)\s*;\s*\Z",
+    re.IGNORECASE,
+)
+HLSL_STRUCTURED_SCALAR_RE = re.compile(
+    r"\A(?:RW)?StructuredBuffer\s*<\s*(?P<type>float|int|uint)\s*>\Z",
+    re.IGNORECASE,
+)
+
+SCALAR_PHYSICAL_TYPES = {
+    "float": "float32",
+    "int": "int32",
+    "uint": "uint32",
+}
 
 HLSL_ENTRY_STAGE_BY_NAME = {
     "VSMain": "vertex",
@@ -684,29 +698,34 @@ def _reflect_hlsl_source(
     resources = []
     for match in HLSL_CBUFFER_RE.finditer(source):
         set_number, binding = _parse_register(match.group("register"))
-        resources.append(
-            {
-                "name": match.group("name"),
-                "kind": "constant-buffer",
-                "type": match.group("name"),
-                "set": set_number,
-                "binding": binding,
-                "access": "read",
-            }
-        )
+        resource = {
+            "name": match.group("name"),
+            "kind": "constant-buffer",
+            "type": match.group("name"),
+            "set": set_number,
+            "binding": binding,
+            "access": "read",
+        }
+        body = _braced_body(source, match.end() - 1)
+        scalar_layout = _hlsl_scalar_block_layout(match.group("kind"), body)
+        if scalar_layout is not None:
+            resource["scalarLayout"] = scalar_layout
+        resources.append(resource)
     for match in HLSL_RESOURCE_RE.finditer(source):
         type_name = " ".join(match.group("type").split())
         set_number, binding = _parse_register(match.group("register"))
-        resources.append(
-            {
-                "name": match.group("name"),
-                "kind": _hlsl_resource_kind(type_name),
-                "type": type_name,
-                "set": set_number,
-                "binding": binding,
-                "access": _hlsl_resource_access(type_name),
-            }
-        )
+        resource = {
+            "name": match.group("name"),
+            "kind": _hlsl_resource_kind(type_name),
+            "type": type_name,
+            "set": set_number,
+            "binding": binding,
+            "access": _hlsl_resource_access(type_name),
+        }
+        scalar_layout = _hlsl_structured_scalar_layout(type_name)
+        if scalar_layout is not None:
+            resource["scalarLayout"] = scalar_layout
+        resources.append(resource)
 
     constants = [
         {
@@ -760,6 +779,53 @@ def _hlsl_resource_access(type_name: str) -> str | None:
     return None
 
 
+def _braced_body(source: str, opening_brace: int) -> str | None:
+    if opening_brace < 0 or opening_brace >= len(source):
+        return None
+    if source[opening_brace] != "{":
+        return None
+    depth = 0
+    for index in range(opening_brace, len(source)):
+        character = source[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening_brace + 1 : index]
+    return None
+
+
+def _hlsl_scalar_block_layout(
+    block_kind: str, body: str | None
+) -> dict[str, Any] | None:
+    if block_kind.lower() != "cbuffer" or body is None:
+        return None
+    match = HLSL_SCALAR_BLOCK_MEMBER_RE.fullmatch(body)
+    if match is None:
+        return None
+    return _scalar_physical_layout(
+        match.group("type"),
+        member_name=match.group("name"),
+        storage_layout="hlsl-constant-buffer",
+        alignment_bytes=16,
+        runtime_sized=False,
+        block_size_bytes=16,
+    )
+
+
+def _hlsl_structured_scalar_layout(type_name: str) -> dict[str, Any] | None:
+    match = HLSL_STRUCTURED_SCALAR_RE.fullmatch(type_name)
+    if match is None:
+        return None
+    return _scalar_physical_layout(
+        match.group("type"),
+        storage_layout="hlsl-structured-buffer",
+        alignment_bytes=4,
+        runtime_sized=True,
+    )
+
+
 GLSL_LAYOUT_RE = re.compile(r"layout\s*\((?P<layout>[^)]*)\)\s*", re.IGNORECASE)
 GLSL_LOCAL_SIZE_RE = re.compile(
     r"layout\s*\((?P<layout>[^)]*local_size_[^)]*)\)\s*in\s*;",
@@ -770,9 +836,14 @@ GLSL_BLOCK_RESOURCE_RE = re.compile(
     r"(?:layout\s*\((?P<layout>[^)]*)\)\s*)?"
     r"(?P<qualifiers>(?:(?:readonly|writeonly|coherent|restrict|volatile)\s+)*)"
     r"(?P<storage>uniform|buffer)\s+"
-    r"(?P<block>[A-Za-z_]\w*)\s*\{[^}]*\}\s*"
+    r"(?P<block>[A-Za-z_]\w*)\s*\{(?P<body>[^}]*)\}\s*"
     r"(?P<name>[A-Za-z_]\w*)?\s*;",
     re.IGNORECASE | re.DOTALL,
+)
+GLSL_SCALAR_BLOCK_MEMBER_RE = re.compile(
+    r"\A\s*(?P<type>float|int|uint)\s+(?P<name>[A-Za-z_]\w*)"
+    r"(?P<runtime_array>\s*\[\s*\])?\s*;\s*\Z",
+    re.IGNORECASE,
 )
 GLSL_RESOURCE_RE = re.compile(
     r"(?:layout\s*\((?P<layout>[^)]*)\)\s*)?"
@@ -836,16 +907,22 @@ def _reflect_glsl_source(
         storage = match.group("storage").lower()
         qualifiers = match.group("qualifiers") or ""
         name = match.group("name") or match.group("block")
-        resources.append(
-            {
-                "name": name,
-                "kind": "constant-buffer" if storage == "uniform" else "buffer",
-                "type": match.group("block"),
-                "set": _layout_int(layout, ("set", "descriptor_set"), default=0),
-                "binding": _layout_int(layout, ("binding",)),
-                "access": _glsl_access(storage, qualifiers),
-            }
+        resource = {
+            "name": name,
+            "kind": "constant-buffer" if storage == "uniform" else "buffer",
+            "type": match.group("block"),
+            "set": _layout_int(layout, ("set", "descriptor_set"), default=0),
+            "binding": _layout_int(layout, ("binding",)),
+            "access": _glsl_access(storage, qualifiers),
+        }
+        scalar_layout = _glsl_scalar_block_layout(
+            storage=storage,
+            layout_text=match.group("layout"),
+            body=match.group("body"),
         )
+        if scalar_layout is not None:
+            resource["scalarLayout"] = scalar_layout
+        resources.append(resource)
     for match in GLSL_RESOURCE_RE.finditer(source):
         if any(start <= match.start() < end for start, end in occupied_spans):
             continue
@@ -950,6 +1027,67 @@ def _parse_layout(layout: str | None) -> dict[str, Any]:
         key, value = part.split("=", 1)
         values[key.strip()] = _literal_value(value)
     return values
+
+
+def _glsl_scalar_block_layout(
+    *, storage: str, layout_text: str | None, body: str
+) -> dict[str, Any] | None:
+    match = GLSL_SCALAR_BLOCK_MEMBER_RE.fullmatch(body)
+    if match is None:
+        return None
+    runtime_sized = match.group("runtime_array") is not None
+    qualifiers = {
+        part.strip().lower()
+        for part in (layout_text or "").split(",")
+        if "=" not in part
+    }
+    if storage == "uniform":
+        if runtime_sized or "std140" not in qualifiers:
+            return None
+        return _scalar_physical_layout(
+            match.group("type"),
+            member_name=match.group("name"),
+            storage_layout="std140",
+            alignment_bytes=16,
+            runtime_sized=False,
+            block_size_bytes=16,
+        )
+    if not runtime_sized or "std430" not in qualifiers:
+        return None
+    return _scalar_physical_layout(
+        match.group("type"),
+        member_name=match.group("name"),
+        storage_layout="std430",
+        alignment_bytes=4,
+        runtime_sized=True,
+    )
+
+
+def _scalar_physical_layout(
+    physical_type: str,
+    *,
+    storage_layout: str,
+    alignment_bytes: int,
+    runtime_sized: bool,
+    member_name: str | None = None,
+    block_size_bytes: int | None = None,
+) -> dict[str, Any]:
+    normalized_type = physical_type.lower()
+    layout: dict[str, Any] = {
+        "physicalType": normalized_type,
+        "elementType": SCALAR_PHYSICAL_TYPES[normalized_type],
+        "elementSizeBytes": 4,
+        "elementStrideBytes": 4,
+        "alignmentBytes": alignment_bytes,
+        "memberOffsetBytes": 0,
+        "storageLayout": storage_layout,
+        "runtimeSized": runtime_sized,
+    }
+    if member_name is not None:
+        layout["memberName"] = member_name
+    if block_size_bytes is not None:
+        layout["blockSizeBytes"] = block_size_bytes
+    return layout
 
 
 def _layout_int(

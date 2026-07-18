@@ -33,9 +33,14 @@ def _write_descriptor(tmp_path, target="directx", *, constants=None):
     artifact_path.parent.mkdir(parents=True)
     artifact_path.write_bytes(artifact_bytes)
     layout = {
+        "physicalType": "float",
         "elementType": "float32",
         "elementSizeBytes": 4,
         "elementStrideBytes": 4,
+        "alignmentBytes": 4,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer" if target == "directx" else "std430",
+        "runtimeSized": True,
     }
     input_namespace = "srv" if target == "directx" else "storage-buffer"
     output_namespace = "uav" if target == "directx" else "storage-buffer"
@@ -446,6 +451,19 @@ def test_normalizes_supported_resource_kind_aliases(
         kind=input_kind,
         namespace=input_namespace,
     )
+    constant_layout = {
+        "physicalType": "float",
+        "elementType": "float32",
+        "elementSizeBytes": 4,
+        "elementStrideBytes": 4,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-constant-buffer" if target == "directx" else "std140",
+        "runtimeSized": False,
+        "blockSizeBytes": 16,
+    }
+    descriptor["bindings"][0]["scalarLayout"] = copy.deepcopy(constant_layout)
+    descriptor["scalarLayout"]["bindings"][0]["layout"] = copy.deepcopy(constant_layout)
     descriptor["bindings"][1]["kind"] = "storage-buffer"
 
     request = _build(tmp_path, target, descriptor=descriptor)
@@ -593,6 +611,29 @@ def test_rejects_runtime_ambiguous_padded_scalar_layout(tmp_path):
         _build(tmp_path, descriptor=descriptor)
 
     assert caught.value.code.endswith(".resource-layout-unsupported")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("alignmentBytes", None, "resource-layout-invalid"),
+        ("memberOffsetBytes", 4, "resource-layout-unsupported"),
+        ("runtimeSized", False, "resource-layout-unsupported"),
+        ("storageLayout", "std140", "resource-layout-mismatch"),
+        ("physicalType", "int", "resource-layout-mismatch"),
+    ],
+)
+def test_rejects_incomplete_or_incompatible_physical_layouts(
+    tmp_path, field, value, code
+):
+    descriptor = _write_descriptor(tmp_path, "opengl")
+    descriptor["bindings"][0]["scalarLayout"][field] = value
+    descriptor["scalarLayout"]["bindings"][0]["layout"][field] = value
+
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, "opengl", descriptor=descriptor)
+
+    assert caught.value.code.endswith(f".{code}")
 
 
 def test_missing_scalar_layout_remains_fail_closed(tmp_path):

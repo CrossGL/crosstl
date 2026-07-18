@@ -136,7 +136,7 @@
           ]
         },
         "metadata": {
-          "artifactContractMode": "replace",
+          "artifactContractMode": "merge",
           "sourceEntryPoint": "arangeuint32",
           "scope": "curated-generated-host-interface"
         }

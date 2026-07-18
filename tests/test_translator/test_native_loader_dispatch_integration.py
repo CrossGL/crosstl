@@ -75,9 +75,14 @@ def _write_package(tmp_path: Path, target: str) -> tuple[dict, Path]:
     artifact_path.write_bytes(source)
 
     scalar_layout = {
+        "physicalType": "uint",
         "elementType": "uint32",
         "elementSizeBytes": 4,
         "elementStrideBytes": 4,
+        "alignmentBytes": 4,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer" if target == "directx" else "std430",
+        "runtimeSized": True,
     }
     bindings = [
         {
@@ -207,14 +212,28 @@ def test_complete_package_descriptor_builds_preflighted_request(tmp_path, target
         for binding in request.adapter_contract.resource_bindings
     ] == [
         {
+            "physicalType": "uint",
             "elementType": "uint32",
             "elementSizeBytes": 4,
             "elementStrideBytes": 4,
+            "alignmentBytes": 4,
+            "memberOffsetBytes": 0,
+            "storageLayout": (
+                "hlsl-structured-buffer" if target == "directx" else "std430"
+            ),
+            "runtimeSized": True,
         },
         {
+            "physicalType": "uint",
             "elementType": "uint32",
             "elementSizeBytes": 4,
             "elementStrideBytes": 4,
+            "alignmentBytes": 4,
+            "memberOffsetBytes": 0,
+            "storageLayout": (
+                "hlsl-structured-buffer" if target == "directx" else "std430"
+            ),
+            "runtimeSized": True,
         },
     ]
 

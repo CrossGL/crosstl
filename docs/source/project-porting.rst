@@ -826,6 +826,47 @@ diagnostics and runtime-reference review actions forward, and it remains a
 metadata contract only: it does not rewrite host application code, execute
 device code, generate runtime framework code, or install target SDKs.
 
+Exact Scalar Physical Resource Layouts
+--------------------------------------
+
+Source reflection records a ``scalarLayout`` only when the target-language
+resource has an exact physical representation covered by the project runtime
+contract. HLSL reflection supports ``StructuredBuffer`` and
+``RWStructuredBuffer`` resources whose element type is exactly ``float``,
+``int``, or ``uint``, together with ``cbuffer`` declarations containing one
+member of one of those types. GLSL reflection supports explicit ``std430``
+buffer blocks containing one scalar runtime-array member and explicit
+``std140`` uniform blocks containing one scalar member of those types.
+
+The reflected layout records ``physicalType``, ``elementType``,
+``elementSizeBytes``, ``elementStrideBytes``, ``alignmentBytes``,
+``memberOffsetBytes``, ``storageLayout``, and ``runtimeSized``. It also records
+``memberName`` when the source block provides one and ``blockSizeBytes`` for a
+fixed scalar block. These fields are preserved through runtime packages and
+native loader ABI descriptors. Descriptor-to-request validation rejects
+missing, incomplete, or mismatched layouts instead of inferring a host ABI.
+
+Native runtime allocation consumes the same physical contract. DirectX
+constant-buffer views require a fixed HLSL scalar block and allocate at least
+the reflected block size, rounded to the 256-byte API alignment. OpenGL
+uniform buffers require a fixed ``std140`` scalar block and zero-pad the upload
+to ``blockSizeBytes``; ``std430`` scalar runtime arrays retain their logical
+payload size for storage-buffer readback.
+
+Vectors, matrices, fixed arrays, aggregates, packed or widened scalar types,
+implicit GLSL block layouts, arbitrary member offsets, and multi-member blocks
+do not receive this layout metadata. Those shapes remain unresolved and fail
+closed when a native loader request requires a physical layout.
+
+At pinned MLX commit ``4367c73b60541ddd5a266ce4644fd93d20223b6e``, the
+``arangeuint32`` entry from ``arange.metal`` is translated to DirectX and
+OpenGL, reflected, packaged, converted through the public native loader bridge,
+and executed in Windows Direct3D and Linux EGL CI. With ``start = 3``,
+``step = 2``, and four invocations, both readbacks are exactly
+``[3, 5, 7, 9]``. This is an end-to-end proof for one scalar kernel contract;
+it is not a claim of vector or aggregate layout support, full MLX runtime
+integration, or MLX test-suite parity.
+
 Build a versioned native loader ABI descriptor and optional C declarations for
 one ready load unit:
 
@@ -950,10 +991,12 @@ layout metadata is a structured error rather than an inferred ABI.
 This API prepares one request. Repository scheduling, application loader and
 host integration, and device execution remain downstream responsibilities. A
 read-write resource may be used as an output, but initializing and reading back
-the same read-write resource in one request is not supported. Generated MLX
-descriptors do not yet carry complete physical scalar layouts, so they remain
-rejected until physical layout reflection is available; request construction
-does not establish MLX runtime execution or numerical parity.
+the same read-write resource in one request is not supported. Generated
+descriptors for the exact HLSL and GLSL scalar forms described above carry the
+complete physical layout into request construction; unsupported resource
+shapes remain rejected rather than inferred. The pinned MLX ``arangeuint32``
+proof establishes native DirectX and OpenGL execution for that one contract,
+not full MLX runtime integration or numerical parity across the MLX test suite.
 
 Build a deterministic runtime variant registry from either a ready runtime
 package or loader manifest:

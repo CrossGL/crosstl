@@ -2550,6 +2550,44 @@ def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
     assert "mlx-upstream" not in opengl_step
 
 
+def test_mlx_project_porting_workflow_runs_pinned_arange_native_loader_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_arange_native_loader.py"
+
+    assert mlx_porting.count(f'"{test_path}"') == 2
+    step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX arange OpenGL native-loader execution",
+    )
+    assert "if: runner.os == 'Linux'" in step
+    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream" in step
+    assert 'CROSTL_REQUIRE_MLX_ARANGE_OPENGL_NATIVE_LOADER: "1"' in step
+    assert "EGL_PLATFORM: surfaceless" in step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in step
+    assert "PYOPENGL_PLATFORM: egl" in step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_arange_executes_through_opengl_native_loader" in step
+    )
+    assert "-n auto" in step
+    assert "-k" not in step
+
+    directx_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX arange Direct3D native-loader execution",
+    )
+    assert "if: runner.os == 'Windows'" in directx_step
+    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream" in directx_step
+    assert 'CROSTL_REQUIRE_MLX_ARANGE_DIRECTX_NATIVE_LOADER: "1"' in directx_step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_arange_executes_through_directx_native_loader" in directx_step
+    )
+    assert "-n auto" in directx_step
+    assert "-k" not in directx_step
+
+
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
     workflows = _workflow_texts()
     support_matrix = workflows.get("support-matrix.yml", "")
