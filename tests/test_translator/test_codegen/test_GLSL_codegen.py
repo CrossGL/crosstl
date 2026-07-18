@@ -6117,6 +6117,83 @@ def test_glsl_private_pointer_view_accepts_bounded_affine_loop_offset(tmp_path):
     )
 
 
+def test_glsl_private_pointer_view_resolves_compile_time_global_partition(
+    tmp_path,
+):
+    code = """
+    shader CompileTimeGlobalPrivatePointerView {
+        constant int quad_size = 4;
+
+        float sum16(thread float* values) {
+            float total = 0.0;
+            for (int i = 0; i < 16; ++i) {
+                total += values[i];
+            }
+            return total;
+        }
+
+        void dispatch() {
+            const int values_per_thread = 128 / quad_size;
+            const int group_size = 16;
+            const int steps_per_thread = values_per_thread < group_size
+                ? 1
+                : values_per_thread / group_size;
+            const int values_per_step = values_per_thread / steps_per_thread;
+            float x_thread[32];
+            float total = 0.0;
+            for (int k = 0; k < steps_per_thread; ++k) {
+                total += sum16(x_thread + k * values_per_step);
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                dispatch();
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "const int quad_size = 4;" in generated
+    assert "float sum16(inout float values[32], int values_base)" in generated
+    assert "sum16(x_thread, int((k * values_per_step)));" in generated
+    assert "x_thread + k" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "private_pointer_compile_time_global_partition",
+    )
+
+
+def test_glsl_private_pointer_view_rejects_specialization_default_partition():
+    code = """
+    shader SpecializationPrivatePointerView {
+        constant int partition_width @constant_id(4) = 2;
+
+        void write_pair(thread int* values) {
+            values[0] = 1;
+            values[1] = 2;
+        }
+
+        void dispatch() {
+            int backing[4];
+            for (int k = 0; k < 2; ++k) {
+                write_pair(backing + k * partition_width);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "unprovable-view-offset"
+
+
 def test_glsl_private_pointer_view_accepts_correlated_unknown_loop_span(tmp_path):
     code = """
     shader CorrelatedPrivatePointerView {

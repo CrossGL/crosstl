@@ -4467,9 +4467,6 @@ class GLSLCodeGen:
             identifier_functions,
             reserved_names=self.glsl_overload_reserved_names(ast),
         )
-        self.function_private_pointer_array_size_hints = (
-            self.collect_private_pointer_array_size_hints(ast)
-        )
         self.validate_global_resource_shadows(ast)
         self.enforce_concrete_glsl_types = True
         code = ""
@@ -4581,6 +4578,9 @@ class GLSLCodeGen:
             + stage_resource_params
         )
         self.prepare_glsl_compile_time_globals(ast, global_vars)
+        self.function_private_pointer_array_size_hints = (
+            self.collect_private_pointer_array_size_hints(ast)
+        )
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(resource_declaration_nodes)
         )

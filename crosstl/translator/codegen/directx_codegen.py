@@ -28689,6 +28689,83 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if key not in {"parent", "annotations", "array", "index", "args", "name"}
         )
 
+    def hlsl_private_pointer_condition_value(self, expression, intervals, constants):
+        if self.hlsl_private_pointer_expression_has_side_effects(expression):
+            return None
+
+        value = self.literal_int_value(expression, constants)
+        if value is not None:
+            return value != 0
+
+        if isinstance(expression, UnaryOpNode) and expression.op == "!":
+            operand = self.hlsl_private_pointer_condition_value(
+                expression.operand, intervals, constants
+            )
+            return None if operand is None else not operand
+
+        if isinstance(expression, BinaryOpNode):
+            operator = expression.op
+            if operator in {"&&", "and", "||", "or"}:
+                left = self.hlsl_private_pointer_condition_value(
+                    expression.left, intervals, constants
+                )
+                if operator in {"&&", "and"} and left is False:
+                    return False
+                if operator in {"||", "or"} and left is True:
+                    return True
+                right = self.hlsl_private_pointer_condition_value(
+                    expression.right, intervals, constants
+                )
+                if left is None or right is None:
+                    return None
+                return left and right if operator in {"&&", "and"} else left or right
+
+            if operator in {"==", "!=", "<", "<=", ">", ">="}:
+                left = self.hlsl_private_pointer_interval(
+                    expression.left, intervals, constants
+                )
+                right = self.hlsl_private_pointer_interval(
+                    expression.right, intervals, constants
+                )
+                if left is None or right is None:
+                    return None
+                if operator == "==":
+                    if left[1] < right[0] or right[1] < left[0]:
+                        return False
+                    if left[0] == left[1] == right[0] == right[1]:
+                        return True
+                elif operator == "!=":
+                    if left[1] < right[0] or right[1] < left[0]:
+                        return True
+                    if left[0] == left[1] == right[0] == right[1]:
+                        return False
+                elif operator == "<":
+                    if left[1] < right[0]:
+                        return True
+                    if left[0] >= right[1]:
+                        return False
+                elif operator == "<=":
+                    if left[1] <= right[0]:
+                        return True
+                    if left[0] > right[1]:
+                        return False
+                elif operator == ">":
+                    if left[0] > right[1]:
+                        return True
+                    if left[1] <= right[0]:
+                        return False
+                elif operator == ">=":
+                    if left[0] >= right[1]:
+                        return True
+                    if left[1] < right[0]:
+                        return False
+                return None
+
+        interval = self.hlsl_private_pointer_interval(expression, intervals, constants)
+        if interval is not None and interval[0] == interval[1]:
+            return interval[0] != 0
+        return None
+
     def hlsl_private_pointer_interval(self, expression, intervals, constants):
         value = self.literal_int_value(expression, constants)
         if value is not None:
@@ -28737,6 +28814,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return int(left[0] / divisor), int(left[1] / divisor)
             return None
         if isinstance(expression, TernaryOpNode):
+            condition = self.hlsl_private_pointer_condition_value(
+                expression.condition, intervals, constants
+            )
+            if condition is not None:
+                selected = expression.true_expr if condition else expression.false_expr
+                return self.hlsl_private_pointer_interval(
+                    selected, intervals, constants
+                )
+            if self.hlsl_private_pointer_expression_has_side_effects(expression):
+                return None
             true_interval = self.hlsl_private_pointer_interval(
                 expression.true_expr, intervals, constants
             )
