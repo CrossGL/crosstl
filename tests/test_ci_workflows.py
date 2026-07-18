@@ -2187,6 +2187,10 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert '"tests/test_mlx_quantized_directx_proof.py"' in mlx_porting
     assert '"tests/test_translator/test_codegen/test_SPIRV_codegen.py"' in mlx_porting
     assert '"tests/test_translator/test_codegen/test_directx_codegen.py"' in mlx_porting
+    assert (
+        '"tests/test_translator/test_private_pointer_partition_runtime.py"'
+        in mlx_porting
+    )
     assert '"tests/test_translator/test_project_translation.py"' in mlx_porting
     assert "Verify MLX frontier accounting" in mlx_porting
     assert "expected the exact 11-source non-fence MLX frontier" in mlx_porting
@@ -2443,6 +2447,20 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
         assert "-n auto" in step
         assert "mlx-upstream" not in step
 
+    directx_partition_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove Direct3D private-pointer partition writeback",
+    )
+    assert "if: runner.os == 'Windows'" in directx_partition_step
+    assert (
+        "CROSTL_REQUIRE_PRIVATE_POINTER_PARTITION_RUNTIME: directx"
+        in directx_partition_step
+    )
+    assert "private_pointer_partition_native_readback and directx" in (
+        directx_partition_step
+    )
+    assert "-n auto" in directx_partition_step
+
     opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Validate OpenGL copysign runtime contract",
@@ -2457,6 +2475,23 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
     assert "PYOPENGL_PLATFORM: egl" in opengl_step
     assert "-n auto" in opengl_step
     assert "mlx-upstream" not in opengl_step
+
+    opengl_partition_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove OpenGL private-pointer partition writeback",
+    )
+    assert "if: runner.os == 'Linux'" in opengl_partition_step
+    assert (
+        "CROSTL_REQUIRE_PRIVATE_POINTER_PARTITION_RUNTIME: opengl"
+        in opengl_partition_step
+    )
+    assert "private_pointer_partition_native_readback and opengl" in (
+        opengl_partition_step
+    )
+    assert "EGL_PLATFORM: surfaceless" in opengl_partition_step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_partition_step
+    assert "PYOPENGL_PLATFORM: egl" in opengl_partition_step
+    assert "-n auto" in opengl_partition_step
 
     vulkan_step = ci_coverage.workflow_step_section(
         mlx_porting,

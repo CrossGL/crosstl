@@ -1,0 +1,30 @@
+shader PrivatePointerPartitionRuntime {
+    RWStructuredBuffer<uint> output @ binding(0);
+
+    void write_partition(thread uint* values, int chunk) {
+        for (int lane = 0; lane < 4; ++lane) {
+            values[lane] = uint((chunk + 1) * 100 + lane);
+        }
+    }
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main() {
+            const int values_per_thread = 8;
+            const int group_size = 4;
+            const int steps_per_thread = values_per_thread < group_size
+                ? 1
+                : values_per_thread / group_size;
+            const int span = values_per_thread / steps_per_thread;
+            uint values[values_per_thread];
+
+            for (int chunk = 0; chunk < steps_per_thread; ++chunk) {
+                write_partition(values + chunk * span, chunk);
+            }
+            for (int index = 0; index < values_per_thread; ++index) {
+                buffer_store(output, uint(index), values[index]);
+            }
+        }
+    }
+}
