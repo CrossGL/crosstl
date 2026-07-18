@@ -234,7 +234,7 @@ def _write_output(root: Path, relative_path: str, content: str) -> None:
     temporary_path = output_path.with_name(f".{output_path.name}.tmp")
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path.write_text(content, encoding="utf-8")
+        temporary_path.write_bytes(content.encode("utf-8"))
         temporary_path.replace(output_path)
     except (OSError, UnicodeError) as exc:
         try:
