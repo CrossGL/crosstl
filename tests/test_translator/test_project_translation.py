@@ -50767,7 +50767,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
         diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
     }
     assert set(diagnostics) == {"directx", "opengl"}
-    expected_source_types = {"directx": "bfloat16", "opengl": "float"}
+    expected_source_types = {"directx": "bfloat16", "opengl": "bfloat16"}
     for target, diagnostic in diagnostics.items():
         assert diagnostic["code"] == (
             "project.translate.pointer-reinterpret-unsupported"
