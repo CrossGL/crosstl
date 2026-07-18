@@ -325,7 +325,6 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .resource_arrays import (
-    collect_private_pointer_array_size_hints,
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
@@ -28606,26 +28605,7 @@ complex64_t crossgl_complex64_mod_assign(
         required_spans = {}
         for function_key, parameters in pointer_parameters.items():
             function = functions_by_key[function_key]
-            direct_hints = collect_private_pointer_array_size_hints(
-                functions=[function],
-                walk_nodes=self.walk_ast,
-                expression_name=self.expression_name,
-                literal_int_value=self.literal_int_value,
-                visible_literal_int_constants=self.visible_literal_int_constants,
-                function_call_name=self.function_call_name,
-                initial_literal_int_constants=self.initial_literal_int_constants,
-                strict_fixed_local_array_sizes=False,
-                propagate_argument_sizes_to_callee=False,
-                validate_fixed_argument_sizes=False,
-            )
-            function_hints = direct_hints.get(getattr(function, "name", None), {})
-            spans = {}
-            for parameter in parameters:
-                raw_size = function_hints.get(parameter.name, "")
-                try:
-                    spans[parameter.name] = int(raw_size) if raw_size else 0
-                except (TypeError, ValueError):
-                    spans[parameter.name] = 0
+            spans = {parameter.name: 0 for parameter in parameters}
             self.glsl_collect_private_pointer_static_direct_spans(
                 function,
                 function_key,
@@ -29454,11 +29434,23 @@ complex64_t crossgl_complex64_mod_assign(
                     visit(argument, active_bindings, active_intervals)
                 return
             if isinstance(value, IfNode):
+                condition_node = getattr(value, "condition", None)
+                condition = self.glsl_private_pointer_condition_value(
+                    condition_node, active_intervals, constants
+                )
                 visit(
-                    getattr(value, "condition", None),
+                    condition_node,
                     active_bindings,
                     active_intervals,
                 )
+                if condition is not None:
+                    selected_branch = (
+                        getattr(value, "then_branch", None)
+                        if condition
+                        else getattr(value, "else_branch", None)
+                    )
+                    visit(selected_branch, dict(active_bindings), active_intervals)
+                    return
                 then_intervals = dict(active_intervals)
                 else_intervals = dict(active_intervals)
                 visit(
@@ -30205,6 +30197,9 @@ complex64_t crossgl_complex64_mod_assign(
                 return
             if isinstance(value, IfNode):
                 condition = getattr(value, "condition", None)
+                condition_value = self.glsl_private_pointer_condition_value(
+                    condition, active_intervals, constants
+                )
                 visit(
                     condition,
                     active_forms,
@@ -30214,6 +30209,26 @@ complex64_t crossgl_complex64_mod_assign(
                     active_predicates,
                     active_pointer_roots,
                 )
+                if condition_value is not None:
+                    selected_branch = (
+                        getattr(value, "then_branch", None)
+                        if condition_value
+                        else getattr(value, "else_branch", None)
+                    )
+                    visit(
+                        selected_branch,
+                        active_forms,
+                        active_value_keys,
+                        active_intervals,
+                        active_loops,
+                        active_predicates,
+                        active_pointer_roots,
+                    )
+                    for name in modified_names(selected_branch):
+                        active_forms.pop(name, None)
+                        active_intervals.pop(name, None)
+                        active_value_keys[name] = ("unknown", id(value), name)
+                    return
                 condition_key = self.glsl_private_pointer_contract_expression_key(
                     condition, active_value_keys, constants
                 )
@@ -30479,6 +30494,83 @@ complex64_t crossgl_complex64_mod_assign(
             for key, child in vars(expression).items()
             if key not in {"parent", "annotations", "array", "index", "args", "name"}
         )
+
+    def glsl_private_pointer_condition_value(self, expression, intervals, constants):
+        if self.glsl_private_pointer_expression_has_side_effects(expression):
+            return None
+
+        value = self.literal_int_value(expression, constants)
+        if value is not None:
+            return value != 0
+
+        if isinstance(expression, UnaryOpNode) and expression.op == "!":
+            operand = self.glsl_private_pointer_condition_value(
+                expression.operand, intervals, constants
+            )
+            return None if operand is None else not operand
+
+        if isinstance(expression, BinaryOpNode):
+            operator = expression.op
+            if operator in {"&&", "and", "||", "or"}:
+                left = self.glsl_private_pointer_condition_value(
+                    expression.left, intervals, constants
+                )
+                if operator in {"&&", "and"} and left is False:
+                    return False
+                if operator in {"||", "or"} and left is True:
+                    return True
+                right = self.glsl_private_pointer_condition_value(
+                    expression.right, intervals, constants
+                )
+                if left is None or right is None:
+                    return None
+                return left and right if operator in {"&&", "and"} else left or right
+
+            if operator in {"==", "!=", "<", "<=", ">", ">="}:
+                left = self.glsl_private_pointer_interval(
+                    expression.left, intervals, constants
+                )
+                right = self.glsl_private_pointer_interval(
+                    expression.right, intervals, constants
+                )
+                if left is None or right is None:
+                    return None
+                if operator == "==":
+                    if left[1] < right[0] or right[1] < left[0]:
+                        return False
+                    if left[0] == left[1] == right[0] == right[1]:
+                        return True
+                elif operator == "!=":
+                    if left[1] < right[0] or right[1] < left[0]:
+                        return True
+                    if left[0] == left[1] == right[0] == right[1]:
+                        return False
+                elif operator == "<":
+                    if left[1] < right[0]:
+                        return True
+                    if left[0] >= right[1]:
+                        return False
+                elif operator == "<=":
+                    if left[1] <= right[0]:
+                        return True
+                    if left[0] > right[1]:
+                        return False
+                elif operator == ">":
+                    if left[0] > right[1]:
+                        return True
+                    if left[1] <= right[0]:
+                        return False
+                elif operator == ">=":
+                    if left[0] >= right[1]:
+                        return True
+                    if left[1] < right[0]:
+                        return False
+                return None
+
+        interval = self.glsl_private_pointer_interval(expression, intervals, constants)
+        if interval is not None and interval[0] == interval[1]:
+            return interval[0] != 0
+        return None
 
     def glsl_private_pointer_static_binding(
         self,
@@ -31166,11 +31258,23 @@ complex64_t crossgl_complex64_mod_assign(
                 visit(value.pointer_expr, active_intervals, active_bindings)
                 return
             if isinstance(value, IfNode):
+                condition_node = getattr(value, "condition", None)
+                condition = self.glsl_private_pointer_condition_value(
+                    condition_node, active_intervals, constants
+                )
                 visit(
-                    getattr(value, "condition", None),
+                    condition_node,
                     active_intervals,
                     active_bindings,
                 )
+                if condition is not None:
+                    selected_branch = (
+                        getattr(value, "then_branch", None)
+                        if condition
+                        else getattr(value, "else_branch", None)
+                    )
+                    visit(selected_branch, active_intervals, dict(active_bindings))
+                    return
                 then_intervals = dict(active_intervals)
                 else_intervals = dict(active_intervals)
                 visit(

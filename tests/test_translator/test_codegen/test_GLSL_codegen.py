@@ -6663,6 +6663,74 @@ def test_glsl_private_pointer_view_rejects_unprovable_offset(offset, reason):
     assert excinfo.value.reason == reason
 
 
+@pytest.mark.parametrize(
+    ("condition", "then_body", "else_body"),
+    [
+        pytest.param(
+            "1 < 2",
+            "return values[0];",
+            "float ignored = values[7]; return read_wide(values);",
+            id="true-condition",
+        ),
+        pytest.param(
+            "2 < 1",
+            "float ignored = values[7]; return read_wide(values);",
+            "return values[0];",
+            id="false-condition",
+        ),
+    ],
+)
+def test_glsl_private_pointer_if_selects_concrete_branch(
+    condition, then_body, else_body
+):
+    code = f"""
+    shader ConcretePrivatePointerBranch {{
+        float read_wide(thread float* values) {{
+            return values[7];
+        }}
+
+        float read_selected(thread float* values) {{
+            if ({condition}) {{
+                {then_body}
+            }} else {{
+                {else_body}
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float read_wide(inout float values[8], int values_base)" in generated
+    assert "float read_selected(inout float values[1], int values_base)" in generated
+
+
+def test_glsl_private_pointer_if_keeps_unknown_branches():
+    code = """
+    shader UnknownPrivatePointerBranch {
+        float read_wide(thread float* values) {
+            return values[7];
+        }
+
+        float read_selected(thread float* values, bool read_first) {
+            if (read_first) {
+                return values[0];
+            } else {
+                float observed = values[7];
+                return observed + read_wide(values);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert (
+        "float read_selected(inout float values[8], int values_base, bool read_first)"
+        in generated
+    )
+
+
 def test_glsl_private_pointer_view_rejects_unresolved_address_base():
     code = """
     shader UnresolvedPrivatePointerBase {
