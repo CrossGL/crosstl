@@ -1382,6 +1382,7 @@ class MetalToCrossGLConverter:
         self.global_sampler_names = set()
         self.suppress_structured_buffer_index_lowering = False
         self.struct_member_types = {}
+        self.struct_member_name_maps = {}
         self.resolved_struct_member_types = {}
         self.struct_declarations = {}
         self.struct_name_map = {}
@@ -2580,6 +2581,7 @@ class MetalToCrossGLConverter:
         self.local_aggregate_declarations = []
         self.local_aggregate_declaration_keys = {}
         self.local_aggregate_reserved_names = set()
+        self.struct_member_name_maps = {}
         functions = getattr(ast, "functions", []) or []
         self.prepare_texture_usage(ast)
         self.prepare_out_of_line_call_operator_bindings(functions)
@@ -2751,6 +2753,15 @@ class MetalToCrossGLConverter:
                         member,
                         owner=self.map_struct_name(struct_node.name),
                     )
+                    if isinstance(member, VariableNode) and getattr(
+                        member, "name", None
+                    ):
+                        owner_name = self.map_struct_name(struct_node.name)
+                        self.struct_member_name_maps.setdefault(owner_name, {})[
+                            member.name
+                        ] = self.identifier_maps[-1].get(
+                            member.name, self.sanitize_identifier(member.name)
+                        )
                     if is_union and isinstance(member, VariableNode):
                         member_size, member_alignment = union_layout["members"].get(
                             id(member), (0, 0)
@@ -9107,6 +9118,8 @@ class MetalToCrossGLConverter:
         self.bind_local_aggregate_aliases(struct_node, canonical_name)
         rendered_members = []
         member_types = {}
+        member_names = {}
+        used_member_names = set()
         for member in getattr(struct_node, "members", None) or []:
             if not isinstance(member, VariableNode) or not getattr(
                 member, "name", None
@@ -9147,9 +9160,16 @@ class MetalToCrossGLConverter:
                 for extent in getattr(member, "array_sizes", None) or []
             ]
             suffix = "".join(f"[{extent}]" for extent in extents)
-            member_name = self.sanitize_identifier(member.name)
+            member_name_base = self.sanitize_identifier(member.name)
+            member_name = member_name_base
+            suffix_index = 2
+            while member_name in used_member_names:
+                member_name = f"{member_name_base}_{suffix_index}"
+                suffix_index += 1
+            used_member_names.add(member_name)
             rendered_members.append(f"{mapped_type}{suffix} {member_name};")
             member_types[member.name] = f"{source_type}{suffix}"
+            member_names[member.name] = member_name
 
         self.local_aggregate_declaration_keys[key] = canonical_name
         self.local_aggregate_declarations.append(
@@ -9162,7 +9182,19 @@ class MetalToCrossGLConverter:
             }
         )
         self.struct_member_types[canonical_name] = member_types
+        self.struct_member_name_maps[canonical_name] = member_names
         return canonical_name
+
+    def render_struct_member_identifier(self, object_expression, member):
+        try:
+            owner = self.expression_mapped_type(object_expression)
+        except (TypeError, ValueError):
+            owner = None
+        owner = str(owner or "").strip()
+        while owner.endswith(("*", "&")):
+            owner = owner[:-1].rstrip()
+        mapped_name = self.struct_member_name_maps.get(owner, {}).get(member)
+        return mapped_name or self.sanitize_identifier(member)
 
     def generate_local_aggregate_declarations(self, indent=0):
         if not self.local_aggregate_declarations:
@@ -9717,9 +9749,14 @@ class MetalToCrossGLConverter:
             )
         mapped_type = self.map_type(expected_type) if expected_type else None
         member_types = {}
+        member_names = {}
         if expected_type:
+            resolved_type = self.resolve_type_alias(expected_type)
             member_types = self.struct_member_types.get(
-                self.normalized_metal_type(expected_type), {}
+                self.normalized_metal_type(resolved_type), {}
+            )
+            member_names = self.struct_member_name_maps.get(
+                self.map_type(resolved_type), {}
             )
 
         named_elements = []
@@ -9727,7 +9764,12 @@ class MetalToCrossGLConverter:
         for element in node.elements:
             if isinstance(element, DesignatedInitializerNode):
                 named_elements.append(
-                    self.generate_designated_initializer(element, is_main, member_types)
+                    self.generate_designated_initializer(
+                        element,
+                        is_main,
+                        member_types,
+                        member_names,
+                    )
                 )
             else:
                 positional_elements.append(
@@ -9745,14 +9787,24 @@ class MetalToCrossGLConverter:
             return f"{mapped_type}({', '.join(elements)})"
         return "{" + ", ".join(elements) + "}"
 
-    def generate_designated_initializer(self, node, is_main=False, member_types=None):
+    def generate_designated_initializer(
+        self,
+        node,
+        is_main=False,
+        member_types=None,
+        member_names=None,
+    ):
         member_types = member_types or {}
+        member_names = member_names or {}
         if len(node.designators) == 1 and node.designators[0][0] == "field":
             field_name = node.designators[0][1]
             value = self.generate_initializer_value(
                 node.value, is_main, member_types.get(field_name)
             )
-            return f"{field_name}: {value}"
+            emitted_name = member_names.get(
+                field_name, self.sanitize_identifier(field_name)
+            )
+            return f"{emitted_name}: {value}"
 
         designators = []
         for designator in node.designators:
@@ -9766,7 +9818,10 @@ class MetalToCrossGLConverter:
             if kind == "index":
                 designators.append(f"[{self.generate_expression(target, is_main)}]")
             else:
-                designators.append(f".{target}")
+                emitted_name = member_names.get(
+                    target, self.sanitize_identifier(target)
+                )
+                designators.append(f".{emitted_name}")
         value = self.generate_initializer_value(node.value, is_main)
         return f"{''.join(designators)} = {value}"
 
@@ -10043,7 +10098,7 @@ class MetalToCrossGLConverter:
                         operation="member-access",
                     )
                 return f"{obj}.lanes[{lane}]"
-            return f"{obj}.{self.sanitize_identifier(expr.member)}"
+            return f"{obj}.{self.render_struct_member_identifier(expr.object, expr.member)}"
         elif isinstance(expr, ArrayAccessNode):
             cooperative_matrix_element = self.metal_cooperative_matrix_element_access(
                 expr

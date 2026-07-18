@@ -5970,6 +5970,114 @@ def test_codegen_resolves_alias_chain_to_named_local_struct():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_preserves_colliding_local_aggregate_member_names():
+    crossgl = convert("""
+        uint read_word() {
+            struct Names {
+                uint layout;
+                uint layout_;
+            };
+            thread Names names;
+            names.layout = 3;
+            names.layout_ = 7;
+            return names.layout + names.layout_;
+        }
+        """)
+
+    assert "uint layout_;" in crossgl
+    assert "uint layout__2;" in crossgl
+    assert "names.layout_ = 3;" in crossgl
+    assert "names.layout__2 = 7;" in crossgl
+    assert "return names.layout_ + names.layout__2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_colliding_module_aggregate_member_names():
+    crossgl = convert("""
+        struct Names {
+            uint layout;
+            uint layout_;
+        };
+
+        uint read_word(thread Names& names) {
+            names.layout = 3;
+            names.layout_ = 7;
+            return names.layout + names.layout_;
+        }
+        """)
+
+    assert "uint layout_;" in crossgl
+    assert "uint layout__2;" in crossgl
+    assert "names.layout_ = 3;" in crossgl
+    assert "names.layout__2 = 7;" in crossgl
+    assert "return names.layout_ + names.layout__2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_colliding_members_through_nested_access():
+    crossgl = convert("""
+        struct Names {
+            uint layout;
+            uint layout_;
+        };
+
+        struct Wrapper {
+            Names names;
+        };
+
+        uint read_word(thread Wrapper& wrapper) {
+            wrapper.names.layout = 3;
+            wrapper.names.layout_ = 7;
+            return wrapper.names.layout + wrapper.names.layout_;
+        }
+        """)
+
+    assert "wrapper.names.layout_ = 3;" in crossgl
+    assert "wrapper.names.layout__2 = 7;" in crossgl
+    assert "return wrapper.names.layout_ + wrapper.names.layout__2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_colliding_members_in_constructor_factory():
+    crossgl = convert("""
+        struct Names {
+            uint layout;
+            uint layout_;
+
+            Names(uint first, uint second)
+                : layout(first), layout_(second) {}
+        };
+
+        uint read_word() {
+            thread Names names(3, 7);
+            return names.layout + names.layout_;
+        }
+        """)
+
+    assert "crosstl_ctor_value.layout_ = uint(first);" in crossgl
+    assert "crosstl_ctor_value.layout__2 = uint(second);" in crossgl
+    assert "return names.layout_ + names.layout__2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_colliding_members_in_designated_initializer():
+    crossgl = convert("""
+        struct Names {
+            uint layout;
+            uint layout_;
+        };
+
+        uint read_word() {
+            thread Names names = {.layout = 3, .layout_ = 7};
+            return names.layout + names.layout_;
+        }
+        """)
+
+    assert "Names{layout_: 3, layout__2: 7}" in crossgl
+    assert "return names.layout_ + names.layout__2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_materializes_local_typedef_struct_per_value_specialization():
     crossgl = convert("""
         template <int Width>
