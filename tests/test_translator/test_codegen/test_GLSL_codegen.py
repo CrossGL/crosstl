@@ -7301,6 +7301,328 @@ def test_glsl_private_struct_byte_view_rejects_unsupported_contracts(
     assert exc_info.value.reason == reason
 
 
+def test_glsl_metal_storage_byte_alias_reaches_storage_helper(tmp_path):
+    metal_source = tmp_path / "storage_byte_alias_helper.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        inline uint load_word(const device uint* values) {
+            return values[0];
+        }
+
+        kernel void storage_byte_alias_helper(
+            const device uint* words [[buffer(0)]],
+            constant uint& word_offset [[buffer(1)]],
+            device uint* output [[buffer(2)]]) {
+            auto bytes = (const device uint8_t*)words;
+            bytes += word_offset * 4 + 4;
+            output[0] = load_word((const device uint*)bytes);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    intermediate = crosstl.translate(
+        str(metal_source),
+        backend="cgl",
+        format_output=False,
+        source_backend="metal",
+    )
+    generated = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "load_word((uint*)bytes)" in intermediate
+    assert "uint load_word_glsl_values_words_uint(int values_offset)" in generated
+    assert "return words[int(" in generated
+    assert "((word_offset * 4) + 4) + (values_offset * 4)" in generated
+    assert "bytes_offset += int(((word_offset * 4) + 4));" in generated
+    assert "uint values[" not in generated
+    assert "values_base" not in generated
+    assert "private-word-array-view" not in generated
+    assert "PointerReinterpretNode" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_byte_alias_helper",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_metal_storage_struct_reinterpret_materializes_word_arrays(tmp_path):
+    metal_source = tmp_path / "storage_struct_word_copy.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct UIntBlock {
+            uint words[2];
+        };
+
+        struct IntBlock {
+            int words[2];
+        };
+
+        struct FloatBlock {
+            float words[2];
+        };
+
+        kernel void storage_struct_word_copy(
+            const device uint* unsigned_input [[buffer(0)]],
+            const device int* signed_input [[buffer(1)]],
+            const device float* float_input [[buffer(2)]],
+            device uint* output [[buffer(3)]]) {
+            thread UIntBlock base =
+                *((const device UIntBlock*)unsigned_input);
+            thread UIntBlock shifted;
+            thread UIntBlock from_signed;
+            thread UIntBlock from_float;
+            thread IntBlock as_signed;
+            thread FloatBlock as_float;
+            shifted =
+                *((const device UIntBlock*)(unsigned_input + 2));
+            from_signed = *((const device UIntBlock*)signed_input);
+            from_float = *((const device UIntBlock*)float_input);
+            as_signed = *((const device IntBlock*)unsigned_input);
+            as_float = *((const device FloatBlock*)unsigned_input);
+            output[0] = base.words[0] + shifted.words[0];
+            output[1] = from_signed.words[0] + from_float.words[0];
+            output[2] =
+                uint(as_signed.words[0]) + as_type<uint>(as_float.words[0]);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "UIntBlock base = "
+        "UIntBlock(uint[2](unsigned_input[0], unsigned_input[1]));" in generated
+    )
+    assert (
+        "shifted = UIntBlock(uint[2]("
+        "unsigned_input[int(2)], unsigned_input[(int(2) + 1)]));" in generated
+    )
+    assert "uint(signed_input[0])" in generated
+    assert "floatBitsToUint(float_input[0])" in generated
+    assert "IntBlock(int[2](int(unsigned_input[0])" in generated
+    assert "FloatBlock(float[2](uintBitsToFloat(unsigned_input[0])" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert re.search(r"\b(?:device|thread)\b|\w+\s*\*", generated) is None
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_struct_word_copy",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_storage_struct_reinterpret_rejects_writes(tmp_path):
+    metal_source = tmp_path / "storage_struct_word_write.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct WordBlock {
+            uint words[2];
+        };
+
+        kernel void storage_struct_word_write(
+            device uint* input [[buffer(0)]]) {
+            thread WordBlock local;
+            *((device WordBlock*)input) = local;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        crosstl.translate(
+            str(metal_source),
+            backend="opengl",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.source_type == "uint"
+    assert diagnostic.target_type == "WordBlock"
+    assert diagnostic.address_space == "storage"
+    assert diagnostic.alignment == 4
+    assert diagnostic.access == "write"
+    assert diagnostic.target_backend == "opengl"
+    assert diagnostic.reason == "storage-aggregate-write-unsupported"
+
+
+@pytest.mark.parametrize(
+    ("source_type", "member_declarations", "reason"),
+    [
+        (
+            "uint",
+            "uint words[2]; float trailing;",
+            "unsupported-storage-aggregate-layout",
+        ),
+        (
+            "uint",
+            "uint words[];",
+            "storage-aggregate-layout-unresolved",
+        ),
+        (
+            "uint",
+            "ushort words[2];",
+            "unsupported-storage-aggregate-layout",
+        ),
+        (
+            "ushort",
+            "uint words[2];",
+            "unsupported-storage-aggregate-source-layout",
+        ),
+    ],
+)
+def test_glsl_storage_struct_reinterpret_rejects_unsupported_word_layouts(
+    tmp_path,
+    source_type,
+    member_declarations,
+    reason,
+):
+    metal_source = tmp_path / f"invalid_storage_struct_{reason}.metal"
+    metal_source.write_text(
+        f"""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct WordBlock {{
+            {member_declarations}
+        }};
+
+        kernel void invalid_storage_struct(
+            const device {source_type}* input [[buffer(0)]],
+            device uint* output [[buffer(1)]]) {{
+            thread WordBlock local;
+            local = *((const device WordBlock*)input);
+            output[0] = uint(local.words[0]);
+        }}
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        crosstl.translate(
+            str(metal_source),
+            backend="opengl",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.target_type == "WordBlock"
+    assert diagnostic.address_space == "storage"
+    assert diagnostic.access == "read"
+    assert diagnostic.target_backend == "opengl"
+    assert diagnostic.reason == reason
+
+
+def test_glsl_storage_struct_reinterpret_rejects_side_effecting_offset(tmp_path):
+    metal_source = tmp_path / "storage_struct_side_effecting_offset.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct WordBlock {
+            uint words[2];
+        };
+
+        inline uint take_offset(thread uint& evaluations) {
+            evaluations += 1;
+            return 1;
+        }
+
+        kernel void storage_struct_side_effecting_offset(
+            const device uint* input [[buffer(0)]],
+            device uint* output [[buffer(1)]]) {
+            thread uint evaluations = 0;
+            thread WordBlock local;
+            local = *((const device WordBlock*)(
+                input + take_offset(evaluations)));
+            output[0] = local.words[0] + evaluations;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        crosstl.translate(
+            str(metal_source),
+            backend="opengl",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.source_type == "uint"
+    assert diagnostic.target_type == "WordBlock"
+    assert diagnostic.address_space == "storage"
+    assert diagnostic.alignment == 4
+    assert diagnostic.access == "read"
+    assert diagnostic.reason == "storage-aggregate-offset-side-effecting"
+
+
+def test_glsl_storage_struct_reinterpret_rejects_unproven_resource_selection(
+    tmp_path,
+):
+    metal_source = tmp_path / "storage_struct_unproven_selection.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct WordBlock {
+            uint words[2];
+        };
+
+        kernel void storage_struct_unproven_selection(
+            const device uint* left [[buffer(0)]],
+            const device uint* right [[buffer(1)]],
+            constant bool& choose_left [[buffer(2)]],
+            device uint* output [[buffer(3)]]) {
+            thread WordBlock local;
+            local = *((const device WordBlock*)(choose_left ? left : right));
+            output[0] = local.words[0];
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        crosstl.translate(
+            str(metal_source),
+            backend="opengl",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.target_type == "WordBlock"
+    assert diagnostic.address_space == "storage"
+    assert diagnostic.access == "read"
+    assert diagnostic.target_backend == "opengl"
+    assert diagnostic.reason == "storage-aggregate-backing-unresolved"
+
+
 def test_glsl_boolean_ternary_preserves_boolean_branch_types():
     code = """
     shader BooleanTernary {
