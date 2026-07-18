@@ -6831,6 +6831,29 @@ def test_cooperative_matrix_inference_rejects_missing_or_incompatible_operands(
     assert message in str(exc_info.value)
 
 
+def test_permissive_parser_preserves_invalid_cooperative_matrix_operation():
+    code = """
+    shader InvalidCooperativeMatrixOperation {
+        void main(
+            CooperativeMatrix<float, 8, 4> left,
+            CooperativeMatrix<float, 5, 8> right
+        ) {
+            auto result = cooperative_matrix_multiply(left, right);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code)).parse()
+    operation = ast.functions[0].body.statements[0].initial_value
+
+    assert isinstance(operation, CooperativeMatrixOpNode)
+    assert operation.result_type is None
+    assert operation.annotations["cooperative_matrix_inference_errors"] == [
+        "Cooperative matrix multiply has incompatible inner dimension: "
+        "left columns are 4, but right rows are 5"
+    ]
+
+
 def test_cooperative_matrix_explicit_result_disagreement_is_rejected():
     code = """
     shader InvalidCooperativeMatrixResult {

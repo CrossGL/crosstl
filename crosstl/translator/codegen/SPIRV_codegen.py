@@ -15675,12 +15675,15 @@ class VulkanSPIRVCodeGen:
             result_source = self.current_expression_expected_type
         if result_source is None:
             result_source = self.current_expression_expected_type
-        if result_source is None:
+        if (
+            result_source is None
+            or self.neutral_cooperative_matrix_type(result_source) is not None
+        ):
             raise self.cooperative_matrix_operation_error(
                 expr,
                 "cooperative-matrix-result-contract",
                 "SPIR-V cooperative-matrix operations require an explicit result "
-                "type until shared result-contract inference is available",
+                "type with an accumulator use role",
                 "spirv.cooperative_matrix.result-contract",
             )
         result_type = self.map_crossgl_type(result_source)

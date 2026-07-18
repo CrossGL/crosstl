@@ -3194,6 +3194,34 @@ class Parser:
         operation_node.set_result_contract(result)
         return operation_node
 
+    def infer_cooperative_matrix_operation_or_preserve(self, operation_node):
+        """Preserve operations for target diagnostics in permissive parse mode."""
+        try:
+            return self.infer_cooperative_matrix_operation(operation_node)
+        except SyntaxError as error:
+            if self.strict_function_bodies:
+                raise
+            self.record_cooperative_matrix_inference_error(operation_node, error)
+            return operation_node
+
+    @staticmethod
+    def record_cooperative_matrix_inference_error(expression, error):
+        expression.annotations.setdefault(
+            "cooperative_matrix_inference_errors", []
+        ).append(str(error))
+
+    def apply_cooperative_matrix_result_constraint(
+        self, expression, expected_type, context
+    ):
+        """Apply a result constraint without discarding permissively parsed bodies."""
+        try:
+            self.constrain_cooperative_matrix_result(expression, expected_type, context)
+        except SyntaxError as error:
+            if self.strict_function_bodies:
+                raise
+            if isinstance(expression, CooperativeMatrixOpNode):
+                self.record_cooperative_matrix_inference_error(expression, error)
+
     @staticmethod
     def type_is_inferred_declaration(value_type):
         return value_type is None or (
@@ -3241,7 +3269,7 @@ class Parser:
     def finish_variable_contract(self, variable):
         """Constrain an initializer and register its effective lexical type."""
         if variable.initial_value is not None:
-            self.constrain_cooperative_matrix_result(
+            self.apply_cooperative_matrix_result_constraint(
                 variable.initial_value,
                 variable.var_type,
                 f"declaration {variable.name!r}",
@@ -4390,7 +4418,7 @@ class Parser:
         value = None
         if self.current_token[0] != "SEMICOLON":
             value = self.parse_expression()
-            self.constrain_cooperative_matrix_result(
+            self.apply_cooperative_matrix_result_constraint(
                 value,
                 self.current_function_return_type,
                 "function return type",
@@ -4436,7 +4464,7 @@ class Parser:
             self.eat(self.current_token[0])
             right = self.parse_assignment_expression(stop_at_generic_close)
             if op == "=":
-                self.constrain_cooperative_matrix_result(
+                self.apply_cooperative_matrix_result_constraint(
                     right,
                     self.cooperative_matrix_expression_type(left),
                     "assignment target",
@@ -4826,7 +4854,7 @@ class Parser:
                     if left.name in WAVE_INTRINSICS:
                         left = WaveOpNode(left.name, arguments)
                     elif left.name in COOPERATIVE_MATRIX_INTRINSICS:
-                        left = self.infer_cooperative_matrix_operation(
+                        left = self.infer_cooperative_matrix_operation_or_preserve(
                             CooperativeMatrixOpNode(
                                 COOPERATIVE_MATRIX_INTRINSICS[left.name],
                                 arguments,
