@@ -853,6 +853,18 @@ and C++17 and can be included for more than one load unit without redefining
 the shared ABI types. They describe what downstream host integration must
 load and bind; they are not a generated runtime implementation.
 
+Build descriptors and declarations for every ready unit in one operation:
+
+.. code-block:: bash
+
+   python -m crosstl native-loader-abi-package \
+     crosstl-runtime-package/runtime-loader-manifest.json \
+     crosstl-native-loader-abi
+
+``native-loader-abi-package`` validates every unit before writing output. It
+emits target-scoped descriptor and header files plus
+``native-loader-abi-package.json`` and prints that package manifest as JSON.
+
 The same operations are available through the public project API:
 
 .. code-block:: python
