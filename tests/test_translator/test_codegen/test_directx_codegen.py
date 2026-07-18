@@ -80,6 +80,9 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXWorkgroupSizeError,
     HLSLCodeGen,
 )
+from crosstl.translator.codegen.pointer_reinterpret import (
+    PointerReinterpretationError,
+)
 from crosstl.translator.cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
 )
@@ -42405,6 +42408,179 @@ def test_hlsl_private_pointer_helper_uses_fixed_local_array_extent():
     assert "sum4(values, 0)" in generated
     assert "uint8_t*" not in generated
     assert "uint8 *" not in generated
+
+
+def test_hlsl_metal_private_struct_byte_view_reads_fixed_word_array(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct WordBlock {
+        uint words[2];
+    };
+
+    inline uint sum8(const thread uint8_t* bytes) {
+        uint total = 0;
+        for (int index = 0; index < 8; ++index) {
+            total += bytes[index];
+        }
+        return total;
+    }
+
+    kernel void local_struct_byte_view(
+        device uint* output [[buffer(0)]]) {
+        thread WordBlock block;
+        block.words[0] = 67305985u;
+        block.words[1] = 134678021u;
+        output[0] = sum8((const thread uint8_t*)&block);
+    }
+    """
+    shader_path = tmp_path / "local_struct_byte_view.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    packed = (67305985).to_bytes(4, "little") + (134678021).to_bytes(4, "little")
+    assert sum(packed) == 36
+    assert "uint sum8(in uint bytes[2], int bytes_base)" in generated
+    assert "bytes[uint(((bytes_base + index)) / 4)]" in generated
+    assert "% 4) * 8" in generated
+    assert "& 255u" in generated
+    assert "sum8(block.words, 0)" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "uint8_t*" not in generated
+    assert "uint8 *" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_private_struct_scalar_views_preserve_aligned_offsets(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct vec_w {
+        uint32_t wi[2];
+    };
+
+    inline uint read8(const thread uint8_t* values) {
+        return values[1];
+    }
+
+    inline uint read16(const thread uint16_t* values) {
+        return values[1];
+    }
+
+    inline uint read32(const thread uint32_t* values) {
+        return values[1];
+    }
+
+    kernel void local_struct_scalar_views(
+        device uint* output [[buffer(0)]]) {
+        thread vec_w w_local;
+        w_local.wi[0] = 67305985u;
+        w_local.wi[1] = 134678021u;
+        output[0] = read8(((const thread uint8_t*)&w_local) + 1);
+        output[1] = read16(((const thread uint16_t*)&w_local) + 1);
+        output[2] = read32((const thread uint32_t*)&w_local);
+    }
+    """
+    shader_path = tmp_path / "local_struct_scalar_views.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "uint read8(in uint values[2], int values_base)" in generated
+    assert "uint read16(in uint values[2], int values_base)" in generated
+    assert "uint read32(in uint values[2], int values_base)" in generated
+    assert "read8(w_local.wi, 1)" in generated
+    assert "read16(w_local.wi, 1)" in generated
+    assert "read32(w_local.wi, 0)" in generated
+    assert "& 255u" in generated
+    assert "& 65535u" in generated
+    assert "* 2)" in generated
+    assert "PointerReinterpretNode" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("struct_body", "helper", "call", "reason"),
+    [
+        pytest.param(
+            "uint words[2];",
+            "inline void inspect(thread uint8_t* values) { values[0] = 1; }",
+            "inspect((thread uint8_t*)&block); output[0] = 0;",
+            "private-view-write-unsupported",
+            id="write",
+        ),
+        pytest.param(
+            "uint tag; uint2 words[2];",
+            "inline uint inspect(const thread uint8_t* values) { return values[0]; }",
+            "output[0] = inspect((const thread uint8_t*)&block);",
+            "heterogeneous-private-view-layout",
+            id="padded-heterogeneous-layout",
+        ),
+        pytest.param(
+            "uint words[];",
+            "inline uint inspect(const thread uint8_t* values) { return values[0]; }",
+            "output[0] = inspect((const thread uint8_t*)&block);",
+            "dynamic-private-view-extent",
+            id="dynamic-extent",
+        ),
+        pytest.param(
+            "uint words[2];",
+            "inline uint inspect(const thread uint64_t* values) { return uint(values[0]); }",
+            "output[0] = inspect((const thread uint64_t*)&block);",
+            "unsupported-private-view-target-layout",
+            id="unsupported-width",
+        ),
+    ],
+)
+def test_hlsl_metal_private_struct_scalar_view_rejects_unsupported_contract(
+    tmp_path, struct_body, helper, call, reason
+):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct WordBlock {{
+        {struct_body}
+    }};
+
+    {helper}
+
+    kernel void rejected_private_view(
+        device uint* output [[buffer(0)]]) {{
+        thread WordBlock block;
+        {call}
+    }}
+    """
+    shader_path = tmp_path / f"rejected_private_view_{reason}.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(PointerReinterpretationError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = excinfo.value
+    assert diagnostic.reason == reason
+    assert diagnostic.source_type == "WordBlock"
+    assert diagnostic.address_space == "thread"
 
 
 def test_hlsl_private_pointer_view_overloads_exact_and_offset_backings(tmp_path):

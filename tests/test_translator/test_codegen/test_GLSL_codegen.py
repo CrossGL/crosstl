@@ -60,6 +60,9 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLWorkgroupPointerError,
     OpenGLWorkgroupSizeError,
 )
+from crosstl.translator.codegen.pointer_reinterpret import (
+    PointerReinterpretationError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -7108,6 +7111,194 @@ def test_glsl_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "storage_pointer_reinterpret"
     )
+
+
+def test_glsl_metal_private_struct_byte_view_reads_packed_words(tmp_path):
+    metal_source = tmp_path / "local_struct_byte_view.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct WordBlock {
+            uint words[2];
+        };
+
+        inline uint sum8(const thread uint8_t* bytes) {
+            uint total = 0;
+            for (int index = 0; index < 8; ++index) {
+                total += bytes[index];
+            }
+            return total;
+        }
+
+        inline uint sum6(const thread uint8_t* bytes) {
+            uint total = 0;
+            for (int index = 0; index < 6; ++index) {
+                total += bytes[index];
+            }
+            return total;
+        }
+
+        inline uint sum4x16(const thread uint16_t* values) {
+            uint total = 0;
+            for (int index = 0; index < 4; ++index) {
+                total += values[index];
+            }
+            return total;
+        }
+
+        inline uint sum2x32(const thread uint* values) {
+            return values[0] + values[1];
+        }
+
+        kernel void local_struct_byte_view(
+            device uint* output [[buffer(0)]]) {
+            thread WordBlock block;
+            block.words[0] = 67305985u;
+            block.words[1] = 134678021u;
+            output[0] = sum8((const thread uint8_t*)&block);
+            output[1] = sum6((const thread uint8_t*)&block + 2);
+            output[2] = sum4x16((const thread uint16_t*)&block);
+            output[3] = sum2x32((const thread uint*)&block);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    packed_words = (67305985, 134678021)
+    packed_bytes = b"".join(word.to_bytes(4, "little") for word in packed_words)
+    assert sum(packed_bytes) == 36
+    assert sum(packed_bytes[2:]) == 33
+    assert (
+        sum(
+            int.from_bytes(packed_bytes[index : index + 2], "little")
+            for index in range(0, len(packed_bytes), 2)
+        )
+        == 5136
+    )
+    assert sum(packed_words) == 201984006
+    assert "uint sum8(inout WordBlock bytes, int bytes_base)" in generated
+    assert "uint sum6(inout WordBlock bytes, int bytes_base)" in generated
+    assert "uint sum4x16(inout WordBlock values, int values_base)" in generated
+    assert "uint sum2x32(inout WordBlock values, int values_base)" in generated
+    assert "bitfieldExtract(bytes.words[" in generated
+    assert "% 4) * 8" in generated
+    assert ", 16)" in generated
+    assert "sum8(block, 0)" in generated
+    assert "sum6(block, int(2))" in generated
+    assert "sum4x16(block, 0)" in generated
+    assert "sum2x32(block, 0)" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "uint8_t*" not in generated
+    assert "uint8*" not in generated
+    assert "&block" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "private_struct_byte_view",
+    )
+
+
+def test_glsl_private_struct_byte_view_rejects_writes(tmp_path):
+    metal_source = tmp_path / "local_struct_byte_write.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct WordBlock {
+            uint words[2];
+        };
+
+        inline void overwrite(thread uint8_t* bytes) {
+            bytes[1] = 9;
+        }
+
+        kernel void local_struct_byte_write(
+            device uint* output [[buffer(0)]]) {
+            thread WordBlock block;
+            overwrite((thread uint8_t*)&block);
+            output[0] = block.words[0];
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        crosstl.translate(
+            str(metal_source),
+            backend="opengl",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.source_type == "WordBlock"
+    assert diagnostic.target_type == "uint8"
+    assert diagnostic.address_space == "thread"
+    assert diagnostic.alignment == 1
+    assert diagnostic.access == "write"
+    assert diagnostic.reason == "private-byte-view-write-unsupported"
+
+
+@pytest.mark.parametrize(
+    ("member_declarations", "view_type", "reason"),
+    [
+        (
+            "uint words[2]; uint extra;",
+            "uint8_t",
+            "unsupported-private-byte-layout",
+        ),
+        ("uint words[];", "uint8_t", "private-byte-layout-unresolved"),
+        ("uint words[2];", "uint64_t", "unsupported-private-byte-view"),
+    ],
+)
+def test_glsl_private_struct_byte_view_rejects_unsupported_contracts(
+    tmp_path,
+    member_declarations,
+    view_type,
+    reason,
+):
+    metal_source = tmp_path / f"invalid_local_byte_view_{reason}.metal"
+    metal_source.write_text(
+        f"""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct WordBlock {{
+            {member_declarations}
+        }};
+
+        inline uint first(const thread {view_type}* values) {{
+            return uint(values[0]);
+        }}
+
+        kernel void invalid_local_byte_view(
+            device uint* output [[buffer(0)]]) {{
+            thread WordBlock block;
+            output[0] = first((const thread {view_type}*)&block);
+        }}
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        crosstl.translate(
+            str(metal_source),
+            backend="opengl",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert exc_info.value.reason == reason
 
 
 def test_glsl_boolean_ternary_preserves_boolean_branch_types():

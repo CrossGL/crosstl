@@ -1938,10 +1938,13 @@ class HLSLCodeGen:
         self.function_private_pointer_parameter_indices = {}
         self.function_private_pointer_backing_variants = {}
         self.function_private_pointer_local_array_extents = {}
+        self.function_private_pointer_local_backing_types = {}
         self.function_private_pointer_view_calls = {}
         self.function_private_pointer_base_names = {}
         self.function_private_pointer_full_span_parameters = {}
         self.function_private_pointer_scalar_parameters = {}
+        self.hlsl_private_pointer_word_views = {}
+        self.hlsl_private_pointer_reinterpret_word_views = {}
         self.hlsl_private_pointer_zero_index_access_ids = set()
         self.current_hlsl_private_pointer_variant = {}
         self.current_hlsl_private_pointer_base_names = {}
@@ -2825,10 +2828,13 @@ class HLSLCodeGen:
         self.function_private_pointer_parameter_indices = {}
         self.function_private_pointer_backing_variants = {}
         self.function_private_pointer_local_array_extents = {}
+        self.function_private_pointer_local_backing_types = {}
         self.function_private_pointer_view_calls = {}
         self.function_private_pointer_base_names = {}
         self.function_private_pointer_full_span_parameters = {}
         self.function_private_pointer_scalar_parameters = {}
+        self.hlsl_private_pointer_word_views = {}
+        self.hlsl_private_pointer_reinterpret_word_views = {}
         self.hlsl_private_pointer_zero_index_access_ids = set()
         self.current_hlsl_private_pointer_variant = {}
         self.current_hlsl_private_pointer_base_names = {}
@@ -11700,6 +11706,153 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return base
         return f"({base} + {delta})"
 
+    def hlsl_private_pointer_word_view_error(
+        self,
+        expression,
+        *,
+        source_type,
+        target_type,
+        reason,
+        detail,
+        alignment=None,
+        access="read",
+    ):
+        raise PointerReinterpretationError(
+            "DirectX cannot preserve a private scalar view from "
+            f"'{source_type}' to '{target_type}': {detail}",
+            source_type=source_type,
+            target_type=target_type,
+            address_space=(
+                getattr(getattr(expression, "target_type", None), "address_space", None)
+                or "thread"
+            ),
+            alignment=alignment,
+            access=access,
+            target_backend="directx",
+            reason=reason,
+            source_location=getattr(expression, "source_location", None),
+        )
+
+    def hlsl_private_pointer_word_view_layout(self, expression, source_type):
+        source_name = self.type_name_string(source_type)
+        pointer_type = getattr(expression, "target_type", None)
+        target_type = getattr(pointer_type, "pointee_type", None)
+        target_name = self.type_name_string(target_type)
+        target_layout = scalar_storage_layout(target_name)
+        alignment = target_layout.byte_width if target_layout else None
+
+        def reject(reason, detail):
+            self.hlsl_private_pointer_word_view_error(
+                expression,
+                source_type=source_name,
+                target_type=target_name,
+                reason=reason,
+                detail=detail,
+                alignment=alignment,
+            )
+
+        address_space = str(getattr(pointer_type, "address_space", None) or "thread")
+        if address_space.lower() not in {"thread", "private", "function"}:
+            reject(
+                "unsupported-private-address-space",
+                f"address space '{address_space}' is not private storage",
+            )
+        if (
+            not isinstance(pointer_type, PointerType)
+            or target_layout is None
+            or target_layout.bit_width not in {8, 16, 32}
+            or (target_layout.kind == "floating" and target_layout.bit_width != 32)
+        ):
+            reject(
+                "unsupported-private-view-target-layout",
+                "the target must be an 8-, 16-, or 32-bit scalar view",
+            )
+
+        struct_node = self.structs_by_name.get(source_name)
+        if struct_node is not None and (
+            getattr(struct_node, "attributes", None)
+            or getattr(struct_node, "inheritance", None)
+            or self.hlsl_union_layout_for_type(source_type) is not None
+        ):
+            reject(
+                "unsupported-private-view-aggregate-layout",
+                "the backing struct has noncanonical layout metadata",
+            )
+        members = (
+            [
+                member
+                for member in getattr(struct_node, "members", []) or []
+                if not self.hlsl_static_struct_member(member)
+            ]
+            if struct_node is not None
+            else []
+        )
+        if len(members) != 1:
+            reject(
+                "heterogeneous-private-view-layout",
+                (
+                    "the backing must be a struct with exactly one fixed-array "
+                    "instance member"
+                ),
+            )
+        member = members[0]
+        if getattr(member, "attributes", None):
+            reject(
+                "unsupported-private-view-aggregate-layout",
+                "the backing array member has noncanonical layout metadata",
+            )
+        member_type = getattr(member, "member_type", None)
+        if not isinstance(member_type, ArrayType):
+            reject(
+                "heterogeneous-private-view-layout",
+                "the sole backing member is not a fixed scalar array",
+            )
+        extent = self.literal_int_value(
+            getattr(member_type, "size", None), self.literal_int_constants
+        )
+        if extent is None or extent <= 0:
+            reject(
+                "dynamic-private-view-extent",
+                "the backing word-array extent is not a positive constant",
+            )
+        source_element_name = self.type_name_string(member_type.element_type)
+        source_layout = scalar_storage_layout(source_element_name)
+        if (
+            source_layout is None
+            or source_layout.bit_width != 32
+            or self.map_type(source_element_name) not in {"float", "int", "uint"}
+        ):
+            reject(
+                "unsupported-private-view-source-layout",
+                "the backing array must contain homogeneous 32-bit scalars",
+            )
+
+        variant = (
+            "word_view",
+            source_layout.name,
+            target_layout.name,
+            extent,
+        )
+        layout = {
+            "variant": variant,
+            "source_type": source_name,
+            "source_layout": source_layout,
+            "target_layout": target_layout,
+            "member": member.name,
+            "word_extent": extent,
+            "target_extent": extent * 4 // target_layout.byte_width,
+        }
+        self.hlsl_private_pointer_word_views.setdefault(variant, layout)
+        self.hlsl_private_pointer_reinterpret_word_views[id(expression)] = layout
+        return layout
+
+    def hlsl_private_pointer_word_view_for_variant(self, variant):
+        return self.hlsl_private_pointer_word_views.get(variant)
+
+    def hlsl_private_pointer_variant_extent(self, variant):
+        layout = self.hlsl_private_pointer_word_view_for_variant(variant)
+        return layout["target_extent"] if layout is not None else variant
+
     def hlsl_private_pointer_view_binding(self, expression):
         local_extents = self.function_private_pointer_local_array_extents.get(
             self.current_function_name, {}
@@ -11707,6 +11860,40 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         scalar_parameters = self.function_private_pointer_scalar_parameters.get(
             self.current_function_name, set()
         )
+        if isinstance(expression, PointerReinterpretNode):
+            layout = self.hlsl_private_pointer_reinterpret_word_views.get(
+                id(expression)
+            )
+            operand = getattr(expression, "expression", None)
+            backing = getattr(operand, "operand", None)
+            backing_name = getattr(backing, "name", None)
+            if (
+                layout is None
+                or not isinstance(operand, UnaryOpNode)
+                or operand.op != "&"
+                or not backing_name
+            ):
+                self.hlsl_private_pointer_word_view_error(
+                    expression,
+                    source_type=self.type_name_string(
+                        self.expression_result_type(operand)
+                    )
+                    or "unknown",
+                    target_type=self.type_name_string(
+                        getattr(expression.target_type, "pointee_type", None)
+                    ),
+                    reason="missing-private-view-backing",
+                    detail="the reinterpretation has no direct local struct backing",
+                )
+            return {
+                "backing": (
+                    f"{self.hlsl_identifier_name(backing_name)}.{layout['member']}"
+                ),
+                "offset": "0",
+                "root_kind": "local_word_view",
+                "word_view": layout["variant"],
+            }
+
         if isinstance(expression, (str, IdentifierNode, VariableNode)):
             raw_name = (
                 expression
@@ -11714,6 +11901,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 else getattr(expression, "name", None)
             )
             if raw_name in self.current_hlsl_private_pointer_base_names:
+                variant = self.current_hlsl_private_pointer_variant.get(raw_name)
+                if self.hlsl_private_pointer_word_view_for_variant(variant) is not None:
+                    return {
+                        "backing": self.hlsl_identifier_name(raw_name),
+                        "offset": self.current_hlsl_private_pointer_base_names[
+                            raw_name
+                        ],
+                        "root_kind": "word_view_parameter",
+                        "word_view": variant,
+                    }
                 if raw_name in scalar_parameters:
                     return {
                         "backing": self.hlsl_identifier_name(raw_name),
@@ -11786,8 +11983,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if binding is None or binding.get("root_kind") not in {
             "parameter",
             "scalar_parameter",
+            "word_view_parameter",
         }:
             return None
+        if binding["root_kind"] == "word_view_parameter":
+            if self.hlsl_private_pointer_expression_has_side_effects(index_expression):
+                raise DirectXPrivatePointerParameterError(
+                    "DirectX cannot emit a side-effecting private scalar-view index",
+                    function_name=self.current_function_name,
+                    reason="side-effecting-view-offset",
+                    source_location=getattr(index_expression, "source_location", None),
+                )
+            layout = self.hlsl_private_pointer_word_views[binding["word_view"]]
+            rendered_index = (
+                str(index_expression)
+                if isinstance(index_expression, (int, float))
+                else self.generate_expression(index_expression)
+            )
+            effective_index = self.hlsl_resource_pointer_offset_sum(
+                binding["offset"], rendered_index
+            )
+            return self.hlsl_pointer_reinterpret_read_expression(
+                {
+                    "root": binding["backing"],
+                    "byte_offset": "0",
+                    "pointer_reinterpretation": {
+                        "source_layout": layout["source_layout"],
+                        "target_layout": layout["target_layout"],
+                    },
+                },
+                effective_index,
+            )
         if binding["root_kind"] == "scalar_parameter":
             if self.hlsl_private_pointer_expression_has_side_effects(index_expression):
                 raise DirectXPrivatePointerParameterError(
@@ -11839,10 +12065,44 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reason="missing-view-backing",
                 source_location=getattr(argument, "source_location", None),
             )
-        binding["scalar"] = parameter_name in (
-            self.function_private_pointer_scalar_parameters.get(function_name, set())
+        binding["scalar"] = (
+            parameter_name
+            in (
+                self.function_private_pointer_scalar_parameters.get(
+                    function_name, set()
+                )
+            )
+            and binding.get("root_kind") != "local_word_view"
         )
         return binding
+
+    def hlsl_private_pointer_word_view_write_error(self, target):
+        if isinstance(target, ArrayAccessNode):
+            pointer_expression = target.array
+        elif (
+            isinstance(target, UnaryOpNode)
+            and not getattr(target, "is_postfix", False)
+            and target.op == "*"
+        ):
+            pointer_expression = target.operand
+        else:
+            return
+        binding = self.hlsl_private_pointer_view_binding(pointer_expression)
+        if binding is None or binding.get("root_kind") != "word_view_parameter":
+            return
+        layout = self.hlsl_private_pointer_word_views[binding["word_view"]]
+        raise PointerReinterpretationError(
+            "DirectX cannot preserve writes through a reinterpreted private "
+            "word-array view",
+            source_type=layout["source_type"],
+            target_type=layout["target_layout"].name,
+            address_space="thread",
+            alignment=layout["target_layout"].byte_width,
+            access="write",
+            target_backend="directx",
+            reason="private-view-write-unsupported",
+            source_location=getattr(target, "source_location", None),
+        )
 
     def hlsl_resource_pointer_parameter_type_node(self, parameter):
         parameter_type = getattr(
@@ -13332,6 +13592,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = node.right
             op = getattr(node, "operator", "=")
 
+        self.hlsl_private_pointer_word_view_write_error(target)
         target_type = self.hlsl_assignment_target_type(target)
         boolean_compound_assignment = self.generate_hlsl_boolean_compound_assignment(
             node,
@@ -14816,6 +15077,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.hlsl_resource_pointer_array_bare_expression_error(expr)
             self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return self.hlsl_identifier_name(expr.name)
+        elif isinstance(expr, PointerReinterpretNode):
+            target_type = getattr(expr.target_type, "pointee_type", None)
+            target_layout = scalar_storage_layout(self.type_name_string(target_type))
+            raise PointerReinterpretationError(
+                "DirectX pointer reinterpretation reached an expression context "
+                "without a resource or private backing contract",
+                source_type=self.type_name_string(
+                    self.expression_result_type(expr.expression)
+                ),
+                target_type=self.type_name_string(target_type),
+                address_space=getattr(expr.target_type, "address_space", None),
+                alignment=target_layout.byte_width if target_layout else None,
+                target_backend="directx",
+                reason="unconsumed-pointer-reinterpretation",
+                source_location=getattr(expr, "source_location", None),
+            )
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             mapped_op = self.map_operator(op)
@@ -14888,6 +15165,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             mapped_op = self.map_operator(op)
             if mapped_op in {"++", "--"}:
+                self.hlsl_private_pointer_word_view_write_error(
+                    getattr(expr, "operand", None)
+                )
                 ancestor = self.hlsl_union_access_ancestor(
                     getattr(expr, "operand", None)
                 )
@@ -20626,12 +20906,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             str(qualifier).lower()
             for qualifier in getattr(parameter, "qualifiers", []) or []
         }
+        private_word_view = self.hlsl_private_pointer_word_view_for_variant(
+            self.current_hlsl_private_pointer_variant.get(
+                getattr(parameter, "name", None)
+            )
+        )
         if (
             is_private_pointer_parameter(parameter)
             and getattr(parameter_type, "is_mutable", True)
+            and private_word_view is None
             and not set(qualifiers).intersection({"const", "in", "out", "inout"})
         ):
             qualifiers.append("inout")
+        if (
+            is_private_pointer_parameter(parameter)
+            and private_word_view is not None
+            and not set(qualifiers).intersection({"const", "in", "out", "inout"})
+        ):
+            qualifiers.append("in")
         if (
             self.hlsl_workgroup_pointer_declaration(parameter)
             and getattr(parameter_type, "is_mutable", True)
@@ -28409,6 +28701,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             for function_name, function in functions_by_name.items()
         }
         self.function_private_pointer_local_array_extents = local_array_extents
+        self.function_private_pointer_local_backing_types = {
+            function_name: self.hlsl_private_pointer_local_backing_types(function)
+            for function_name, function in functions_by_name.items()
+        }
 
         direct_spans = {
             function_name: {parameter.name: 0 for parameter in parameters}
@@ -28481,9 +28777,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 for parameter_name in full_span_parameters:
                     binding = call["bindings"].get(parameter_name, {})
-                    if binding.get("root_kind") == "local" and binding.get(
-                        "offset"
-                    ) == (0, 0):
+                    if binding.get("root_kind") in {
+                        "local",
+                        "local_word_view",
+                    } and binding.get("offset") == (0, 0):
                         direct_spans[call["callee"]][parameter_name] = max(
                             direct_spans[call["callee"]][parameter_name],
                             binding["extent"],
@@ -28556,7 +28853,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             for call in calls:
                 callee_scalar_parameters = scalar_parameters.get(call["callee"], set())
                 if not all(
-                    binding.get("root_kind") == "local"
+                    binding.get("root_kind") in {"local", "local_word_view"}
                     or binding.get("root_kind") == "scalar"
                     and parameter_name in callee_scalar_parameters
                     for parameter_name, binding in call["bindings"].items()
@@ -28564,7 +28861,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     continue
                 variants[call["callee"]].add(
                     tuple(
-                        call["bindings"][parameter.name]["extent"]
+                        (
+                            call["bindings"][parameter.name]["word_view"]
+                            if call["bindings"][parameter.name].get("root_kind")
+                            == "local_word_view"
+                            else call["bindings"][parameter.name]["extent"]
+                        )
                         for parameter in pointer_parameters[call["callee"]]
                     )
                 )
@@ -28586,15 +28888,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             binding = call["bindings"][parameter.name]
                             if binding.get("root_kind") == "local":
                                 extent = binding["extent"]
+                                variant_value = extent
+                            elif binding.get("root_kind") == "local_word_view":
+                                extent = binding["extent"]
+                                variant_value = binding["word_view"]
                             elif binding.get(
                                 "root_kind"
                             ) == "scalar" and parameter.name in scalar_parameters.get(
                                 call["callee"], set()
                             ):
                                 extent = 1
+                                variant_value = extent
                             elif binding.get("root_kind") == "parameter":
                                 position = caller_parameter_positions[binding["root"]]
-                                extent = caller_variant[position]
+                                variant_value = caller_variant[position]
+                                extent = self.hlsl_private_pointer_variant_extent(
+                                    variant_value
+                                )
                             else:
                                 self.hlsl_private_pointer_backing_error(
                                     call, parameter.name, binding
@@ -28608,22 +28918,54 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                                 extent,
                                 caller_parameter_positions,
                             )
-                            callee_variant.append(extent)
+                            callee_variant.append(variant_value)
                         callee_variant = tuple(callee_variant)
                         if callee_variant not in variants[call["callee"]]:
                             variants[call["callee"]].add(callee_variant)
                             changed = True
 
+        for function_name, parameters in pointer_parameters.items():
+            incoming_calls = [
+                call
+                for calls in view_calls.values()
+                for call in calls
+                if call["callee"] == function_name
+            ]
+            if incoming_calls and all(
+                all(
+                    call["bindings"][parameter.name].get("root_kind")
+                    == "local_word_view"
+                    for parameter in parameters
+                )
+                for call in incoming_calls
+            ):
+                variants[function_name].discard(
+                    tuple(
+                        required_spans[function_name][parameter.name]
+                        for parameter in parameters
+                    )
+                )
+
         self.function_private_pointer_backing_variants = {
-            function_name: tuple(sorted(function_variants))
+            function_name: tuple(
+                sorted(
+                    function_variants,
+                    key=lambda variant: tuple(
+                        (0, value) if isinstance(value, int) else (1, repr(value))
+                        for value in variant
+                    ),
+                )
+            )
             for function_name, function_variants in variants.items()
         }
         return {
             function_name: {
                 parameter.name: str(
-                    self.function_private_pointer_backing_variants[function_name][0][
-                        index
-                    ]
+                    self.hlsl_private_pointer_variant_extent(
+                        self.function_private_pointer_backing_variants[function_name][
+                            0
+                        ][index]
+                    )
                 )
                 for index, parameter in enumerate(parameters)
             }
@@ -28658,6 +29000,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for name in ambiguous:
             extents.pop(name, None)
         return extents
+
+    def hlsl_private_pointer_local_backing_types(self, function):
+        local_types = {}
+        for node in self.walk_ast(getattr(function, "body", [])):
+            if not isinstance(node, (VariableNode, ArrayNode)):
+                continue
+            name = getattr(node, "name", None)
+            node_type = getattr(node, "var_type", getattr(node, "vtype", None))
+            if name and node_type is not None:
+                local_types[name] = node_type
+        return local_types
 
     def hlsl_private_pointer_expression_has_side_effects(self, expression):
         if expression is None or isinstance(expression, (str, int, float, bool)):
@@ -28861,8 +29214,44 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return None
 
     def hlsl_private_pointer_static_binding(
-        self, expression, parameter_names, local_extents, intervals, constants
+        self,
+        expression,
+        parameter_names,
+        local_extents,
+        intervals,
+        constants,
+        local_types=None,
     ):
+        local_types = local_types or {}
+        if isinstance(expression, PointerReinterpretNode):
+            operand = getattr(expression, "expression", None)
+            backing = getattr(operand, "operand", None)
+            backing_name = getattr(backing, "name", None)
+            source_type = local_types.get(backing_name)
+            if (
+                not isinstance(operand, UnaryOpNode)
+                or operand.op != "&"
+                or source_type is None
+            ):
+                self.hlsl_private_pointer_word_view_error(
+                    expression,
+                    source_type=self.type_name_string(source_type) or "unknown",
+                    target_type=self.type_name_string(
+                        getattr(expression.target_type, "pointee_type", None)
+                    ),
+                    reason="missing-private-view-backing",
+                    detail="the source must be the address of a typed local struct",
+                )
+            layout = self.hlsl_private_pointer_word_view_layout(expression, source_type)
+            return {
+                "root_kind": "local_word_view",
+                "root": backing_name,
+                "member": layout["member"],
+                "extent": layout["target_extent"],
+                "offset": (0, 0),
+                "side_effecting": False,
+                "word_view": layout["variant"],
+            }
         if isinstance(expression, (str, IdentifierNode, VariableNode)):
             name = (
                 expression
@@ -28900,12 +29289,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.hlsl_private_pointer_static_binding(
-                operand.array, parameter_names, local_extents, intervals, constants
+                operand.array,
+                parameter_names,
+                local_extents,
+                intervals,
+                constants,
+                local_types,
             )
             delta_expression = operand.index
         elif isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
             binding = self.hlsl_private_pointer_static_binding(
-                expression.left, parameter_names, local_extents, intervals, constants
+                expression.left,
+                parameter_names,
+                local_extents,
+                intervals,
+                constants,
+                local_types,
             )
             delta_expression = expression.right
             if binding is None and expression.op == "+":
@@ -28915,6 +29314,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     local_extents,
                     intervals,
                     constants,
+                    local_types,
                 )
                 delta_expression = expression.left
             if binding is None:
@@ -28984,6 +29384,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         function_name = getattr(function, "name", None)
         parameter_names = set(direct_spans)
         local_extents = self.function_private_pointer_local_array_extents.get(
+            function_name, {}
+        )
+        local_types = self.function_private_pointer_local_backing_types.get(
             function_name, {}
         )
         constants = self.initial_literal_int_constants(function)
@@ -29094,6 +29497,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     local_extents,
                     active_intervals,
                     constants,
+                    local_types,
                 )
                 record_access(binding, value.index, active_intervals, value)
                 visit(value.array, active_intervals)
@@ -29107,6 +29511,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         local_extents,
                         active_intervals,
                         constants,
+                        local_types,
                     )
                     record_access(binding, 0, active_intervals, value)
                 visit(value.operand, active_intervals)
@@ -29134,6 +29539,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             local_extents,
                             active_intervals,
                             constants,
+                            local_types,
                         )
                         if binding is None:
                             binding = {
@@ -29282,7 +29688,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         extent,
         caller_parameter_positions,
     ):
-        if binding.get("root_kind") not in {"local", "parameter", "scalar"}:
+        if binding.get("root_kind") not in {
+            "local",
+            "local_word_view",
+            "parameter",
+            "scalar",
+        }:
             self.hlsl_private_pointer_backing_error(call, parameter_name, binding)
         required_span = self.function_private_pointer_required_spans[call["callee"]][
             parameter_name
@@ -29298,14 +29709,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             required_span=required_span,
         )
         upper = offset[1] + required_span - 1
-        if binding["root_kind"] in {"local", "scalar"}:
+        if binding["root_kind"] in {"local", "local_word_view", "scalar"}:
             available = extent
         else:
             root_name = binding["root"]
             available = self.function_private_pointer_required_spans[caller_name][
                 root_name
             ]
-            variant_extent = caller_variant[caller_parameter_positions[root_name]]
+            variant_extent = self.hlsl_private_pointer_variant_extent(
+                caller_variant[caller_parameter_positions[root_name]]
+            )
             if available > variant_extent:
                 available = variant_extent
         if upper < available:
@@ -31149,6 +31562,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 workgroup_pointer_func_name
             )
         )
+        private_pointer_indices = self.function_private_pointer_parameter_indices.get(
+            type_func_name or func_name, {}
+        )
         rendered_args = []
         for index, arg in enumerate(args):
             expected_type = (
@@ -31167,7 +31583,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "argument; a materialized array temporary is required"
                     ),
                 )
-            if index in workgroup_pointer_indices or index in resource_pointer_indices:
+            if (
+                index in workgroup_pointer_indices
+                or index in resource_pointer_indices
+                or index in private_pointer_indices
+            ):
                 rendered_args.append("")
             else:
                 rendered_args.append(
@@ -36575,6 +36995,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 parameter_name=parameter_name,
                 reason="unsupported-pointee-type",
                 source_location=getattr(parameter, "source_location", None),
+            )
+        word_view = self.hlsl_private_pointer_word_view_for_variant(size)
+        if word_view is not None:
+            return (
+                f"{self.map_type(word_view['source_layout'].name)}"
+                f"[{word_view['word_extent']}]"
             )
         if parameter_name in self.function_private_pointer_scalar_parameters.get(
             function_name, set()
