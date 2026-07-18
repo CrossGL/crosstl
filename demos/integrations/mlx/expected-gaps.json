@@ -918,7 +918,7 @@
     "runtime_integration_included": false
   },
   "fp_quantized_contextual_materialization_status": {
-    "status": "blocked-after-source-specialization-and-constructor-resolution",
+    "status": "blocked-at-target-cooperative-matrix-lowering",
     "source": "mlx/backend/metal/kernels/fp_quantized.metal",
     "repository_commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
     "targets": [
@@ -938,7 +938,11 @@
       "canonical-non-type-specialization-identity",
       "source-scoped-specialization-values",
       "equivalent-duplicate-static-owner-resolution",
-      "constructor-argument-address-space-provenance"
+      "constructor-argument-address-space-provenance",
+      "equivalent-duplicate-struct-alias-component-type",
+      "cv-qualified-constructor-member-initialization",
+      "fixed-member-array-constructor-initialization",
+      "generic-crossgl-pointer-cast-parsing"
     ],
     "contextual_receiver_resolved_by_commit": "c7a3c61addf9ca523e09bc81252ab76340c3f82c",
     "dependent_values_resolved_in": "https://github.com/CrossGL/crosstl/pull/1808",
@@ -976,30 +980,28 @@
       },
       "static_constant": "BaseMMAFrag_float_8_8::kFragRows",
       "constructor": "QuantizedBlockLoader_float_32_32_36_1_64_16_4",
+      "struct_alias_component": {
+        "alias": "BaseMMAFrag_float_8_8::frag_type",
+        "index_expression": "k",
+        "component_type": "float"
+      },
+      "cv_qualified_constructor_member": "BlockLoader_float_16_32_36_1_64::src_ld",
+      "fixed_member_array_constructor": "MMATile_float_2_1_BaseMMAFrag_float_8_8::val_frags",
+      "generic_pointer_cast": "(vec<bfloat16_t, 4>*)(xv[v] + k0)",
       "materialized_specialization_count": 588
     },
     "current_boundaries": {
       "directx": {
-        "diagnostic_code": "project.translate.metal-indexed-component-type-unresolved",
-        "missing_contract": "equivalent-duplicate-struct-alias-component-type",
-        "indexed_component": {
-          "base_type": "BaseMMAFrag_float_8_8::frag_type",
-          "access_kind": "aggregate-subscript",
-          "index_expression": "k",
-          "reason": "the user-defined aggregate subscript result type cannot be inferred"
-        },
-        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1811"
+        "diagnostic_code": "project.translate.directx-cooperative-matrix-unsupported",
+        "missing_capability": "directx.cooperative-matrix-lowering",
+        "cooperative_matrix_type": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified>",
+        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1602"
       },
       "opengl": {
-        "diagnostic_code": "project.translate.metal-indexed-component-type-unresolved",
-        "missing_contract": "equivalent-duplicate-struct-alias-component-type",
-        "indexed_component": {
-          "base_type": "BaseMMAFrag_float_8_8::frag_type",
-          "access_kind": "aggregate-subscript",
-          "index_expression": "k",
-          "reason": "the user-defined aggregate subscript result type cannot be inferred"
-        },
-        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1811"
+        "diagnostic_code": "project.translate.opengl-cooperative-matrix-unsupported",
+        "missing_capability": "opengl.cooperative-matrix-lowering",
+        "cooperative_matrix_type": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified>",
+        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1602"
       }
     },
     "target_results": {
@@ -1018,7 +1020,8 @@
     },
     "target_artifact_count": 0,
     "resolved_issues": [
-      "https://github.com/CrossGL/crosstl/issues/1807"
+      "https://github.com/CrossGL/crosstl/issues/1807",
+      "https://github.com/CrossGL/crosstl/issues/1811"
     ],
     "advanced_issue_contracts": [
       "https://github.com/CrossGL/crosstl/issues/1479",
@@ -1026,10 +1029,13 @@
       "https://github.com/CrossGL/crosstl/issues/1491",
       "https://github.com/CrossGL/crosstl/issues/1538",
       "https://github.com/CrossGL/crosstl/issues/1809",
-      "https://github.com/CrossGL/crosstl/issues/1810"
+      "https://github.com/CrossGL/crosstl/issues/1810",
+      "https://github.com/CrossGL/crosstl/issues/1812",
+      "https://github.com/CrossGL/crosstl/issues/1813",
+      "https://github.com/CrossGL/crosstl/issues/1814"
     ],
     "remaining_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1811"
+      "https://github.com/CrossGL/crosstl/issues/1602"
     ],
     "runtime_integration_included": false,
     "numerical_parity_claimed": false,
@@ -1672,7 +1678,9 @@
     "https://github.com/CrossGL/crosstl/issues/1538",
     "https://github.com/CrossGL/crosstl/issues/1809",
     "https://github.com/CrossGL/crosstl/issues/1810",
-    "https://github.com/CrossGL/crosstl/issues/1811",
+    "https://github.com/CrossGL/crosstl/issues/1812",
+    "https://github.com/CrossGL/crosstl/issues/1813",
+    "https://github.com/CrossGL/crosstl/issues/1814",
     "https://github.com/CrossGL/crosstl/issues/1540",
     "https://github.com/CrossGL/crosstl/issues/1541",
     "https://github.com/CrossGL/crosstl/issues/1542",
@@ -1689,9 +1697,11 @@
     "https://github.com/CrossGL/crosstl/issues/1568",
     "https://github.com/CrossGL/crosstl/issues/1569",
     "https://github.com/CrossGL/crosstl/issues/1574",
+    "https://github.com/CrossGL/crosstl/issues/1602",
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1811",
     "https://github.com/CrossGL/crosstl/issues/1807",
     "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1800",

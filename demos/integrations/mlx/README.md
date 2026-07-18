@@ -922,14 +922,31 @@ Both targets also advance through equivalent duplicate definitions of
 `BaseMMAFrag_float_8_8::kFragRows` and through construction of
 `QuantizedBlockLoader_float_32_32_36_1_64_16_4`. These paths exercise the
 qualified static-constant contract in CrossGL/crosstl#1491 and the constructor
-address-space provenance contract in CrossGL/crosstl#1810. DirectX and OpenGL
-then fail closed with
-`project.translate.metal-indexed-component-type-unresolved` while indexing
-`BaseMMAFrag_float_8_8::frag_type` at `k`. The concrete alias denotes a
-two-component float vector, but equivalent duplicate alias owners are not yet
-resolved for component typing; CrossGL/crosstl#1811 tracks that contract.
-Neither run emits a target artifact. This evidence does not claim runtime
-integration or numerical parity.
+address-space provenance contract in CrossGL/crosstl#1810. Equivalent duplicate
+owners now resolve `BaseMMAFrag_float_8_8::frag_type` to its concrete
+two-component float vector, including component access at `k`; this resolves
+CrossGL/crosstl#1811 for the pinned frontier. Constructor factories preserve the
+`BlockLoader_float_16_32_36_1_64::src_ld` const-value initialization and lower
+the partially initialized `MMATile_float_2_1_BaseMMAFrag_float_8_8::val_frags`
+array through ordered element writes. These results advance the broader
+constructor contracts in CrossGL/crosstl#1812 and CrossGL/crosstl#1813.
+
+The complete materialized CrossGL intermediate contains 591 functions. Strict
+function-body parsing now accepts the generic pointer reinterpretation in
+`fp_qmv_wide_impl_bfloat16_t_16_4_2_16`,
+`(vec<bfloat16_t, 4>*)(xv[v] + k0)`, including the generic pointee type. This
+advances CrossGL/crosstl#1814 and removes
+`project.translate.crossgl-function-body-parse-failed` from both exact project
+runs.
+
+DirectX next fails closed with
+`project.translate.directx-cooperative-matrix-unsupported` and OpenGL with
+`project.translate.opengl-cooperative-matrix-unsupported`. Both diagnostics
+identify `CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified>`;
+substituting an ordinary HLSL or GLSL matrix would change distributed fragment
+semantics. CrossGL/crosstl#1602 tracks the required target-independent lane
+layout and software-fallback contract. Neither run emits a target artifact.
+This evidence does not claim runtime integration or numerical parity.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.
@@ -1037,3 +1054,6 @@ OpenGL/SPIR-V 1.3 compilation and validation gate.
 CrossGL/crosstl#1807 is resolved for the pinned `fp_quantized.metal` frontier by
 specialized struct constexpr assertion evaluation; contextual receiver
 materialization remains tracked in CrossGL/crosstl#1479.
+CrossGL/crosstl#1811 is resolved for the same frontier by equivalent duplicate
+struct-alias resolution with concrete component typing and fail-closed conflict
+diagnostics.
