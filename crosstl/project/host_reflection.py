@@ -1323,6 +1323,7 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
             continue
         storage_class = variable.get("storageClass")
         pointee = pointer_types.get(variable.get("typeId"), (storage_class, None))[1]
+        pointee_decorate = decorations.get(str(pointee), {})
         resources.append(
             {
                 "name": names.get(variable_id, variable_id.lstrip("%")),
@@ -1330,7 +1331,9 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
                 "type": names.get(str(pointee), str(pointee) if pointee else None),
                 "set": decorate.get("DescriptorSet", 0),
                 "binding": decorate.get("Binding"),
-                "access": _spirv_resource_access(str(storage_class), decorate),
+                "access": _spirv_resource_access(
+                    str(storage_class), decorate, pointee_decorate
+                ),
                 "metadata": {
                     "id": variable_id,
                     "storageClass": storage_class,
@@ -1496,12 +1499,16 @@ def _spirv_resource_kind(
 
 
 def _spirv_resource_access(
-    storage_class: str, decorations: Mapping[str, Any]
+    storage_class: str,
+    decorations: Mapping[str, Any],
+    pointee_decorations: Mapping[str, Any],
 ) -> str | None:
     if "NonReadable" in decorations:
         return "write"
     if "NonWritable" in decorations:
         return "read"
+    if storage_class == "Uniform" and "BufferBlock" in pointee_decorations:
+        return "read_write"
     if storage_class == "Uniform":
         return "read"
     if storage_class == "StorageBuffer":
