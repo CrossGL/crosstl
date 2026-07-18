@@ -942,7 +942,9 @@
       "equivalent-duplicate-struct-alias-component-type",
       "cv-qualified-constructor-member-initialization",
       "fixed-member-array-constructor-initialization",
-      "generic-crossgl-pointer-cast-parsing"
+      "generic-crossgl-pointer-cast-parsing",
+      "whole-fragment-thread-elements-canonicalization",
+      "cooperative-matrix-fragment-contract-provenance"
     ],
     "contextual_receiver_resolved_by_commit": "c7a3c61addf9ca523e09bc81252ab76340c3f82c",
     "dependent_values_resolved_in": "https://github.com/CrossGL/crosstl/pull/1808",
@@ -988,19 +990,37 @@
       "cv_qualified_constructor_member": "BlockLoader_float_16_32_36_1_64::src_ld",
       "fixed_member_array_constructor": "MMATile_float_2_1_BaseMMAFrag_float_8_8::val_frags",
       "generic_pointer_cast": "(vec<bfloat16_t, 4>*)(xv[v] + k0)",
+      "cooperative_matrix_fragment_contract": {
+        "layout": "metal_thread_elements",
+        "subgroup_size": 32,
+        "elements_per_lane": 2,
+        "provenance": "metal_thread_elements_reference_view"
+      },
       "materialized_specialization_count": 588
     },
     "current_boundaries": {
       "directx": {
         "diagnostic_code": "project.translate.directx-cooperative-matrix-unsupported",
         "missing_capability": "directx.cooperative-matrix-lowering",
-        "cooperative_matrix_type": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified>",
+        "cooperative_matrix_type": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view>",
+        "fragment_contract": {
+          "layout": "metal_thread_elements",
+          "subgroup_size": 32,
+          "elements_per_lane": 2,
+          "provenance": "metal_thread_elements_reference_view"
+        },
         "blocked_by": "https://github.com/CrossGL/crosstl/issues/1602"
       },
       "opengl": {
         "diagnostic_code": "project.translate.opengl-cooperative-matrix-unsupported",
         "missing_capability": "opengl.cooperative-matrix-lowering",
-        "cooperative_matrix_type": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified>",
+        "cooperative_matrix_type": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view>",
+        "fragment_contract": {
+          "layout": "metal_thread_elements",
+          "subgroup_size": 32,
+          "elements_per_lane": 2,
+          "provenance": "metal_thread_elements_reference_view"
+        },
         "blocked_by": "https://github.com/CrossGL/crosstl/issues/1602"
       }
     },
@@ -1021,7 +1041,9 @@
     "target_artifact_count": 0,
     "resolved_issues": [
       "https://github.com/CrossGL/crosstl/issues/1807",
-      "https://github.com/CrossGL/crosstl/issues/1811"
+      "https://github.com/CrossGL/crosstl/issues/1811",
+      "https://github.com/CrossGL/crosstl/issues/1815",
+      "https://github.com/CrossGL/crosstl/issues/1816"
     ],
     "advanced_issue_contracts": [
       "https://github.com/CrossGL/crosstl/issues/1479",
@@ -1701,6 +1723,8 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1816",
+    "https://github.com/CrossGL/crosstl/issues/1815",
     "https://github.com/CrossGL/crosstl/issues/1811",
     "https://github.com/CrossGL/crosstl/issues/1807",
     "https://github.com/CrossGL/crosstl/issues/1799",

@@ -939,14 +939,26 @@ advances CrossGL/crosstl#1814 and removes
 `project.translate.crossgl-function-body-parse-failed` from both exact project
 runs.
 
+Source whole-fragment reads and writes through `thread_elements()` references
+are now canonicalized to ordered `cooperative_matrix_element` operations. The
+resulting cooperative-matrix contract records the `metal_thread_elements`
+layout, a 32-lane subgroup, two elements per lane, and
+`metal_thread_elements_reference_view` provenance. These fields survive into
+both target diagnostics instead of being inferred again after source lowering.
+Reduced read and write helpers compile with the native Xcode Metal compiler.
+This resolves CrossGL/crosstl#1815 and CrossGL/crosstl#1816 for the pinned
+frontier.
+
 DirectX next fails closed with
 `project.translate.directx-cooperative-matrix-unsupported` and OpenGL with
 `project.translate.opengl-cooperative-matrix-unsupported`. Both diagnostics
-identify `CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified>`;
+identify
+`CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view>`;
 substituting an ordinary HLSL or GLSL matrix would change distributed fragment
-semantics. CrossGL/crosstl#1602 tracks the required target-independent lane
-layout and software-fallback contract. Neither run emits a target artifact.
-This evidence does not claim runtime integration or numerical parity.
+semantics. CrossGL/crosstl#1602 remains the only boundary blocker and tracks the
+required target-independent lane layout and software-fallback contract. Neither
+run emits a target artifact. This evidence does not claim runtime integration
+or numerical parity.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.

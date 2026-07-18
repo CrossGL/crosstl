@@ -2293,6 +2293,8 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     const_member_issue = "https://github.com/CrossGL/crosstl/issues/1812"
     member_array_issue = "https://github.com/CrossGL/crosstl/issues/1813"
     pointer_cast_issue = "https://github.com/CrossGL/crosstl/issues/1814"
+    whole_fragment_issue = "https://github.com/CrossGL/crosstl/issues/1815"
+    fragment_contract_issue = "https://github.com/CrossGL/crosstl/issues/1816"
     cooperative_matrix_issue = "https://github.com/CrossGL/crosstl/issues/1602"
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1807"
 
@@ -2321,6 +2323,8 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             "cv-qualified-constructor-member-initialization",
             "fixed-member-array-constructor-initialization",
             "generic-crossgl-pointer-cast-parsing",
+            "whole-fragment-thread-elements-canonicalization",
+            "cooperative-matrix-fragment-contract-provenance",
         ],
         "contextual_receiver_resolved_by_commit": (
             "c7a3c61addf9ca523e09bc81252ab76340c3f82c"
@@ -2370,6 +2374,12 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 "MMATile_float_2_1_BaseMMAFrag_float_8_8::val_frags"
             ),
             "generic_pointer_cast": "(vec<bfloat16_t, 4>*)(xv[v] + k0)",
+            "cooperative_matrix_fragment_contract": {
+                "layout": "metal_thread_elements",
+                "subgroup_size": 32,
+                "elements_per_lane": 2,
+                "provenance": "metal_thread_elements_reference_view",
+            },
             "materialized_specialization_count": 588,
         },
         "current_boundaries": {
@@ -2380,8 +2390,15 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 "missing_capability": "directx.cooperative-matrix-lowering",
                 "cooperative_matrix_type": (
                     "CooperativeMatrix<float, 8, 8, subgroup, unspecified, "
-                    "unspecified>"
+                    "unspecified, metal_thread_elements, 32, 2, "
+                    "metal_thread_elements_reference_view>"
                 ),
+                "fragment_contract": {
+                    "layout": "metal_thread_elements",
+                    "subgroup_size": 32,
+                    "elements_per_lane": 2,
+                    "provenance": "metal_thread_elements_reference_view",
+                },
                 "blocked_by": cooperative_matrix_issue,
             },
             "opengl": {
@@ -2391,8 +2408,15 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 "missing_capability": "opengl.cooperative-matrix-lowering",
                 "cooperative_matrix_type": (
                     "CooperativeMatrix<float, 8, 8, subgroup, unspecified, "
-                    "unspecified>"
+                    "unspecified, metal_thread_elements, 32, 2, "
+                    "metal_thread_elements_reference_view>"
                 ),
+                "fragment_contract": {
+                    "layout": "metal_thread_elements",
+                    "subgroup_size": 32,
+                    "elements_per_lane": 2,
+                    "provenance": "metal_thread_elements_reference_view",
+                },
                 "blocked_by": cooperative_matrix_issue,
             },
         },
@@ -2411,7 +2435,12 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             },
         },
         "target_artifact_count": 0,
-        "resolved_issues": [resolved_issue, indexed_alias_issue],
+        "resolved_issues": [
+            resolved_issue,
+            indexed_alias_issue,
+            whole_fragment_issue,
+            fragment_contract_issue,
+        ],
         "advanced_issue_contracts": [
             issue,
             dependent_value_issue,
@@ -2432,6 +2461,10 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert resolved_issue not in expected_gaps["tracked_issues"]
     assert indexed_alias_issue in expected_gaps["resolved_issues"]
     assert indexed_alias_issue not in expected_gaps["tracked_issues"]
+    assert whole_fragment_issue in expected_gaps["resolved_issues"]
+    assert whole_fragment_issue not in expected_gaps["tracked_issues"]
+    assert fragment_contract_issue in expected_gaps["resolved_issues"]
+    assert fragment_contract_issue not in expected_gaps["tracked_issues"]
     assert issue in expected_gaps["tracked_issues"]
     assert dependent_value_issue in expected_gaps["tracked_issues"]
     assert directx_issue in expected_gaps["tracked_issues"]
@@ -2469,7 +2502,17 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "CrossGL/crosstl#1812" in readme
     assert "CrossGL/crosstl#1813" in readme
     assert "CrossGL/crosstl#1814" in readme
+    assert "CrossGL/crosstl#1815" in readme
+    assert "CrossGL/crosstl#1816" in readme
     assert "CrossGL/crosstl#1602" in readme
+    assert "ordered `cooperative_matrix_element` operations" in " ".join(readme.split())
+    assert "`metal_thread_elements` layout" in " ".join(readme.split())
+    assert "a 32-lane subgroup, two elements per lane" in " ".join(readme.split())
+    assert "`metal_thread_elements_reference_view` provenance" in " ".join(
+        readme.split()
+    )
+    assert "compile with the native Xcode Metal compiler" in " ".join(readme.split())
+    assert "Neither run emits a target artifact" in " ".join(readme.split())
     assert "does not claim runtime integration or numerical parity" in " ".join(
         readme.split()
     )
