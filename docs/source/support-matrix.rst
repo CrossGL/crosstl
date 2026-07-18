@@ -62,9 +62,9 @@ scope for graphics backend completion work.
    "OpenGL / GLSL", "75", "0", "2", "1", "0", "0"
    "Metal", "70", "0", "4", "4", "0", "0"
 
-.. csv-table:: DirectX/OpenGL/Metal actionable backlog
-   :header: "Backend", "Category", "Feature", "Status", "Notes"
+.. rubric:: DirectX/OpenGL/Metal actionable backlog
 
+No actionable backlog rows.
 
 Project Porting Focus
 ---------------------
@@ -87,9 +87,9 @@ inspection, diagnostics, validation, and corpus-coverage rows.
    "Rust", "29", "0", "1", "4", "0", "0"
    "Slang", "29", "0", "1", "4", "0", "0"
 
-.. csv-table:: Project-porting actionable backlog
-   :header: "Backend", "Feature", "Status", "Current gap", "Next scope"
+.. rubric:: Project-porting actionable backlog
 
+No actionable backlog rows.
 
 Feature Matrix
 --------------
@@ -224,9 +224,9 @@ the matrix counts, but are closed-loop behavior rather than synced
 implementation backlog work. Unknown rows need an audit before
 implementation work can be scoped accurately.
 
-.. csv-table:: Actionable backlog rows
-   :header: "Backend", "Category", "Feature", "Status", "Current gap", "Next scope", "Notes"
+.. rubric:: Actionable backlog rows
 
+No actionable backlog rows.
 
 Documentation Sources
 ---------------------

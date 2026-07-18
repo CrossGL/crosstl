@@ -962,7 +962,9 @@ def csv_row(cells):
     return ", ".join(csv_cell(cell) for cell in cells)
 
 
-def render_csv_table(title, headers, rows, widths=None):
+def render_csv_table(title, headers, rows, widths=None, empty_message=None):
+    if not rows and empty_message:
+        return [f".. rubric:: {title}", "", empty_message, ""]
     lines = []
     lines.append(f".. csv-table:: {title}")
     lines.append(f"   :header: {csv_row(headers)}")
@@ -1111,6 +1113,7 @@ def render_docs(matrix):
             "DirectX/OpenGL/Metal actionable backlog",
             ["Backend", "Category", "Feature", "Status", "Notes"],
             graphics_backlog_rows,
+            empty_message="No actionable backlog rows.",
         )
     )
 
@@ -1153,6 +1156,7 @@ def render_docs(matrix):
             "Project-porting actionable backlog",
             ["Backend", "Feature", "Status", "Current gap", "Next scope"],
             project_backlog_rows,
+            empty_message="No actionable backlog rows.",
         )
     )
 
@@ -1219,6 +1223,7 @@ def render_docs(matrix):
                 "Notes",
             ],
             backlog_rows,
+            empty_message="No actionable backlog rows.",
         )
     )
 
