@@ -3809,6 +3809,249 @@ class MetalToCrossGLConverter:
             }
         ]
 
+    def constructor_member_array_contract(
+        self,
+        struct_node,
+        constructor,
+        member,
+        initializer,
+    ):
+        dimensions = list(getattr(member, "array_sizes", None) or [])
+        if not dimensions:
+            return None
+
+        owner = struct_node.name
+        candidates = [self.constructor_candidate_signature(constructor)]
+        location = (
+            getattr(initializer, "source_location", None)
+            if initializer is not None
+            else getattr(member, "source_location", None)
+        ) or getattr(constructor, "source_location", None)
+        element_type = self.effective_metal_variable_type(member)
+        qualifiers = {
+            str(item).lower() for item in self.effective_declaration_qualifiers(member)
+        }
+        if "constant" in qualifiers:
+            raise MetalConstructorContractError(
+                owner,
+                (),
+                candidates,
+                f"member array '{member.name}' uses constant address-space storage",
+                location,
+            )
+        if self.reference_element_type(element_type) is not None:
+            raise MetalConstructorContractError(
+                owner,
+                (),
+                candidates,
+                f"member array '{member.name}' has a reference element type",
+                location,
+            )
+        if len(dimensions) != 1:
+            raise MetalConstructorContractError(
+                owner,
+                (),
+                candidates,
+                f"member array '{member.name}' is multidimensional",
+                location,
+            )
+
+        extent = dimensions[0]
+        if extent is None:
+            raise MetalConstructorContractError(
+                owner,
+                (),
+                candidates,
+                f"member array '{member.name}' has no finite extent",
+                location,
+            )
+        rendered_extent = self.format_array_extent(extent)
+        extent_value = self.evaluate_value_template_constant_expression(rendered_extent)
+        if not isinstance(extent_value, int) or isinstance(extent_value, bool):
+            raise MetalConstructorContractError(
+                owner,
+                (),
+                candidates,
+                f"member array '{member.name}' extent is not a concrete "
+                "integral constant",
+                location,
+            )
+        if extent_value <= 0:
+            raise MetalConstructorContractError(
+                owner,
+                (),
+                candidates,
+                f"member array '{member.name}' extent must be positive",
+                location,
+            )
+
+        initialized = initializer is not None
+        if initializer is not None:
+            elements = list(initializer.arguments)
+        else:
+            default_value = getattr(member, "default_value", None)
+            if default_value is None:
+                elements = []
+                initialized = self.metal_constructor_contract(element_type) is not None
+            elif isinstance(default_value, InitializerListNode):
+                elements = list(default_value.elements)
+                initialized = True
+            else:
+                raise MetalConstructorContractError(
+                    owner,
+                    (),
+                    candidates,
+                    f"member array '{member.name}' requires a brace initializer "
+                    "list",
+                    location,
+                )
+
+        if any(isinstance(element, DesignatedInitializerNode) for element in elements):
+            raise MetalConstructorContractError(
+                owner,
+                (),
+                candidates,
+                f"member array '{member.name}' uses a designated array initializer",
+                location,
+            )
+        if len(elements) > extent_value:
+            raise MetalConstructorContractError(
+                owner,
+                (),
+                candidates,
+                f"member array '{member.name}' initializer contains more "
+                "elements than its extent",
+                location,
+            )
+
+        default_element = None
+        if initialized and len(elements) < extent_value:
+            default_element = self.constructor_member_array_default_element(
+                owner,
+                candidates,
+                member.name,
+                element_type,
+                location,
+            )
+        return {
+            "element_type": element_type,
+            "elements": elements,
+            "extent": extent_value,
+            "initialized": initialized,
+            "default_element": default_element,
+            "location": location,
+        }
+
+    def constructor_member_array_default_element(
+        self,
+        owner,
+        candidates,
+        member_name,
+        element_type,
+        source_location,
+    ):
+        constructor_contract = self.metal_constructor_contract(element_type)
+        if constructor_contract is not None:
+            value = VectorConstructorNode(element_type, [])
+        else:
+            scalar_type = self.metal_scalar_arithmetic_type_info(element_type)
+            vector_type = self.metal_vector_component_parts(element_type)
+            matrix_type = self.metal_matrix_type_parts(element_type)
+            wide_vector = self.wide_vector_type_info(element_type, source_location)
+            if scalar_type is not None:
+                value = (
+                    False
+                    if self.normalized_metal_type(self.resolve_type_alias(element_type))
+                    == "bool"
+                    else 0
+                )
+            elif vector_type is not None or matrix_type is not None or wide_vector:
+                component_type = (
+                    vector_type[0]
+                    if vector_type is not None
+                    else matrix_type[0] if matrix_type is not None else element_type
+                )
+                zero = (
+                    False
+                    if self.normalized_metal_type(
+                        self.resolve_type_alias(component_type)
+                    )
+                    == "bool"
+                    else 0
+                )
+                value = VectorConstructorNode(element_type, [zero])
+            else:
+                raise MetalConstructorContractError(
+                    owner,
+                    (),
+                    candidates,
+                    f"member array '{member_name}' has omitted elements whose "
+                    f"value initialization for '{element_type}' is not "
+                    "representable",
+                    source_location,
+                )
+        if isinstance(value, VectorConstructorNode):
+            value.source_location = source_location
+        return value
+
+    def constructor_member_array_element(
+        self,
+        element_type,
+        declared_element_type,
+        expression,
+    ):
+        if isinstance(expression, InitializerListNode):
+            return expression
+
+        expression_owner = None
+        expression_arguments = None
+        if isinstance(expression, VectorConstructorNode):
+            expression_owner = expression.type_name
+            expression_arguments = list(expression.args)
+        elif isinstance(expression, FunctionCallNode):
+            expression_owner = expression.name
+            expression_arguments = list(expression.args)
+        elif isinstance(expression, CastNode):
+            expression_owner = expression.target_type
+            expression_arguments = [expression.expression]
+        if expression_owner is not None:
+            expression_identity = self.metal_source_overload_type_identity(
+                expression_owner
+            )
+            element_identity = self.metal_source_overload_type_identity(element_type)
+            declared_identity = self.metal_source_overload_type_identity(
+                declared_element_type
+            )
+            if expression_identity == element_identity:
+                return expression
+            if expression_identity == declared_identity:
+                value = VectorConstructorNode(element_type, expression_arguments)
+                value.source_location = getattr(expression, "source_location", None)
+                return value
+
+        expression_type = self.metal_source_overload_value_type(
+            self.expression_metal_type(expression)
+        )
+        if expression_type is not None and (
+            self.metal_source_overload_type_identity(expression_type)
+            == self.metal_source_overload_type_identity(element_type)
+        ):
+            return expression
+        if (
+            self.metal_scalar_arithmetic_type_info(element_type) is not None
+            or self.metal_constructor_contract(element_type) is not None
+            or self.metal_vector_component_parts(element_type) is not None
+            or self.metal_matrix_type_parts(element_type) is not None
+            or self.wide_vector_type_info(
+                element_type, getattr(expression, "source_location", None)
+            )
+            is not None
+        ):
+            value = VectorConstructorNode(element_type, [expression])
+            value.source_location = getattr(expression, "source_location", None)
+            return value
+        return expression
+
     def validate_constructor_factory(self, struct_node, constructor):
         owner = struct_node.name
         candidates = [self.constructor_candidate_signature(constructor)]
@@ -3873,20 +4116,28 @@ class MetalToCrossGLConverter:
             initializers_by_member[target] = initializer
 
         for member in members.values():
+            member_type = self.effective_metal_variable_type(member)
             requires_assignment = (
                 member.name in initializers_by_member
                 or getattr(member, "default_value", None) is not None
-                or self.metal_constructor_contract(member.vtype) is not None
+                or self.metal_constructor_contract(member_type) is not None
             )
             if not requires_assignment:
+                continue
+            if getattr(member, "array_sizes", None):
+                self.constructor_member_array_contract(
+                    struct_node,
+                    constructor,
+                    member,
+                    initializers_by_member.get(member.name),
+                )
                 continue
             qualifiers = {
                 str(item).lower() for item in getattr(member, "qualifiers", []) or []
             }
             if (
                 "constant" in qualifiers
-                or self.reference_element_type(member.vtype) is not None
-                or getattr(member, "array_sizes", None)
+                or self.reference_element_type(member_type) is not None
             ):
                 raise MetalConstructorContractError(
                     owner,
@@ -3919,7 +4170,7 @@ class MetalToCrossGLConverter:
                 location,
             )
 
-    def constructor_result_variable_name(self, struct_node, constructor):
+    def constructor_scope_identifier_names(self, struct_node, constructor):
         used = {getattr(parameter, "name", None) for parameter in constructor.params}
         used.update(
             member.name for member in self.constructor_runtime_members(struct_node)
@@ -3933,17 +4184,29 @@ class MetalToCrossGLConverter:
 
         collect_local_names(constructor.body or [])
         used.discard(None)
-        base = "crosstl_ctor_value"
+        return used
+
+    def reserve_constructor_scope_identifier(self, used, base):
         name = base
         suffix = 2
         while name in used:
             name = f"{base}_{suffix}"
             suffix += 1
+        used.add(name)
         return name
+
+    def constructor_result_variable_name(self, struct_node, constructor):
+        used = self.constructor_scope_identifier_names(struct_node, constructor)
+        base = "crosstl_ctor_value"
+        return self.reserve_constructor_scope_identifier(used, base)
 
     def build_constructor_factory_function(self, struct_node, constructor, name):
         self.validate_constructor_factory(struct_node, constructor)
         result_name = self.constructor_result_variable_name(struct_node, constructor)
+        used_identifiers = self.constructor_scope_identifier_names(
+            struct_node, constructor
+        )
+        used_identifiers.add(result_name)
         result = VariableNode(struct_node.name, result_name)
         result.is_metal_constructor_storage = True
         statements = [result]
@@ -3953,6 +4216,52 @@ class MetalToCrossGLConverter:
         }
         for member in self.constructor_runtime_members(struct_node):
             initializer = initializer_map.get(member.name)
+            array_contract = self.constructor_member_array_contract(
+                struct_node,
+                constructor,
+                member,
+                initializer,
+            )
+            if array_contract is not None:
+                if not array_contract["initialized"]:
+                    continue
+                member_target = MemberAccessNode(
+                    VariableNode("", result_name), member.name
+                )
+                for index, element in enumerate(array_contract["elements"]):
+                    target = ArrayAccessNode(member_target, index)
+                    value = self.constructor_member_array_element(
+                        array_contract["element_type"], member.vtype, element
+                    )
+                    assignment = AssignmentNode(target, value)
+                    assignment.source_location = (
+                        getattr(element, "source_location", None)
+                        or array_contract["location"]
+                    )
+                    statements.append(assignment)
+
+                default_element = array_contract["default_element"]
+                if default_element is not None:
+                    index_name = self.reserve_constructor_scope_identifier(
+                        used_identifiers,
+                        f"{result_name}_{self.sanitize_identifier(member.name)}_index",
+                    )
+                    index = VariableNode("", index_name)
+                    target = ArrayAccessNode(member_target, index)
+                    assignment = AssignmentNode(target, default_element)
+                    assignment.source_location = array_contract["location"]
+                    loop = ForNode(
+                        AssignmentNode(
+                            VariableNode("int", index_name),
+                            len(array_contract["elements"]),
+                        ),
+                        BinaryOpNode(index, "<", array_contract["extent"]),
+                        PostfixOpNode(index, "++"),
+                        [assignment],
+                    )
+                    loop.source_location = array_contract["location"]
+                    statements.append(loop)
+                continue
             if initializer is not None:
                 value = VectorConstructorNode(member.vtype, list(initializer.arguments))
                 value.source_location = initializer.source_location
@@ -3986,7 +4295,10 @@ class MetalToCrossGLConverter:
             self.constructor_receiver_address_space(constructor)
         )
         factory.constructor_member_types = {
-            member.name: member.vtype
+            member.name: (
+                self.struct_member_types.get(struct_node.name, {}).get(member.name)
+                or self.effective_metal_variable_type(member)
+            )
             for member in self.constructor_runtime_members(struct_node)
         }
         factory.source_location = getattr(constructor, "source_location", None)

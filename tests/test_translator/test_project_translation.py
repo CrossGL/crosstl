@@ -54230,6 +54230,292 @@ def test_metal_addressed_template_member_pointer_translates_and_validates(
     assert_compute_glsl_validates_if_available(opengl, tmp_path)
 
 
+def test_metal_const_member_constructor_translates_and_validates_for_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "const_member_constructor.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct Layout {
+                const int leading_dimension;
+                const int tile_stride;
+                const float scale;
+
+                Layout(int leading_dimension_, float scale_)
+                    : leading_dimension(leading_dimension_),
+                      tile_stride(leading_dimension * 2),
+                      scale(scale_) {}
+            };
+
+            kernel void apply_layout(
+                device float* output [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                Layout layout(int(gid) + 1, 0.5f);
+                output[gid] = float(layout.tile_stride) * layout.scale;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl"}
+    assert all(artifact["status"] == "translated" for artifact in artifacts.values())
+
+    generated = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    assert_directx_compute_validates_if_available(generated["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(generated["opengl"], tmp_path)
+
+
+def test_metal_fixed_member_array_constructor_translates_and_zero_fills_for_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "fixed_member_array_constructor.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct FragmentTile {
+                using frag_type = metal::vec<float, 2>;
+                frag_type val_frags[3] = {frag_type(1.25f)};
+
+                explicit FragmentTile(uint lane) {}
+            };
+
+            kernel void read_fragments(
+                device float* output [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                FragmentTile tile(gid);
+                output[gid] = tile.val_frags[0][0]
+                    + tile.val_frags[1][0]
+                    + tile.val_frags[2][1];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl"}
+    assert all(artifact["status"] == "translated" for artifact in artifacts.values())
+
+    generated = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    for target, vector_type in (("directx", "float2"), ("opengl", "vec2")):
+        output = generated[target]
+        assert "frag_type" not in output
+        assert f"{vector_type} val_frags[3];" in output
+        assert "crosstl_ctor_value.val_frags =" not in output
+
+        assignments = re.findall(
+            r"crosstl_ctor_value\.val_frags\[(\d+)\]\s*=\s*([^;]+);",
+            output,
+        )
+        assert [index for index, _value in assignments] == ["0"]
+        assert "1.25" in assignments[0][1]
+        loop_header = re.search(
+            r"for\s*\(int\s+(crosstl_ctor_value_val_frags_index\w*)\s*=\s*1;"
+            r"([^{}]+)\)\s*\{",
+            output,
+        )
+        assert loop_header is not None
+        index_name = loop_header.group(1)
+        assert re.search(rf"\b{index_name}\s*<\s*3\b", loop_header.group(2))
+        default_assignment = re.search(
+            rf"crosstl_ctor_value\.val_frags\[{index_name}\]\s*=\s*([^;]+);",
+            output,
+        )
+        assert default_assignment is not None
+        assert "1.25" not in default_assignment.group(1)
+        assert re.search(r"\b0(?:\.0+)?f?\b", default_assignment.group(1))
+
+    assert_directx_compute_validates_if_available(generated["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(generated["opengl"], tmp_path)
+
+
+def test_metal_fixed_member_array_uses_element_constructor_factories_for_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "constructed_member_array.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct Fragment {
+                float value;
+
+                Fragment() : value(0.5f) {}
+                explicit Fragment(float value_) : value(value_) {}
+            };
+
+            struct FragmentTile {
+                Fragment fragments[3] = {Fragment(1.25f)};
+
+                explicit FragmentTile(uint lane) {}
+            };
+
+            kernel void read_fragments(
+                device float* output [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                FragmentTile tile(gid);
+                output[gid] = tile.fragments[0].value
+                    + tile.fragments[1].value
+                    + tile.fragments[2].value;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl"}
+    assert all(artifact["status"] == "translated" for artifact in artifacts.values())
+    assert all((repo / artifact["path"]).exists() for artifact in artifacts.values())
+
+    generated = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    factory_call = re.compile(
+        r"\bcrosstl_ctor_Fragment(?:_[A-Za-z0-9]+)*\s*\(([^()]*)\)"
+    )
+    for output in generated.values():
+        assert not re.search(r"\bcrosstl_ctor_value\.fragments\s*=", output)
+
+        explicit_assignment = re.search(
+            r"crosstl_ctor_value\.fragments\[0\]\s*=\s*([^;]+);",
+            output,
+        )
+        assert explicit_assignment is not None
+        explicit_factory = factory_call.fullmatch(explicit_assignment.group(1).strip())
+        assert explicit_factory is not None
+        assert "1.25" in explicit_factory.group(1)
+
+        loop_header = re.search(
+            r"for\s*\(int\s+(crosstl_ctor_value_fragments_index\w*)\s*=\s*1;"
+            r"([^{}]+)\)\s*\{",
+            output,
+        )
+        assert loop_header is not None
+        index_name = loop_header.group(1)
+        assert re.search(rf"\b{index_name}\s*<\s*3\b", loop_header.group(2))
+        default_assignment = re.search(
+            rf"crosstl_ctor_value\.fragments\[{index_name}\]\s*=\s*([^;]+);",
+            output,
+        )
+        assert default_assignment is not None
+        default_factory = factory_call.fullmatch(default_assignment.group(1).strip())
+        assert default_factory is not None
+        assert default_factory.group(1).strip() == ""
+
+    assert_directx_compute_validates_if_available(generated["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(generated["opengl"], tmp_path)
+
+
+def test_metal_multidimensional_member_array_constructor_reports_details(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multidimensional_member_array.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct MatrixTile {
+                int values[2][2] = {{1, 2}, {3, 4}};
+
+                explicit MatrixTile(uint lane) {}
+            };
+
+            kernel void read_matrix(
+                device int* output [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                MatrixTile tile(gid);
+                output[gid] = tile.values[0][0];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-constructor-unrepresentable": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.explicit-constructor-lowering": 1
+    }
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert not (repo / artifact["path"]).exists()
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.metal-constructor-unrepresentable"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["metal.explicit-constructor-lowering"]
+    assert diagnostic["location"]["file"] == "multidimensional_member_array.metal"
+    assert diagnostic["location"]["line"] == 7
+    assert diagnostic["location"]["column"] == 5
+    assert diagnostic["location"]["endLine"] == 7
+    assert diagnostic["location"]["endColumn"] == 38
+    assert diagnostic["details"] == {
+        "metalConstructor": {
+            "candidates": ["MatrixTile(uint)"],
+            "owner": "MatrixTile",
+            "reason": "member array 'values' is multidimensional",
+        },
+        "sourcePath": "multidimensional_member_array.metal",
+        "targetArtifact": "out/directx/multidimensional_member_array.hlsl",
+    }
+
+
 @pytest.mark.parametrize(
     ("call_expression", "generic_arguments"),
     [

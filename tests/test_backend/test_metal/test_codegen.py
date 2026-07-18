@@ -8141,6 +8141,121 @@ def test_codegen_constructor_factory_initializes_const_value_members(tmp_path):
     )
 
 
+def test_codegen_constructor_factory_initializes_fixed_member_arrays(tmp_path):
+    source = """
+    struct FragmentTile {
+      using frag_type = metal::vec<float, 2>;
+      frag_type val_frags[3] = {frag_type(1.25f)};
+      float weights[2] = {2};
+
+      explicit FragmentTile(uint lane) {}
+    };
+
+    kernel void read_fragments(
+        device float* output [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+      FragmentTile tile(gid);
+      output[gid] = tile.val_frags[0][0]
+          + tile.val_frags[1][0]
+          + tile.val_frags[2][1]
+          + tile.weights[0]
+          + tile.weights[1];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "vec2[3] val_frags;" in normalized
+    assert "crosstl_ctor_value.val_frags[0] = vec2(1.25f);" in normalized
+    assert "crosstl_ctor_value.val_frags =" not in normalized
+    assert (
+        "for (int crosstl_ctor_value_val_frags_index = 1; "
+        "crosstl_ctor_value_val_frags_index < 3; "
+        "crosstl_ctor_value_val_frags_index++)" in normalized
+    )
+    assert (
+        "crosstl_ctor_value.val_frags[crosstl_ctor_value_val_frags_index] "
+        "= vec2(0);" in normalized
+    )
+    assert "float[2] weights;" in normalized
+    assert "crosstl_ctor_value.weights[0] = float(2);" in normalized
+    assert (
+        "crosstl_ctor_value.weights[crosstl_ctor_value_weights_index] = 0;"
+        in normalized
+    )
+
+    shader = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(shader)
+    glsl = GLSLCodeGen().generate(shader)
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "fixed-member-array-constructor.hlsl"
+        binary_path = tmp_path / "fixed-member-array-constructor.dxil"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(binary_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    assert_opengl_compute_validates_if_available(
+        glsl,
+        tmp_path,
+        "fixed-member-array-constructor",
+    )
+
+
+@pytest.mark.parametrize(
+    ("member_declaration", "reason"),
+    [
+        pytest.param(
+            "int values[2][2] = {{1, 2}, {3, 4}};",
+            "member array 'values' is multidimensional",
+            id="multidimensional",
+        ),
+        pytest.param(
+            "int values[1] = {1, 2};",
+            "member array 'values' initializer contains more elements than its extent",
+            id="excess-elements",
+        ),
+    ],
+)
+def test_codegen_constructor_factory_rejects_unrepresentable_member_arrays(
+    member_declaration,
+    reason,
+):
+    source = f"""
+    struct Tile {{
+      {member_declaration}
+      Tile() {{}}
+    }};
+
+    void build_tile() {{
+      Tile tile;
+    }}
+    """
+
+    with pytest.raises(MetalConstructorContractError) as raised:
+        convert_without_preprocessing(source)
+
+    assert raised.value.owner == "Tile"
+    assert raised.value.reason == reason
+
+
 @pytest.mark.parametrize(
     ("actual_qualifiers", "parameter_qualifiers"),
     [
