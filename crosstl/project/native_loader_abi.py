@@ -17,6 +17,7 @@ _ACCESS_VALUES = frozenset(("read", "write", "read_write"))
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _C_IDENTIFIER_RE = re.compile(r"[^A-Za-z0-9_]+")
 _UINT32_MAX = (1 << 32) - 1
+_UINT64_MAX = (1 << 64) - 1
 
 
 class NativeLoaderABIError(ValueError):
@@ -190,6 +191,10 @@ def generate_native_loader_declarations(descriptor: Mapping[str, Any]) -> str:
         "    const char *scalar_layout_json;",
         "    const char *specialization_constants_json;",
         "    const char *provenance_json;",
+        "    const char *source_artifact_path;",
+        "    const char *source_hash_algorithm;",
+        "    const char *source_hash_value;",
+        "    const char *source_remap_json;",
         "} CrossTLNativeLoaderUnitDescriptor;",
         "",
         "#endif /* CROSSTL_NATIVE_LOADER_ABI_V1_TYPES */",
@@ -226,6 +231,7 @@ def generate_native_loader_declarations(descriptor: Mapping[str, Any]) -> str:
     artifact_hash = artifact["hash"]
     entry_point = normalized["entryPoint"]
     source = normalized["source"]
+    source_hash = source.get("hash")
     binding_pointer = f"{symbol}_bindings" if bindings else "NULL"
     lines.extend(
         [
@@ -247,7 +253,11 @@ def generate_native_loader_declarations(descriptor: Mapping[str, Any]) -> str:
             f"    {binding_pointer},",
             f"    {_c_json_string(normalized['scalarLayout'])},",
             f"    {_c_json_string(normalized['specializationConstants'])},",
-            f"    {_c_json_string(normalized['provenance'])}",
+            f"    {_c_json_string(normalized['provenance'])},",
+            f"    {_c_nullable_string(source.get('artifactPath'))},",
+            f"    {_c_nullable_string(source_hash.get('algorithm') if source_hash else None)},",
+            f"    {_c_nullable_string(source_hash.get('value') if source_hash else None)},",
+            f"    {_c_nullable_json_string(source.get('remap'))}",
             "};",
             "",
             "#ifdef __cplusplus",
@@ -741,41 +751,22 @@ def _specialization_descriptors(
 
 
 def _artifact_descriptor(unit: Mapping[str, Any]) -> dict[str, Any]:
-    artifact_hash = unit.get("hash")
-    if not isinstance(artifact_hash, Mapping):
-        raise NativeLoaderABIError(
-            "artifact-hash-invalid",
-            "Runtime loader unit hash must be a SHA-256 object.",
-            path="$.hash",
-        )
-    algorithm = artifact_hash.get("algorithm")
-    digest = artifact_hash.get("value")
-    if (
-        algorithm != "sha256"
-        or not isinstance(digest, str)
-        or not _SHA256_RE.fullmatch(digest)
-    ):
-        raise NativeLoaderABIError(
-            "artifact-hash-invalid",
-            "Runtime loader unit hash must contain a lowercase SHA-256 digest.",
-            path="$.hash",
-            details={"algorithm": algorithm, "value": digest},
-        )
-    size_bytes = unit.get("sizeBytes")
-    if (
-        not isinstance(size_bytes, int)
-        or isinstance(size_bytes, bool)
-        or size_bytes < 0
-    ):
-        raise NativeLoaderABIError(
-            "artifact-size-invalid",
-            "Runtime loader unit sizeBytes must be a non-negative integer.",
-            path="$.sizeBytes",
-        )
+    artifact_hash = _sha256_hash(
+        unit.get("hash"),
+        path="$.hash",
+        code="artifact-hash-invalid",
+        label="Runtime loader unit hash",
+    )
+    size_bytes = _uint64(
+        unit.get("sizeBytes"),
+        path="$.sizeBytes",
+        code="artifact-size-invalid",
+        label="Runtime loader unit sizeBytes",
+    )
     return {
         "packagePath": _required_string(unit.get("packagePath"), path="$.packagePath"),
         "format": _required_string(unit.get("artifactFormat"), path="$.artifactFormat"),
-        "hash": {"algorithm": algorithm, "value": digest},
+        "hash": artifact_hash,
         "sizeBytes": size_bytes,
     }
 
@@ -786,10 +777,11 @@ def _source_descriptor(unit: Mapping[str, Any]) -> dict[str, Any]:
         "artifactPath": _optional_string(unit.get("sourcePath"), path="$.sourcePath"),
         "backend": _optional_string(unit.get("sourceBackend"), path="$.sourceBackend"),
         "hash": _optional_hash(unit.get("sourceHash"), path="$.sourceHash"),
-        "remap": (
-            _json_mapping(unit.get("sourceRemap"), path="$.sourceRemap")
-            if unit.get("sourceRemap") is not None
-            else None
+        "remap": _source_remap_descriptor(
+            unit.get("sourceRemap"),
+            path="$.sourceRemap",
+            code_prefix="source-remap",
+            label="Source remap",
         ),
     }
 
@@ -797,23 +789,12 @@ def _source_descriptor(unit: Mapping[str, Any]) -> dict[str, Any]:
 def _optional_hash(value: Any, *, path: str) -> dict[str, str] | None:
     if value is None:
         return None
-    if not isinstance(value, Mapping):
-        raise NativeLoaderABIError(
-            "source-hash-invalid", "Source hash must be an object or null.", path=path
-        )
-    algorithm = value.get("algorithm")
-    digest = value.get("value")
-    if (
-        algorithm != "sha256"
-        or not isinstance(digest, str)
-        or not _SHA256_RE.fullmatch(digest)
-    ):
-        raise NativeLoaderABIError(
-            "source-hash-invalid",
-            "Source hash must contain a lowercase SHA-256 digest.",
-            path=path,
-        )
-    return {"algorithm": algorithm, "value": digest}
+    return _sha256_hash(
+        value,
+        path=path,
+        code="source-hash-invalid",
+        label="Source hash",
+    )
 
 
 def _validate_descriptor(descriptor: Mapping[str, Any]) -> dict[str, Any]:
@@ -838,8 +819,9 @@ def _validate_descriptor(descriptor: Mapping[str, Any]) -> dict[str, Any]:
             "provenance",
         )
     )
-    missing = sorted(required_fields - set(descriptor))
-    unsupported = sorted(set(descriptor) - required_fields)
+    actual_fields = frozenset(descriptor)
+    missing = sorted(required_fields - actual_fields)
+    unsupported = sorted(actual_fields - required_fields, key=lambda item: str(item))
     if missing or unsupported:
         raise NativeLoaderABIError(
             "descriptor-schema-invalid",
@@ -847,7 +829,9 @@ def _validate_descriptor(descriptor: Mapping[str, Any]) -> dict[str, Any]:
             details={"missingFields": missing, "unsupportedFields": unsupported},
         )
     if (
-        descriptor.get("schemaVersion") != NATIVE_LOADER_ABI_VERSION
+        type(descriptor.get("schemaVersion")) is not int
+        or descriptor.get("schemaVersion") != NATIVE_LOADER_ABI_VERSION
+        or type(descriptor.get("abiVersion")) is not int
         or descriptor.get("abiVersion") != NATIVE_LOADER_ABI_VERSION
         or descriptor.get("kind") != NATIVE_LOADER_ABI_KIND
     ):
@@ -860,59 +844,33 @@ def _validate_descriptor(descriptor: Mapping[str, Any]) -> dict[str, Any]:
     _required_string(normalized.get("target"), path="$.target")
     if normalized.get("stage") is not None:
         _required_string(normalized.get("stage"), path="$.stage")
-    if not isinstance(normalized.get("entryPoint"), Mapping):
+    entry_point = _mapping_with_fields(
+        normalized.get("entryPoint"),
+        fields=frozenset(("name", "stage", "executionConfig", "provenance")),
+        path="$.entryPoint",
+        code="descriptor-entry-point-invalid",
+        label="Native loader ABI entryPoint",
+    )
+    _required_string(entry_point.get("name"), path="$.entryPoint.name")
+    entry_stage = _optional_string(entry_point.get("stage"), path="$.entryPoint.stage")
+    if entry_stage != normalized.get("stage"):
         raise NativeLoaderABIError(
             "descriptor-entry-point-invalid",
-            "Native loader ABI entryPoint must be an object.",
-            path="$.entryPoint",
+            "Native loader ABI entryPoint.stage must match stage.",
+            path="$.entryPoint.stage",
         )
-    _required_string(normalized["entryPoint"].get("name"), path="$.entryPoint.name")
-    artifact = normalized.get("artifact")
-    if not isinstance(artifact, Mapping):
-        raise NativeLoaderABIError(
-            "descriptor-artifact-invalid",
-            "Native loader ABI artifact must be an object.",
-            path="$.artifact",
-        )
-    _required_string(artifact.get("packagePath"), path="$.artifact.packagePath")
-    _required_string(artifact.get("format"), path="$.artifact.format")
-    if not isinstance(artifact.get("hash"), Mapping):
-        raise NativeLoaderABIError(
-            "descriptor-artifact-invalid",
-            "Native loader ABI artifact hash must be an object.",
-            path="$.artifact.hash",
-        )
-    if not isinstance(normalized.get("source"), Mapping):
-        raise NativeLoaderABIError(
-            "descriptor-source-invalid",
-            "Native loader ABI source must be an object.",
-            path="$.source",
-        )
-    if not isinstance(normalized.get("bindings"), list):
-        raise NativeLoaderABIError(
-            "descriptor-bindings-invalid",
-            "Native loader ABI bindings must be a list.",
-            path="$.bindings",
-        )
-    for index, binding in enumerate(normalized["bindings"]):
-        if not isinstance(binding, Mapping):
-            raise NativeLoaderABIError(
-                "descriptor-binding-invalid",
-                "Native loader ABI binding must be an object.",
-                path=f"$.bindings[{index}]",
-            )
-    if not isinstance(normalized.get("scalarLayout"), Mapping):
-        raise NativeLoaderABIError(
-            "descriptor-scalar-layout-invalid",
-            "Native loader ABI scalarLayout must be an object.",
-            path="$.scalarLayout",
-        )
-    if not isinstance(normalized.get("specializationConstants"), list):
-        raise NativeLoaderABIError(
-            "descriptor-specialization-invalid",
-            "Native loader ABI specializationConstants must be a list.",
-            path="$.specializationConstants",
-        )
+    _json_mapping(
+        entry_point.get("executionConfig"), path="$.entryPoint.executionConfig"
+    )
+    _json_mapping(entry_point.get("provenance"), path="$.entryPoint.provenance")
+
+    _validate_descriptor_artifact(normalized.get("artifact"))
+    _validate_descriptor_source(normalized.get("source"))
+    bindings = _validate_descriptor_bindings(normalized.get("bindings"))
+    _validate_descriptor_scalar_layout(normalized.get("scalarLayout"), bindings)
+    _validate_descriptor_specialization_constants(
+        normalized.get("specializationConstants")
+    )
     if not isinstance(normalized.get("provenance"), Mapping):
         raise NativeLoaderABIError(
             "descriptor-provenance-invalid",
@@ -920,6 +878,354 @@ def _validate_descriptor(descriptor: Mapping[str, Any]) -> dict[str, Any]:
             path="$.provenance",
         )
     return normalized
+
+
+def _validate_descriptor_artifact(value: Any) -> None:
+    artifact = _mapping_with_fields(
+        value,
+        fields=frozenset(("packagePath", "format", "hash", "sizeBytes")),
+        path="$.artifact",
+        code="descriptor-artifact-invalid",
+        label="Native loader ABI artifact",
+    )
+    _required_string(artifact.get("packagePath"), path="$.artifact.packagePath")
+    _required_string(artifact.get("format"), path="$.artifact.format")
+    _sha256_hash(
+        artifact.get("hash"),
+        path="$.artifact.hash",
+        code="descriptor-artifact-hash-invalid",
+        label="Native loader ABI artifact hash",
+    )
+    _uint64(
+        artifact.get("sizeBytes"),
+        path="$.artifact.sizeBytes",
+        code="descriptor-artifact-size-invalid",
+        label="Native loader ABI artifact sizeBytes",
+    )
+
+
+def _validate_descriptor_source(value: Any) -> None:
+    source = _mapping_with_fields(
+        value,
+        fields=frozenset(("path", "artifactPath", "backend", "hash", "remap")),
+        path="$.source",
+        code="descriptor-source-invalid",
+        label="Native loader ABI source",
+    )
+    _optional_string(source.get("path"), path="$.source.path")
+    _optional_string(source.get("artifactPath"), path="$.source.artifactPath")
+    _optional_string(source.get("backend"), path="$.source.backend")
+    source_hash = source.get("hash")
+    if source_hash is not None:
+        _sha256_hash(
+            source_hash,
+            path="$.source.hash",
+            code="descriptor-source-hash-invalid",
+            label="Native loader ABI source hash",
+        )
+    _source_remap_descriptor(
+        source.get("remap"),
+        path="$.source.remap",
+        code_prefix="descriptor-source-remap",
+        label="Native loader ABI source remap",
+    )
+
+
+def _validate_descriptor_bindings(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        raise NativeLoaderABIError(
+            "descriptor-bindings-invalid",
+            "Native loader ABI bindings must be a list.",
+            path="$.bindings",
+        )
+    bindings: list[Mapping[str, Any]] = []
+    names: set[str] = set()
+    coordinates: set[tuple[str, int, int]] = set()
+    for index, binding_value in enumerate(value):
+        path = f"$.bindings[{index}]"
+        binding = _mapping_with_fields(
+            binding_value,
+            fields=frozenset(
+                (
+                    "name",
+                    "kind",
+                    "type",
+                    "namespace",
+                    "coordinates",
+                    "access",
+                    "scalarLayout",
+                    "provenance",
+                )
+            ),
+            path=path,
+            code="descriptor-binding-invalid",
+            label="Native loader ABI binding",
+        )
+        name = _required_string(binding.get("name"), path=f"{path}.name")
+        _required_string(binding.get("kind"), path=f"{path}.kind")
+        _required_string(binding.get("type"), path=f"{path}.type")
+        namespace = _required_string(binding.get("namespace"), path=f"{path}.namespace")
+        coordinate_value = _mapping_with_fields(
+            binding.get("coordinates"),
+            fields=frozenset(("set", "binding")),
+            path=f"{path}.coordinates",
+            code="descriptor-binding-coordinate-invalid",
+            label="Native loader ABI binding coordinates",
+        )
+        set_index = _coordinate(
+            coordinate_value.get("set"), path=f"{path}.coordinates.set"
+        )
+        binding_index = _coordinate(
+            coordinate_value.get("binding"), path=f"{path}.coordinates.binding"
+        )
+        access = binding.get("access")
+        if access is not None and access not in _ACCESS_VALUES:
+            raise NativeLoaderABIError(
+                "descriptor-binding-access-invalid",
+                "Native loader ABI binding access must be read, write, read_write, or null.",
+                path=f"{path}.access",
+            )
+        scalar_layout = binding.get("scalarLayout")
+        if scalar_layout is not None:
+            _json_mapping(scalar_layout, path=f"{path}.scalarLayout")
+        _json_mapping(binding.get("provenance"), path=f"{path}.provenance")
+        if name in names:
+            raise NativeLoaderABIError(
+                "descriptor-binding-name-duplicate",
+                "Native loader ABI binding names must be unique.",
+                path=f"{path}.name",
+                details={"name": name},
+            )
+        coordinate = (namespace, set_index, binding_index)
+        if coordinate in coordinates:
+            raise NativeLoaderABIError(
+                "descriptor-binding-coordinate-duplicate",
+                "Native loader ABI binding coordinates must be unique within a namespace.",
+                path=f"{path}.coordinates",
+                details={
+                    "namespace": namespace,
+                    "set": set_index,
+                    "binding": binding_index,
+                },
+            )
+        names.add(name)
+        coordinates.add(coordinate)
+        bindings.append(binding)
+    return bindings
+
+
+def _validate_descriptor_scalar_layout(
+    value: Any, bindings: Sequence[Mapping[str, Any]]
+) -> None:
+    scalar_layout = _mapping_with_fields(
+        value,
+        fields=frozenset(("constants", "bindings")),
+        path="$.scalarLayout",
+        code="descriptor-scalar-layout-invalid",
+        label="Native loader ABI scalarLayout",
+    )
+    constants = scalar_layout.get("constants")
+    if not isinstance(constants, list):
+        raise NativeLoaderABIError(
+            "descriptor-scalar-layout-invalid",
+            "Native loader ABI scalarLayout.constants must be a list.",
+            path="$.scalarLayout.constants",
+        )
+    for index, constant in enumerate(constants):
+        _json_mapping(constant, path=f"$.scalarLayout.constants[{index}]")
+
+    binding_layouts = scalar_layout.get("bindings")
+    if not isinstance(binding_layouts, list):
+        raise NativeLoaderABIError(
+            "descriptor-scalar-layout-invalid",
+            "Native loader ABI scalarLayout.bindings must be a list.",
+            path="$.scalarLayout.bindings",
+        )
+    actual_layouts: dict[str, Mapping[str, Any]] = {}
+    for index, layout_value in enumerate(binding_layouts):
+        path = f"$.scalarLayout.bindings[{index}]"
+        layout = _mapping_with_fields(
+            layout_value,
+            fields=frozenset(("binding", "layout")),
+            path=path,
+            code="descriptor-scalar-layout-invalid",
+            label="Native loader ABI scalar binding layout",
+        )
+        binding_name = _required_string(layout.get("binding"), path=f"{path}.binding")
+        layout_data = _json_mapping(layout.get("layout"), path=f"{path}.layout")
+        if binding_name in actual_layouts:
+            raise NativeLoaderABIError(
+                "descriptor-scalar-layout-invalid",
+                "Native loader ABI scalar binding layout names must be unique.",
+                path=f"{path}.binding",
+            )
+        actual_layouts[binding_name] = layout_data
+
+    expected_layouts = {
+        str(binding["name"]): binding["scalarLayout"]
+        for binding in bindings
+        if binding.get("scalarLayout") is not None
+    }
+    if actual_layouts != expected_layouts:
+        raise NativeLoaderABIError(
+            "descriptor-scalar-layout-invalid",
+            "Native loader ABI scalarLayout.bindings must match binding scalar layouts.",
+            path="$.scalarLayout.bindings",
+        )
+
+
+def _validate_descriptor_specialization_constants(value: Any) -> None:
+    if not isinstance(value, list):
+        raise NativeLoaderABIError(
+            "descriptor-specialization-invalid",
+            "Native loader ABI specializationConstants must be a list.",
+            path="$.specializationConstants",
+        )
+    for index, constant in enumerate(value):
+        _json_mapping(constant, path=f"$.specializationConstants[{index}]")
+
+
+def _mapping_with_fields(
+    value: Any,
+    *,
+    fields: frozenset[str],
+    path: str,
+    code: str,
+    label: str,
+) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise NativeLoaderABIError(
+            code,
+            f"{label} must be an object.",
+            path=path,
+        )
+    actual_fields = frozenset(value)
+    missing = sorted(fields - actual_fields)
+    unsupported = sorted(actual_fields - fields, key=lambda item: str(item))
+    if missing or unsupported:
+        raise NativeLoaderABIError(
+            code,
+            f"{label} has an invalid field set.",
+            path=path,
+            details={"missingFields": missing, "unsupportedFields": unsupported},
+        )
+    return value
+
+
+def _sha256_hash(
+    value: Any,
+    *,
+    path: str,
+    code: str,
+    label: str,
+) -> dict[str, str]:
+    hash_value = _mapping_with_fields(
+        value,
+        fields=frozenset(("algorithm", "value")),
+        path=path,
+        code=code,
+        label=label,
+    )
+    algorithm = hash_value.get("algorithm")
+    digest = hash_value.get("value")
+    if (
+        algorithm != "sha256"
+        or not isinstance(digest, str)
+        or not _SHA256_RE.fullmatch(digest)
+    ):
+        raise NativeLoaderABIError(
+            code,
+            f"{label} must contain a lowercase SHA-256 digest.",
+            path=path,
+            details={"algorithm": algorithm, "value": digest},
+        )
+    return {"algorithm": algorithm, "value": digest}
+
+
+def _uint64(value: Any, *, path: str, code: str, label: str) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+        or value > _UINT64_MAX
+    ):
+        raise NativeLoaderABIError(
+            code,
+            f"{label} must be a uint64 value.",
+            path=path,
+            details={"value": value},
+        )
+    return value
+
+
+def _source_remap_descriptor(
+    value: Any,
+    *,
+    path: str,
+    code_prefix: str,
+    label: str,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise NativeLoaderABIError(
+            f"{code_prefix}-invalid",
+            f"{label} must be an object or null.",
+            path=path,
+        )
+    integrity_fields = frozenset(("sourcePath", "packagePath", "hash", "sizeBytes"))
+    inspection_fields = frozenset(("sourcePath", "packagePath", "status"))
+    actual_fields = frozenset(value)
+    if actual_fields not in (integrity_fields, inspection_fields):
+        raise NativeLoaderABIError(
+            f"{code_prefix}-invalid",
+            f"{label} has an invalid field set.",
+            path=path,
+            details={
+                "actualFields": sorted(actual_fields, key=lambda item: str(item)),
+                "acceptedFieldSets": [
+                    sorted(integrity_fields),
+                    sorted(inspection_fields),
+                ],
+            },
+        )
+    remap = value
+    source_path = _required_string(remap.get("sourcePath"), path=f"{path}.sourcePath")
+    package_path = _required_string(
+        remap.get("packagePath"), path=f"{path}.packagePath"
+    )
+    if actual_fields == inspection_fields:
+        status = _required_string(remap.get("status"), path=f"{path}.status")
+        if status not in {"ready", "failed"}:
+            raise NativeLoaderABIError(
+                f"{code_prefix}-status-invalid",
+                f"{label} status must be ready or failed.",
+                path=f"{path}.status",
+                details={"status": status},
+            )
+        return {
+            "sourcePath": source_path,
+            "packagePath": package_path,
+            "status": status,
+        }
+    remap_hash = _sha256_hash(
+        remap.get("hash"),
+        path=f"{path}.hash",
+        code=f"{code_prefix}-hash-invalid",
+        label=f"{label} hash",
+    )
+    size_bytes = _uint64(
+        remap.get("sizeBytes"),
+        path=f"{path}.sizeBytes",
+        code=f"{code_prefix}-size-invalid",
+        label=f"{label} sizeBytes",
+    )
+    return {
+        "sourcePath": source_path,
+        "packagePath": package_path,
+        "hash": remap_hash,
+        "sizeBytes": size_bytes,
+    }
 
 
 def _json_mapping(value: Any, *, path: str) -> dict[str, Any]:
@@ -1036,6 +1342,10 @@ def _c_access(value: Any) -> str:
 
 def _c_json_string(value: Any) -> str:
     return _c_string(_canonical_json(value))
+
+
+def _c_nullable_json_string(value: Any) -> str:
+    return "NULL" if value is None else _c_json_string(value)
 
 
 def _c_nullable_string(value: Any) -> str:
