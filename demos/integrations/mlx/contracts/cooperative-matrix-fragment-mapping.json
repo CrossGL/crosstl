@@ -78,7 +78,7 @@
     "fragmentMapping": "tile_4x4_row_pair",
     "fragmentMappingProvenance": "mlx_steel_BaseMMAFrag_get_coord",
     "cooperativeMatrixType": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view, tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>",
-    "materializedSpecializationCount": 588,
+    "materializedSpecializationCount": 604,
     "unsupportedSpecializationCount": 0,
     "sourceContracts": {
       "cooperativeMatrixTypeCount": 16,
@@ -125,21 +125,37 @@
       "defaultEnabled": false,
       "projectConfigurationWired": false
     },
+    "replay": {
+      "scope": "full-source-exact-high-budget",
+      "mode": "explicit-opt-in",
+      "elapsedSeconds": 747.678,
+      "codegenFactoryOverrides": [
+        "crosstl.project.pipeline.get_codegen",
+        "crosstl._crosstl.get_codegen"
+      ],
+      "projectConfigurationWired": false
+    },
     "targets": {
       "directx": {
         "boundaryDiagnostic": "project.translate.directx-private-pointer-unsupported",
         "missingCapability": "directx.private-pointer-parameter-lowering",
-        "reason": "missing-fixed-array-extent",
-        "function": "qdot_float_values_per_thread_4",
-        "parameter": "x_thread",
+        "privatePointer": {
+          "function": "qdot_float_16_4",
+          "parameter": "x_thread",
+          "backingArray": "x_thread",
+          "reason": "unprovable-view-offset"
+        },
         "artifactEmitted": false
       },
       "opengl": {
         "boundaryDiagnostic": "project.translate.opengl-private-pointer-unsupported",
         "missingCapability": "opengl.private-pointer-parameter-lowering",
-        "reason": "missing-view-backing",
-        "function": "load_vector_float_float_values_per_thread",
-        "parameter": "x_thread",
+        "privatePointer": {
+          "function": "qdot_float_16_4",
+          "parameter": "x_thread",
+          "backingArray": "x_thread",
+          "reason": "unprovable-view-offset"
+        },
         "artifactEmitted": false
       }
     }
@@ -156,12 +172,13 @@
     "numericalParityVerified": false,
     "resolvedIssues": [
       "https://github.com/CrossGL/crosstl/issues/1610",
-      "https://github.com/CrossGL/crosstl/issues/1823"
+      "https://github.com/CrossGL/crosstl/issues/1823",
+      "https://github.com/CrossGL/crosstl/issues/1824"
     ],
     "trackedIssues": [
       "https://github.com/CrossGL/crosstl/issues/1602",
       "https://github.com/CrossGL/crosstl/issues/1820",
-      "https://github.com/CrossGL/crosstl/issues/1824"
+      "https://github.com/CrossGL/crosstl/issues/1826"
     ]
   }
 }

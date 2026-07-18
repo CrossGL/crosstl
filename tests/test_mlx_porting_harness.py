@@ -2366,7 +2366,7 @@ def test_cooperative_matrix_fragment_mapping_contract_tracks_pinned_source():
             "fragmentMapping": "tile_4x4_row_pair",
             "fragmentMappingProvenance": "mlx_steel_BaseMMAFrag_get_coord",
             "cooperativeMatrixType": matrix_type,
-            "materializedSpecializationCount": 588,
+            "materializedSpecializationCount": 604,
             "unsupportedSpecializationCount": 0,
             "sourceContracts": {
                 "cooperativeMatrixTypeCount": 16,
@@ -2410,15 +2410,28 @@ def test_cooperative_matrix_fragment_mapping_contract_tracks_pinned_source():
                 "defaultEnabled": False,
                 "projectConfigurationWired": False,
             },
+            "replay": {
+                "scope": "full-source-exact-high-budget",
+                "mode": "explicit-opt-in",
+                "elapsedSeconds": 747.678,
+                "codegenFactoryOverrides": [
+                    "crosstl.project.pipeline.get_codegen",
+                    "crosstl._crosstl.get_codegen",
+                ],
+                "projectConfigurationWired": False,
+            },
             "targets": {
                 "directx": {
                     "boundaryDiagnostic": (
                         "project.translate.directx-private-pointer-unsupported"
                     ),
                     "missingCapability": "directx.private-pointer-parameter-lowering",
-                    "reason": "missing-fixed-array-extent",
-                    "function": "qdot_float_values_per_thread_4",
-                    "parameter": "x_thread",
+                    "privatePointer": {
+                        "function": "qdot_float_16_4",
+                        "parameter": "x_thread",
+                        "backingArray": "x_thread",
+                        "reason": "unprovable-view-offset",
+                    },
                     "artifactEmitted": False,
                 },
                 "opengl": {
@@ -2426,9 +2439,12 @@ def test_cooperative_matrix_fragment_mapping_contract_tracks_pinned_source():
                         "project.translate.opengl-private-pointer-unsupported"
                     ),
                     "missingCapability": "opengl.private-pointer-parameter-lowering",
-                    "reason": "missing-view-backing",
-                    "function": "load_vector_float_float_values_per_thread",
-                    "parameter": "x_thread",
+                    "privatePointer": {
+                        "function": "qdot_float_16_4",
+                        "parameter": "x_thread",
+                        "backingArray": "x_thread",
+                        "reason": "unprovable-view-offset",
+                    },
                     "artifactEmitted": False,
                 },
             },
@@ -2446,11 +2462,12 @@ def test_cooperative_matrix_fragment_mapping_contract_tracks_pinned_source():
             "resolvedIssues": [
                 "https://github.com/CrossGL/crosstl/issues/1610",
                 "https://github.com/CrossGL/crosstl/issues/1823",
+                "https://github.com/CrossGL/crosstl/issues/1824",
             ],
             "trackedIssues": [
                 "https://github.com/CrossGL/crosstl/issues/1602",
                 "https://github.com/CrossGL/crosstl/issues/1820",
-                "https://github.com/CrossGL/crosstl/issues/1824",
+                "https://github.com/CrossGL/crosstl/issues/1826",
             ],
         },
     }
@@ -2494,16 +2511,26 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     coordinate_mapping_issue = "https://github.com/CrossGL/crosstl/issues/1820"
     opengl_analyzer_issue = "https://github.com/CrossGL/crosstl/issues/1823"
     source_materialization_issue = "https://github.com/CrossGL/crosstl/issues/1824"
+    private_pointer_issue = "https://github.com/CrossGL/crosstl/issues/1826"
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1807"
 
     status = expected_gaps["fp_quantized_contextual_materialization_status"]
 
     assert status == {
-        "status": "blocked-with-opt-in-lane-local-lowering",
+        "status": "blocked-at-private-pointer-lowering",
         "source": "mlx/backend/metal/kernels/fp_quantized.metal",
         "repository_commit": PINNED_MLX_COMMIT,
         "targets": ["directx", "opengl"],
         "translation_mode": "full-source-exact-high-budget",
+        "replay": {
+            "mode": "explicit-opt-in",
+            "elapsed_seconds": 747.678,
+            "codegen_factory_overrides": [
+                "crosstl.project.pipeline.get_codegen",
+                "crosstl._crosstl.get_codegen",
+            ],
+            "project_configuration_wired": False,
+        },
         "resolved_contracts": [
             "helper-array-decay-template-deduction",
             "specialized-struct-constexpr-assertion-evaluation",
@@ -2528,6 +2555,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             "directx-lane-local-cooperative-matrix-software-lowering",
             "opengl-lane-local-cooperative-matrix-software-lowering",
             "opengl-private-pointer-unresolved-base-analysis",
+            "transitive-local-constexpr-materialization",
         ],
         "contextual_receiver_resolved_by_commit": (
             "c7a3c61addf9ca523e09bc81252ab76340c3f82c"
@@ -2586,7 +2614,17 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
                 "source_contract": "contracts/cooperative-matrix-fragment-mapping.json",
             },
-            "materialized_specialization_count": 588,
+            "materialized_specialization_count": 604,
+            "transitive_local_constexpr": {
+                "symbol": "values_per_thread",
+                "fixed_array_extents_materialized": True,
+                "resolved_by": source_materialization_issue,
+                "resolved_boundaries": [
+                    "symbolic-values_per_thread",
+                    "missing-fixed-array-extent",
+                    "missing-view-backing",
+                ],
+            },
         },
         "coordinate_mapping_status": {
             "source_contract": "contracts/cooperative-matrix-fragment-mapping.json",
@@ -2685,13 +2723,18 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 ),
                 "missing_capability": "directx.private-pointer-parameter-lowering",
                 "private_pointer": {
-                    "function": "qdot_float_values_per_thread_4",
+                    "function": "qdot_float_16_4",
                     "parameter": "x_thread",
-                    "reason": "missing-fixed-array-extent",
+                    "backing_array": "x_thread",
+                    "reason": "unprovable-view-offset",
                 },
-                "advanced_past": ["cooperative-matrix-type-representation"],
+                "advanced_past": [
+                    "transitive-local-constexpr-materialization",
+                    "private-pointer-missing-fixed-array-extent",
+                    "private-pointer-missing-view-backing",
+                ],
                 "artifact_emitted": False,
-                "blocked_by": source_materialization_issue,
+                "blocked_by": [private_pointer_issue],
             },
             "opengl": {
                 "diagnostic_code": (
@@ -2699,30 +2742,35 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 ),
                 "missing_capability": "opengl.private-pointer-parameter-lowering",
                 "private_pointer": {
-                    "function": "load_vector_float_float_values_per_thread",
+                    "function": "qdot_float_16_4",
                     "parameter": "x_thread",
-                    "reason": "missing-view-backing",
+                    "backing_array": "x_thread",
+                    "reason": "unprovable-view-offset",
                 },
-                "advanced_past": ["cooperative-matrix-type-representation"],
+                "advanced_past": [
+                    "transitive-local-constexpr-materialization",
+                    "private-pointer-unresolved-base-analysis",
+                    "private-pointer-missing-view-backing",
+                ],
                 "analyzer_guard": {
                     "status": "resolved-on-branch",
                     "issue": opengl_analyzer_issue,
                 },
                 "artifact_emitted": False,
-                "blocked_by": source_materialization_issue,
+                "blocked_by": [private_pointer_issue],
             },
         },
         "target_results": {
             "directx": {
-                "status": "blocked-with-opt-in-lane-local-lowering",
+                "status": "blocked-at-private-pointer-lowering",
                 "artifact_emitted": False,
-                "specialization_count": 588,
+                "specialization_count": 604,
                 "unsupported_specialization_count": 0,
             },
             "opengl": {
-                "status": "blocked-with-opt-in-lane-local-lowering",
+                "status": "blocked-at-private-pointer-lowering",
                 "artifact_emitted": False,
-                "specialization_count": 588,
+                "specialization_count": 604,
                 "unsupported_specialization_count": 0,
             },
         },
@@ -2734,6 +2782,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             fragment_contract_issue,
             operation_result_type_issue,
             opengl_analyzer_issue,
+            source_materialization_issue,
         ],
         "advanced_issue_contracts": [
             issue,
@@ -2747,11 +2796,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             pointer_cast_issue,
             coordinate_mapping_issue,
         ],
-        "remaining_blocked_by": [
-            cooperative_matrix_issue,
-            coordinate_mapping_issue,
-            source_materialization_issue,
-        ],
+        "remaining_blocked_by": [private_pointer_issue],
         "source_translation_claimed": False,
         "runtime_integration_included": False,
         "runtime_execution_verified": False,
@@ -2777,12 +2822,46 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert pointer_cast_issue in expected_gaps["tracked_issues"]
     assert cooperative_matrix_issue in expected_gaps["tracked_issues"]
     assert coordinate_mapping_issue in expected_gaps["tracked_issues"]
-    assert source_materialization_issue in expected_gaps["tracked_issues"]
+    assert private_pointer_issue in expected_gaps["tracked_issues"]
+    assert source_materialization_issue not in expected_gaps["tracked_issues"]
     assert operation_result_type_issue in expected_gaps["resolved_issues"]
     assert operation_result_type_issue not in expected_gaps["tracked_issues"]
     assert opengl_analyzer_issue in expected_gaps["resolved_issues"]
     assert opengl_analyzer_issue not in expected_gaps["tracked_issues"]
-    assert source_materialization_issue not in expected_gaps["resolved_issues"]
+    assert source_materialization_issue in expected_gaps["resolved_issues"]
+
+    assert status["replay"] == {
+        "mode": "explicit-opt-in",
+        "elapsed_seconds": 747.678,
+        "codegen_factory_overrides": [
+            "crosstl.project.pipeline.get_codegen",
+            "crosstl._crosstl.get_codegen",
+        ],
+        "project_configuration_wired": False,
+    }
+    resolved_boundaries = status["advanced_past"]["transitive_local_constexpr"][
+        "resolved_boundaries"
+    ]
+    assert resolved_boundaries == [
+        "symbolic-values_per_thread",
+        "missing-fixed-array-extent",
+        "missing-view-backing",
+    ]
+    for target, boundary in status["current_boundaries"].items():
+        assert boundary["diagnostic_code"] == (
+            f"project.translate.{target}-private-pointer-unsupported"
+        )
+        assert boundary["missing_capability"] == (
+            f"{target}.private-pointer-parameter-lowering"
+        )
+        assert boundary["private_pointer"] == {
+            "function": "qdot_float_16_4",
+            "parameter": "x_thread",
+            "backing_array": "x_thread",
+            "reason": "unprovable-view-offset",
+        }
+        assert "cooperative_matrix" not in boundary
+        assert boundary["blocked_by"] == [private_pointer_issue]
 
     readme = MLX_README_PATH.read_text(encoding="utf-8")
     assert PINNED_MLX_COMMIT in readme
@@ -2798,10 +2877,9 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "`align_K` (ID 202)" in readme
     assert "`project.translate.directx-private-pointer-unsupported`" in readme
     assert "`project.translate.opengl-private-pointer-unsupported`" in readme
-    assert "`missing-fixed-array-extent`" in readme
-    assert "`missing-view-backing`" in readme
-    assert "`qdot_float_values_per_thread_4.x_thread`" in readme
-    assert "`load_vector_float_float_values_per_thread.x_thread`" in readme
+    assert "`directx.private-pointer-parameter-lowering`" in readme
+    assert "`opengl.private-pointer-parameter-lowering`" in readme
+    assert "604 function specializations" in " ".join(readme.split())
     assert "`BaseMMAFrag_float_8_8::kFragRows`" in readme
     assert "CrossGL/crosstl#1479" in readme
     assert "CrossGL/crosstl#1490" in readme
@@ -2819,8 +2897,8 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "CrossGL/crosstl#1602" in readme
     assert "CrossGL/crosstl#1610" in readme
     assert "CrossGL/crosstl#1820" in readme
-    assert "CrossGL/crosstl#1823" in readme
     assert "CrossGL/crosstl#1824" in readme
+    assert "CrossGL/crosstl#1826" in readme
     assert "ordered `cooperative_matrix_element` operations" in " ".join(readme.split())
     assert "`metal_thread_elements` layout" in " ".join(readme.split())
     assert "a 32-lane subgroup, two elements per lane" in " ".join(readme.split())
@@ -2854,10 +2932,22 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "not wired through project profiles or configuration" in " ".join(
         readme.split()
     )
-    assert "`values_per_thread` extent remains symbolic" in " ".join(readme.split())
+    assert (
+        "transitive local `constexpr` chain defining the symbolic "
+        "`values_per_thread`" in " ".join(readme.split())
+    )
+    assert "including its fixed array extents" in " ".join(readme.split())
+    assert "747.678 seconds" in " ".join(readme.split())
+    assert "both code-generation factory paths" in " ".join(readme.split())
+    assert "`qdot_float_16_4.x_thread`" in readme
+    assert "`unprovable-view-offset`" in readme
+    assert "backing array `x_thread`" in " ".join(readme.split())
+    assert "symbolic `values_per_thread`" in " ".join(readme.split())
+    assert "`missing-fixed-array-extent`" in readme
+    assert "`missing-view-backing`" in readme
     assert "compile with the native Xcode Metal compiler" in " ".join(readme.split())
-    assert "Neither target emits an artifact" in " ".join(readme.split())
-    assert "do not establish complete source translation" in " ".join(readme.split())
+    assert "neither emitted an artifact" in " ".join(readme.split())
+    assert "does not establish complete source translation" in " ".join(readme.split())
     assert "runtime integration, runtime execution, or numerical parity" in " ".join(
         readme.split()
     )

@@ -906,7 +906,7 @@ Dependent helper deduction now resolves the function-local `BK_padded` and
 specializing plain helper templates. Proven non-type arguments are serialized to
 canonical values, so equivalent Boolean and integer spellings identify the same
 concrete struct at the kernel call site and in the generated helper signature.
-The exact DirectX and OpenGL runs each materialize 588 function
+The exact DirectX and OpenGL runs each materialize 604 function
 specializations with no unsupported template records. This advances the current
 frontier through the applicable CrossGL/crosstl#1479 and CrossGL/crosstl#1490
 contracts; both issues retain broader project-materialization scope.
@@ -931,8 +931,8 @@ the partially initialized `MMATile_float_2_1_BaseMMAFrag_float_8_8::val_frags`
 array through ordered element writes. These results advance the broader
 constructor contracts in CrossGL/crosstl#1812 and CrossGL/crosstl#1813.
 
-The complete materialized CrossGL intermediate contains 591 functions. Strict
-function-body parsing now accepts the generic pointer reinterpretation in
+The complete materialized CrossGL intermediate reaches target generation. Strict
+function-body parsing accepts the generic pointer reinterpretation in
 `fp_qmv_wide_impl_bfloat16_t_16_4_2_16`,
 `(vec<bfloat16_t, 4>*)(xv[v] + k0)`, including the generic pointee type. This
 advances CrossGL/crosstl#1814 and removes
@@ -989,24 +989,28 @@ configuration. Full software fallback, target policy, runtime execution, and
 numerical parity remain unimplemented. CrossGL/crosstl#1602 and
 CrossGL/crosstl#1820 remain open for that work.
 
-With the opt-in path enabled, full pinned `fp_quantized.metal` replays no longer
-stop at the earlier cooperative-matrix type-representation diagnostic. DirectX
-next reports
-`project.translate.directx-private-pointer-unsupported` with reason
-`missing-fixed-array-extent` at
-`qdot_float_values_per_thread_4.x_thread`. OpenGL next reports
-`project.translate.opengl-private-pointer-unsupported` with reason
-`missing-view-backing` at
-`load_vector_float_float_values_per_thread.x_thread`. Neither target emits an
-artifact. The OpenGL private-pointer analyzer now handles the unresolved base
-binding as a structured boundary instead of raising an exception, resolving
-CrossGL/crosstl#1823 on this branch.
+The verified full pinned `fp_quantized.metal` replay enables lane-local
+cooperative-matrix lowering explicitly through both code-generation factory
+paths, `crosstl.project.pipeline.get_codegen` and
+`crosstl._crosstl.get_codegen`; this option is not yet available through project
+configuration. The replay completed in 747.678 seconds. DirectX and OpenGL each
+materialized 604 function specializations with no unsupported specialization
+records, and neither emitted an artifact. Both targets stop at private-pointer
+parameter `qdot_float_16_4.x_thread`, with backing array `x_thread` and reason
+`unprovable-view-offset`. DirectX reports
+`project.translate.directx-private-pointer-unsupported` with missing capability
+`directx.private-pointer-parameter-lowering`; OpenGL reports
+`project.translate.opengl-private-pointer-unsupported` with missing capability
+`opengl.private-pointer-parameter-lowering`.
 
-Both target boundaries originate in source materialization: the
-`values_per_thread` extent remains symbolic through a transitive local
-`constexpr` chain. CrossGL/crosstl#1824 tracks materializing that chain before
-target pointer analysis. These replays do not establish complete source
-translation, runtime integration, runtime execution, or numerical parity.
+This replay confirms that the transitive local `constexpr` chain defining the
+symbolic `values_per_thread`, including its fixed array extents, is materialized.
+The former `missing-fixed-array-extent` and `missing-view-backing` boundaries are
+also resolved. CrossGL/crosstl#1824 is complete for this source-materialization
+contract; the generalized private-pointer view-offset blocker is tracked in
+CrossGL/crosstl#1826. The result does not establish complete source translation,
+target artifact validation, runtime integration, runtime execution, or numerical
+parity.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.

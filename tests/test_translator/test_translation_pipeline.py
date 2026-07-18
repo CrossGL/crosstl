@@ -1032,7 +1032,8 @@ def test_metal_materialized_local_array_extent_lowers_to_opengl(tmp_path):
 
     _assert_generated_output_is_usable(generated)
     assert "const int values_per_lane = (64 / 32);" in generated
-    assert "float values[values_per_lane] = float[2](0.0, 0.0);" in generated
+    assert "float values[2] = float[2](0.0, 0.0);" in generated
+    assert "values[values_per_lane]" not in generated
     assert "float[values_per_lane](" not in generated
 
 

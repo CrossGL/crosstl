@@ -659,6 +659,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 Optional[Dict[str, _MetalStructDefinition]],
             ],
         ] = {}
+        self._materialized_function_names: Set[str] = set()
+        self._active_static_constexpr_functions: Dict[
+            str, List[_MetalConstexprFunction]
+        ] = {}
         self._source_type_alias_bindings: Dict[str, List[_MetalTypeAliasBinding]] = {}
         self._integral_constant_binary_operators: Set[str] = set()
         self._integral_constant_contract_verified = False
@@ -699,6 +703,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._materialized_struct_specializations.clear()
         self._known_member_function_return_types.clear()
         self._instantiated_template_member_calls.clear()
+        self._materialized_function_names.clear()
+        self._active_static_constexpr_functions.clear()
         self._source_type_alias_bindings.clear()
         self._integral_constant_binary_operators.clear()
         self._integral_constant_contract_verified = False
@@ -717,6 +723,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         processed = self._elide_stateless_compile_time_globals(processed)
         processed = self._lower_struct_member_functions(processed)
         processed = self._materialize_explicit_template_function_calls(processed)
+        processed = self._substitute_local_integral_constant_array_extents(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def _source_analysis(self, code: str) -> _MetalSourceAnalysis:
@@ -2186,12 +2193,19 @@ class MetalPreprocessor(HLSLPreprocessor):
             if self._fail_closed_static_assertions
             else code
         )
+        previous_constexpr_functions = self._active_static_constexpr_functions
+        self._active_static_constexpr_functions = (
+            self._materialization_constexpr_function_index(evaluated)
+        )
         try:
-            return self._lower_struct_member_functions_impl(evaluated)
-        except MetalStructMethodError:
-            raise
-        except Exception:
-            return evaluated
+            try:
+                return self._lower_struct_member_functions_impl(evaluated)
+            except MetalStructMethodError:
+                raise
+            except Exception:
+                return evaluated
+        finally:
+            self._active_static_constexpr_functions = previous_constexpr_functions
 
     def _lower_struct_member_functions_impl(self, code: str) -> str:
         template_declaration_spans = self._find_template_declaration_spans(code)
@@ -3091,10 +3105,21 @@ class MetalPreprocessor(HLSLPreprocessor):
         owner_spans: List[Tuple[int, int]],
         type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
         constexpr_functions: Optional[Dict[str, List[_MetalConstexprFunction]]] = None,
+        constexpr_position_offset: int = 0,
+        include_file_scope: bool = False,
     ) -> Dict[str, List[_MetalIntegralConstantBinding]]:
-        raw_declarations: List[Tuple[int, str, _MetalDataMember]] = []
+        raw_declarations: List[Tuple[int, str, _MetalDataMember, bool]] = []
+        parameter_bindings: List[Tuple[int, str, int, int]] = []
         seen_declarations: Set[Tuple[int, str]] = set()
-        for owner_start, owner_end in sorted(owner_spans):
+        lexical_scopes = self._find_lexical_brace_scopes(code)
+        selected_owner_spans = sorted(owner_spans)
+        scan_spans = [(0, len(code))] if include_file_scope else selected_owner_spans
+        file_scopes = {(0, len(code))}
+        if include_file_scope:
+            file_scopes.update(
+                (start, end) for start, end, _name in self._find_namespace_spans(code)
+            )
+        for owner_start, owner_end in scan_spans:
             owner_text = code[owner_start:owner_end]
             search_start = 0
             for statement in self._iter_simple_declarations(owner_text):
@@ -3111,6 +3136,20 @@ class MetalPreprocessor(HLSLPreprocessor):
                     + len(statement)
                     - len(statement.lstrip())
                 )
+                file_scope_only = False
+                if include_file_scope:
+                    declaration_scope = self._innermost_lexical_scope(
+                        lexical_scopes,
+                        declaration_position,
+                        len(code),
+                    )
+                    selected_owner = self._containing_span(
+                        declaration_position,
+                        selected_owner_spans,
+                    )
+                    if selected_owner is None and declaration_scope not in file_scopes:
+                        continue
+                    file_scope_only = selected_owner is None
                 name = self._declared_local_name(stripped)
                 if name is None:
                     continue
@@ -3121,12 +3160,63 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if declaration_key in seen_declarations:
                     continue
                 seen_declarations.add(declaration_key)
-                raw_declarations.append((declaration_position, name, member))
+                raw_declarations.append(
+                    (declaration_position, name, member, file_scope_only)
+                )
 
-        if not raw_declarations:
+        template_spans = self._find_template_declaration_spans(code)
+        for function in self._find_non_template_function_definitions(
+            code,
+            template_spans,
+        ):
+            if (
+                self._containing_span(
+                    function.body_span[0],
+                    selected_owner_spans,
+                )
+                is None
+            ):
+                continue
+            header = code[function.span[0] : function.body_span[0] - 1]
+            parameter_span = self._function_parameter_list_span(header)
+            if parameter_span is None:
+                continue
+            parameter_start, parameter_end = parameter_span
+            for parameter in self._split_top_level_commas(
+                header[parameter_start + 1 : parameter_end]
+            ):
+                declaration = self._strip_metal_attributes(parameter)
+                name = self._declared_data_member_name(declaration)
+                if name and name != "void":
+                    parameter_bindings.append(
+                        (
+                            function.body_span[0],
+                            name,
+                            function.body_span[0],
+                            function.body_span[1],
+                        )
+                    )
+
+        if not raw_declarations and not parameter_bindings:
             return {}
         bindings: Dict[str, List[_MetalIntegralConstantBinding]] = {}
-        lexical_scopes = self._find_lexical_brace_scopes(code)
+        ordered_parameters = iter(sorted(parameter_bindings))
+        pending_parameter = next(ordered_parameters, None)
+
+        def record_parameters_through(position: int) -> None:
+            nonlocal pending_parameter
+            while pending_parameter is not None and pending_parameter[0] <= position:
+                declaration_position, name, scope_start, scope_end = pending_parameter
+                bindings.setdefault(name, []).append(
+                    _MetalIntegralConstantBinding(
+                        declaration_position=declaration_position,
+                        scope_start=scope_start,
+                        scope_end=scope_end,
+                        value=None,
+                    )
+                )
+                pending_parameter = next(ordered_parameters, None)
+
         ignored_type_tokens = {
             "const",
             "constant",
@@ -3138,7 +3228,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             "threadgroup",
             "volatile",
         }
-        for declaration_position, name, member in sorted(raw_declarations):
+        for declaration_position, name, member, file_scope_only in sorted(
+            raw_declarations
+        ):
+            record_parameters_through(declaration_position)
             scope_start, scope_end = self._innermost_lexical_scope(
                 lexical_scopes, declaration_position, len(code)
             )
@@ -3147,7 +3240,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             value_type_tokens = [
                 token for token in type_tokens if token not in ignored_type_tokens
             ]
-            if (
+            is_constexpr_integral = (
                 member.default is not None
                 and "constexpr" in type_tokens
                 and len(value_type_tokens) == 1
@@ -3155,7 +3248,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 and not member.array_suffix
                 and "*" not in member.type_text
                 and "&" not in member.type_text
-            ):
+            )
+            if file_scope_only and not is_constexpr_integral:
+                continue
+            if is_constexpr_integral:
                 visible_constants = self._local_integral_constants_at(
                     bindings, declaration_position
                 )
@@ -3183,7 +3279,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                         self._resolve_static_constexpr_calls(
                             initializer,
                             constexpr_functions,
-                            declaration_position,
+                            declaration_position + constexpr_position_offset,
                         )
                     )
                 value = self._proven_integral_constant_value(
@@ -3197,7 +3293,87 @@ class MetalPreprocessor(HLSLPreprocessor):
                     value=value,
                 )
             )
+        record_parameters_through(len(code))
         return bindings
+
+    def _substitute_local_integral_constant_array_extents(self, code: str) -> str:
+        template_spans = self._find_template_declaration_spans(code)
+        owner_spans = [
+            function.body_span
+            for function in self._find_non_template_function_definitions(
+                code,
+                template_spans,
+            )
+            if function.name in self._materialized_function_names
+        ]
+        if not owner_spans:
+            return code
+
+        type_aliases = self._collect_local_type_alias_bindings(code, owner_spans)
+        constexpr_functions = self._materialization_constexpr_function_index(code)
+        constants = self._collect_local_integral_constant_bindings(
+            code,
+            owner_spans,
+            type_aliases,
+            constexpr_functions,
+            include_file_scope=True,
+        )
+        replacements: List[Tuple[int, int, str]] = []
+        for owner_start, owner_end in sorted(owner_spans):
+            owner_text = code[owner_start:owner_end]
+            search_start = 0
+            for statement in self._iter_simple_declarations(owner_text):
+                relative_start = owner_text.find(statement, search_start)
+                if relative_start == -1:
+                    continue
+                search_start = relative_start + len(statement)
+                stripped = statement.strip()
+                if not stripped:
+                    continue
+                name = self._declared_local_name(stripped)
+                if name is None:
+                    continue
+                member = self._parse_ordered_data_member(name, stripped)
+                if member is None or not member.array_suffix:
+                    continue
+
+                declaration_position = (
+                    owner_start
+                    + relative_start
+                    + len(statement)
+                    - len(statement.lstrip())
+                )
+                visible_constants = self._local_integral_constants_at(
+                    constants,
+                    declaration_position,
+                )
+                if not visible_constants:
+                    continue
+                resolved_suffix = self._substitute_template_argument_static_constants(
+                    member.array_suffix,
+                    visible_constants,
+                )
+                concrete_extents = self._concrete_array_extents(resolved_suffix)
+                if concrete_extents is None:
+                    continue
+                concrete_suffix = "".join(f"[{extent}]" for extent in concrete_extents)
+                if concrete_suffix == member.array_suffix:
+                    continue
+
+                lhs, _default = self._split_top_level_assignment(stripped)
+                if not lhs.endswith(member.array_suffix):
+                    continue
+                suffix_start = (
+                    declaration_position + len(lhs) - len(member.array_suffix)
+                )
+                replacements.append(
+                    (
+                        suffix_start,
+                        suffix_start + len(member.array_suffix),
+                        concrete_suffix,
+                    )
+                )
+        return self._apply_text_replacements(code, replacements)
 
     @staticmethod
     def _local_integral_constant_bindings_at(
@@ -5349,6 +5525,26 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
         return functions
 
+    def _materialization_constexpr_function_index(
+        self,
+        code: str,
+    ) -> Dict[str, List[_MetalConstexprFunction]]:
+        functions = self._static_constexpr_function_index(code)
+        return {
+            name: [
+                function
+                for function in candidates
+                if function.is_template
+                or function.name in self._materialized_function_names
+            ]
+            for name, candidates in functions.items()
+            if any(
+                function.is_template
+                or function.name in self._materialized_function_names
+                for function in candidates
+            )
+        }
+
     def _resolve_static_constexpr_calls(
         self,
         expression: str,
@@ -7157,6 +7353,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             code,
             local_constant_owner_spans,
             local_constant_type_aliases,
+            self._active_static_constexpr_functions,
+            include_file_scope=True,
         )
         struct_type_aliases = self._collect_struct_type_aliases(
             code,
@@ -10763,6 +10961,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             instantiated_body,
             local_constant_owner_spans,
             local_constant_type_aliases,
+            self._active_static_constexpr_functions,
+            method.span[0],
         )
         instantiated_body = self._rewrite_const_reference_alias_bindings(
             instantiated_body,
@@ -15049,6 +15249,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             materialized = insertion + materialized.lstrip()
         if not materialized.endswith("\n"):
             materialized += "\n"
+        self._materialized_function_names.add(function_identifier)
         return materialized
 
     def _materialize_template_struct_with_name(
@@ -15362,10 +15563,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             code,
             local_binding_owner_spans,
         )
+        constexpr_functions = self._materialization_constexpr_function_index(code)
         local_integral_constants = self._collect_local_integral_constant_bindings(
             code,
             local_binding_owner_spans,
             local_type_aliases,
+            constexpr_functions,
+            include_file_scope=True,
         )
         resolved_calls: List[Tuple[str, List[str], Tuple[int, int]]] = []
         for function_name, template_arguments, span in calls:
@@ -15377,10 +15581,15 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 for argument in template_arguments
             ]
-            local_constants = self._local_integral_constants_at(
+            visible_local_constants = self._local_integral_constant_bindings_at(
                 local_integral_constants,
                 span[0],
             )
+            local_constants = {
+                name: binding.value
+                for name, binding in visible_local_constants.items()
+                if binding.value is not None
+            }
             if local_constants:
                 resolved_arguments = [
                     self._substitute_template_argument_static_constants(
@@ -15389,6 +15598,47 @@ class MetalPreprocessor(HLSLPreprocessor):
                     )
                     for argument in resolved_arguments
                 ]
+            unresolved_local_constants = sorted(
+                name
+                for name, binding in visible_local_constants.items()
+                if binding.value is None
+                and any(
+                    self._substitute_template_argument_static_constants(
+                        argument,
+                        {name: "0"},
+                    )
+                    != argument
+                    for argument in resolved_arguments
+                )
+            )
+            if unresolved_local_constants:
+                requested_signature = self._template_specialization_signature(
+                    function_name,
+                    resolved_arguments,
+                )
+                constant_names = ", ".join(
+                    f"'{name}'" for name in unresolved_local_constants
+                )
+                suggested_action = (
+                    "make each function-local template argument a constexpr "
+                    "integral expression composed from concrete values"
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal function template materialization left function-local "
+                    f"constant {constant_names} unresolved in "
+                    f"'{requested_signature}'. Suggested action: "
+                    f"{suggested_action}.",
+                    requested_signature=requested_signature,
+                    suggested_action=suggested_action,
+                    source_location=self._source_location_for_offsets(
+                        code,
+                        span[0],
+                        span[1],
+                    ),
+                    unresolved_local_constants=tuple(unresolved_local_constants),
+                    callee_template=function_name,
+                    requested_arguments=tuple(resolved_arguments),
+                )
             resolved_key = self._template_specialization_key(
                 function_name,
                 resolved_arguments,
@@ -15463,10 +15713,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             code,
             local_binding_owner_spans,
         )
+        constexpr_functions = self._materialization_constexpr_function_index(code)
         local_integral_constants = self._collect_local_integral_constant_bindings(
             code,
             local_binding_owner_spans,
             local_type_aliases,
+            constexpr_functions,
+            include_file_scope=True,
         )
 
         instantiations: List[Tuple[str, List[str], Tuple[int, int]]] = []
@@ -16597,6 +16850,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         excluded_spans: List[Tuple[int, int]],
     ) -> List[_MetalFunctionDefinition]:
         functions: List[_MetalFunctionDefinition] = []
+        namespace_body_starts = {
+            start - 1 for start, _end, _name in self._find_namespace_spans(code)
+        }
         pos = 0
         while True:
             body_start = self._find_next_top_level_char(code, pos, "{")
@@ -16622,6 +16878,11 @@ class MetalPreprocessor(HLSLPreprocessor):
                         is_entry=METAL_ENTRY_FUNCTION_RE.search(header) is not None,
                     )
                 )
+                pos = body_end
+                continue
+            if body_start in namespace_body_starts:
+                pos = body_start + 1
+                continue
             pos = body_end
         return functions
 
