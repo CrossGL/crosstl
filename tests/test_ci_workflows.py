@@ -2511,6 +2511,45 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
     assert "mlx-upstream" not in vulkan_step
 
 
+def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    integration_test = "test_native_loader_dispatch_integration.py"
+
+    assert mlx_porting.count(f'"tests/test_translator/{integration_test}"') == 2
+
+    directx_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove native loader Direct3D dispatch bridge",
+    )
+    assert "if: runner.os == 'Windows'" in directx_step
+    assert 'CROSTL_RUN_NATIVE_LOADER_DIRECTX_DEVICE_TEST: "1"' in directx_step
+    assert (
+        f"tests/test_translator/{integration_test}::"
+        "test_native_loader_descriptor_executes_directx_on_device" in directx_step
+    )
+    assert "-n auto" in directx_step
+    assert "-k" not in directx_step
+    assert "mlx-upstream" not in directx_step
+
+    opengl_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove native loader OpenGL dispatch bridge",
+    )
+    assert "if: runner.os == 'Linux'" in opengl_step
+    assert 'CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST: "1"' in opengl_step
+    assert (
+        f"tests/test_translator/{integration_test}::"
+        "test_native_loader_descriptor_executes_opengl_on_device" in opengl_step
+    )
+    assert "EGL_PLATFORM: surfaceless" in opengl_step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
+    assert "PYOPENGL_PLATFORM: egl" in opengl_step
+    assert "-n auto" in opengl_step
+    assert "-k" not in opengl_step
+    assert "mlx-upstream" not in opengl_step
+
+
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
     workflows = _workflow_texts()
     support_matrix = workflows.get("support-matrix.yml", "")

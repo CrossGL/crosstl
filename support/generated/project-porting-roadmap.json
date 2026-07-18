@@ -5878,6 +5878,107 @@
     },
     {
       "category": "project",
+      "description": "Construct and preflight one DirectX or OpenGL compute runtime request from a complete native loader ABI descriptor without scheduling or executing device work.",
+      "id": "project.native_loader_dispatch_request",
+      "name": "Native loader dispatch request",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+          ],
+          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "status": "validated_rejection"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_native_loader_dispatch_public_api.py::def test_project_exports_native_loader_dispatch_contract",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_complete_package_descriptor_builds_preflighted_request",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_tampered_package_artifact_fails_before_runtime_consultation",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_loader_descriptor_executes_directx_on_device",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_builds_preflighted_native_runtime_request",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_attests_artifact_size_and_hash_before_building_request",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_missing_extra_and_read_only_output_values",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_missing_scalar_layout_remains_fail_closed",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_invalid_dispatch_geometry"
+          ],
+          "notes": "build_native_loader_dispatch_request constructs a preflighted RuntimeExecutionRequest from one complete schema-v1 native loader ABI descriptor. It verifies the package-contained HLSL artifact size and SHA-256 digest before binding, requires exact reflected names and complete tightly packed 32-bit scalar layouts, and validates DirectX binding namespaces, coordinates, access modes, materialized specialization values, and dispatch geometry. Repository scheduling, host integration, device execution, and combined read-write initialization plus readback remain outside this API. Generated MLX descriptors without physical scalar layout reflection are rejected rather than inferred.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+          ],
+          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "status": "validated_rejection"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+          ],
+          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "status": "validated_rejection"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+          ],
+          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "status": "validated_rejection"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_native_loader_dispatch_public_api.py::def test_project_exports_native_loader_dispatch_contract",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_complete_package_descriptor_builds_preflighted_request",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_tampered_package_artifact_fails_before_runtime_consultation",
+            "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_loader_descriptor_executes_opengl_on_device",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_builds_preflighted_native_runtime_request",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_specialization_provenance_distinguishes_descriptor_default_and_explicit",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_attests_artifact_size_and_hash_before_building_request",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_missing_scalar_layout_remains_fail_closed",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_invalid_dispatch_geometry"
+          ],
+          "notes": "build_native_loader_dispatch_request constructs a preflighted RuntimeExecutionRequest from one complete schema-v1 native loader ABI descriptor. It verifies the package-contained GLSL artifact size and SHA-256 digest before binding, requires exact reflected names and complete tightly packed 32-bit scalar layouts, and validates OpenGL binding namespaces, coordinates, access modes, specialization values, and dispatch geometry. Repository scheduling, host integration, device execution, and combined read-write initialization plus readback remain outside this API. Generated MLX descriptors without physical scalar layout reflection are rejected rather than inferred.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+          ],
+          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "status": "validated_rejection"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+          ],
+          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "status": "validated_rejection"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+          ],
+          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "status": "validated_rejection"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+          ],
+          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "status": "validated_rejection"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+          ],
+          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "status": "validated_rejection"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Plan and report backend-agnostic runtime tests for translated project artifacts.",
       "id": "project.runtime_test_manifest",
       "name": "Runtime test manifest",
@@ -10390,7 +10491,7 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 33,
+    "feature_count": 34,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
@@ -10398,12 +10499,12 @@
         "supported": 29,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 3
+        "validated_rejection": 4
       },
       "directx": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 32,
+        "supported": 33,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -10414,7 +10515,7 @@
         "supported": 29,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 3
+        "validated_rejection": 4
       },
       "metal": {
         "diagnostic": 1,
@@ -10422,7 +10523,7 @@
         "supported": 29,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 3
+        "validated_rejection": 4
       },
       "mojo": {
         "diagnostic": 1,
@@ -10430,12 +10531,12 @@
         "supported": 29,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 3
+        "validated_rejection": 4
       },
       "opengl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 31,
+        "supported": 32,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1
@@ -10446,7 +10547,7 @@
         "supported": 29,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 3
+        "validated_rejection": 4
       },
       "slang": {
         "diagnostic": 1,
@@ -10454,7 +10555,7 @@
         "supported": 29,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 3
+        "validated_rejection": 4
       },
       "vulkan": {
         "diagnostic": 1,
@@ -10462,7 +10563,7 @@
         "supported": 29,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 3
+        "validated_rejection": 4
       },
       "webgl": {
         "diagnostic": 1,
@@ -10470,7 +10571,7 @@
         "supported": 29,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 3
+        "validated_rejection": 4
       },
       "wgsl": {
         "diagnostic": 1,
@@ -10478,7 +10579,7 @@
         "supported": 29,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 3
+        "validated_rejection": 4
       }
     }
   },

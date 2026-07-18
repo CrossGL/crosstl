@@ -3782,6 +3782,24 @@ def test_rendered_docs_label_actionable_backlog_policy():
     assert all(item["feature_id"] != "target.fallback" for item in matrix["backlog"])
 
 
+def test_render_csv_table_uses_empty_message_without_empty_directive():
+    module = load_support_matrix_module()
+
+    rendered = module.render_csv_table(
+        "Actionable backlog rows",
+        ["Backend", "Feature"],
+        [],
+        empty_message="No actionable backlog rows.",
+    )
+
+    assert rendered == [
+        ".. rubric:: Actionable backlog rows",
+        "",
+        "No actionable backlog rows.",
+        "",
+    ]
+
+
 def test_validate_matrix_catches_inconsistent_generated_counts():
     module = load_support_matrix_module()
     backends, features = _minimal_catalogs(module)

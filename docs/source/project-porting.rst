@@ -906,6 +906,55 @@ These APIs and the CLI produce ABI metadata and C declarations only. They do
 not instantiate Direct3D or OpenGL runtime objects, dispatch device work,
 rewrite host code, or prove parity for the MLX test suite.
 
+For a complete DirectX or OpenGL compute descriptor, the public project API can
+construct and preflight the backend-neutral runtime request consumed by the
+native parity adapters:
+
+.. code-block:: python
+
+   import json
+   from pathlib import Path
+
+   from crosstl.project import build_native_loader_dispatch_request
+
+   package_root = Path("crosstl-native-loader-abi")
+   descriptor = json.loads(
+       (package_root / "descriptors/directx/copy.abi.json").read_text()
+   )
+   request = build_native_loader_dispatch_request(
+       descriptor,
+       package_root,
+       input_values={
+           "input_values": {
+               "dtype": "float32",
+               "shape": [4],
+               "values": [1.0, 2.0, 3.0, 4.0],
+           }
+       },
+       output_values={
+           "output_values": {"dtype": "float32", "shape": [4]}
+       },
+       dispatch_geometry={"workgroupCount": [1, 1, 1]},
+       specialization_values={3: 4},
+       expected_target="directx",
+   )
+
+``build_native_loader_dispatch_request`` supports compute-stage DirectX HLSL
+and OpenGL GLSL artifacts. It validates the descriptor, requires exact
+reflected binding names, verifies the artifact size and SHA-256 digest inside
+the package root, validates specialization values and dispatch geometry, and
+returns a preflighted ``RuntimeExecutionRequest``. Buffer bindings require a
+complete, tightly packed 32-bit scalar layout; missing or ambiguous physical
+layout metadata is a structured error rather than an inferred ABI.
+
+This API prepares one request. Repository scheduling, application loader and
+host integration, and device execution remain downstream responsibilities. A
+read-write resource may be used as an output, but initializing and reading back
+the same read-write resource in one request is not supported. Generated MLX
+descriptors do not yet carry complete physical scalar layouts, so they remain
+rejected until physical layout reflection is available; request construction
+does not establish MLX runtime execution or numerical parity.
+
 Build a deterministic runtime variant registry from either a ready runtime
 package or loader manifest:
 

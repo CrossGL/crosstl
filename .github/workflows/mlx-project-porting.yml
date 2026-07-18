@@ -27,6 +27,7 @@ on:
       - "tests/fixtures/runtime_verification/**"
       - "tests/fixtures/project_porting/mlx/**"
       - "tests/test_translator/test_native_runtime_drivers.py"
+      - "tests/test_translator/test_native_loader_dispatch_integration.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
       - "tests/test_translator/test_project_translation.py"
       - "tests/test_translator/test_runtime_verification.py"
@@ -52,6 +53,7 @@ on:
       - "tests/fixtures/runtime_verification/**"
       - "tests/fixtures/project_porting/mlx/**"
       - "tests/test_translator/test_native_runtime_drivers.py"
+      - "tests/test_translator/test_native_loader_dispatch_integration.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
       - "tests/test_translator/test_project_translation.py"
       - "tests/test_translator/test_runtime_verification.py"
@@ -290,6 +292,14 @@ jobs:
           CROSTL_RUN_DIRECTX_MLX_ARANGE_DEVICE_TEST: "1"
         run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device"
 
+      - name: Prove native loader Direct3D dispatch bridge
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_RUN_NATIVE_LOADER_DIRECTX_DEVICE_TEST: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_directx_on_device
+
       - name: Prove Direct3D local-struct byte-view native readback
         if: runner.os == 'Windows'
         env:
@@ -332,6 +342,17 @@ jobs:
         run: |
           python -m pytest -q -n auto \
             "tests/test_translator/test_private_pointer_partition_runtime.py::test_private_pointer_native_readback[local-struct-byte-view-opengl]"
+
+      - name: Prove native loader OpenGL dispatch bridge
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_RUN_NATIVE_LOADER_OPENGL_DEVICE_TEST: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_native_loader_dispatch_integration.py::test_native_loader_descriptor_executes_opengl_on_device
 
       - name: Validate generated OpenGL subgroup contract through Vulkan
         if: runner.os == 'Linux'
