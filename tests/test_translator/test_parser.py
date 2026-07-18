@@ -6364,44 +6364,492 @@ def test_cooperative_matrix_fragment_dimensions_participate_in_ast_traversal():
 
 
 @pytest.mark.parametrize(
-    ("intrinsic", "operation"),
+    ("intrinsic", "operation", "arguments", "argument_count"),
     [
-        ("cooperative_matrix_element", "element"),
-        ("cooperative_matrix_load", "load"),
-        ("cooperative_matrix_store", "store"),
-        ("cooperative_matrix_multiply", "multiply"),
-        ("cooperative_matrix_multiply_accumulate", "multiply_accumulate"),
-        ("cooperative_matrix_add", "elementwise_add"),
-        ("cooperative_matrix_subtract", "elementwise_subtract"),
+        ("cooperative_matrix_element", "element", "left, 0", 2),
+        ("cooperative_matrix_load", "load", "left, right, accumulator", 3),
+        ("cooperative_matrix_store", "store", "left, right, accumulator", 3),
+        ("cooperative_matrix_multiply", "multiply", "left, right", 2),
+        (
+            "cooperative_matrix_multiply_accumulate",
+            "multiply_accumulate",
+            "left, right, accumulator",
+            3,
+        ),
+        ("cooperative_matrix_add", "elementwise_add", "left, right", 2),
+        ("cooperative_matrix_subtract", "elementwise_subtract", "left, right", 2),
         (
             "cooperative_matrix_elementwise_multiply",
             "elementwise_multiply",
+            "left, right",
+            2,
         ),
-        ("cooperative_matrix_negate", "negate"),
+        ("cooperative_matrix_negate", "negate", "left", 1),
     ],
 )
 def test_cooperative_matrix_intrinsics_parse_to_canonical_operations(
-    intrinsic, operation
+    intrinsic, operation, arguments, argument_count
 ):
     code = f"""
     shader CooperativeMatrixOperations {{
-        void main() {{
-            auto result = {intrinsic}(left, right, accumulator);
+        void main(
+            CooperativeMatrix<float, 8, 8> left,
+            CooperativeMatrix<float, 8, 8> right,
+            CooperativeMatrix<float, 8, 8> accumulator
+        ) {{
+            auto result = {intrinsic}({arguments});
         }}
     }}
     """
 
-    ast = parse_code(tokenize_code(code))
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
     matrix_op = ast.functions[0].body.statements[0].initial_value
 
     assert isinstance(matrix_op, CooperativeMatrixOpNode)
     assert matrix_op.operation == operation
-    assert [argument.name for argument in matrix_op.arguments] == [
-        "left",
-        "right",
-        "accumulator",
-    ]
+    assert len(matrix_op.arguments) == argument_count
+    assert matrix_op.arguments[0].name == "left"
     assert matrix_op.args is matrix_op.arguments
+
+
+def cooperative_matrix_contract_source(
+    rows="8",
+    cols="8",
+    *,
+    component="float",
+    scope="subgroup",
+    use="unspecified",
+    layout="unspecified",
+    fragment_contract=False,
+):
+    extension = ""
+    if fragment_contract:
+        extension = (
+            ", metal_thread_elements, 32, 2, "
+            "metal_thread_elements_reference_view, tile_4x4_row_pair, "
+            "source_coordinate_helper"
+        )
+    return (
+        f"CooperativeMatrix<{component}, {rows}, {cols}, {scope}, {use}, "
+        f"{layout}{extension}>"
+    )
+
+
+def test_cooperative_matrix_element_has_scalar_expression_type_only():
+    matrix_type = cooperative_matrix_contract_source(fragment_contract=True)
+    code = f"""
+    shader CooperativeMatrixElementResult {{
+        void main({matrix_type} matrix) {{
+            float value = cooperative_matrix_element(matrix, 0);
+        }}
+    }}
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    operation = ast.functions[0].body.statements[0].initial_value
+
+    assert operation.operation == "element"
+    assert operation.result_type is None
+    assert isinstance(operation.expression_type, PrimitiveType)
+    assert operation.expression_type.name == "float"
+    assert operation.vtype is operation.expression_type
+
+    operation.bind_parent_links()
+    assert operation.expression_type.parent is operation
+
+
+@pytest.mark.parametrize(
+    ("intrinsic", "arguments", "operation"),
+    [
+        ("cooperative_matrix_negate", "left", "negate"),
+        ("cooperative_matrix_add", "left, right", "elementwise_add"),
+        (
+            "cooperative_matrix_subtract",
+            "left, right",
+            "elementwise_subtract",
+        ),
+        (
+            "cooperative_matrix_elementwise_multiply",
+            "left, right",
+            "elementwise_multiply",
+        ),
+    ],
+)
+def test_cooperative_matrix_elementwise_operations_preserve_full_contract(
+    intrinsic, arguments, operation
+):
+    matrix_type = cooperative_matrix_contract_source(
+        use="accumulator",
+        layout="row_major",
+        fragment_contract=True,
+    )
+    code = f"""
+    shader CooperativeMatrixElementwiseResult {{
+        void main({matrix_type} left, {matrix_type} right) {{
+            auto result = {intrinsic}({arguments});
+        }}
+    }}
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    matrix_op = ast.functions[0].body.statements[0].initial_value
+    result = matrix_op.result_type
+
+    assert matrix_op.operation == operation
+    assert isinstance(result, CooperativeMatrixType)
+    assert (result.rows, result.cols, result.scope) == (8, 8, "subgroup")
+    assert (result.use, result.layout) == ("accumulator", "row_major")
+    assert result.fragment_layout == "metal_thread_elements"
+    assert (result.subgroup_size, result.elements_per_lane) == (32, 2)
+    assert result.fragment_provenance == "metal_thread_elements_reference_view"
+    assert result.fragment_mapping == "tile_4x4_row_pair"
+    assert result.fragment_mapping_provenance == "source_coordinate_helper"
+
+
+def test_cooperative_matrix_multiply_preserves_symbolic_result_dimensions():
+    left_type = cooperative_matrix_contract_source("M", "K", use="matrix_a")
+    right_type = cooperative_matrix_contract_source("K", "N", use="matrix_b")
+    code = f"""
+    shader CooperativeMatrixSymbolicMultiply {{
+        void main({left_type} left, {right_type} right) {{
+            auto product = cooperative_matrix_multiply(left, right);
+        }}
+    }}
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    result = ast.functions[0].body.statements[0].initial_value.result_type
+
+    assert isinstance(result.element_type, PrimitiveType)
+    assert result.element_type.name == "float"
+    assert isinstance(result.rows, NamedType)
+    assert isinstance(result.cols, NamedType)
+    assert (result.rows.name, result.cols.name) == ("M", "N")
+    assert result.scope == "subgroup"
+    assert result.use == "unspecified"
+    assert result.layout == "unspecified"
+
+
+def test_cooperative_matrix_multiply_matches_symbolic_dimension_expressions():
+    left_type = cooperative_matrix_contract_source("M + 1", "K + 1")
+    right_type = cooperative_matrix_contract_source("K + 1", "N + 1")
+    code = f"""
+    shader CooperativeMatrixExpressionDimensions {{
+        void main({left_type} left, {right_type} right) {{
+            auto product = cooperative_matrix_multiply(left, right);
+        }}
+    }}
+    """
+
+    parser = Parser(tokenize_code(code), strict_function_bodies=True)
+    ast = parser.parse()
+    result = ast.functions[0].body.statements[0].initial_value.result_type
+
+    assert isinstance(result.rows, BinaryOpNode)
+    assert isinstance(result.cols, BinaryOpNode)
+    assert parser.format_type_argument(result.rows) == "M + 1"
+    assert parser.format_type_argument(result.cols) == "N + 1"
+
+
+def test_cooperative_matrix_multiply_preserves_compatible_fragment_metadata():
+    left_type = cooperative_matrix_contract_source(
+        use="matrix_a", layout="row_major", fragment_contract=True
+    )
+    right_type = cooperative_matrix_contract_source(
+        use="matrix_b", layout="column_major", fragment_contract=True
+    )
+    code = f"""
+    shader CooperativeMatrixFragmentMultiply {{
+        void main({left_type} left, {right_type} right) {{
+            auto product = cooperative_matrix_multiply(left, right);
+        }}
+    }}
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    result = ast.functions[0].body.statements[0].initial_value.result_type
+
+    assert (result.rows, result.cols) == (8, 8)
+    assert (result.use, result.layout) == ("unspecified", "unspecified")
+    assert result.fragment_layout == "metal_thread_elements"
+    assert (result.subgroup_size, result.elements_per_lane) == (32, 2)
+    assert result.fragment_provenance == "metal_thread_elements_reference_view"
+    assert result.fragment_mapping == "tile_4x4_row_pair"
+    assert result.fragment_mapping_provenance == "source_coordinate_helper"
+
+
+@pytest.mark.parametrize("include_destination", [False, True])
+def test_cooperative_matrix_multiply_accumulate_preserves_accumulator_contract(
+    include_destination,
+):
+    left_type = cooperative_matrix_contract_source("M", "K", use="matrix_a")
+    right_type = cooperative_matrix_contract_source("K", "N", use="matrix_b")
+    result_type = (
+        "CooperativeMatrix<float, M, N, subgroup, accumulator, row_major, "
+        "source_fragment, SUBGROUP_SIZE, ELEMENTS_PER_LANE, source_manifest, "
+        "external_mapping, source_mapping_manifest>"
+    )
+    parameters = [
+        f"{left_type} left",
+        f"{right_type} right",
+        f"{result_type} accumulator",
+    ]
+    arguments = "left, right, accumulator"
+    if include_destination:
+        parameters.insert(0, f"{result_type} destination")
+        arguments = f"destination, {arguments}"
+    code = f"""
+    shader CooperativeMatrixMultiplyAccumulate {{
+        void main({", ".join(parameters)}) {{
+            auto result = cooperative_matrix_multiply_accumulate({arguments});
+        }}
+    }}
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    result = ast.functions[0].body.statements[0].initial_value.result_type
+
+    assert (result.rows.name, result.cols.name) == ("M", "N")
+    assert result.element_type.name == "float"
+    assert (result.scope, result.use, result.layout) == (
+        "subgroup",
+        "accumulator",
+        "row_major",
+    )
+    assert result.fragment_layout == "source_fragment"
+    assert result.subgroup_size.name == "SUBGROUP_SIZE"
+    assert result.elements_per_lane.name == "ELEMENTS_PER_LANE"
+    assert result.fragment_provenance == "source_manifest"
+    assert result.fragment_mapping == "external_mapping"
+    assert result.fragment_mapping_provenance == "source_mapping_manifest"
+
+
+def test_cooperative_matrix_declaration_context_constrains_inferred_result():
+    left_type = cooperative_matrix_contract_source("M", "K", use="matrix_a")
+    right_type = cooperative_matrix_contract_source("K", "N", use="matrix_b")
+    result_type = cooperative_matrix_contract_source(
+        "M", "N", use="accumulator", layout="row_major"
+    )
+    code = f"""
+    shader CooperativeMatrixDeclarationContext {{
+        void main({left_type} left, {right_type} right) {{
+            {result_type} result = cooperative_matrix_multiply(left, right);
+        }}
+    }}
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    operation = ast.functions[0].body.statements[0].initial_value
+
+    assert (operation.result_type.rows.name, operation.result_type.cols.name) == (
+        "M",
+        "N",
+    )
+    assert (operation.result_type.use, operation.result_type.layout) == (
+        "accumulator",
+        "row_major",
+    )
+
+
+def test_cooperative_matrix_assignment_context_constrains_inferred_result():
+    left_type = cooperative_matrix_contract_source("M", "K", use="matrix_a")
+    right_type = cooperative_matrix_contract_source("K", "N", use="matrix_b")
+    result_type = cooperative_matrix_contract_source(
+        "M", "N", use="accumulator", layout="row_major"
+    )
+    code = f"""
+    shader CooperativeMatrixAssignmentContext {{
+        void main({left_type} left, {right_type} right) {{
+            {result_type} result;
+            result = cooperative_matrix_multiply(left, right);
+        }}
+    }}
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    assignment = ast.functions[0].body.statements[1].expression
+    result = assignment.value.result_type
+
+    assert (result.rows.name, result.cols.name) == ("M", "N")
+    assert (result.use, result.layout) == ("accumulator", "row_major")
+
+
+def test_cooperative_matrix_return_context_constrains_inferred_result():
+    left_type = cooperative_matrix_contract_source("M", "K", use="matrix_a")
+    right_type = cooperative_matrix_contract_source("K", "N", use="matrix_b")
+    result_type = cooperative_matrix_contract_source(
+        "M", "N", use="accumulator", layout="row_major"
+    )
+    code = f"""
+    shader CooperativeMatrixReturnContext {{
+        {result_type} product({left_type} left, {right_type} right) {{
+            return cooperative_matrix_multiply(left, right);
+        }}
+    }}
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    result = ast.functions[0].body.statements[0].value.result_type
+
+    assert (result.rows.name, result.cols.name) == ("M", "N")
+    assert (result.use, result.layout) == ("accumulator", "row_major")
+
+
+def test_nested_cooperative_matrix_multiply_uses_inner_result_contract():
+    left_type = cooperative_matrix_contract_source("M", "K")
+    middle_type = cooperative_matrix_contract_source("K", "N")
+    right_type = cooperative_matrix_contract_source("N", "P")
+    code = f"""
+    shader CooperativeMatrixNestedMultiply {{
+        void main(
+            {left_type} left,
+            {middle_type} middle,
+            {right_type} right
+        ) {{
+            auto result = cooperative_matrix_multiply(
+                cooperative_matrix_multiply(left, middle), right);
+        }}
+    }}
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    outer = ast.functions[0].body.statements[0].initial_value
+    inner = outer.arguments[0]
+
+    assert isinstance(inner, CooperativeMatrixOpNode)
+    assert (inner.result_type.rows.name, inner.result_type.cols.name) == ("M", "N")
+    assert (outer.result_type.rows.name, outer.result_type.cols.name) == ("M", "P")
+
+    outer.bind_parent_links()
+    assert inner.parent is outer
+    assert inner.result_type.parent is inner
+    assert outer.result_type.parent is outer
+
+
+def test_cooperative_matrix_type_binding_is_restored_after_for_loop():
+    code = """
+    shader CooperativeMatrixForLoopScope {
+        void main(CooperativeMatrix<float, 8, 8> value) {
+            for (int value = 0; value < 1; ++value) {
+            }
+            auto result = cooperative_matrix_negate(value);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    operation = ast.functions[0].body.statements[1].initial_value
+
+    assert operation.operation == "negate"
+    assert isinstance(operation.result_type, CooperativeMatrixType)
+    assert (operation.result_type.rows, operation.result_type.cols) == (8, 8)
+
+
+def test_unknown_local_binding_shadows_outer_cooperative_matrix_type():
+    code = """
+    shader CooperativeMatrixUnknownLocalScope {
+        void main(CooperativeMatrix<float, 8, 8> value) {
+            {
+                auto value = make_value();
+                auto result = cooperative_matrix_negate(value);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
+        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+
+    assert "operand matrix has no cooperative-matrix contract" in str(exc_info.value)
+
+
+def test_for_in_binding_shadows_outer_cooperative_matrix_type():
+    code = """
+    shader CooperativeMatrixForInScope {
+        void main(CooperativeMatrix<float, 8, 8> value, int limit) {
+            for value in 0..limit {
+                auto result = cooperative_matrix_negate(value);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
+        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+
+    assert "operand matrix has no cooperative-matrix contract" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("parameters", "expression", "message"),
+    [
+        (
+            "CooperativeMatrix<float, 8, 8> right",
+            "cooperative_matrix_multiply(left, right)",
+            "operand left has no cooperative-matrix contract",
+        ),
+        (
+            (
+                "CooperativeMatrix<float, 8, 4> left, "
+                "CooperativeMatrix<float, 8, 8> right"
+            ),
+            "cooperative_matrix_multiply(left, right)",
+            "incompatible inner dimension",
+        ),
+        (
+            (
+                "CooperativeMatrix<float, 8, 8, subgroup> left, "
+                "CooperativeMatrix<float, 8, 8, workgroup> right"
+            ),
+            "cooperative_matrix_add(left, right)",
+            "incompatible scope",
+        ),
+        (
+            (
+                "CooperativeMatrix<float, 8, 8> left, "
+                "CooperativeMatrix<int, 8, 8> right"
+            ),
+            "cooperative_matrix_elementwise_multiply(left, right)",
+            "incompatible component type",
+        ),
+    ],
+)
+def test_cooperative_matrix_inference_rejects_missing_or_incompatible_operands(
+    parameters, expression, message
+):
+    code = f"""
+    shader InvalidCooperativeMatrixOperation {{
+        void main({parameters}) {{
+            auto result = {expression};
+        }}
+    }}
+    """
+
+    with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
+        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+
+    assert message in str(exc_info.value)
+
+
+def test_cooperative_matrix_explicit_result_disagreement_is_rejected():
+    code = """
+    shader InvalidCooperativeMatrixResult {
+        void main(
+            CooperativeMatrix<float, 8, 4> left,
+            CooperativeMatrix<float, 4, 8> right
+        ) {
+            CooperativeMatrix<float, 4, 8> result =
+                cooperative_matrix_multiply(left, right);
+        }
+    }
+    """
+
+    with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
+        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+
+    message = str(exc_info.value)
+    assert "incompatible row count" in message
+    assert "declaration 'result'" in message
 
 
 def test_cooperative_matrix_nodes_participate_in_walk_and_parent_binding():
