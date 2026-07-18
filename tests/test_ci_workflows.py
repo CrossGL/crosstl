@@ -2588,6 +2588,67 @@ def test_mlx_project_porting_workflow_proves_initialized_read_write_execution():
     assert "-k" not in opengl_step
 
 
+def test_mlx_project_porting_workflow_proves_shared_native_allocation_execution():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_shared_native_allocations_runtime.py"
+
+    assert mlx_porting.count(f'"{test_path}"') == 2
+
+    directx_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove shared allocation Direct3D native execution",
+    )
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove shared allocation Direct3D native execution",
+        "Install Windows DirectX Shader Compiler",
+    )
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove shared allocation Direct3D native execution",
+        "Install Windows Direct3D runtime dependencies",
+    )
+    assert "if: runner.os == 'Windows'" in directx_step
+    assert (
+        'CROSTL_RUN_SHARED_NATIVE_ALLOCATION_DIRECTX_DEVICE_TEST: "1"' in directx_step
+    )
+    assert (
+        f"{test_path}::test_directx_shared_native_allocation_executes_on_device"
+        in directx_step
+    )
+    assert "-n auto" in directx_step
+    assert "-k" not in directx_step
+    assert "mlx-upstream" not in directx_step
+
+    opengl_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove shared allocation OpenGL native execution",
+    )
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove shared allocation OpenGL native execution",
+        "Install Linux SPIR-V tools",
+    )
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove shared allocation OpenGL native execution",
+        "Install Linux runtime dependencies",
+    )
+    assert "if: runner.os == 'Linux'" in opengl_step
+    assert 'CROSTL_RUN_SHARED_NATIVE_ALLOCATION_OPENGL_DEVICE_TEST: "1"' in opengl_step
+    assert "EGL_PLATFORM: surfaceless" in opengl_step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
+    assert "PYOPENGL_PLATFORM: egl" in opengl_step
+    assert (
+        f"{test_path}::test_opengl_shared_native_allocation_executes_on_device"
+        in opengl_step
+    )
+    assert "-n auto" in opengl_step
+    assert "-k" not in opengl_step
+    assert "mlx-upstream" not in opengl_step
+
+
 def test_mlx_project_porting_workflow_runs_pinned_arange_native_loader_proof():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()
