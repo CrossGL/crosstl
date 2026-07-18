@@ -10243,6 +10243,44 @@ def test_codegen_resolves_equivalent_duplicate_concrete_struct_alias_for_indexin
     parse_crossgl(crossgl)
 
 
+def test_codegen_keeps_duplicate_struct_aliases_isolated_by_qualified_namespace():
+    source = """
+    namespace Left {
+    struct Fragment {
+        typedef metal::vec<float, 2> frag_type;
+    };
+    struct Fragment {
+        typedef metal::vec<float, 2> frag_type;
+    };
+    }
+
+    namespace Right {
+    struct Fragment {
+        typedef metal::vec<float, 4> frag_type;
+    };
+    struct Fragment {
+        typedef metal::vec<float, 4> frag_type;
+    };
+    }
+
+    float read_left(Left::Fragment::frag_type value, ushort lane) {
+        return value[lane];
+    }
+
+    float read_right(Right::Fragment::frag_type value, ushort lane) {
+        return value[lane];
+    }
+    """
+
+    crossgl = convert(source)
+    normalized = normalize(crossgl)
+    assert "float read_left(vec2 value, uint16 lane)" in normalized
+    assert "float read_right(vec4 value, uint16 lane)" in normalized
+    assert "CrossGLMetalVectorIndex_vec2_get(value, lane)" in normalized
+    assert "CrossGLMetalVectorIndex_vec4_get(value, lane)" in normalized
+    parse_crossgl(crossgl)
+
+
 def test_equivalent_duplicate_struct_alias_reaches_project_targets(tmp_path):
     source = """
     struct Fragment_float {
