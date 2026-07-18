@@ -14805,9 +14805,220 @@ def test_translate_project_opengl_resolves_local_constant_in_struct_template(
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "translated"
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
-    assert "struct BlockLoader_float_4_32_8_2_1" in output
+    assert "struct BlockLoader_float_4_2" in output
     assert "BlockLoader_float_4_32_8_WM_1" not in output
     assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_materializes_plain_helper_from_dependent_local_aliases(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dependent_aliases.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define MLX_MTL_CONST static constant constexpr const
+            MLX_MTL_CONST int SIMD_SIZE = 32;
+
+            namespace mlx {
+            namespace steel {
+                template <typename OutT, typename InT>
+                struct TransformNone {};
+
+                template <
+                    typename T,
+                    typename U,
+                    int BM,
+                    int BN,
+                    int BK,
+                    int WM,
+                    int WN,
+                    bool transpose_a,
+                    bool transpose_b,
+                    short lda_tgp,
+                    short ldb_tgp,
+                    typename AccumType = float,
+                    typename Epilogue = TransformNone<U, AccumType>>
+                struct BlockMMA {
+                    T value;
+                };
+
+                template <
+                    typename T,
+                    short BROWS,
+                    short BCOLS,
+                    short dst_ld,
+                    short reduction_dim,
+                    short tgp_size,
+                    short alignment = 1,
+                    short n_reads = (BCOLS * BROWS) / tgp_size,
+                    short TCOLS = BCOLS / n_reads,
+                    short TROWS = tgp_size / TCOLS>
+                struct BlockLoader {
+                    T value;
+                };
+            }
+            }
+
+            template <
+                    typename T,
+                    short BROWS,
+                    short BCOLS,
+                    short dst_ld,
+                    short reduction_dim,
+                    short tgp_size,
+                    short group_size,
+                    short bits>
+            struct QuantizedBlockLoader {
+                T value;
+            };
+
+            template <typename T>
+            struct UnrelatedConstants {
+                static constexpr int BK_padded = 99;
+                static constexpr int BN_padded = 101;
+            };
+
+            void unrelated_constants() {
+                constexpr int BK_padded = 77;
+                constexpr int BN_padded = 79;
+                (void)BK_padded;
+                (void)BN_padded;
+            }
+
+            template <typename T, typename MMA, typename LoaderX, typename LoaderW>
+            METAL_FUNC void gemm_loop(
+                thread MMA& mma,
+                thread LoaderX& loader_x,
+                thread LoaderW& loader_w,
+                T value) {
+                mma.value = value;
+                loader_x.value = mma.value;
+                loader_w.value = loader_x.value;
+            }
+
+            template <
+                typename T,
+                int group_size,
+                int bits,
+                int BM,
+                int BN,
+                int BK,
+                int WM,
+                int WN,
+                bool transpose>
+            [[kernel]] void quantized_gather(
+                const device T* source [[buffer(0)]],
+                device T* destination [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                constexpr int BK_padded = BK + 16 / sizeof(T);
+                constexpr int BN_padded = BN + 16 / sizeof(T);
+
+                using mma_t = mlx::steel::BlockMMA<
+                    T,
+                    T,
+                    BM,
+                    BN,
+                    BK,
+                    WM,
+                    WN,
+                    false,
+                    transpose,
+                    BK_padded,
+                    transpose ? BK_padded : BN_padded>;
+                using loader_x_t =
+                    mlx::steel::BlockLoader<
+                        T, BM, BK, BK_padded, 1, WM * WN * SIMD_SIZE>;
+                using loader_w_t = QuantizedBlockLoader<
+                    T,
+                    transpose ? BN : BK,
+                    transpose ? BK : BN,
+                    transpose ? BK_padded : BN_padded,
+                    transpose,
+                    WM * WN * SIMD_SIZE,
+                    group_size,
+                    bits>;
+
+                mma_t mma;
+                loader_x_t loader_x;
+                loader_w_t loader_w;
+                gemm_loop(mma, loader_x, loader_w, source[gid]);
+                destination[gid] = loader_w.value;
+            }
+
+            instantiate_kernel(
+                "quantized_gather_float_nt",
+                quantized_gather,
+                float,
+                16,
+                4,
+                32,
+                32,
+                32,
+                1,
+                2,
+                false)
+            instantiate_kernel(
+                "quantized_gather_float_t",
+                quantized_gather,
+                float,
+                16,
+                4,
+                32,
+                32,
+                32,
+                1,
+                2,
+                true)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl"}
+    assert all(artifact["status"] == "translated" for artifact in artifacts.values())
+    outputs = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    for artifact in artifacts.values():
+        helpers = [
+            specialization
+            for specialization in artifact["templateMaterialization"]["specializations"]
+            if specialization["name"] == "gemm_loop"
+        ]
+        assert len(helpers) == 2
+        helper_payload = json.dumps(helpers, sort_keys=True)
+        assert "BK_padded" not in helper_payload
+        assert "BN_padded" not in helper_payload
+        assert "SIMD_SIZE" not in helper_payload
+        assert "99" not in helper_payload
+        assert "101" not in helper_payload
+        assert "77" not in helper_payload
+        assert "79" not in helper_payload
+
+    for output in outputs.values():
+        helper_lines = [line for line in output.splitlines() if "gemm_loop_" in line]
+        assert helper_lines
+        assert all(
+            symbol not in "\n".join(helper_lines)
+            for symbol in ("BK_padded", "BN_padded", "SIMD_SIZE")
+        )
+        assert "36" in "\n".join(helper_lines)
+        assert "32" in "\n".join(helper_lines)
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
 
 
 def test_translate_project_folds_concrete_metal_sizeof_across_targets(tmp_path):
@@ -47027,8 +47238,8 @@ def test_translate_project_evaluates_specialized_struct_member_assertions(tmp_pa
     }
     for output in outputs.values():
         assert "static_assert" not in output
-        assert "Loader_32_32_1_2_32_16_4" in output
-        assert "Loader_32_32_2_2_32_8_4" in output
+        assert "Loader_32_32_64_16_4" in output
+        assert "Loader_32_32_128_8_4" in output
     assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
     assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
 

@@ -12274,6 +12274,16 @@ def _metal_find_implicit_template_function_calls(
         source,
         list(excluded_spans),
     )
+    constant_owner_spans = [(0, len(source))]
+    constant_type_aliases = preprocessor._collect_local_type_alias_bindings(
+        source,
+        constant_owner_spans,
+    )
+    integral_constants = preprocessor._collect_local_integral_constant_bindings(
+        source,
+        constant_owner_spans,
+        constant_type_aliases,
+    )
     included = list(included_spans) if included_spans is not None else None
     known_return_types = dict(return_types or {})
     for function in functions:
@@ -12359,6 +12369,10 @@ def _metal_find_implicit_template_function_calls(
                 arguments,
                 call_type_environment,
                 known_return_types,
+                static_values=preprocessor._local_integral_constants_at(
+                    integral_constants,
+                    call_position,
+                ),
             )
             if inferred_arguments:
                 calls.append(
@@ -13231,24 +13245,7 @@ def _fold_concrete_metal_struct_template_arguments(
                             evaluation,
                         )
                         if value is not None:
-                            argument_text = argument.strip()
-                            already_grouped = (
-                                argument_text.startswith("(")
-                                and preprocessor._find_matching_delimiter(
-                                    argument_text,
-                                    0,
-                                    "(",
-                                    ")",
-                                )
-                                == len(argument_text) - 1
-                            )
-                            normalized_argument = (
-                                argument
-                                if already_grouped
-                                else preprocessor._static_initializer_reference(
-                                    resolved_argument
-                                )
-                            )
+                            normalized_argument = value
                             normalized_arguments[index] = normalized_argument
                             folded_argument = (
                                 folded_argument or normalized_argument != argument
@@ -15129,6 +15126,26 @@ def _infer_plain_template_helper_arguments(
         getattr(template, "variadic_template_parameters", set()) or set()
     )
     constant_values = dict(static_values or {})
+
+    def inferred_actual_type(argument: str) -> str | None:
+        actual_type = _metal_expression_type(
+            preprocessor,
+            argument,
+            type_environment,
+            return_types,
+        )
+        if not actual_type or not constant_values:
+            return actual_type
+        expanded_type = _metal_expand_materialized_struct_type(
+            preprocessor,
+            actual_type,
+        )
+        resolved_type = preprocessor._substitute_template_argument_static_constants(
+            expanded_type,
+            constant_values,
+        )
+        return resolved_type if resolved_type != expanded_type else actual_type
+
     inference_arguments = [
         preprocessor._substitute_template_argument_static_constants(
             argument,
@@ -15174,12 +15191,7 @@ def _infer_plain_template_helper_arguments(
                 len(call_arguments) - argument_index - remaining_fixed,
             )
             actual_types = [
-                _metal_expression_type(
-                    preprocessor,
-                    argument,
-                    type_environment,
-                    return_types,
-                )
+                inferred_actual_type(argument)
                 for argument in inference_arguments[
                     argument_index : argument_index + variadic_count
                 ]
@@ -15195,12 +15207,7 @@ def _infer_plain_template_helper_arguments(
             continue
         if argument_index >= len(call_arguments):
             continue
-        actual_type = _metal_expression_type(
-            preprocessor,
-            inference_arguments[argument_index],
-            type_environment,
-            return_types,
-        )
+        actual_type = inferred_actual_type(inference_arguments[argument_index])
         argument_index += 1
         if not actual_type:
             continue
@@ -15404,7 +15411,11 @@ def _materialize_plain_template_helper_calls(
             working,
             template_spans,
         )
-        local_constant_owner_spans = [function.body_span for function in functions]
+        # The lexical binding index safely includes translation-unit constants as
+        # well as function locals. This allows helper deduction to resolve proven
+        # file-scope values used by a local concrete type while retaining normal
+        # scope and shadowing rules at each call site.
+        local_constant_owner_spans = [(0, len(working))]
         local_constant_type_aliases = preprocessor._collect_local_type_alias_bindings(
             working,
             local_constant_owner_spans,
