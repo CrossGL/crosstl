@@ -37,17 +37,17 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "76", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "75", "0", "2", "1", "0", "0"
-   "WebGL / GLSL ES", "42", "0", "23", "13", "0", "0"
-   "WebGPU / WGSL", "46", "0", "21", "11", "0", "0"
-   "Metal", "70", "0", "4", "4", "0", "0"
-   "Vulkan SPIR-V", "72", "0", "2", "4", "0", "0"
-   "CUDA", "66", "0", "8", "4", "0", "0"
-   "HIP", "66", "0", "8", "4", "0", "0"
-   "Mojo", "68", "0", "6", "4", "0", "0"
-   "Rust", "69", "0", "5", "4", "0", "0"
-   "Slang", "70", "0", "4", "4", "0", "0"
+   "DirectX / HLSL", "77", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "76", "0", "2", "1", "0", "0"
+   "WebGL / GLSL ES", "42", "0", "23", "14", "0", "0"
+   "WebGPU / WGSL", "46", "0", "21", "12", "0", "0"
+   "Metal", "70", "0", "4", "5", "0", "0"
+   "Vulkan SPIR-V", "72", "0", "2", "5", "0", "0"
+   "CUDA", "66", "0", "8", "5", "0", "0"
+   "HIP", "66", "0", "8", "5", "0", "0"
+   "Mojo", "68", "0", "6", "5", "0", "0"
+   "Rust", "69", "0", "5", "5", "0", "0"
+   "Slang", "70", "0", "4", "5", "0", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -58,9 +58,9 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "76", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "75", "0", "2", "1", "0", "0"
-   "Metal", "70", "0", "4", "4", "0", "0"
+   "DirectX / HLSL", "77", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "76", "0", "2", "1", "0", "0"
+   "Metal", "70", "0", "4", "5", "0", "0"
 
 .. rubric:: DirectX/OpenGL/Metal actionable backlog
 
@@ -75,17 +75,17 @@ inspection, diagnostics, validation, and corpus-coverage rows.
 .. csv-table:: Project-porting status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "33", "0", "1", "0", "0", "0"
-   "OpenGL / GLSL", "32", "0", "1", "1", "0", "0"
-   "WebGL / GLSL ES", "29", "0", "1", "4", "0", "0"
-   "WebGPU / WGSL", "29", "0", "1", "4", "0", "0"
-   "Metal", "29", "0", "1", "4", "0", "0"
-   "Vulkan SPIR-V", "29", "0", "1", "4", "0", "0"
-   "CUDA", "29", "0", "1", "4", "0", "0"
-   "HIP", "29", "0", "1", "4", "0", "0"
-   "Mojo", "29", "0", "1", "4", "0", "0"
-   "Rust", "29", "0", "1", "4", "0", "0"
-   "Slang", "29", "0", "1", "4", "0", "0"
+   "DirectX / HLSL", "34", "0", "1", "0", "0", "0"
+   "OpenGL / GLSL", "33", "0", "1", "1", "0", "0"
+   "WebGL / GLSL ES", "29", "0", "1", "5", "0", "0"
+   "WebGPU / WGSL", "29", "0", "1", "5", "0", "0"
+   "Metal", "29", "0", "1", "5", "0", "0"
+   "Vulkan SPIR-V", "29", "0", "1", "5", "0", "0"
+   "CUDA", "29", "0", "1", "5", "0", "0"
+   "HIP", "29", "0", "1", "5", "0", "0"
+   "Mojo", "29", "0", "1", "5", "0", "0"
+   "Rust", "29", "0", "1", "5", "0", "0"
+   "Slang", "29", "0", "1", "5", "0", "0"
 
 .. rubric:: Project-porting actionable backlog
 
@@ -196,6 +196,7 @@ Each category below uses the status codes from the legend.
    "Runtime host binding plan", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime adapter plan", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime loader manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Exact scalar physical resource layouts", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
    "Native loader ABI descriptors", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Native loader dispatch request", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
    "Runtime test manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"

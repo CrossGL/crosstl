@@ -3388,6 +3388,47 @@
     },
     {
       "category": "project",
+      "description": "Reflect and enforce exact 32-bit scalar resource layouts from target source through native loader descriptors, runtime requests, and target buffer allocation without inferring unsupported physical ABIs.",
+      "id": "project.exact_scalar_resource_layout",
+      "name": "Exact scalar physical resource layouts",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_host_reflection.py::def test_hlsl_reflection_preserves_entry_points_resources_and_constants",
+            "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_rejects_missing_scalar_block_layout",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_uses_reflected_block_size_as_allocation_minimum",
+            "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
+          ],
+          "notes": "HLSL host reflection emits scalarLayout for float, int, and uint StructuredBuffer/RWStructuredBuffer resources and one-member scalar cbuffer declarations. The contract records physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed blocks. Native loader ABI packaging preserves these fields, request construction rejects missing or mismatched layouts, and DirectX CBV preparation validates the fixed block before allocating at least blockSizeBytes with 256-byte API alignment. Windows Direct3D CI translates, reflects, packages, dispatches, and executes pinned MLX arangeuint32 with exact output [3, 5, 7, 9]. Vectors, matrices, fixed arrays, aggregates, packed or widened types, arbitrary offsets, and multi-member blocks are not inferred.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+          ],
+          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects Metal descriptors with a structured target-unsupported diagnostic; no Metal physical-layout allocation or execution support is claimed.",
+          "status": "validated_rejection"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_host_reflection.py::def test_glsl_reflection_records_exact_mlx_scalar_block_layouts",
+            "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_opengl_buffers_rejects_missing_scalar_block_layout",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation",
+            "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
+          ],
+          "notes": "GLSL host reflection emits scalarLayout for explicit std430 one-member float, int, and uint runtime-array buffer blocks and explicit std140 one-member scalar uniform blocks. The contract records physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed blocks. Native loader ABI packaging preserves these fields, request construction rejects missing or mismatched layouts, and OpenGL UBO preparation zero-pads scalar uploads to blockSizeBytes while storage-buffer readback retains its logical payload size. Linux EGL CI translates, reflects, packages, dispatches, and executes pinned MLX arangeuint32 with exact output [3, 5, 7, 9]. Implicit layouts and unsupported aggregate shapes are not inferred.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Build deterministic native loader ABI metadata, C declarations, and multi-unit packages from ready runtime loader units without creating runtime objects or dispatching device work.",
       "id": "project.native_loader_abi",
       "name": "Native loader ABI descriptors",
@@ -3453,16 +3494,20 @@
         "directx": {
           "evidence": [
             "tests/test_native_loader_dispatch_public_api.py::def test_project_exports_native_loader_dispatch_contract",
+            "tests/test_translator/test_host_reflection.py::def test_hlsl_reflection_preserves_entry_points_resources_and_constants",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_complete_package_descriptor_builds_preflighted_request",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_tampered_package_artifact_fails_before_runtime_consultation",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_loader_descriptor_executes_directx_on_device",
             "tests/test_translator/test_native_loader_dispatch.py::def test_builds_preflighted_native_runtime_request",
             "tests/test_translator/test_native_loader_dispatch.py::def test_attests_artifact_size_and_hash_before_building_request",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_missing_extra_and_read_only_output_values",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
             "tests/test_translator/test_native_loader_dispatch.py::def test_missing_scalar_layout_remains_fail_closed",
-            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_invalid_dispatch_geometry"
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_invalid_dispatch_geometry",
+            "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
           ],
-          "notes": "build_native_loader_dispatch_request constructs a preflighted RuntimeExecutionRequest from one complete schema-v1 native loader ABI descriptor. It verifies the package-contained HLSL artifact size and SHA-256 digest before binding, requires exact reflected names and complete tightly packed 32-bit scalar layouts, and validates DirectX binding namespaces, coordinates, access modes, materialized specialization values, and dispatch geometry. Repository scheduling, host integration, device execution, and combined read-write initialization plus readback remain outside this API. Generated MLX descriptors without physical scalar layout reflection are rejected rather than inferred.",
+          "notes": "build_native_loader_dispatch_request constructs a preflighted RuntimeExecutionRequest from one complete schema-v1 native loader ABI descriptor. It verifies the package-contained HLSL artifact size and SHA-256 digest before binding, requires exact reflected names, and validates physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed scalar blocks. It also validates DirectX binding namespaces, coordinates, access modes, materialized specialization values, and dispatch geometry. The pinned MLX arangeuint32 kernel at commit 4367c73b60541ddd5a266ce4644fd93d20223b6e follows this public descriptor-to-request path and executes in Windows Direct3D CI with exact output [3, 5, 7, 9]. Missing, incomplete, mismatched, or unsupported physical layouts are rejected rather than inferred. This single-kernel proof does not establish full MLX runtime integration or test-suite parity; repository scheduling and combined read-write initialization plus readback remain outside this API.",
           "status": "supported"
         },
         "metal": {
@@ -3475,16 +3520,20 @@
         "opengl": {
           "evidence": [
             "tests/test_native_loader_dispatch_public_api.py::def test_project_exports_native_loader_dispatch_contract",
+            "tests/test_translator/test_host_reflection.py::def test_glsl_reflection_records_exact_mlx_scalar_block_layouts",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_complete_package_descriptor_builds_preflighted_request",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_tampered_package_artifact_fails_before_runtime_consultation",
             "tests/test_translator/test_native_loader_dispatch_integration.py::def test_native_loader_descriptor_executes_opengl_on_device",
             "tests/test_translator/test_native_loader_dispatch.py::def test_builds_preflighted_native_runtime_request",
             "tests/test_translator/test_native_loader_dispatch.py::def test_specialization_provenance_distinguishes_descriptor_default_and_explicit",
             "tests/test_translator/test_native_loader_dispatch.py::def test_attests_artifact_size_and_hash_before_building_request",
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
             "tests/test_translator/test_native_loader_dispatch.py::def test_missing_scalar_layout_remains_fail_closed",
-            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_invalid_dispatch_geometry"
+            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_invalid_dispatch_geometry",
+            "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
           ],
-          "notes": "build_native_loader_dispatch_request constructs a preflighted RuntimeExecutionRequest from one complete schema-v1 native loader ABI descriptor. It verifies the package-contained GLSL artifact size and SHA-256 digest before binding, requires exact reflected names and complete tightly packed 32-bit scalar layouts, and validates OpenGL binding namespaces, coordinates, access modes, specialization values, and dispatch geometry. Repository scheduling, host integration, device execution, and combined read-write initialization plus readback remain outside this API. Generated MLX descriptors without physical scalar layout reflection are rejected rather than inferred.",
+          "notes": "build_native_loader_dispatch_request constructs a preflighted RuntimeExecutionRequest from one complete schema-v1 native loader ABI descriptor. It verifies the package-contained GLSL artifact size and SHA-256 digest before binding, requires exact reflected names, and validates physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed scalar blocks. It also validates OpenGL binding namespaces, coordinates, access modes, specialization values, and dispatch geometry. The pinned MLX arangeuint32 kernel at commit 4367c73b60541ddd5a266ce4644fd93d20223b6e follows this public descriptor-to-request path and executes in Linux EGL CI with exact output [3, 5, 7, 9]. Missing, incomplete, mismatched, or unsupported physical layouts are rejected rather than inferred. This single-kernel proof does not establish full MLX runtime integration or test-suite parity; repository scheduling and combined read-write initialization plus readback remain outside this API.",
           "status": "supported"
         }
       }
@@ -4836,12 +4885,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 78,
+    "feature_count": 79,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 76,
+        "supported": 77,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -4852,12 +4901,12 @@
         "supported": 70,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 4
+        "validated_rejection": 5
       },
       "opengl": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 75,
+        "supported": 76,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1
