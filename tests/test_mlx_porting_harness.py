@@ -3264,10 +3264,9 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "286.175 seconds" in " ".join(readme.split())
     assert "286.540 seconds" in " ".join(readme.split())
     assert "283.718 seconds" in " ".join(readme.split())
-    assert "`16d4df7b1`" in readme
-    assert "`0509feabb`" in readme
-    assert "`a8410478d`" in readme
-    assert "`710a16ee7`" in readme
+    assert "In the first replay" in " ".join(readme.split())
+    assert "In the second replay" in " ".join(readme.split())
+    assert "In the third replay" in " ".join(readme.split())
     assert "both code-generation factory paths" in " ".join(readme.split())
     assert "`qdot_float_16_4.x_thread`" in readme
     assert "`unprovable-view-offset`" in readme
@@ -3280,10 +3279,10 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "`view-out-of-bounds`" in readme
     assert "branch-insensitive private-pointer analysis" in " ".join(readme.split())
     assert "`qouter_float_2_8_4.w`" in readme
-    assert "`338641085`" in readme
-    assert "`88241864b`" in readme
-    assert "`7b1779a22`" in readme
-    assert "issue remains open until these changes merge" in " ".join(
+    assert "DirectX and OpenGL branch pruning" in " ".join(readme.split())
+    assert "resolve CrossGL/crosstl#1829" in " ".join(readme.split())
+    assert "The completed exact replay" in " ".join(readme.split())
+    assert "issue remains open until these changes merge" not in " ".join(
         readme.lower().split()
     )
     assert "429.507 seconds" in " ".join(readme.split())

@@ -980,8 +980,8 @@ has scalar `expression_type` `float` and intentionally has no matrix
 `result_type`. The multiply-accumulate operation has complete cooperative-matrix
 `result_type` and `expression_type` contracts that preserve the accumulator and
 destination representation. Shared expression result inference therefore
-resolves CrossGL/crosstl#1610 on this branch without claiming that scalar element
-expressions require matrix result types.
+resolves CrossGL/crosstl#1610 for this contract without claiming that scalar
+element expressions require matrix result types.
 
 DirectX and OpenGL now provide an explicit opt-in lane-local cooperative-matrix
 software-lowering foundation for the exact registered 8-by-8, 32-lane,
@@ -1001,33 +1001,30 @@ paths, `crosstl.project.pipeline.get_codegen` and
 configuration.
 
 Three measured intermediate replays document translation progression and are
-not current-boundary claims. At CrossTL commit `16d4df7b1`, DirectX ran for
-292.953 seconds and OpenGL for 286.175 seconds before both reported
+not current-boundary claims. In the first replay, DirectX ran for 292.953
+seconds and OpenGL for 286.175 seconds before both reported
 `project.translate.metal-local-type-unresolved` for local type `vec_w`, whose
-extent remained `tn * bytes_per_pack`. At commit `0509feabb`, DirectX ran for
+extent remained `tn * bytes_per_pack`. In the second replay, DirectX ran for
 286.540 seconds and OpenGL for 283.718 seconds. Both reached extent
-`(2) * bytes_per_pack`, proving that `tn` had resolved to `2`. At commit
-`710a16ee7`, DirectX ran for 418.540 seconds and OpenGL for 364.117 seconds; each
+`(2) * bytes_per_pack`, proving that `tn` had resolved to `2`. In the third
+replay, DirectX ran for 418.540 seconds and OpenGL for 364.117 seconds; each
 materialized 606 function specializations before branch-insensitive
 private-pointer analysis reported a false `view-out-of-bounds` result for
 `qouter_float_2_8_4.w`.
 
 The implementation sequence establishes reusable contracts for function-local
-struct hoisting at `16d4df7b1`, concrete `constexpr` local extents at
-`0509feabb`, and defaulted zero-argument helper materialization at `a8410478d`.
-These contracts are backend-independent materialization behavior rather than
-MLX-specific rewrites. The completed replay demonstrates progression through
-all three contracts for this source specialization. CrossGL/crosstl#1567 remains
-open globally because this source-specific evidence does not establish its
-complete function-local typedef scope.
+struct hoisting, concrete `constexpr` local extents, and defaulted zero-argument
+helper materialization. These contracts are backend-independent materialization
+behavior rather than MLX-specific rewrites. The completed replay demonstrates
+progression through all three contracts for this source specialization.
+CrossGL/crosstl#1567 remains open globally because this source-specific evidence
+does not establish its complete function-local typedef scope.
 
-CrossGL/crosstl#1829 is resolved on this branch by DirectX branch pruning at
-`338641085`, OpenGL branch pruning at `88241864b`, and the project translation
-regression at `7b1779a22`. The issue remains open until these changes merge. The
-exact replay at `7b1779a22` proves progression past the false
-`qouter_float_2_8_4.w` range result recorded at `710a16ee7`.
+DirectX and OpenGL branch pruning, together with the project translation
+regression, resolve CrossGL/crosstl#1829. The completed exact replay proves
+progression past the earlier false `qouter_float_2_8_4.w` range result.
 
-At CrossTL commit `7b1779a22`, DirectX ran for 429.507 seconds, materialized 606
+In the completed replay, DirectX ran for 429.507 seconds, materialized 606
 function specializations with no unsupported specializations, and reported
 `project.translate.directx-workgroup-pointer-unsupported`. The missing
 capability is `directx.workgroup-pointer-lowering`; function
