@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import math
 import os
 import re
@@ -188,7 +189,7 @@ def build_native_loader_dispatch_request(
                 "abiVersion": normalized["abiVersion"],
                 "unitId": normalized["unitId"],
             },
-            "scalarLayout": copy.deepcopy(normalized["scalarLayout"]),
+            "scalarLayout": _ordered_scalar_layout(normalized["scalarLayout"]),
             "provenance": copy.deepcopy(normalized["provenance"]),
         },
     )
@@ -921,7 +922,7 @@ def _resource_bindings(
                 },
             )
         )
-    return result
+    return sorted(result, key=_resource_binding_order)
 
 
 def _validated_scalar_layout(
@@ -982,6 +983,30 @@ def _validated_scalar_layout(
             },
         )
     return copy.deepcopy(dict(layout))
+
+
+def _resource_binding_order(binding: RuntimeResourceBinding) -> tuple[Any, ...]:
+    return (
+        binding.set,
+        binding.binding,
+        str(binding.metadata.get("bindingNamespace") or ""),
+        binding.name or "",
+    )
+
+
+def _ordered_scalar_layout(layout: Mapping[str, Any]) -> dict[str, Any]:
+    ordered = copy.deepcopy(dict(layout))
+    for field_name in ("constants", "bindings"):
+        ordered[field_name] = sorted(
+            ordered[field_name],
+            key=lambda value: json.dumps(
+                value,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
+    return ordered
 
 
 def _specialization_constants(

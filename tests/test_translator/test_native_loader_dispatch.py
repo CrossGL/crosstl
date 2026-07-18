@@ -457,6 +457,21 @@ def test_normalizes_supported_resource_kind_aliases(
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_descriptor_binding_order_does_not_change_runtime_contract(tmp_path, target):
+    descriptor = _write_descriptor(tmp_path, target)
+    reordered = copy.deepcopy(descriptor)
+    reordered["bindings"].reverse()
+    reordered["scalarLayout"]["bindings"].reverse()
+
+    first = _build(tmp_path, target, descriptor=descriptor)
+    second = _build(tmp_path, target, descriptor=reordered)
+
+    assert first.adapter_contract.to_json() == second.adapter_contract.to_json()
+    assert first.fixture.to_json() == second.fixture.to_json()
+    assert first.execution_plan.to_json() == second.execution_plan.to_json()
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
 def test_rejects_read_write_binding_supplied_only_as_input(tmp_path, target):
     descriptor = _write_descriptor(tmp_path, target)
     descriptor["bindings"][1]["access"] = "read_write"
