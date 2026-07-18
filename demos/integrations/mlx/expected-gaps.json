@@ -918,7 +918,7 @@
     "runtime_integration_included": false
   },
   "fp_quantized_contextual_materialization_status": {
-    "status": "blocked-at-cooperative-matrix-lowering",
+    "status": "blocked-at-private-pointer-lowering",
     "source": "mlx/backend/metal/kernels/fp_quantized.metal",
     "repository_commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
     "targets": [
@@ -926,6 +926,15 @@
       "opengl"
     ],
     "translation_mode": "full-source-exact-high-budget",
+    "replay": {
+      "mode": "explicit-opt-in",
+      "elapsed_seconds": 747.678,
+      "codegen_factory_overrides": [
+        "crosstl.project.pipeline.get_codegen",
+        "crosstl._crosstl.get_codegen"
+      ],
+      "project_configuration_wired": false
+    },
     "resolved_contracts": [
       "helper-array-decay-template-deduction",
       "specialized-struct-constexpr-assertion-evaluation",
@@ -1009,7 +1018,12 @@
       "transitive_local_constexpr": {
         "symbol": "values_per_thread",
         "fixed_array_extents_materialized": true,
-        "resolved_by": "https://github.com/CrossGL/crosstl/issues/1824"
+        "resolved_by": "https://github.com/CrossGL/crosstl/issues/1824",
+        "resolved_boundaries": [
+          "symbolic-values_per_thread",
+          "missing-fixed-array-extent",
+          "missing-view-backing"
+        ]
       }
     },
     "coordinate_mapping_status": {
@@ -1106,36 +1120,37 @@
     },
     "current_boundaries": {
       "directx": {
-        "diagnostic_code": "project.translate.directx-cooperative-matrix-unsupported",
-        "missing_capability": "directx.cooperative-matrix-lowering",
-        "cooperative_matrix": {
-          "operation": "type",
-          "reason": "unsupported-type",
-          "fragment_mapping": "tile_4x4_row_pair",
-          "fragment_mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord"
+        "diagnostic_code": "project.translate.directx-private-pointer-unsupported",
+        "missing_capability": "directx.private-pointer-parameter-lowering",
+        "private_pointer": {
+          "function": "qdot_float_16_4",
+          "parameter": "x_thread",
+          "backing_array": "x_thread",
+          "reason": "unprovable-view-offset"
         },
         "advanced_past": [
           "transitive-local-constexpr-materialization",
-          "private-pointer-missing-fixed-array-extent"
+          "private-pointer-missing-fixed-array-extent",
+          "private-pointer-missing-view-backing"
         ],
         "artifact_emitted": false,
         "blocked_by": [
-          "https://github.com/CrossGL/crosstl/issues/1602",
-          "https://github.com/CrossGL/crosstl/issues/1820"
+          "https://github.com/CrossGL/crosstl/issues/1826"
         ]
       },
       "opengl": {
-        "diagnostic_code": "project.translate.opengl-cooperative-matrix-unsupported",
-        "missing_capability": "opengl.cooperative-matrix-lowering",
-        "cooperative_matrix": {
-          "operation": "type",
-          "reason": "unsupported-type",
-          "fragment_mapping": "tile_4x4_row_pair",
-          "fragment_mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord"
+        "diagnostic_code": "project.translate.opengl-private-pointer-unsupported",
+        "missing_capability": "opengl.private-pointer-parameter-lowering",
+        "private_pointer": {
+          "function": "qdot_float_16_4",
+          "parameter": "x_thread",
+          "backing_array": "x_thread",
+          "reason": "unprovable-view-offset"
         },
         "advanced_past": [
           "transitive-local-constexpr-materialization",
-          "private-pointer-unresolved-base-analysis"
+          "private-pointer-unresolved-base-analysis",
+          "private-pointer-missing-view-backing"
         ],
         "analyzer_guard": {
           "status": "resolved-on-branch",
@@ -1143,20 +1158,19 @@
         },
         "artifact_emitted": false,
         "blocked_by": [
-          "https://github.com/CrossGL/crosstl/issues/1602",
-          "https://github.com/CrossGL/crosstl/issues/1820"
+          "https://github.com/CrossGL/crosstl/issues/1826"
         ]
       }
     },
     "target_results": {
       "directx": {
-        "status": "blocked-at-cooperative-matrix-lowering",
+        "status": "blocked-at-private-pointer-lowering",
         "artifact_emitted": false,
         "specialization_count": 604,
         "unsupported_specialization_count": 0
       },
       "opengl": {
-        "status": "blocked-at-cooperative-matrix-lowering",
+        "status": "blocked-at-private-pointer-lowering",
         "artifact_emitted": false,
         "specialization_count": 604,
         "unsupported_specialization_count": 0
@@ -1185,8 +1199,7 @@
       "https://github.com/CrossGL/crosstl/issues/1820"
     ],
     "remaining_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1602",
-      "https://github.com/CrossGL/crosstl/issues/1820"
+      "https://github.com/CrossGL/crosstl/issues/1826"
     ],
     "source_translation_claimed": false,
     "runtime_integration_included": false,
@@ -1852,6 +1865,7 @@
     "https://github.com/CrossGL/crosstl/issues/1574",
     "https://github.com/CrossGL/crosstl/issues/1602",
     "https://github.com/CrossGL/crosstl/issues/1820",
+    "https://github.com/CrossGL/crosstl/issues/1826",
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [

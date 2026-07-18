@@ -125,23 +125,37 @@
       "defaultEnabled": false,
       "projectConfigurationWired": false
     },
+    "replay": {
+      "scope": "full-source-exact-high-budget",
+      "mode": "explicit-opt-in",
+      "elapsedSeconds": 747.678,
+      "codegenFactoryOverrides": [
+        "crosstl.project.pipeline.get_codegen",
+        "crosstl._crosstl.get_codegen"
+      ],
+      "projectConfigurationWired": false
+    },
     "targets": {
       "directx": {
-        "boundaryDiagnostic": "project.translate.directx-cooperative-matrix-unsupported",
-        "missingCapability": "directx.cooperative-matrix-lowering",
-        "operation": "type",
-        "reason": "unsupported-type",
-        "fragmentMapping": "tile_4x4_row_pair",
-        "fragmentMappingProvenance": "mlx_steel_BaseMMAFrag_get_coord",
+        "boundaryDiagnostic": "project.translate.directx-private-pointer-unsupported",
+        "missingCapability": "directx.private-pointer-parameter-lowering",
+        "privatePointer": {
+          "function": "qdot_float_16_4",
+          "parameter": "x_thread",
+          "backingArray": "x_thread",
+          "reason": "unprovable-view-offset"
+        },
         "artifactEmitted": false
       },
       "opengl": {
-        "boundaryDiagnostic": "project.translate.opengl-cooperative-matrix-unsupported",
-        "missingCapability": "opengl.cooperative-matrix-lowering",
-        "operation": "type",
-        "reason": "unsupported-type",
-        "fragmentMapping": "tile_4x4_row_pair",
-        "fragmentMappingProvenance": "mlx_steel_BaseMMAFrag_get_coord",
+        "boundaryDiagnostic": "project.translate.opengl-private-pointer-unsupported",
+        "missingCapability": "opengl.private-pointer-parameter-lowering",
+        "privatePointer": {
+          "function": "qdot_float_16_4",
+          "parameter": "x_thread",
+          "backingArray": "x_thread",
+          "reason": "unprovable-view-offset"
+        },
         "artifactEmitted": false
       }
     }
@@ -163,7 +177,8 @@
     ],
     "trackedIssues": [
       "https://github.com/CrossGL/crosstl/issues/1602",
-      "https://github.com/CrossGL/crosstl/issues/1820"
+      "https://github.com/CrossGL/crosstl/issues/1820",
+      "https://github.com/CrossGL/crosstl/issues/1826"
     ]
   }
 }
