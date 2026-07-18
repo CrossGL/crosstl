@@ -44,6 +44,12 @@ from .native_loader_abi import (
     build_native_loader_abi_descriptor,
     generate_native_loader_declarations,
 )
+from .native_loader_abi_package import (
+    NATIVE_LOADER_ABI_PACKAGE_KIND,
+    NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
+    NATIVE_LOADER_ABI_PACKAGE_VERSION,
+    build_native_loader_abi_package,
+)
 from .native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
@@ -162,6 +168,9 @@ __all__ = [
     "DISPATCH_CONTRACT_SCHEMA_VERSION",
     "MAX_DISPATCH_VARIANTS",
     "NATIVE_LOADER_ABI_KIND",
+    "NATIVE_LOADER_ABI_PACKAGE_KIND",
+    "NATIVE_LOADER_ABI_PACKAGE_MANIFEST",
+    "NATIVE_LOADER_ABI_PACKAGE_VERSION",
     "NATIVE_LOADER_ABI_VERSION",
     "DispatchArtifactJob",
     "DispatchArtifactPlan",
@@ -244,6 +253,7 @@ __all__ = [
     "build_runtime_artifact_manifest",
     "build_runtime_binding_manifest",
     "build_native_loader_abi_descriptor",
+    "build_native_loader_abi_package",
     "build_runtime_test_manifest",
     "build_runtime_host_loader_scaffolds",
     "build_runtime_host_integration_handoff",

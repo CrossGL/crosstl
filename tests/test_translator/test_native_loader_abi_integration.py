@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -13,6 +14,10 @@ from pathlib import Path
 import pytest
 
 from crosstl.project import (
+    NATIVE_LOADER_ABI_PACKAGE_KIND,
+    NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
+    NativeLoaderABIError,
+    build_native_loader_abi_package,
     build_runtime_artifact_manifest,
     build_runtime_loader_manifest,
     build_runtime_package,
@@ -69,6 +74,11 @@ def reduced_runtime_package(tmp_path_factory):
     loader_manifest = build_runtime_loader_manifest(
         package_dir / "runtime-package.json"
     )
+    loader_manifest_path = package_dir / "runtime-loader-manifest.json"
+    loader_manifest_path.write_text(
+        json.dumps(loader_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
     assert report.to_json()["summary"]["translatedCount"] == 2
     assert package["success"] is True
@@ -90,6 +100,8 @@ def reduced_runtime_package(tmp_path_factory):
     return {
         "source_path": source_path,
         "package_dir": package_dir,
+        "loader_manifest": loader_manifest,
+        "loader_manifest_path": loader_manifest_path,
         "units": units,
         "descriptors": descriptors,
         "headers": headers,
@@ -284,3 +296,122 @@ def test_generated_runtime_loader_headers_compile(
     tmp_path, reduced_runtime_package, language
 ):
     _compile_headers(tmp_path, language, reduced_runtime_package["headers"])
+
+
+def _relative_file_contents(root):
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
+    tmp_path, reduced_runtime_package
+):
+    manifest_path = reduced_runtime_package["loader_manifest_path"]
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+
+    first = build_native_loader_abi_package(manifest_path, first_root)
+    second = build_native_loader_abi_package(manifest_path, second_root)
+
+    assert first == second
+    assert first["kind"] == NATIVE_LOADER_ABI_PACKAGE_KIND
+    assert first["success"] is True
+    assert first["summary"] == {
+        "unitCount": 2,
+        "targetCount": 2,
+        "generatedFileCount": 5,
+    }
+    assert len(first["generatedFiles"]) == first["summary"]["generatedFileCount"]
+    assert first["generatedFiles"][0] == {
+        "path": NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
+        "kind": "native-loader-abi-package-manifest",
+    }
+    assert [unit["target"] for unit in first["units"]] == ["directx", "opengl"]
+    assert _relative_file_contents(first_root) == _relative_file_contents(second_root)
+    assert (
+        json.loads(
+            (first_root / NATIVE_LOADER_ABI_PACKAGE_MANIFEST).read_text(
+                encoding="utf-8"
+            )
+        )
+        == first
+    )
+
+    for unit in first["units"]:
+        target = unit["target"]
+        descriptor_path = first_root / unit["descriptorPath"]
+        declarations_path = first_root / unit["declarationsPath"]
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        assert descriptor == reduced_runtime_package["descriptors"][target]
+        assert (
+            declarations_path.read_text(encoding="utf-8")
+            == reduced_runtime_package["headers"][target]
+        )
+        assert unit["descriptorHash"] == {
+            "algorithm": "sha256",
+            "value": _sha256(descriptor_path),
+        }
+        assert unit["declarationsHash"] == {
+            "algorithm": "sha256",
+            "value": _sha256(declarations_path),
+        }
+
+
+def test_runtime_loader_abi_package_rejects_blocked_units_before_writing(
+    tmp_path, reduced_runtime_package
+):
+    manifest = copy.deepcopy(reduced_runtime_package["loader_manifest"])
+    manifest["loadUnits"][0]["blockers"] = [{"kind": "resolve-host-interface-metadata"}]
+    manifest_path = tmp_path / "blocked-loader-manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    package_root = tmp_path / "abi-package"
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(manifest_path, package_root)
+
+    assert exc_info.value.code == "project.native-loader-abi.load-unit-blocked"
+    assert not package_root.exists()
+
+
+def test_runtime_loader_abi_package_rejects_duplicate_unit_ids(
+    tmp_path, reduced_runtime_package
+):
+    manifest = copy.deepcopy(reduced_runtime_package["loader_manifest"])
+    manifest["loadUnits"][1]["id"] = manifest["loadUnits"][0]["id"]
+    manifest_path = tmp_path / "duplicate-loader-manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    package_root = tmp_path / "abi-package"
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(manifest_path, package_root)
+
+    assert exc_info.value.code == ("project.native-loader-abi.load-unit-id-duplicate")
+    assert not package_root.exists()
+
+
+@pytest.mark.parametrize("language", ("c", "c++"), ids=("c11", "cxx17"))
+def test_packaged_runtime_loader_headers_compile(
+    tmp_path, reduced_runtime_package, language
+):
+    package_root = tmp_path / "abi-package"
+    package = build_native_loader_abi_package(
+        reduced_runtime_package["loader_manifest_path"],
+        package_root,
+    )
+    headers = {
+        unit["target"]: (
+            (package_root / unit["declarationsPath"]).read_text(encoding="utf-8")
+        )
+        for unit in package["units"]
+    }
+
+    _compile_headers(tmp_path, language, headers)
