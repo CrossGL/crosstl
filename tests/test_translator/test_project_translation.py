@@ -50600,10 +50600,10 @@ def test_translate_project_lowers_read_only_local_struct_byte_view(
             }
 
             kernel void local_struct_byte_view(
-                device uint* output [[buffer(0)]]) {
-                thread WordBlock local;
-                local.words[0] = 67305985u;
-                local.words[1] = 134678021u;
+                const device uint* input [[buffer(0)]],
+                device uint* output [[buffer(1)]]) {
+                thread WordBlock local =
+                    *((const device WordBlock*)input);
                 output[0] = sum8((const thread uint8_t*)&local);
             }
             """).strip() + "\n",
@@ -50636,16 +50636,31 @@ def test_translate_project_lowers_read_only_local_struct_byte_view(
 
     generated = (repo / expected_path).read_text(encoding="utf-8")
     assert "PointerReinterpretNode" not in generated
+    assert "(const device WordBlock*)" not in generated
+    assert "(const thread uint8_t*)" not in generated
     if target == "directx":
+        first_read = "local.words[0] = input[uint(0)];"
+        second_read = "local.words[1] = input[uint(1)];"
+        byte_view_call = "sum8(local.words, 0)"
+        assert first_read in generated
+        assert second_read in generated
+        assert generated.index(first_read) < generated.index(second_read)
+        assert generated.index(second_read) < generated.index(byte_view_call)
         assert "bytes[uint(((bytes_base + index)) / 4)]" in generated
         assert ">> uint((((bytes_base + index)) % 4) * 8)) & 255u" in generated
-        assert "sum8(local.words, 0)" in generated
+        assert "WordBlock*" not in generated
         HLSLParser(HLSLLexer(generated).tokenize()).parse()
         assert_directx_compute_validates_if_available(generated, tmp_path)
     else:
+        first_read = "input_[0]"
+        second_read = "input_[1]"
+        byte_view_call = "sum8(local, 0)"
+        assert "WordBlock(uint[2](input_[0], input_[1]))" in generated
+        assert generated.index(first_read) < generated.index(second_read)
+        assert generated.index(second_read) < generated.index(byte_view_call)
         assert "bitfieldExtract(bytes.words[" in generated
         assert ", 8)" in generated
-        assert "sum8(local, 0)" in generated
+        assert "WordBlock*" not in generated
         GLSLParser(GLSLLexer(generated).tokenize(), "compute").parse()
         assert_compute_glsl_validates_if_available(generated, tmp_path)
 
