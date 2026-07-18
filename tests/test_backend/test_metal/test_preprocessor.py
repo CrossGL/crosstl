@@ -4471,6 +4471,51 @@ def test_preprocessor_keeps_method_local_call_operator_with_owner_type():
     assert "LocalValue__operator_call" not in output
 
 
+@pytest.mark.parametrize(
+    "member_declaration",
+    [
+        pytest.param(
+            "~Outer() { LOCAL_SETUP local(); }",
+            id="destructor",
+        ),
+        pytest.param(
+            "operator bool() { LOCAL_SETUP return local() != 0; }",
+            id="conversion-operator",
+        ),
+        pytest.param(
+            "bool operator==(thread const Outer& other) { "
+            "LOCAL_SETUP return local() == other.value; }",
+            id="comparison-operator",
+        ),
+    ],
+)
+def test_preprocessor_keeps_unlowered_member_local_call_operator_with_owner_type(
+    member_declaration,
+):
+    local_setup = """
+        struct LocalValue {
+            uint operator()() { return 7; }
+            uint value;
+        };
+        LocalValue local;
+    """
+    code = f"""
+    struct Outer {{
+        {member_declaration.replace("LOCAL_SETUP", local_setup)}
+        uint ordinary() {{ return 1; }}
+        uint value;
+    }};
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct LocalValue" in output
+    assert "uint operator()() { return 7; }" in output
+    assert "LocalValue local;" in output
+    assert "LocalValue__operator_call" not in output
+    assert "uint Outer__ordinary(thread Outer& self)" in output
+
+
 def test_preprocessor_lowers_materialized_template_functor():
     # After the struct-template materializer produces a concrete `Sum_float`, the
     # member-function lowering pass lowers its `operator()` and rewrites the call.
@@ -9112,6 +9157,7 @@ def test_sfinae_simd_reduce_recognized_as_template_methods():
         templates,
         _members,
         _ctors,
+        _member_function_body_spans,
         _layout_supported,
     ) = pp._split_struct_body("Red", body, 0)
     by_name = {}

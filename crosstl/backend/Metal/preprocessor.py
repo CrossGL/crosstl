@@ -557,6 +557,7 @@ class _MetalStructDefinition:
     # available without a second parse.
     data_members: List[_MetalDataMember] = field(default_factory=list)
     constructors: List[_MetalConstructor] = field(default_factory=list)
+    member_function_body_spans: List[Tuple[int, int]] = field(default_factory=list)
     base_clause: str = ""
     aggregate_kind: str = "struct"
     layout_supported: bool = True
@@ -2231,15 +2232,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
         ]
         local_owner_spans.extend(
-            method.span
+            body_span
             for struct in structs
-            for method in (*struct.methods, *struct.template_methods)
-        )
-        local_owner_spans.extend(
-            constructor.span
-            for struct in structs
-            for constructor in struct.constructors
-            if constructor.span is not None
+            for body_span in struct.member_function_body_spans
         )
         # Only structs that actually declare at least one member function (a
         # concrete method OR a template method) need rewriting; everything else
@@ -2527,6 +2522,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 template_methods,
                 ordered_members,
                 constructors,
+                member_function_body_spans,
                 layout_supported,
             ) = self._split_struct_body(
                 name,
@@ -2548,6 +2544,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     data_member_types=data_member_types,
                     data_members=ordered_members,
                     constructors=constructors,
+                    member_function_body_spans=member_function_body_spans,
                     base_clause=stripped_between,
                     aggregate_kind=match.group("aggregate_kind"),
                     layout_supported=layout_supported,
@@ -3636,6 +3633,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         List[_MetalStructMethod],
         List[_MetalDataMember],
         List[_MetalConstructor],
+        List[Tuple[int, int]],
         bool,
     ]:
         # Walk a struct body separating DATA members from METHOD definitions.
@@ -3652,6 +3650,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # scalar-replacement path (declaration order and ctor mapping matter).
         ordered_members: List[_MetalDataMember] = []
         constructors: List[_MetalConstructor] = []
+        member_function_body_spans: List[Tuple[int, int]] = []
         layout_supported = True
         if member_prototype_names is None:
             member_prototype_names = set()
@@ -3696,6 +3695,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 ):
                     method_body_end = self._find_matching_brace(body, method_body_start)
                     if method_body_end is not None:
+                        member_function_body_spans.append(
+                            (
+                                body_offset + method_body_start + 1,
+                                body_offset + method_body_end - 1,
+                            )
+                        )
                         template_method = self._parse_struct_template_method(
                             struct_name,
                             body,
@@ -3771,6 +3776,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                     layout_supported = False
                     break
                 if method is not None:
+                    member_function_body_spans.append(
+                        (
+                            body_offset + brace + 1,
+                            body_offset + brace_end - 1,
+                        )
+                    )
                     method.span = (body_offset + i, body_offset + brace_end)
                     methods.append(method)
                     i = brace_end
@@ -3790,6 +3801,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 # existing struct-method skipping drops it; a brace-initialized
                 # member is recorded as a data member.
                 if self._brace_construct_is_method_definition(body[i:brace]):
+                    member_function_body_spans.append(
+                        (
+                            body_offset + brace + 1,
+                            body_offset + brace_end - 1,
+                        )
+                    )
                     # A constructor is captured (for pointer-member scalar
                     # replacement); other declined constructs (destructor,
                     # conversion/comparison operators) are simply left in place.
@@ -3873,6 +3890,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             template_methods,
             ordered_members,
             constructors,
+            member_function_body_spans,
             layout_supported,
         )
 
