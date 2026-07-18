@@ -2701,11 +2701,12 @@ class Parser:
 
     def cooperative_matrix_type(self, generic_args):
         """Build the canonical cooperative matrix type from generic arguments."""
-        if not 3 <= len(generic_args) <= 10:
+        if not 3 <= len(generic_args) <= 12:
             raise SyntaxError(
-                "CooperativeMatrix expects 3 to 10 generic arguments: "
+                "CooperativeMatrix expects 3 to 12 generic arguments: "
                 "element type, rows, columns, scope, use, layout, fragment "
-                "layout, subgroup size, elements per lane, and fragment provenance"
+                "layout, subgroup size, elements per lane, fragment provenance, "
+                "fragment mapping, and fragment mapping provenance"
             )
 
         element_type = generic_args[0]
@@ -2738,6 +2739,12 @@ class Parser:
         fragment_provenance = self.cooperative_matrix_optional_contract_label(
             generic_args[9] if len(generic_args) > 9 else None,
         )
+        fragment_mapping = self.cooperative_matrix_optional_contract_label(
+            generic_args[10] if len(generic_args) > 10 else None,
+        )
+        fragment_mapping_provenance = self.cooperative_matrix_optional_contract_label(
+            generic_args[11] if len(generic_args) > 11 else None,
+        )
         try:
             return CooperativeMatrixType(
                 element_type,
@@ -2750,6 +2757,8 @@ class Parser:
                 subgroup_size,
                 elements_per_lane,
                 fragment_provenance,
+                fragment_mapping,
+                fragment_mapping_provenance,
             )
         except ValueError as error:
             raise SyntaxError(str(error)) from error

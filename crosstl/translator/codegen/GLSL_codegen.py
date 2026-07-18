@@ -1012,6 +1012,8 @@ class OpenGLCooperativeMatrixError(ValueError):
         subgroup_size=None,
         elements_per_lane=None,
         fragment_provenance=None,
+        fragment_mapping=None,
+        fragment_mapping_provenance=None,
         reason=None,
         source_location=None,
     ):
@@ -1024,6 +1026,12 @@ class OpenGLCooperativeMatrixError(ValueError):
             elements_per_lane = getattr(matrix_type, "elements_per_lane", None)
         if fragment_provenance is None:
             fragment_provenance = getattr(matrix_type, "fragment_provenance", None)
+        if fragment_mapping is None:
+            fragment_mapping = getattr(matrix_type, "fragment_mapping", None)
+        if fragment_mapping_provenance is None:
+            fragment_mapping_provenance = getattr(
+                matrix_type, "fragment_mapping_provenance", None
+            )
 
         self.operation = operation
         self.matrix_type = matrix_type
@@ -1031,6 +1039,8 @@ class OpenGLCooperativeMatrixError(ValueError):
         self.subgroup_size = subgroup_size
         self.elements_per_lane = elements_per_lane
         self.fragment_provenance = fragment_provenance
+        self.fragment_mapping = fragment_mapping
+        self.fragment_mapping_provenance = fragment_mapping_provenance
         self.reason = reason
         self.source_location = source_location
         details = {
@@ -1041,6 +1051,12 @@ class OpenGLCooperativeMatrixError(ValueError):
             ),
             "fragmentProvenance": _opengl_cooperative_matrix_detail_value(
                 fragment_provenance
+            ),
+            "fragmentMapping": _opengl_cooperative_matrix_detail_value(
+                fragment_mapping
+            ),
+            "fragmentMappingProvenance": _opengl_cooperative_matrix_detail_value(
+                fragment_mapping_provenance
             ),
         }
         self.details = {
@@ -1069,6 +1085,10 @@ def _opengl_cooperative_matrix_fragment_contract(matrix_type):
         "subgroup_size": getattr(matrix_type, "subgroup_size", None),
         "elements_per_lane": getattr(matrix_type, "elements_per_lane", None),
         "fragment_provenance": getattr(matrix_type, "fragment_provenance", None),
+        "fragment_mapping": getattr(matrix_type, "fragment_mapping", None),
+        "fragment_mapping_provenance": getattr(
+            matrix_type, "fragment_mapping_provenance", None
+        ),
     }
 
 
@@ -1078,12 +1098,14 @@ def _opengl_cooperative_matrix_contract_type(matrix_type):
 
     base_name, generic_args = generic_type_parts(str(matrix_type).strip())
     if base_name.rsplit("::", 1)[-1] != "CooperativeMatrix" or not (
-        3 <= len(generic_args) <= 10
+        3 <= len(generic_args) <= 12
     ):
         return matrix_type
 
     defaults = [
         "subgroup",
+        "unspecified",
+        "unspecified",
         "unspecified",
         "unspecified",
         "unspecified",
@@ -1117,6 +1139,8 @@ def _opengl_cooperative_matrix_contract_type(matrix_type):
             optional_dimension(generic_args[7]),
             optional_dimension(generic_args[8]),
             optional_label(generic_args[9]),
+            optional_label(generic_args[10]),
+            optional_label(generic_args[11]),
         )
     except ValueError:
         return matrix_type
@@ -1134,7 +1158,10 @@ def _opengl_cooperative_matrix_fragment_contract_message(contract):
         f"fragment_layout={render(contract['fragment_layout'])}, "
         f"subgroup_size={render(contract['subgroup_size'])}, "
         f"elements_per_lane={render(contract['elements_per_lane'])}, "
-        f"fragment_provenance={render(contract['fragment_provenance'])}"
+        f"fragment_provenance={render(contract['fragment_provenance'])}, "
+        f"fragment_mapping={render(contract['fragment_mapping'])}, "
+        "fragment_mapping_provenance="
+        f"{render(contract['fragment_mapping_provenance'])}"
     )
 
 

@@ -57,7 +57,12 @@ def _accepts_keyword(callable_obj, keyword: str) -> bool:
         signature = inspect.signature(callable_obj)
     except (TypeError, ValueError):
         return False
-    return keyword in signature.parameters or any(
+    parameter = signature.parameters.get(keyword)
+    return (
+        parameter is not None
+        and parameter.kind
+        in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    ) or any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD
         for parameter in signature.parameters.values()
     )
@@ -75,7 +80,7 @@ class SourceSpec:
     name: str
     extensions: Sequence[str]
     load_lexer_parser: Callable[[], tuple[type, type]]
-    reverse_codegen_factory: Callable[[], Any] | None = None
+    reverse_codegen_factory: Callable[..., Any] | None = None
     aliases: Sequence[str] = ()
     shader_type_from_path: Callable[[str], str | None] | None = None
     native_directive_classifier: (
@@ -128,6 +133,22 @@ class SourceSpec:
         """Return whether this source frontend accepts a lexer keyword option."""
         lexer_cls, _parser_cls = self.load_lexer_parser()
         return _accepts_keyword(lexer_cls, keyword)
+
+    def create_reverse_codegen(
+        self, source_options: Mapping[str, Any] | None = None
+    ) -> Any | None:
+        """Construct a reverse code generator with its supported source options."""
+        factory = self.reverse_codegen_factory
+        if factory is None:
+            return None
+        factory_kwargs = {}
+        if source_options:
+            factory_kwargs = {
+                name: value
+                for name, value in source_options.items()
+                if _accepts_keyword(factory, name)
+            }
+        return factory(**factory_kwargs)
 
     def classify_native_directive(
         self, directive: str, payload: str
@@ -427,10 +448,18 @@ def _reverse_directx():
     return HLSLToCrossGLConverter()
 
 
-def _reverse_metal():
+def _reverse_metal(
+    cooperative_matrix_fragment_mapping=None,
+    cooperative_matrix_fragment_mapping_provenance=None,
+):
     from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 
-    return MetalToCrossGLConverter()
+    return MetalToCrossGLConverter(
+        cooperative_matrix_fragment_mapping=(cooperative_matrix_fragment_mapping),
+        cooperative_matrix_fragment_mapping_provenance=(
+            cooperative_matrix_fragment_mapping_provenance
+        ),
+    )
 
 
 def _reverse_glsl():

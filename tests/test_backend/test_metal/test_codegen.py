@@ -11387,6 +11387,87 @@ def test_metal_cooperative_matrix_operations_round_trip_through_shared_ir():
     assert "cooperative_matrix_" not in regenerated
 
 
+def cooperative_matrix_fragment_transfer_source(rows=8, columns=8):
+    return f"""
+    using fragment_type = metal::vec<float, 2>;
+    using matrix_type = metal::simdgroup_matrix<float, {rows}, {columns}>;
+
+    kernel void transfer_fragment(
+        device fragment_type* fragments [[buffer(0)]]) {{
+      matrix_type matrix;
+      fragments[0] = reinterpret_cast<const thread fragment_type&>(
+          matrix.thread_elements());
+    }}
+    """
+
+
+def generate_cooperative_matrix_fragment_transfer(converter, rows=8, columns=8):
+    source = cooperative_matrix_fragment_transfer_source(rows, columns)
+    return converter.generate(parse_code(tokenize_code(source)))
+
+
+def test_metal_cooperative_matrix_fragment_mapping_is_not_inferred():
+    crossgl = generate_cooperative_matrix_fragment_transfer(MetalToCrossGLConverter())
+
+    assert (
+        "CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified,"
+        "metal_thread_elements,32,2,metal_thread_elements_reference_view>"
+    ) in crossgl
+    assert "tile_4x4_row_pair" not in crossgl
+
+
+def test_metal_cooperative_matrix_fragment_mapping_emits_configured_metadata():
+    converter = MetalToCrossGLConverter(
+        cooperative_matrix_fragment_mapping="tile_4x4_row_pair",
+        cooperative_matrix_fragment_mapping_provenance="source_coordinate_helper",
+    )
+
+    crossgl = generate_cooperative_matrix_fragment_transfer(converter)
+
+    assert (
+        "CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified,"
+        "metal_thread_elements,32,2,metal_thread_elements_reference_view,"
+        "tile_4x4_row_pair,source_coordinate_helper>"
+    ) in crossgl
+
+
+@pytest.mark.parametrize(
+    ("mapping", "provenance"),
+    [
+        ("tile_4x4_row_pair", None),
+        (None, "source_coordinate_helper"),
+    ],
+)
+def test_metal_cooperative_matrix_fragment_mapping_requires_provenance_pair(
+    mapping, provenance
+):
+    with pytest.raises(ValueError, match="must be configured together"):
+        MetalToCrossGLConverter(
+            cooperative_matrix_fragment_mapping=mapping,
+            cooperative_matrix_fragment_mapping_provenance=provenance,
+        )
+
+
+def test_metal_cooperative_matrix_fragment_mapping_rejects_unknown_profile():
+    with pytest.raises(ValueError, match="Unknown cooperative-matrix fragment"):
+        MetalToCrossGLConverter(
+            cooperative_matrix_fragment_mapping="unknown_profile",
+            cooperative_matrix_fragment_mapping_provenance="project_configuration",
+        )
+
+
+def test_metal_cooperative_matrix_fragment_mapping_rejects_contract_mismatch():
+    converter = MetalToCrossGLConverter(
+        cooperative_matrix_fragment_mapping="tile_4x4_row_pair",
+        cooperative_matrix_fragment_mapping_provenance="source_coordinate_helper",
+    )
+
+    with pytest.raises(MetalCooperativeMatrixFragmentLoweringError) as exc_info:
+        generate_cooperative_matrix_fragment_transfer(converter, rows=4, columns=4)
+
+    assert "has no registered contract for 4x4" in exc_info.value.reason
+
+
 def test_codegen_lowers_whole_cooperative_matrix_fragment_transfers_once(tmp_path):
     source = """
     using fragment_type = metal::vec<float, 2>;

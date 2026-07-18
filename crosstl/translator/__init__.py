@@ -2,6 +2,13 @@
 
 from . import codegen, lexer, parser
 from .codegen.registry import BackendSpec, backend_names, get_backend, register_backend
+from .cooperative_matrix import (
+    CooperativeMatrixFragmentMapping,
+    cooperative_matrix_fragment_mapping_names,
+    get_cooperative_matrix_fragment_mapping,
+    has_cooperative_matrix_fragment_mapping,
+    register_cooperative_matrix_fragment_mapping,
+)
 from .lexer import Lexer
 from .parser import Parser
 from .plugin_loader import discover_backend_plugins

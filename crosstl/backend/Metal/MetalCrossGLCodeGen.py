@@ -3,6 +3,10 @@
 import re
 
 from ...translator.codegen.array_utils import evaluate_literal_int_expression
+from ...translator.cooperative_matrix import (
+    get_cooperative_matrix_fragment_mapping,
+    has_cooperative_matrix_fragment_mapping,
+)
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -1019,7 +1023,55 @@ class MetalToCrossGLConverter:
         }
     )
 
-    def __init__(self):
+    def __init__(
+        self,
+        cooperative_matrix_fragment_mapping=None,
+        cooperative_matrix_fragment_mapping_provenance=None,
+    ):
+        mapping_is_configured = cooperative_matrix_fragment_mapping is not None
+        provenance_is_configured = (
+            cooperative_matrix_fragment_mapping_provenance is not None
+        )
+        if mapping_is_configured != provenance_is_configured:
+            raise ValueError(
+                "cooperative_matrix_fragment_mapping and "
+                "cooperative_matrix_fragment_mapping_provenance must be "
+                "configured together"
+            )
+        if mapping_is_configured:
+            if (
+                not isinstance(cooperative_matrix_fragment_mapping, str)
+                or not cooperative_matrix_fragment_mapping.strip()
+            ):
+                raise ValueError(
+                    "cooperative_matrix_fragment_mapping must be a non-empty string"
+                )
+            if (
+                not isinstance(cooperative_matrix_fragment_mapping_provenance, str)
+                or not cooperative_matrix_fragment_mapping_provenance.strip()
+            ):
+                raise ValueError(
+                    "cooperative_matrix_fragment_mapping_provenance must be a "
+                    "non-empty string"
+                )
+            cooperative_matrix_fragment_mapping = (
+                cooperative_matrix_fragment_mapping.strip()
+            )
+            cooperative_matrix_fragment_mapping_provenance = (
+                cooperative_matrix_fragment_mapping_provenance.strip()
+            )
+            if not has_cooperative_matrix_fragment_mapping(
+                cooperative_matrix_fragment_mapping
+            ):
+                raise ValueError(
+                    "Unknown cooperative-matrix fragment mapping profile "
+                    f"'{cooperative_matrix_fragment_mapping}'"
+                )
+
+        self.cooperative_matrix_fragment_mapping = cooperative_matrix_fragment_mapping
+        self.cooperative_matrix_fragment_mapping_provenance = (
+            cooperative_matrix_fragment_mapping_provenance
+        )
         self.rt_qualifiers = {
             "intersection",
             "anyhit",
@@ -11942,6 +11994,8 @@ class MetalToCrossGLConverter:
         subgroup_size=None,
         elements_per_lane=None,
         fragment_provenance=None,
+        fragment_mapping=None,
+        fragment_mapping_provenance=None,
     ):
         generic_args = self.metal_cooperative_matrix_type_parts(metal_type)
         if generic_args is None:
@@ -11964,6 +12018,8 @@ class MetalToCrossGLConverter:
                 else "unspecified"
             ),
             fragment_provenance or "unspecified",
+            fragment_mapping or "unspecified",
+            fragment_mapping_provenance or "unspecified",
         ]
         while fragment_contract and fragment_contract[-1] == "unspecified":
             fragment_contract.pop()
@@ -12139,6 +12195,24 @@ class MetalToCrossGLConverter:
                 "width"
             )
         required_subgroup_size = element_count // fragment_width
+        if (
+            self.cooperative_matrix_fragment_mapping is not None
+            and get_cooperative_matrix_fragment_mapping(
+                self.cooperative_matrix_fragment_mapping,
+                rows,
+                cols,
+                required_subgroup_size,
+                fragment_width,
+            )
+            is None
+        ):
+            reject(
+                "configured cooperative-matrix fragment mapping "
+                f"'{self.cooperative_matrix_fragment_mapping}' has no registered "
+                f"contract for {rows}x{cols}, "
+                f"subgroup_size={required_subgroup_size}, and "
+                f"elements_per_lane={fragment_width}"
+            )
         matrix_contract_key = self.normalized_metal_type(matrix_type)
         source_contract = (required_subgroup_size, fragment_width)
         previous_contract = self.cooperative_matrix_fragment_type_contracts.get(
@@ -12202,6 +12276,10 @@ class MetalToCrossGLConverter:
             subgroup_size=required_subgroup_size,
             elements_per_lane=fragment_width,
             fragment_provenance="metal_thread_elements_reference_view",
+            fragment_mapping=self.cooperative_matrix_fragment_mapping,
+            fragment_mapping_provenance=(
+                self.cooperative_matrix_fragment_mapping_provenance
+            ),
         )
         if mapped_matrix_type is None:
             reject("the matrix type cannot retain its inferred fragment contract")

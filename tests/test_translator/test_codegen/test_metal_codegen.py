@@ -32742,7 +32742,9 @@ def test_metal_cooperative_matrix_preserves_thread_elements_fragment_contract():
                 metal_thread_elements,
                 32,
                 2,
-                metal_thread_elements_reference_view
+                metal_thread_elements_reference_view,
+                tile_4x4_row_pair,
+                source_coordinate_helper
             > matrix
         ) {}
     }
@@ -32752,6 +32754,46 @@ def test_metal_cooperative_matrix_preserves_thread_elements_fragment_contract():
 
     assert "simdgroup_matrix<float, 8, 8> matrix" in generated
     assert "CooperativeMatrix<" not in generated
+
+
+@pytest.mark.parametrize("arity", range(3, 13))
+def test_metal_cooperative_matrix_accepts_all_canonical_contract_arities(arity):
+    arguments = [
+        "float",
+        "8",
+        "8",
+        "subgroup",
+        "unspecified",
+        "unspecified",
+        "metal_thread_elements",
+        "32",
+        "2",
+        "reference_view",
+        "tile_4x4_row_pair",
+        "source_coordinate_helper",
+    ]
+    matrix_type = f"CooperativeMatrix<{','.join(arguments[:arity])}>"
+
+    contract = MetalCodeGen().cooperative_matrix_contract(matrix_type)
+
+    assert contract is not None
+    assert len(contract) == 12
+    assert contract[:arity] == tuple(arguments[:arity])
+    assert MetalCodeGen().map_type(matrix_type) == ("simdgroup_matrix<float, 8, 8>")
+
+
+def test_metal_cooperative_matrix_mapping_does_not_relax_fragment_layout_gate():
+    matrix_type = (
+        "CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified,"
+        "dense,32,2,reference_view,tile_4x4_row_pair,source_coordinate_helper>"
+    )
+
+    with pytest.raises(UnsupportedMetalFeatureError) as exc_info:
+        MetalCodeGen().map_type(matrix_type)
+
+    error = exc_info.value
+    assert error.feature == "cooperative-matrix-fragment-contract"
+    assert error.reason == "unsupported-fragment-contract"
 
 
 def test_metal_cooperative_matrix_rejects_foreign_fragment_contract():

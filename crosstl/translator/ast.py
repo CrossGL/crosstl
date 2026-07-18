@@ -3,6 +3,11 @@
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
+from .cooperative_matrix import (
+    get_cooperative_matrix_fragment_mapping,
+    has_cooperative_matrix_fragment_mapping,
+)
+
 
 class ASTNode:
     """Base class for all AST nodes with common functionality."""
@@ -170,6 +175,8 @@ class CooperativeMatrixType(TypeNode):
         subgroup_size: Optional[Union[int, ASTNode]] = None,
         elements_per_lane: Optional[Union[int, ASTNode]] = None,
         fragment_provenance: Optional[str] = None,
+        fragment_mapping: Optional[str] = None,
+        fragment_mapping_provenance: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -191,6 +198,16 @@ class CooperativeMatrixType(TypeNode):
             if fragment_provenance == self.UNSPECIFIED_FRAGMENT_CONTRACT
             else fragment_provenance
         )
+        self.fragment_mapping = (
+            None
+            if fragment_mapping == self.UNSPECIFIED_FRAGMENT_CONTRACT
+            else fragment_mapping
+        )
+        self.fragment_mapping_provenance = (
+            None
+            if fragment_mapping_provenance == self.UNSPECIFIED_FRAGMENT_CONTRACT
+            else fragment_mapping_provenance
+        )
 
         self._validate_fragment_contract()
 
@@ -210,6 +227,8 @@ class CooperativeMatrixType(TypeNode):
                 else self.UNSPECIFIED_FRAGMENT_CONTRACT
             ),
             self.fragment_provenance or self.UNSPECIFIED_FRAGMENT_CONTRACT,
+            self.fragment_mapping or self.UNSPECIFIED_FRAGMENT_CONTRACT,
+            self.fragment_mapping_provenance or self.UNSPECIFIED_FRAGMENT_CONTRACT,
         ]
         while (
             fragment_contract
@@ -231,10 +250,17 @@ class CooperativeMatrixType(TypeNode):
                 )
 
         if (
-            self.fragment_layout is None
-            or self.fragment_layout.lower() not in self.COMPLETE_FRAGMENT_LAYOUTS
+            self.fragment_mapping_provenance is not None
+            and self.fragment_mapping is None
         ):
-            return
+            raise ValueError(
+                "CooperativeMatrix fragment_mapping_provenance requires a "
+                "fragment_mapping"
+            )
+        if self.fragment_mapping is not None and self.fragment_layout is None:
+            raise ValueError(
+                "CooperativeMatrix fragment_mapping requires a fragment_layout"
+            )
 
         dimensions = (
             self.rows,
@@ -245,17 +271,43 @@ class CooperativeMatrixType(TypeNode):
         if not all(type(value) is int for value in dimensions):
             return
 
-        matrix_elements = self.rows * self.cols
-        distributed_elements = self.subgroup_size * self.elements_per_lane
-        if matrix_elements != distributed_elements:
+        if (
+            self.fragment_layout is not None
+            and self.fragment_layout.lower() in self.COMPLETE_FRAGMENT_LAYOUTS
+        ):
+            matrix_elements = self.rows * self.cols
+            distributed_elements = self.subgroup_size * self.elements_per_lane
+            if matrix_elements != distributed_elements:
+                raise ValueError(
+                    f"CooperativeMatrix {self.fragment_layout} fragment layout is "
+                    "inconsistent: "
+                    f"rows={self.rows} * columns={self.cols} produces "
+                    f"{matrix_elements} matrix elements, but "
+                    f"subgroup_size={self.subgroup_size} * "
+                    f"elements_per_lane={self.elements_per_lane} produces "
+                    f"{distributed_elements} distributed elements"
+                )
+
+        if (
+            self.fragment_mapping is None
+            or not has_cooperative_matrix_fragment_mapping(self.fragment_mapping)
+        ):
+            return
+
+        mapping = get_cooperative_matrix_fragment_mapping(
+            self.fragment_mapping,
+            self.rows,
+            self.cols,
+            self.subgroup_size,
+            self.elements_per_lane,
+        )
+        if mapping is None:
             raise ValueError(
-                f"CooperativeMatrix {self.fragment_layout} fragment layout is "
-                "inconsistent: "
-                f"rows={self.rows} * columns={self.cols} produces "
-                f"{matrix_elements} matrix elements, but "
-                f"subgroup_size={self.subgroup_size} * "
-                f"elements_per_lane={self.elements_per_lane} produces "
-                f"{distributed_elements} distributed elements"
+                f"CooperativeMatrix fragment mapping '{self.fragment_mapping}' has "
+                "no registered contract for "
+                f"rows={self.rows}, columns={self.cols}, "
+                f"subgroup_size={self.subgroup_size}, "
+                f"elements_per_lane={self.elements_per_lane}"
             )
 
     def __repr__(self):
@@ -266,7 +318,10 @@ class CooperativeMatrixType(TypeNode):
             f"fragment_layout={self.fragment_layout!r}, "
             f"subgroup_size={self.subgroup_size}, "
             f"elements_per_lane={self.elements_per_lane}, "
-            f"fragment_provenance={self.fragment_provenance!r})"
+            f"fragment_provenance={self.fragment_provenance!r}, "
+            f"fragment_mapping={self.fragment_mapping!r}, "
+            f"fragment_mapping_provenance="
+            f"{self.fragment_mapping_provenance!r})"
         )
 
 

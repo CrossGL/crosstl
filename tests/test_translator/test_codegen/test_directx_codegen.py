@@ -1545,6 +1545,8 @@ def test_hlsl_cooperative_matrix_type_reports_structured_diagnostic():
     assert diagnostic.subgroup_size is None
     assert diagnostic.elements_per_lane is None
     assert diagnostic.fragment_provenance is None
+    assert diagnostic.fragment_mapping is None
+    assert diagnostic.fragment_mapping_provenance is None
     assert diagnostic.details == {}
     assert diagnostic.reason == "unsupported-type"
     assert "cooperative matrix type lowering is unavailable" in str(diagnostic)
@@ -1563,6 +1565,8 @@ def test_hlsl_cooperative_matrix_type_reports_known_fragment_requirements():
         subgroup_size=32,
         elements_per_lane=2,
         fragment_provenance="mlx_fragment_contract",
+        fragment_mapping="tile_4x4_row_pair",
+        fragment_mapping_provenance="source_coordinate_helper",
     )
 
     with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
@@ -1574,17 +1578,23 @@ def test_hlsl_cooperative_matrix_type_reports_known_fragment_requirements():
     assert diagnostic.subgroup_size == 32
     assert diagnostic.elements_per_lane == 2
     assert diagnostic.fragment_provenance == "mlx_fragment_contract"
+    assert diagnostic.fragment_mapping == "tile_4x4_row_pair"
+    assert diagnostic.fragment_mapping_provenance == "source_coordinate_helper"
     assert diagnostic.details == {
         "fragmentLayout": "metal_simdgroup_8x8_f32",
         "subgroupSize": 32,
         "elementsPerLane": 2,
         "fragmentProvenance": "mlx_fragment_contract",
+        "fragmentMapping": "tile_4x4_row_pair",
+        "fragmentMappingProvenance": "source_coordinate_helper",
     }
     assert diagnostic.reason == "unsupported-type"
     assert "fragment_layout=metal_simdgroup_8x8_f32" in str(diagnostic)
     assert "subgroup_size=32" in str(diagnostic)
     assert "elements_per_lane=2" in str(diagnostic)
     assert "fragment_provenance=mlx_fragment_contract" in str(diagnostic)
+    assert "fragment_mapping=tile_4x4_row_pair" in str(diagnostic)
+    assert "fragment_mapping_provenance=source_coordinate_helper" in str(diagnostic)
 
 
 def test_hlsl_cooperative_matrix_diagnostic_normalizes_symbolic_fragment_values():
@@ -1596,6 +1606,8 @@ def test_hlsl_cooperative_matrix_diagnostic_normalizes_symbolic_fragment_values(
         subgroup_size=NamedType("SUBGROUP_SIZE"),
         elements_per_lane=NamedType("ELEMENTS_PER_LANE"),
         fragment_provenance="source_manifest",
+        fragment_mapping="source_lane_map",
+        fragment_mapping_provenance="source_mapping_manifest",
     )
 
     with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
@@ -1606,14 +1618,77 @@ def test_hlsl_cooperative_matrix_diagnostic_normalizes_symbolic_fragment_values(
         "subgroupSize": "SUBGROUP_SIZE",
         "elementsPerLane": "ELEMENTS_PER_LANE",
         "fragmentProvenance": "source_manifest",
+        "fragmentMapping": "source_lane_map",
+        "fragmentMappingProvenance": "source_mapping_manifest",
     }
 
 
-def test_hlsl_cooperative_matrix_string_retains_fragment_contract():
-    source_type = (
-        "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, "
-        "metal_thread_elements, 32, 2, metal_thread_elements_reference_view>"
-    )
+@pytest.mark.parametrize(
+    ("generic_args", "expected_details"),
+    [
+        ("float, 8, 8", {}),
+        ("float, 8, 8, subgroup", {}),
+        ("float, 8, 8, subgroup, accumulator", {}),
+        ("float, 8, 8, subgroup, accumulator, row_major", {}),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, " "metal_thread_elements",
+            {"fragmentLayout": "metal_thread_elements"},
+        ),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, "
+            "metal_thread_elements, 32",
+            {"fragmentLayout": "metal_thread_elements", "subgroupSize": 32},
+        ),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, "
+            "metal_thread_elements, 32, 2",
+            {
+                "fragmentLayout": "metal_thread_elements",
+                "subgroupSize": 32,
+                "elementsPerLane": 2,
+            },
+        ),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, "
+            "metal_thread_elements, 32, 2, metal_reference_view",
+            {
+                "fragmentLayout": "metal_thread_elements",
+                "subgroupSize": 32,
+                "elementsPerLane": 2,
+                "fragmentProvenance": "metal_reference_view",
+            },
+        ),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, "
+            "metal_thread_elements, 32, 2, metal_reference_view, "
+            "tile_4x4_row_pair",
+            {
+                "fragmentLayout": "metal_thread_elements",
+                "subgroupSize": 32,
+                "elementsPerLane": 2,
+                "fragmentProvenance": "metal_reference_view",
+                "fragmentMapping": "tile_4x4_row_pair",
+            },
+        ),
+        (
+            "float, 8, 8, subgroup, accumulator, row_major, "
+            "metal_thread_elements, 32, 2, metal_reference_view, "
+            "tile_4x4_row_pair, source_coordinate_helper",
+            {
+                "fragmentLayout": "metal_thread_elements",
+                "subgroupSize": 32,
+                "elementsPerLane": 2,
+                "fragmentProvenance": "metal_reference_view",
+                "fragmentMapping": "tile_4x4_row_pair",
+                "fragmentMappingProvenance": "source_coordinate_helper",
+            },
+        ),
+    ],
+)
+def test_hlsl_cooperative_matrix_string_contract_arities_fail_closed(
+    generic_args, expected_details
+):
+    source_type = f"CooperativeMatrix<{generic_args}>"
 
     with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
         HLSLCodeGen().map_type(source_type)
@@ -1623,12 +1698,13 @@ def test_hlsl_cooperative_matrix_string_retains_fragment_contract():
     assert diagnostic.matrix_type.element_type.name == "float"
     assert diagnostic.matrix_type.rows == 8
     assert diagnostic.matrix_type.cols == 8
-    assert diagnostic.details == {
-        "fragmentLayout": "metal_thread_elements",
-        "subgroupSize": 32,
-        "elementsPerLane": 2,
-        "fragmentProvenance": "metal_thread_elements_reference_view",
-    }
+    assert diagnostic.operation == "type"
+    assert diagnostic.reason == "unsupported-type"
+    assert diagnostic.details == expected_details
+    assert diagnostic.fragment_mapping == expected_details.get("fragmentMapping")
+    assert diagnostic.fragment_mapping_provenance == expected_details.get(
+        "fragmentMappingProvenance"
+    )
 
 
 def test_hlsl_cooperative_matrix_shader_fails_before_generic_type_emission():
@@ -1663,6 +1739,8 @@ def test_hlsl_cooperative_matrix_operation_reports_structured_diagnostic():
         subgroup_size=32,
         elements_per_lane=2,
         fragment_provenance="mlx_fragment_contract",
+        fragment_mapping="tile_4x4_row_pair",
+        fragment_mapping_provenance="source_coordinate_helper",
     )
     matrix_op = CooperativeMatrixOpNode(
         "multiply_accumulate",
@@ -1687,11 +1765,15 @@ def test_hlsl_cooperative_matrix_operation_reports_structured_diagnostic():
     assert diagnostic.subgroup_size == 32
     assert diagnostic.elements_per_lane == 2
     assert diagnostic.fragment_provenance == "mlx_fragment_contract"
+    assert diagnostic.fragment_mapping == "tile_4x4_row_pair"
+    assert diagnostic.fragment_mapping_provenance == "source_coordinate_helper"
     assert diagnostic.details == {
         "fragmentLayout": "metal_simdgroup_8x8_f32",
         "subgroupSize": 32,
         "elementsPerLane": 2,
         "fragmentProvenance": "mlx_fragment_contract",
+        "fragmentMapping": "tile_4x4_row_pair",
+        "fragmentMappingProvenance": "source_coordinate_helper",
     }
     assert diagnostic.reason == "unsupported-operation"
     assert "operation 'multiply_accumulate'" in str(diagnostic)
@@ -1699,6 +1781,8 @@ def test_hlsl_cooperative_matrix_operation_reports_structured_diagnostic():
     assert "subgroup_size=32" in str(diagnostic)
     assert "elements_per_lane=2" in str(diagnostic)
     assert "fragment_provenance=mlx_fragment_contract" in str(diagnostic)
+    assert "fragment_mapping=tile_4x4_row_pair" in str(diagnostic)
+    assert "fragment_mapping_provenance=source_coordinate_helper" in str(diagnostic)
 
 
 def test_hlsl_codegen_drops_metal_system_includes_but_preserves_hlsl_includes():

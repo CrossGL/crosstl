@@ -9373,12 +9373,30 @@ def test_translate_project_reports_directx_trailing_zero_builtin_contract(tmp_pa
         ),
     ],
 )
+@pytest.mark.parametrize(
+    ("mapping_contract", "expected_mapping"),
+    [
+        ("", {}),
+        (
+            """,
+                            tile_4x4_row_pair,
+                            source_fixture_mapping""",
+            {
+                "fragmentMapping": "tile_4x4_row_pair",
+                "fragmentMappingProvenance": "source_fixture_mapping",
+            },
+        ),
+    ],
+    ids=["mapping-absent", "mapping-present"],
+)
 def test_translate_project_reports_cooperative_matrix_fragment_contract(
     tmp_path,
     target,
     diagnostic_code,
     missing_capability,
     extension,
+    mapping_contract,
+    expected_mapping,
 ):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -9397,12 +9415,12 @@ def test_translate_project_reports_cooperative_matrix_fragment_contract(
                             dense,
                             32,
                             2,
-                            source_fixture
+                            source_fixtureMAPPING_CONTRACT
                         > value;
                     }
                 }
             }
-            """).strip(),
+            """).replace("MAPPING_CONTRACT", mapping_contract).strip(),
         encoding="utf-8",
     )
 
@@ -9427,6 +9445,7 @@ def test_translate_project_reports_cooperative_matrix_fragment_contract(
             "elementType": "float",
             "elementsPerLane": 2,
             "fragmentLayout": "dense",
+            **expected_mapping,
             "fragmentProvenance": "source_fixture",
             "memoryLayout": "row_major",
             "operation": "type",
@@ -9442,6 +9461,69 @@ def test_translate_project_reports_cooperative_matrix_fragment_contract(
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
     assert not (repo / artifact["path"]).exists()
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_applies_metal_fragment_mapping_source_options(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "fragment.metal").write_text(
+        textwrap.dedent("""
+            using fragment_type = metal::vec<float, 2>;
+            using matrix_type = metal::simdgroup_matrix<float, 8, 8>;
+
+            void read_fragment(
+                const thread matrix_type& matrix,
+                thread fragment_type& fragment) {
+              fragment = reinterpret_cast<const thread fragment_type&>(
+                  matrix.thread_elements());
+            }
+
+            kernel void entry() {}
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            source_roots = ["."]
+            targets = ["{target}"]
+            output_dir = "translated"
+
+            [project.source_options.metal.source_patterns."fragment.metal"]
+            cooperative_matrix_fragment_mapping = "tile_4x4_row_pair"
+            cooperative_matrix_fragment_mapping_provenance = "source_coordinate_helper"
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["target"] == target
+    assert (
+        diagnostic["details"]["cooperativeMatrix"]["fragmentMapping"]
+        == "tile_4x4_row_pair"
+    )
+    assert (
+        diagnostic["details"]["cooperativeMatrix"]["fragmentMappingProvenance"]
+        == "source_coordinate_helper"
+    )
+
+    report_path = repo / f"{target}-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is False
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+    assert validation["diagnosticsByCode"][diagnostic["code"]] == 1
+    assert validation["diagnostics"][0]["details"] == diagnostic["details"]
 
 
 def test_translate_project_reports_invalid_metal_matrix_fragment_cast(tmp_path):

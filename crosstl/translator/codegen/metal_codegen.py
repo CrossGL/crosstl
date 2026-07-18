@@ -23490,16 +23490,20 @@ class MetalCodeGen:
                 matrix_type.subgroup_size,
                 matrix_type.elements_per_lane,
                 matrix_type.fragment_provenance,
+                matrix_type.fragment_mapping,
+                matrix_type.fragment_mapping_provenance,
             )
 
         type_name = str(matrix_type).strip()
         base_name, generic_args = generic_type_parts(type_name)
         if base_name.rsplit("::", 1)[-1] != "CooperativeMatrix" or not (
-            3 <= len(generic_args) <= 10
+            3 <= len(generic_args) <= 12
         ):
             return None
         defaults = (
             "subgroup",
+            "unspecified",
+            "unspecified",
             "unspecified",
             "unspecified",
             "unspecified",
@@ -23523,6 +23527,8 @@ class MetalCodeGen:
             subgroup_size,
             elements_per_lane,
             fragment_provenance,
+            _fragment_mapping,
+            _fragment_mapping_provenance,
         ) = contract
         metadata = (scope, use, layout)
         if metadata != ("subgroup", "unspecified", "unspecified"):
