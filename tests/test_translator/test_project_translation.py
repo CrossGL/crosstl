@@ -50623,8 +50623,14 @@ def test_translate_project_lowers_read_only_local_struct_byte_view(
 
             inline uint sum8(const thread uint8_t* bytes) {
                 uint total = 0;
-                for (int index = 0; index < 8; ++index) {
-                    total += bytes[index];
+                if constexpr (4 == 4) {
+                    for (int index = 0; index < 8; ++index) {
+                        total += bytes[index];
+                    }
+                } else {
+                    for (int index = 0; index < 16; ++index) {
+                        total += bytes[index];
+                    }
                 }
                 return total;
             }
