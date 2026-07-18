@@ -43285,6 +43285,54 @@ def test_hlsl_private_pointer_partition_keeps_unknown_ternary_branches():
     assert excinfo.value.reason == "unprovable-view-offset"
 
 
+@pytest.mark.parametrize(
+    ("condition", "then_index", "else_index"),
+    [
+        pytest.param("1 < 2", 0, 7, id="true-condition"),
+        pytest.param("2 < 1", 7, 0, id="false-condition"),
+    ],
+)
+def test_hlsl_private_pointer_if_selects_concrete_branch(
+    condition, then_index, else_index
+):
+    shader = f"""
+    shader ConcretePrivatePointerBranch {{
+        float read_selected(thread float* values) {{
+            if ({condition}) {{
+                return values[{then_index}];
+            }} else {{
+                return values[{else_index}];
+            }}
+        }}
+    }}
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float read_selected(inout float values[1], int values_base)" in generated
+
+
+def test_hlsl_private_pointer_if_keeps_unknown_branches():
+    shader = """
+    shader UnknownPrivatePointerBranch {
+        float read_selected(thread float* values, bool read_first) {
+            if (read_first) {
+                return values[0];
+            } else {
+                return values[7];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "float read_selected(inout float values[8], int values_base, bool read_first)"
+        in generated
+    )
+
+
 def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes(tmp_path):
     shader = """
     shader WorkgroupPointerViews {

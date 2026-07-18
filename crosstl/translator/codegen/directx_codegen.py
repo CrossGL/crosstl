@@ -30236,7 +30236,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     visit(argument, active_intervals)
                 return
             if isinstance(value, IfNode):
-                visit(getattr(value, "condition", None), active_intervals)
+                condition_node = getattr(value, "condition", None)
+                condition = self.hlsl_private_pointer_condition_value(
+                    condition_node, active_intervals, constants
+                )
+                visit(condition_node, active_intervals)
+                if condition is not None:
+                    selected_branch = (
+                        getattr(value, "then_branch", None)
+                        if condition
+                        else getattr(value, "else_branch", None)
+                    )
+                    visit(selected_branch, active_intervals)
+                    return
                 then_intervals = dict(active_intervals)
                 else_intervals = dict(active_intervals)
                 visit(getattr(value, "then_branch", None), then_intervals)
