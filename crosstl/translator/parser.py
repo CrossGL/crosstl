@@ -4154,12 +4154,15 @@ class Parser:
                 restore()
                 return None
             # Type names such as ``int64``/``uint64`` and user structs are lexed
-            # as identifiers, which are ambiguous with variables. Only treat a
-            # single identifier immediately closed by ``)`` as a cast type; this
-            # keeps ``(a < b)`` and ``(a).x`` out of the type parser (which would
-            # otherwise try to read a generic argument list and never return).
+            # as identifiers, which are ambiguous with variables. Permit a
+            # complete generic type-id to enter the speculative type parser;
+            # malformed generic syntax and comparisons restore the token stream.
             identifier_type = self.current_token[0] == "IDENTIFIER"
-            if identifier_type and self.peek()[0] not in {"RPAREN", "MULTIPLY"}:
+            if identifier_type and self.peek()[0] not in {
+                "RPAREN",
+                "MULTIPLY",
+                "LESS_THAN",
+            }:
                 restore()
                 return None
             target_type = self.parse_type()

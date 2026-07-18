@@ -50272,6 +50272,113 @@ def test_translate_project_lowers_materialized_pointer_reinterpretation(tmp_path
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
 
 
+def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_path):
+    from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            typedef bfloat bfloat16_t;
+
+            [[kernel]] void read_vector(
+                const device bfloat16_t* base [[buffer(0)]],
+                device float* out [[buffer(1)]],
+                constant uint& offset [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]) {
+                const device metal::vec<bfloat16_t, 4>* values =
+                    (const device metal::vec<bfloat16_t, 4>*)(base + offset);
+                out[gid] = float((*values)[gid & 3u]);
+            }
+            """).strip()
+    (repo / "generic_vector_pointer.metal").write_text(
+        source,
+        encoding="utf-8",
+    )
+
+    intermediate = MetalToCrossGLConverter().generate(
+        MetalParser(MetalLexer(source).tokenize()).parse()
+    )
+    assert "(vec<bfloat16_t, 4>*)(base + offset)" in intermediate
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    diagnostic_codes = {diagnostic["code"] for diagnostic in payload["diagnostics"]}
+    assert "project.translate.crossgl-function-body-parse-failed" not in (
+        diagnostic_codes
+    )
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 2
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.pointer-reinterpret-unsupported": 2
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "pointer.reinterpretation": 2
+    }
+
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl"}
+    expected_errors = {
+        "directx": (
+            "DirectX storage pointer reinterpretation requires a 32-bit scalar "
+            "backing element and an 8-, 16-, or 32-bit scalar view"
+        ),
+        "opengl": (
+            "OpenGL storage pointer reinterpretation requires a 32-bit scalar "
+            "backing element and an 8-, 16-, or 32-bit scalar view"
+        ),
+    }
+    for target, artifact in artifacts.items():
+        assert artifact["status"] == "failed"
+        assert artifact["error"] == expected_errors[target]
+        assert not (repo / artifact["path"]).exists()
+
+    diagnostics = {
+        diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
+    }
+    assert set(diagnostics) == {"directx", "opengl"}
+    expected_source_types = {"directx": "bfloat16", "opengl": "float"}
+    for target, diagnostic in diagnostics.items():
+        assert diagnostic["code"] == (
+            "project.translate.pointer-reinterpret-unsupported"
+        )
+        assert diagnostic["severity"] == "error"
+        assert diagnostic["sourceBackend"] == "metal"
+        assert diagnostic["missingCapabilities"] == ["pointer.reinterpretation"]
+        assert diagnostic["message"] == expected_errors[target]
+        assert diagnostic["location"] == {
+            "file": "generic_vector_pointer.metal",
+            "line": 1,
+            "column": 1,
+            "offset": 0,
+            "length": 0,
+            "endLine": 1,
+            "endColumn": 1,
+            "endOffset": 0,
+        }
+        assert diagnostic["details"] == {
+            "pointerReinterpretation": {
+                "access": "read",
+                "addressSpace": "storage",
+                "reason": "unsupported-scalar-layout",
+                "sourceType": expected_source_types[target],
+                "targetType": "vec<bfloat16_t, 4>",
+            },
+            "sourcePath": "generic_vector_pointer.metal",
+            "targetArtifact": (
+                f"out/{target}/generic_vector_pointer."
+                f"{'hlsl' if target == 'directx' else 'glsl'}"
+            ),
+        }
+
+
 def test_translate_project_reports_reinterpreted_pointer_writes(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
