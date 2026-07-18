@@ -4689,14 +4689,16 @@ class Parser:
         constructor call ``int64(tid)`` (a ``FunctionCallNode`` with the type
         name as callee) so the existing scalar/vector cast handling applies.
 
-        Only a parenthesized *type keyword* is treated as a cast, so ordinary
-        parenthesized expressions like ``(a) * b`` are never misparsed.
+        Pointer targets and type keywords are unambiguous casts. Identifier-led
+        scalar targets remain speculative so ordinary parenthesized expressions
+        like ``(a) * b`` are never misparsed.
         """
         if self.current_token[0] != "LPAREN":
             return None
-        # Cheap guard: only a parenthesized type keyword can start a cast, so
-        # ordinary ``(expr)`` avoids the token snapshot below entirely.
-        if not self.next_token_starts_type():
+        if not (
+            self.next_token_starts_type()
+            or self.token_is_c_style_cast_address_space(self.peek())
+        ):
             return None
 
         saved_pos = self.pos
@@ -4710,6 +4712,11 @@ class Parser:
 
         try:
             self.eat("LPAREN")
+            address_spaces = []
+            while self.token_is_c_style_cast_address_space(self.current_token):
+                address_spaces.append(str(self.current_token[1]).lower())
+                self.eat(self.current_token[0])
+
             if not self.is_type_token():
                 restore()
                 return None
@@ -4730,23 +4737,56 @@ class Parser:
                 restore()
                 return None
             self.eat("RPAREN")
-            # A keyword type is unambiguously a cast, so it accepts prefix
-            # operators in the operand (``(int)-x``). An identifier type only
-            # counts as a cast when followed by an unambiguous primary, so
-            # ``(a) + b`` stays an addition rather than becoming ``a(+b)``.
-            allowed_operand_starts = (
-                self.UNAMBIGUOUS_CAST_OPERAND_START_TOKENS
-                if identifier_type
-                else self.CAST_OPERAND_START_TOKENS
-            )
-            if (
-                self.current_token[0] not in allowed_operand_starts
-                and not self.is_type_token()
-            ):
+        except Exception:
+            restore()
+            return None
+
+        unambiguous_target = (
+            not identifier_type
+            or isinstance(target_type, PointerType)
+            or bool(address_spaces)
+        )
+
+        if address_spaces:
+            if not isinstance(target_type, PointerType):
+                raise SyntaxError(
+                    "Address-space-qualified C-style cast target must be a pointer type"
+                )
+            unique_address_spaces = set(address_spaces)
+            if len(unique_address_spaces) != 1:
+                raise SyntaxError(
+                    "Conflicting address spaces in C-style cast target: "
+                    + ", ".join(address_spaces)
+                )
+            target_type.address_space = address_spaces[0]
+
+        # Pointer targets and keyword types accept prefix operators in the
+        # operand. Identifier scalar casts still require a primary start so
+        # ``(a) * b`` remains multiplication.
+        allowed_operand_starts = (
+            self.CAST_OPERAND_START_TOKENS
+            if unambiguous_target
+            else self.UNAMBIGUOUS_CAST_OPERAND_START_TOKENS
+        )
+        if (
+            self.current_token[0] not in allowed_operand_starts
+            and not self.is_type_token()
+        ):
+            if not unambiguous_target:
                 restore()
                 return None
+
+            token_type, token_value = self.current_token
+            raise SyntaxError(
+                "Expected expression after C-style cast, "
+                f"got {token_type} {token_value!r}"
+            )
+
+        try:
             operand = self.parse_unary_expression(stop_at_generic_close)
         except Exception:
+            if unambiguous_target:
+                raise
             restore()
             return None
 
@@ -4770,6 +4810,11 @@ class Parser:
             return self.is_type_token()
         finally:
             self.current_token = saved_token
+
+    @staticmethod
+    def token_is_c_style_cast_address_space(token):
+        """Return whether ``token`` is a resource address-space qualifier."""
+        return str(token[1]).lower() in RESOURCE_ADDRESS_SPACE_NAMES
 
     def parse_postfix_expression(self):
         """Parse member, call, index, and postfix unary expressions."""
@@ -4821,11 +4866,7 @@ class Parser:
             ):
                 generic_args = self.parse_generic_arguments()
                 self.eat("LPAREN")
-                arguments = []
-                while self.current_token[0] != "RPAREN":
-                    arguments.append(self.parse_expression())
-                    if self.current_token[0] == "COMMA":
-                        self.eat("COMMA")
+                arguments = self.parse_call_arguments()
                 self.eat("RPAREN")
                 left = FunctionCallNode(left, arguments, generic_args=generic_args)
             elif (
@@ -4844,11 +4885,7 @@ class Parser:
                     arguments = self.parse_lambda_call_arguments()
                 else:
                     self.eat("LPAREN")
-                    arguments = []
-                    while self.current_token[0] != "RPAREN":
-                        arguments.append(self.parse_expression())
-                        if self.current_token[0] == "COMMA":
-                            self.eat("COMMA")
+                    arguments = self.parse_call_arguments()
                     self.eat("RPAREN")
                 if isinstance(left, IdentifierNode):
                     if left.name in WAVE_INTRINSICS:
@@ -4881,6 +4918,26 @@ class Parser:
                 break
 
         return left
+
+    def parse_call_arguments(self):
+        """Parse comma-separated call arguments without accepting stalled input."""
+        arguments = []
+        while self.current_token[0] != "RPAREN":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated function call argument list")
+
+            arguments.append(self.parse_expression())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            if self.current_token[0] != "RPAREN":
+                token_type, token_value = self.current_token
+                raise SyntaxError(
+                    "Expected ',' or ')' after function argument, "
+                    f"got {token_type} {token_value!r}"
+                )
+
+        return arguments
 
     def parse_square_expression_generic_arguments(self):
         """Parse square-bracket specialization arguments in expression position."""

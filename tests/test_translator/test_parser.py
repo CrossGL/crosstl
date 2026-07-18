@@ -93,6 +93,73 @@ def test_explicit_compute_stage_entry_preserves_pointer_reinterpretation():
     assert target_type.pointee_type.name == "uint8"
 
 
+@pytest.mark.parametrize(
+    ("cast_type", "address_space"),
+    [
+        ("uint8_t*", None),
+        ("thread uint8_t*", "thread"),
+    ],
+)
+def test_call_argument_pointer_reinterpretation_preserves_compute_body(
+    cast_type, address_space
+):
+    code = f"""
+    shader main {{
+        @compute
+        @stage_entry
+        void unpack_block() {{
+            uint block = 0;
+            uint observed = sum8(({cast_type})&block);
+            uint retained = observed;
+        }}
+    }}
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    function = next(func for func in ast.functions if func.name == "unpack_block")
+    body = function.body.statements
+
+    assert len(body) == 3
+    call = body[1].initial_value
+    assert isinstance(call, FunctionCallNode)
+    assert call.function.name == "sum8"
+    assert len(call.arguments) == 1
+
+    reinterpret = call.arguments[0]
+    assert isinstance(reinterpret, PointerReinterpretNode)
+    assert isinstance(reinterpret.expression, UnaryOpNode)
+    assert reinterpret.expression.op == "&"
+    assert reinterpret.expression.operand.name == "block"
+    assert isinstance(reinterpret.target_type, PointerType)
+    assert reinterpret.target_type.pointee_type.name == "uint8_t"
+    assert reinterpret.target_type.address_space == address_space
+    assert body[2].initial_value.name == "observed"
+
+
+@pytest.mark.parametrize("cast_type", ["uint8_t*", "thread uint8_t*"])
+def test_call_argument_pointer_reinterpretation_requires_operand(cast_type):
+    code = f"""
+    shader main {{
+        @compute
+        @stage_entry
+        void unpack_block() {{
+            uint block = 0;
+            uint observed = sum8(({cast_type}));
+            uint retained = observed;
+        }}
+    }}
+    """
+
+    with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
+        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+
+    error = exc_info.value
+    assert error.function_name == "unpack_block"
+    assert error.token_type == "RPAREN"
+    assert error.token_value == ")"
+    assert error.reason == ("Expected expression after C-style cast, got RPAREN ')'")
+
+
 def test_generic_c_style_pointer_cast_preserves_named_pointee_type():
     code = """
     shader GenericPointerCast {
