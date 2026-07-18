@@ -93,6 +93,92 @@ def test_explicit_compute_stage_entry_preserves_pointer_reinterpretation():
     assert target_type.pointee_type.name == "uint8"
 
 
+def test_generic_c_style_pointer_cast_preserves_named_pointee_type():
+    code = """
+    shader GenericPointerCast {
+        void kernel() {
+            auto view = (vec<bfloat16_t, 4>*)(source + offset);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    value = ast.functions[0].body.statements[0].initial_value
+
+    assert isinstance(value, PointerReinterpretNode)
+    assert isinstance(value.expression, BinaryOpNode)
+    assert value.expression.operator == "+"
+    assert value.expression.left.name == "source"
+    assert value.expression.right.name == "offset"
+
+    target_type = value.target_type
+    assert isinstance(target_type, PointerType)
+    assert isinstance(target_type.pointee_type, NamedType)
+    assert target_type.pointee_type.name == "vec"
+    element_type, width = target_type.pointee_type.generic_args
+    assert isinstance(element_type, NamedType)
+    assert element_type.name == "bfloat16_t"
+    assert isinstance(width, LiteralNode)
+    assert width.value == 4
+
+
+def test_nested_generic_c_style_pointer_cast_splits_combined_close_token():
+    code = """
+    shader NestedGenericPointerCast {
+        void kernel() {
+            auto view = (buffer_view<vec<bfloat16_t, 4>>*)(source + offset);
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    assert ("BITWISE_SHIFT_RIGHT", ">>") in tokens
+
+    ast = Parser(tokens, strict_function_bodies=True).parse()
+    value = ast.functions[0].body.statements[0].initial_value
+
+    assert isinstance(value, PointerReinterpretNode)
+    assert isinstance(value.target_type, PointerType)
+    outer_type = value.target_type.pointee_type
+    assert isinstance(outer_type, NamedType)
+    assert outer_type.name == "buffer_view"
+    assert len(outer_type.generic_args) == 1
+
+    inner_type = outer_type.generic_args[0]
+    assert isinstance(inner_type, NamedType)
+    assert inner_type.name == "vec"
+    element_type, width = inner_type.generic_args
+    assert isinstance(element_type, NamedType)
+    assert element_type.name == "bfloat16_t"
+    assert isinstance(width, LiteralNode)
+    assert width.value == 4
+
+
+def test_parenthesized_comparison_and_multiplication_are_not_c_style_casts():
+    code = """
+    shader ParenthesizedExpressions {
+        void kernel() {
+            bool ordered = (a < b);
+            int product = (a) * b;
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ordered = ast.functions[0].body.statements[0].initial_value
+    product = ast.functions[0].body.statements[1].initial_value
+
+    assert isinstance(ordered, BinaryOpNode)
+    assert ordered.operator == "<"
+    assert ordered.left.name == "a"
+    assert ordered.right.name == "b"
+
+    assert isinstance(product, BinaryOpNode)
+    assert product.operator == "*"
+    assert product.left.name == "a"
+    assert product.right.name == "b"
+
+
 def test_non_entry_helper_malformed_body_raises_parse_error():
     code = """
     shader main {

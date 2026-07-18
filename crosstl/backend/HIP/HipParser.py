@@ -49,6 +49,7 @@ class HipProgramNode(ASTNode):
 
     def __init__(self, statements=None):
         self.statements = statements or []
+        self.namespace_aliases = {}
 
     def __repr__(self):
         return f"HipProgramNode(statements={self.statements})"
@@ -449,7 +450,9 @@ class HipParser:
         self.pos = 0
         self.current_token = self.tokens[0] if tokens else None
         self.block_depth = 0
+        self.namespace_depth = 0
         self.type_aliases = set()
+        self.namespace_aliases = {}
         self.user_function_names = self.collect_user_function_names()
 
     def collect_user_function_names(self):
@@ -1066,7 +1069,9 @@ class HipParser:
                 else:
                     statements.append(stmt)
 
-        return HipProgramNode(statements)
+        program = HipProgramNode(statements)
+        program.namespace_aliases = dict(self.namespace_aliases)
+        return program
 
     def parse_statement(self):
         if not self.current_token:
@@ -1586,15 +1591,28 @@ class HipParser:
         self.consume("NAMESPACE")
         self.skip_newlines()
 
+        name_parts = []
         while self.match("IDENTIFIER", "SCOPE"):
+            name_parts.append(self.current_token.value)
             self.advance()
             self.skip_newlines()
 
         if self.match("ASSIGN"):
-            self.skip_until_semicolon()
+            self.consume("ASSIGN")
+            target_parts = []
+            while self.current_token and not self.match("SEMICOLON"):
+                target_parts.append(self.current_token.value)
+                self.advance()
+            alias = "".join(name_parts).strip()
+            target = "".join(target_parts).strip()
+            if alias and target and self.namespace_depth == 0 and self.block_depth == 0:
+                self.namespace_aliases[alias] = target
+            if self.match("SEMICOLON"):
+                self.advance()
             return None
 
         self.consume("LBRACE")
+        self.namespace_depth += 1
         statements = []
         while self.current_token and not self.match("RBRACE"):
             if self.match("NEWLINE", "SEMICOLON"):
@@ -1609,6 +1627,7 @@ class HipParser:
                     statements.append(stmt)
 
         self.consume("RBRACE")
+        self.namespace_depth -= 1
         if self.match("SEMICOLON"):
             self.advance()
         return statements

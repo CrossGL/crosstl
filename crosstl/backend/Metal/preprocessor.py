@@ -282,7 +282,7 @@ class _MetalTypeAliasBinding:
     declaration_position: int
     scope_start: int
     scope_end: int
-    target: str
+    target: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -456,15 +456,16 @@ class _MetalDataMember:
     Unlike the unordered ``data_member_names`` set and the normalized
     ``data_member_types`` map, this preserves the full declared type text
     (address space + cv + pointer, e.g. ``const device float2*``), the trailing
-    array suffix (``[N]`` for array members), and any default initializer. It is
-    what the pointer-member scalar-replacement path needs to explode a struct
-    into individual per-member parameters and per-member locals.
+    array suffix (``[N]`` for array members), any default initializer, and the
+    source declaration span. It is what the pointer-member scalar-replacement
+    and declaration-order constant-substitution paths need.
     """
 
     name: str
     type_text: str
     default: Optional[str] = None
     array_suffix: str = ""
+    span: Optional[Tuple[int, int]] = None
 
     @property
     def is_pointer(self) -> bool:
@@ -994,7 +995,22 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _materialize_explicit_template_struct_instantiations_impl(
         self, code: str, *, work_budget: Optional[object] = None
     ) -> str:
-        materialized_names: Dict[Tuple[str, Tuple[str, ...]], str] = {}
+        concrete_name_counts: Dict[str, int] = {}
+        for struct in self._find_concrete_struct_definitions(code):
+            concrete_name_counts[struct.name] = (
+                concrete_name_counts.get(struct.name, 0) + 1
+            )
+        # Project materialization can expose new references and run this pass
+        # again. Reuse only a recorded specialization with one surviving concrete
+        # declaration; missing or duplicate declarations must be handled again.
+        materialized_names: Dict[Tuple[str, Tuple[str, ...]], str] = {
+            (source_name, tuple(source_arguments)): specialized_name
+            for specialized_name, (
+                source_name,
+                source_arguments,
+            ) in self._materialized_struct_specializations.items()
+            if concrete_name_counts.get(specialized_name) == 1
+        }
         working = code
         # Each iteration resolves one "layer" of instantiations; the bound mirrors
         # the specialization budget so deeply nested or pathological inputs cannot
@@ -3052,6 +3068,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if key in resolving:
                     return None
                 if key not in cache:
+                    if binding.target is None:
+                        return None
                     cache[key] = canonicalize(
                         binding.target,
                         binding.declaration_position,
@@ -3333,6 +3351,27 @@ class MetalPreprocessor(HLSLPreprocessor):
             if angle_end is not None:
                 add_replacement(angle_start + 1, angle_end)
 
+        # Function-style and braced casts name the type directly. Restrict this
+        # to unqualified owner aliases so another struct's member alias and a
+        # block-local alias keep their own scope.
+        alias_pattern = "|".join(
+            re.escape(alias) for alias in sorted(alias_names, key=len, reverse=True)
+        )
+        constructor_pattern = re.compile(
+            rf"(?<![A-Za-z0-9_:])(?P<type>{alias_pattern})\s*(?=[({{])"
+        )
+        for match in constructor_pattern.finditer(body):
+            if self._containing_span(match.start(), ignored_spans) is not None:
+                continue
+            prefix = body[: match.start()].rstrip()
+            if prefix.endswith(("::", ".", "->")):
+                continue
+            if match.group("type") in self._shadowed_type_aliases_at(
+                local_aliases, match.start()
+            ):
+                continue
+            add_replacement(match.start("type"), match.end("type"))
+
         # Parenthesized expressions overlap C-style cast syntax. Only rewrite a
         # span that resolves to a pointer/reference type and has a concrete cast
         # operand; ambiguous scalar groups remain unchanged.
@@ -3356,9 +3395,6 @@ class MetalPreprocessor(HLSLPreprocessor):
         }
         for alias_target in struct.type_aliases.values():
             allowed_c_style_identifiers.update(IDENTIFIER_RE.findall(alias_target))
-        alias_pattern = "|".join(
-            re.escape(alias) for alias in sorted(alias_names, key=len, reverse=True)
-        )
         c_style_cast_pattern = re.compile(
             rf"\((?P<type>[^(){{}};]*\b(?:{alias_pattern})\b[^(){{}};]*)\)"
         )
@@ -3517,8 +3553,18 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             # Find the next statement boundary: either a `{` (method body or
             # in-struct initializer braces) or a `;` (data member / declaration).
-            brace = self._find_next_top_level_char(body, i, "{")
-            semicolon = self._find_next_top_level_char(body, i, ";")
+            brace = self._find_next_top_level_char(
+                body,
+                i,
+                "{",
+                track_angles=False,
+            )
+            semicolon = self._find_next_top_level_char(
+                body,
+                i,
+                ";",
+                track_angles=False,
+            )
             if brace is not None and (semicolon is None or brace < semicolon):
                 method = self._parse_struct_method(struct_name, body, i, brace)
                 brace_end = self._find_matching_brace(body, brace)
@@ -3579,6 +3625,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                         data_member_names,
                         data_member_types,
                         ordered_members,
+                        declaration_span=(
+                            body_offset + i,
+                            body_offset + decl_semicolon + 1,
+                        ),
                     )
                 i = decl_semicolon + 1
                 continue
@@ -3610,6 +3660,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                         data_member_names,
                         data_member_types,
                         ordered_members,
+                        declaration_span=(
+                            body_offset + i,
+                            body_offset + semicolon + 1,
+                        ),
                     )
             i = semicolon + 1
         self._assign_receiver_overload_free_names(struct_name, methods)
@@ -3629,6 +3683,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         data_member_names: Set[str],
         data_member_types: Dict[str, str],
         ordered_members: List[_MetalDataMember],
+        declaration_span: Tuple[int, int],
     ) -> bool:
         # Record a data member into the name set, the (normalized) type map, and
         # the ordered list with its FULL declared type text / default / array
@@ -3638,14 +3693,21 @@ class MetalPreprocessor(HLSLPreprocessor):
             return False
         data_member_names.add(name)
         self._record_data_member_type(data_member_types, name, declaration)
-        member = self._parse_ordered_data_member(name, declaration)
+        member = self._parse_ordered_data_member(
+            name,
+            declaration,
+            declaration_span,
+        )
         if member is not None:
             ordered_members.append(member)
             return True
         return False
 
     def _parse_ordered_data_member(
-        self, name: str, declaration: str
+        self,
+        name: str,
+        declaration: str,
+        declaration_span: Optional[Tuple[int, int]] = None,
     ) -> Optional[_MetalDataMember]:
         # Split `[qualifiers] Type name [array] [= default]` into its full type
         # text (preserving address space / cv / pointer), trailing array suffix,
@@ -3670,6 +3732,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             type_text=type_text,
             default=default,
             array_suffix=array_suffix,
+            span=declaration_span,
         )
 
     def _split_top_level_assignment(self, text: str) -> Tuple[str, Optional[str]]:
@@ -3726,9 +3789,10 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> Optional[_MetalConstructor]:
         # Parse a constructor `[macros] Name(params) : init_list { body }`.
         # `Name` is a bare identifier with NO return type (that is what makes it a
-        # constructor rather than a method); for a materialized template struct it
-        # is the ORIGINAL template name, not the renamed struct. Destructors and
-        # operators are rejected. Returns None for any non-constructor construct.
+        # constructor rather than a method). Materialized template constructors
+        # are renamed only after this parser has identified their source spans.
+        # Destructors and operators are rejected. Returns None for any
+        # non-constructor construct.
         header = body[decl_start:brace]
         paren_start = self._function_parameter_start(header)
         if paren_start is None:
@@ -7478,23 +7542,35 @@ class MetalPreprocessor(HLSLPreprocessor):
                 detail="no concrete operator() overload matches the call arguments",
             )
 
-        # Resolve the variable's struct type from the NEAREST declaration at or
-        # before this call site (deterministic; correct across sibling kernels
-        # that reuse a variable name for different functor types).
-        struct_type = self._resolve_declared_type_at(variable_types, ident, ident_start)
-        if struct_type is None:
-            return None
-        receiver_contract = (
-            implicit_receiver_contract
-            if ident == "self" and implicit_receiver_contract is not None
-            else self._receiver_contract_for_named_value(
-                code,
-                struct_type,
+        # Prefer the lexically visible declaration over the legacy positioned
+        # type map. If the current declaration cannot be resolved, it must shadow
+        # same-named receivers from outer or sibling functions.
+        receiver_declaration, struct_type = self._receiver_struct_type_at(
+            code,
+            ident,
+            ident_start,
+            struct_names,
+            struct_type_aliases,
+        )
+        if receiver_declaration is None:
+            struct_type = self._resolve_declared_type_at(
+                variable_types,
                 ident,
                 ident_start,
-                type_aliases=struct_type_aliases,
             )
-        )
+        receiver_contract = None
+        if struct_type is not None:
+            receiver_contract = (
+                implicit_receiver_contract
+                if ident == "self" and implicit_receiver_contract is not None
+                else self._receiver_contract_for_named_value(
+                    code,
+                    struct_type,
+                    ident,
+                    ident_start,
+                    type_aliases=struct_type_aliases,
+                )
+            )
 
         # Instance method call: `var.m(args)` -> `S__m(var, args)`.
         if code[j] == ".":
@@ -7517,6 +7593,31 @@ class MetalPreprocessor(HLSLPreprocessor):
                 # A data-member access (`var.field`) — leave untouched.
                 return None
             arg_open, explicit_template_arguments = call_suffix
+            if struct_type is None:
+                assert receiver_declaration is not None
+                arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+                location_end = arg_close + 1 if arg_close is not None else arg_open + 1
+                receiver_type = receiver_declaration.raw_type_text.strip()
+                raise MetalStructMethodError(
+                    "Cannot lower concrete member call "
+                    f"'{ident}.{member}' because receiver declaration "
+                    f"'{receiver_type} {ident}' does not resolve to a concrete "
+                    "struct in its lexical scope.",
+                    method_name=member,
+                    requested_signature=f"{ident}.{member}",
+                    suggested_action=(
+                        "make the receiver alias resolve to a concrete struct "
+                        "within the current function scope"
+                    ),
+                    source_location=self._source_location_for_offsets(
+                        code,
+                        ident_start,
+                        location_end,
+                    ),
+                    missing_capabilities=("metal.member-overload-resolution",),
+                    reason="concrete-receiver-type-unresolved",
+                    receiver_type=receiver_type,
+                )
             owner_struct = structs_by_name.get(struct_type)
             reference_methods = (
                 self._concrete_reference_methods(owner_struct, member)
@@ -7583,6 +7684,38 @@ class MetalPreprocessor(HLSLPreprocessor):
                     arg_open,
                     struct_name=structs_by_name.get(struct_type, struct_type),
                 )
+            if owner_struct is not None and explicit_template_arguments is None:
+                static_method = self._select_concrete_method_for_call(
+                    code,
+                    owner_struct,
+                    member,
+                    arg_open,
+                    buffer_element_types,
+                    local_variable_types,
+                    field_variable_types,
+                    field_structs_by_name,
+                    allow_template_fallback=bool(template_overloads),
+                    require_static=True,
+                    type_alias_fallback_position=type_alias_fallback_position,
+                    call_start=ident_start,
+                )
+                if static_method is not None:
+                    arg_close = self._find_matching_delimiter(
+                        code,
+                        arg_open,
+                        "(",
+                        ")",
+                    )
+                    if arg_close is None:
+                        return None
+                    self._reject_reference_returning_method_call(
+                        code,
+                        structs_by_name.get(struct_type, struct_type),
+                        static_method,
+                        arg_open,
+                        arg_close,
+                    )
+                    return arg_open, static_method.free_name
             # An instance TEMPLATE member call `var.m(args)`.
             if template_overloads:
                 return self._instantiate_template_member_call(
@@ -7692,9 +7825,25 @@ class MetalPreprocessor(HLSLPreprocessor):
         if self._is_member_identifier_context(code, ident_start):
             return None
 
-        declared_type = self._resolve_declared_type_at(
-            field_variable_types, ident, ident_start
-        ) or self._resolve_declared_type_at(variable_types, ident, ident_start)
+        receiver_declaration, resolved_receiver_type = self._receiver_struct_type_at(
+            code,
+            ident,
+            ident_start,
+            set(field_structs_by_name),
+            struct_type_aliases,
+        )
+        if receiver_declaration is not None:
+            if resolved_receiver_type is None:
+                return None
+            receiver_contract = self._receiver_contract_from_type_text(
+                receiver_declaration.raw_type_text,
+                resolved_receiver_type,
+            )
+            declared_type = f"{resolved_receiver_type}{receiver_contract.indirection}"
+        else:
+            declared_type = self._resolve_declared_type_at(
+                field_variable_types, ident, ident_start
+            ) or self._resolve_declared_type_at(variable_types, ident, ident_start)
         receiver_info = self._nested_member_receiver_info(
             declared_type, field_structs_by_name
         )
@@ -7907,30 +8056,68 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> Optional[_MetalReceiverContract]:
         if re.fullmatch(r"[A-Za-z_]\w*", receiver) is None:
             return None
-        declaration = None
-        declarations = self._find_receiver_declarations(code).get(receiver, ())
-        for candidate in declarations:
-            if candidate.declaration_end > call_start:
-                break
-            if not (candidate.scope_start <= call_start < candidate.scope_end):
-                continue
-            resolved_type = candidate.declared_type
-            if resolved_type != struct_name and type_aliases is not None:
-                resolved_type = self._resolve_struct_type_alias_at(
-                    type_aliases,
-                    candidate.declared_type,
-                    candidate.type_position,
-                )
-            if resolved_type != struct_name:
-                continue
-            declaration = candidate
+        declaration = self._visible_receiver_declaration_at(
+            code,
+            receiver,
+            call_start,
+        )
         if declaration is None:
+            return None
+        resolved_type = declaration.declared_type
+        if resolved_type != struct_name and type_aliases is not None:
+            resolved_type = self._resolve_struct_type_alias_at(
+                type_aliases,
+                declaration.declared_type,
+                declaration.type_position,
+            )
+        if resolved_type != struct_name:
             return None
 
         return self._receiver_contract_from_type_text(
             declaration.raw_type_text,
             struct_name,
         )
+
+    def _visible_receiver_declaration_at(
+        self,
+        code: str,
+        receiver: str,
+        position: int,
+    ) -> Optional[_MetalReceiverDeclaration]:
+        declaration = None
+        for candidate in self._find_receiver_declarations(code).get(receiver, ()):
+            if candidate.declaration_end > position:
+                break
+            if not (candidate.scope_start <= position < candidate.scope_end):
+                continue
+            declaration = candidate
+        return declaration
+
+    def _receiver_struct_type_at(
+        self,
+        code: str,
+        receiver: str,
+        position: int,
+        struct_names: Set[str],
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
+    ) -> Tuple[Optional[_MetalReceiverDeclaration], Optional[str]]:
+        declaration = self._visible_receiver_declaration_at(
+            code,
+            receiver,
+            position,
+        )
+        if declaration is None:
+            return None, None
+        resolved_type = declaration.declared_type
+        if resolved_type not in struct_names and type_aliases is not None:
+            resolved_type = self._resolve_struct_type_alias_at(
+                type_aliases,
+                declaration.declared_type,
+                declaration.type_position,
+            )
+        if resolved_type not in struct_names:
+            return declaration, None
+        return declaration, resolved_type
 
     def _receiver_contract_from_type_text(
         self,
@@ -10457,6 +10644,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         methods_by_struct = methods_by_struct or {}
         operator_call_structs = operator_call_structs or set()
         rewrite_structs_by_name = rewrite_structs_by_name or {}
+        self._register_contextual_receiver_parameters(
+            instantiated_body,
+            instantiated_parameters,
+        )
         instantiated_body = self._lower_runtime_value_template_member_calls(
             struct,
             method,
@@ -10467,6 +10658,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             methods_by_struct,
             operator_call_structs,
             rewrite_structs_by_name,
+        )
+        contextual_receiver_names = self._register_contextual_receiver_parameters(
+            instantiated_body,
+            instantiated_parameters,
         )
         rewrite_struct_names = set(rewrite_structs_by_name)
         struct_type_aliases = self._collect_struct_type_aliases(
@@ -10499,8 +10694,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             qualified_identifiers & (rewrite_struct_names | set(struct_type_aliases))
         )
         has_external_member_call = bool(
-            re.search(r"\bself\s*(?:\.|->)", instantiated_body)
-            and (methods_by_struct or template_methods_by_struct)
+            (methods_by_struct or template_methods_by_struct)
+            and any(
+                re.search(
+                    rf"\b{re.escape(receiver)}\s*(?:\.|->)",
+                    instantiated_body,
+                )
+                for receiver in {"self", *contextual_receiver_names}
+            )
         )
         has_concrete_sibling_call = any(
             re.search(
@@ -11112,6 +11313,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         if index < len(code) and code[index] == "<":
             angle_end = self._find_matching_angle(code, index)
             if angle_end is None:
+                return None
+            argument_source = code[index + 1 : angle_end]
+            if self._find_next_top_level_char(argument_source, 0, ";") is not None:
                 return None
             explicit_template_arguments = [
                 argument.strip()
@@ -12195,13 +12399,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             [*skip_spans, *self._find_comment_and_literal_spans(code)]
         )
         for match in re.finditer(
-            r"\busing\s+([A-Za-z_]\w*)\s*=\s*"
-            r"((?:typename\s+)?[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)?)\s*;",
+            r"\busing\s+(?P<alias>[A-Za-z_]\w*)\s*=\s*" r"(?P<target>[^;{}]+?)\s*;",
             code,
+            re.DOTALL,
         ):
             if self._containing_span(match.start(), ignored_spans) is not None:
                 continue
-            alias, target = match.group(1), match.group(2)
+            alias, target = match.group("alias"), match.group("target")
             raw_aliases.append(
                 (match.start(), alias, self._normalize_template_argument_text(target))
             )
@@ -12214,6 +12418,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             raw_aliases.append((match.start(), alias, target))
 
         aliases: Dict[str, List[_MetalTypeAliasBinding]] = {}
+        qualified_struct_names = {
+            struct.qualified_name.lstrip(":"): struct.name
+            for struct in (structs_by_name or {}).values()
+            if struct.qualified_name
+        }
         lexical_scopes = self._find_lexical_brace_scopes(code)
         for declaration_position, alias, target in sorted(raw_aliases):
             resolved_target = self._resolve_struct_type_alias_at(
@@ -12221,6 +12430,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
             if resolved_target is None and target in struct_names:
                 resolved_target = target
+            if resolved_target is None:
+                resolved_target = qualified_struct_names.get(target.lstrip(":"))
             if resolved_target is None and structs_by_name:
                 qualified = re.fullmatch(
                     r"(?:typename\s+)?(?P<owner>[A-Za-z_]\w*)\s*::\s*"
@@ -12246,8 +12457,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                             or canonical in self._materialized_struct_specializations
                         ):
                             resolved_target = canonical
-            if resolved_target is None:
-                continue
             scope_start, scope_end = self._innermost_lexical_scope(
                 lexical_scopes, declaration_position, len(code)
             )
@@ -12268,6 +12477,49 @@ class MetalPreprocessor(HLSLPreprocessor):
         if analysis.receiver_declarations is None:
             analysis.receiver_declarations = self._scan_receiver_declarations(code)
         return analysis.receiver_declarations
+
+    def _register_contextual_receiver_parameters(
+        self,
+        code: str,
+        parameters: str,
+    ) -> Set[str]:
+        declarations = self._scan_receiver_declarations(code)
+        contextual_names: Set[str] = set()
+        for parameter in self._split_top_level_commas(parameters):
+            text = self._strip_metal_attributes(
+                self._strip_top_level_default_value(parameter)
+            ).strip()
+            if not text:
+                continue
+            match = METAL_RECEIVER_DECLARATION_RE.search(f"{text},")
+            if match is None or match.start() != 0:
+                continue
+            raw_type_text = "".join(
+                (
+                    match.group("leading") or "",
+                    match.group("type"),
+                    match.group("trailing") or "",
+                    match.group("indirection") or "",
+                    match.group("indirection_qualifiers") or "",
+                )
+            )
+            name = match.group("name")
+            contextual_names.add(name)
+            declarations.setdefault(name, []).insert(
+                0,
+                _MetalReceiverDeclaration(
+                    name=name,
+                    declaration_position=-1,
+                    declaration_end=0,
+                    type_position=0,
+                    scope_start=0,
+                    scope_end=len(code),
+                    declared_type=match.group("type"),
+                    raw_type_text=raw_type_text,
+                ),
+            )
+        self._source_analysis(code).receiver_declarations = declarations
+        return contextual_names
 
     def _scan_receiver_declarations(
         self, code: str
@@ -14821,12 +15073,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not substitutions:
             return ""
         materialized = self._replace_identifiers(template.source, substitutions)
-        materialized = self._rename_struct_definition(
+        materialized = self._rename_materialized_struct_constructors(
             materialized,
             template.name,
             struct_identifier,
         )
-        materialized = self._rename_materialized_struct_constructors(
+        materialized = self._rename_struct_definition(
             materialized,
             template.name,
             struct_identifier,
@@ -14855,10 +15107,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         materialized = self._rename_struct_definition(
             materialized,
             template.name,
-            struct_identifier,
+            template.name,
             strip_specialization_arguments=True,
         )
         materialized = self._rename_materialized_struct_constructors(
+            materialized,
+            template.name,
+            struct_identifier,
+        )
+        materialized = self._rename_struct_definition(
             materialized,
             template.name,
             struct_identifier,
@@ -14924,23 +15181,28 @@ class MetalPreprocessor(HLSLPreprocessor):
             name: self._static_initializer_reference(initializer)
             for name, initializer in constants.items()
         }
+        declaration_ends = {
+            member.name: member.span[1]
+            for member in outer.data_members
+            if member.name in mapping and member.span is not None
+        }
         replacements: List[Tuple[int, int, str]] = []
         cursor = body_start
         for start, end in [*merged_spans, (body_end, body_end)]:
             if cursor < start:
                 segment = materialized[cursor:start]
-                segment = self._substitute_struct_scoped_alias_owners(
+                segment = self._substitute_static_constants_in_declarations(
                     segment,
-                    outer,
+                    mapping,
+                    declaration_ends,
+                    source_offset=cursor,
                 )
+                segment = self._substitute_struct_scoped_alias_owners(segment, outer)
                 replacements.append(
                     (
                         cursor,
                         start,
-                        self._substitute_static_constants_in_declarations(
-                            segment,
-                            mapping,
-                        ),
+                        segment,
                     )
                 )
             cursor = max(cursor, end)
@@ -14954,25 +15216,52 @@ class MetalPreprocessor(HLSLPreprocessor):
         return f"({normalized})"
 
     def _substitute_static_constants_in_declarations(
-        self, source: str, mapping: Dict[str, str]
+        self,
+        source: str,
+        mapping: Dict[str, str],
+        declaration_ends: Dict[str, int],
+        *,
+        source_offset: int,
     ) -> str:
-        # Preserve each constant's declaration name while resolving references in
-        # its initializer and in subsequent aliases, array extents, alignments, and
-        # nested type declarations.
-        sentinels: Dict[str, str] = {}
-        masked = source
-        for index, name in enumerate(mapping):
-            sentinel = f"__CROSSTL_STATIC_DECL_{index}__"
-            while sentinel in masked:
-                sentinel += "_"
-            pattern = re.compile(rf"\b{re.escape(name)}\b(?=\s*=(?!=))")
-            masked, count = pattern.subn(sentinel, masked)
-            if count:
-                sentinels[sentinel] = name
-        substituted = self._substitute_bare_member_references(masked, mapping)
-        for sentinel, name in sentinels.items():
-            substituted = substituted.replace(sentinel, name)
-        return substituted
+        # A class member is not available to declarations that precede it. Apply
+        # each resolved mapping only after its declaration terminator while still
+        # allowing subsequent initializers, aliases, extents, and assertions to
+        # use the value.
+        source_end = source_offset + len(source)
+        visible = {
+            name: value
+            for name, value in mapping.items()
+            if declaration_ends.get(name, source_end + 1) <= source_offset
+        }
+        visibility_events: Dict[int, List[str]] = {}
+        for name in mapping:
+            declaration_end = declaration_ends.get(name)
+            if declaration_end is None or not (
+                source_offset < declaration_end <= source_end
+            ):
+                continue
+            visibility_events.setdefault(declaration_end, []).append(name)
+
+        substituted_parts: List[str] = []
+        relative_cursor = 0
+        for declaration_end in sorted(visibility_events):
+            relative_end = declaration_end - source_offset
+            substituted_parts.append(
+                self._substitute_bare_member_references(
+                    source[relative_cursor:relative_end],
+                    visible,
+                )
+            )
+            for name in visibility_events[declaration_end]:
+                visible[name] = mapping[name]
+            relative_cursor = relative_end
+        substituted_parts.append(
+            self._substitute_bare_member_references(
+                source[relative_cursor:],
+                visible,
+            )
+        )
+        return "".join(substituted_parts)
 
     def _find_explicit_template_function_calls(
         self,
@@ -15132,6 +15421,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # dropped. References inside template declarations (excluded_spans) are
         # skipped: they are only materialized once their enclosing template is.
         concrete_structs = self._find_concrete_struct_definitions(code)
+        namespace_spans = self._find_namespace_spans(code)
         concrete_structs_by_name = {struct.name: struct for struct in concrete_structs}
         owner_contexts: List[
             Tuple[
@@ -15222,6 +15512,29 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if angle_end is None:
                     i += consumed
                     continue
+                primary_template = struct_templates_by_name[ident]
+                reference_start = self._scoped_identifier_start(code, i)
+                reference_name = re.sub(
+                    r"\s*::\s*",
+                    "::",
+                    code[reference_start : i + consumed].strip(),
+                )
+                if "::" in reference_name:
+                    globally_qualified = reference_name.startswith("::")
+                    normalized_reference = reference_name.lstrip(":")
+                    expected_name = (
+                        f"{primary_template.namespace}::{ident}"
+                        if primary_template.namespace
+                        else ident
+                    )
+                    visible_names = self._namespace_lookup_names(
+                        normalized_reference,
+                        self._namespace_at(namespace_spans, i),
+                        globally_qualified,
+                    )
+                    if expected_name not in visible_names:
+                        i = angle_end + 1
+                        continue
                 template_arguments = self._split_top_level_commas(
                     code[j + 1 : angle_end]
                 )
@@ -15430,7 +15743,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                             )
                             for argument in template_arguments
                         ]
-                primary_template = struct_templates_by_name[ident]
                 resolved_arguments = (
                     self._template_arguments_with_resolved_defaults(
                         primary_template,
@@ -16478,15 +16790,22 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     def _scoped_identifier_start(self, code: str, identifier_start: int) -> int:
         start = identifier_start
-        while start >= 2 and code[start - 2 : start] == "::":
-            name_end = start - 2
+        while True:
+            separator_end = start
+            while separator_end > 0 and code[separator_end - 1].isspace():
+                separator_end -= 1
+            if separator_end < 2 or code[separator_end - 2 : separator_end] != "::":
+                break
+            name_end = separator_end - 2
+            while name_end > 0 and code[name_end - 1].isspace():
+                name_end -= 1
             name_start = name_end
             while name_start > 0 and (
                 code[name_start - 1].isalnum() or code[name_start - 1] == "_"
             ):
                 name_start -= 1
             if name_start == name_end:
-                start -= 2
+                start = separator_end - 2
                 break
             start = name_start
         return start
@@ -17689,7 +18008,14 @@ class MetalPreprocessor(HLSLPreprocessor):
         """Rename constructor declarators with a materialized template owner."""
 
         definitions = self._find_concrete_struct_definitions(source)
-        owner = next((item for item in definitions if item.name == new_name), None)
+        owner = next(
+            (
+                item
+                for item in definitions
+                if item.name == old_name or item.name == new_name
+            ),
+            None,
+        )
         if owner is None:
             return source
 
@@ -17872,7 +18198,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         return None
 
     def _find_next_top_level_char(
-        self, code: str, start: int, target: str
+        self,
+        code: str,
+        start: int,
+        target: str,
+        *,
+        track_angles: bool = True,
     ) -> Optional[int]:
         paren_depth = 0
         bracket_depth = 0
@@ -17901,7 +18232,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 ch == target
                 and paren_depth == 0
                 and bracket_depth == 0
-                and angle_depth == 0
+                and (not track_angles or angle_depth == 0)
             ):
                 return i
             if ch == "(":
@@ -17912,9 +18243,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 bracket_depth += 1
             elif ch == "]":
                 bracket_depth = max(0, bracket_depth - 1)
-            elif ch == "<":
+            elif track_angles and ch == "<":
                 angle_depth += 1
-            elif ch == ">":
+            elif track_angles and ch == ">":
                 angle_depth = max(0, angle_depth - 1)
             i += 1
         return None

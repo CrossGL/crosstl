@@ -1092,6 +1092,12 @@ configuration contract is intentionally small:
    useFastPath = true
    "2" = 16
 
+   [project.source_specialization_constants."kernels/*.metal"]
+   "2" = 32
+
+   [project.source_specialization_constants."kernels/gemv.metal"]
+   "2" = 16
+
    [project.variants.debug.specialization_constants]
    useFastPath = false
    "2" = 8
@@ -1109,6 +1115,25 @@ Configured values are checked against the declaration's scalar source type. If
 both selectors address the same declaration, their values must agree; a
 name/id conflict fails the artifact instead of choosing one silently.
 
+Repository-wide numeric IDs and source names do not need to be unique. Use
+``[project.source_specialization_constants."<repo-relative-pattern>"]`` to
+override specialization selectors only for matching translation units. For
+example, unrelated sources can configure the same numeric ID as a Boolean in
+one table and an integer in another without offering either value to the other
+source.
+
+Source patterns use normalized repository-relative paths and merge per
+selector. ``project.specialization_constants`` provides the base values. Every
+matching source table can add selectors; for a selector present in more than
+one table, an exact normalized path wins over a glob. Otherwise, fewer wildcard
+operators take precedence, followed by the longer normalized pattern. Patterns
+with equal specificity may provide the same scalar value; lexical pattern order
+then selects one stable provenance path without changing the value. Equal-
+specificity patterns that provide different values fail closed with a
+``ValueError`` identifying the source, selector, matching patterns, and values.
+An exact table only overrides selectors it contains, so less-specific matching
+tables can still supply other selectors.
+
 Source ``function_constant`` and ``constant_id`` identifiers use C-family
 integral literal rules. Decimal, leading-zero octal, hexadecimal, and binary
 forms are accepted, together with apostrophe digit separators and the standard
@@ -1125,12 +1150,19 @@ produce ``project.translate.specialization-constant-id-invalid`` with the source
 span, original spelling, and a structured reason.
 
 ``[project.variants.<name>.specialization_constants]`` applies after the
-project-level table and overrides the same selector for that named variant.
+project-level and matching source tables and overrides the same selector for
+that named variant.
 Artifact ``specializationConstants`` records retain the effective value and
 ``valueProvenance`` with the project or variant configuration path, selector,
-selector kind, and variant name. Using a name in one table and the corresponding
-ID in another still creates two matches, so different values fail as a
-conflicting contract rather than relying on table precedence.
+selector kind, and variant name. Values selected from a source table use
+``project-source-pattern`` provenance with the normalized ``sourcePattern`` and
+the complete configuration path. The report's
+``project.sourceSpecializationConstants``,
+``project.sourceSpecializationPatternCount``, and
+``project.sourceSpecializationConstantCounts`` fields preserve the normalized
+configuration for deterministic report validation. Using a name in one table
+and the corresponding ID in another still creates two matches, so different
+values fail as a conflicting contract rather than relying on table precedence.
 
 A declaration without a source initializer is required; one with an initializer
 has a source default. Explicit project or variant values override source

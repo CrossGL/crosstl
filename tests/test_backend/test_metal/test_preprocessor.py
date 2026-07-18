@@ -2359,6 +2359,114 @@ def test_preprocessor_dedupes_nested_struct_aliases_by_canonical_target():
         assert alias not in repr(tile_specializations)
 
 
+def test_preprocessor_reuses_materialized_struct_across_calls():
+    code = """
+    template <typename T>
+    struct Value {
+        T data;
+    };
+
+    Value<float> first;
+    """
+    preprocessor = MetalPreprocessor()
+
+    first_output = preprocessor._materialize_explicit_template_struct_instantiations(
+        code
+    )
+    second_output = preprocessor._materialize_explicit_template_struct_instantiations(
+        first_output + "\nValue<float> second;\n"
+    )
+
+    assert first_output.count("struct Value_float {") == 1
+    assert second_output.count("struct Value_float {") == 1
+    assert "Value_float first;" in second_output
+    assert "Value_float second;" in second_output
+    assert preprocessor._materialized_struct_specializations["Value_float"] == (
+        "Value",
+        ("float",),
+    )
+
+
+def test_preprocessor_reuses_partial_struct_with_scoped_alias_across_calls():
+    code = """
+    template <typename T, int Rows, int Columns>
+    struct BaseFrag {
+        static constexpr int elements = Rows * Columns;
+    };
+
+    template <typename T>
+    struct BaseFrag<T, 8, 8> {
+        static constexpr int elements = 4;
+        using frag_type = metal::vec<T, elements>;
+    };
+
+    int first_elements = BaseFrag<float, 8, 8>::elements;
+    using first_frag_type = typename BaseFrag<float, 8, 8>::frag_type;
+    """
+    preprocessor = MetalPreprocessor()
+
+    first_output = preprocessor._materialize_explicit_template_struct_instantiations(
+        code
+    )
+    second_output = preprocessor._materialize_explicit_template_struct_instantiations(
+        first_output + """
+        int second_elements = BaseFrag<float, 8, 8>::elements;
+        using second_frag_type = typename BaseFrag<float, 8, 8>::frag_type;
+        """
+    )
+
+    assert first_output.count("struct BaseFrag_float_8_8 {") == 1
+    assert "using frag_type = metal::vec<float, 4>;" in first_output
+    assert second_output.count("struct BaseFrag_float_8_8 {") == 1
+    assert "int first_elements = BaseFrag_float_8_8::elements;" in second_output
+    assert "int second_elements = BaseFrag_float_8_8::elements;" in second_output
+    assert (
+        "using first_frag_type = typename BaseFrag_float_8_8::frag_type;"
+        in second_output
+    )
+    assert (
+        "using second_frag_type = typename BaseFrag_float_8_8::frag_type;"
+        in second_output
+    )
+    assert preprocessor._materialized_struct_specializations["BaseFrag_float_8_8"] == (
+        "BaseFrag",
+        ("float", "8", "8"),
+    )
+
+
+def test_preprocessor_rematerializes_struct_when_cached_declaration_is_absent():
+    code = """
+    template <typename T>
+    struct Value {
+        T data;
+    };
+
+    Value<float> value;
+    """
+    preprocessor = MetalPreprocessor()
+
+    first_output = preprocessor._materialize_explicit_template_struct_instantiations(
+        code
+    )
+    assert "struct Value_float {" not in code
+    assert preprocessor._materialized_struct_specializations["Value_float"] == (
+        "Value",
+        ("float",),
+    )
+
+    rematerialized_output = (
+        preprocessor._materialize_explicit_template_struct_instantiations(code)
+    )
+
+    assert first_output.count("struct Value_float {") == 1
+    assert rematerialized_output.count("struct Value_float {") == 1
+    assert "Value_float value;" in rematerialized_output
+    assert preprocessor._materialized_struct_specializations["Value_float"] == (
+        "Value",
+        ("float",),
+    )
+
+
 def test_preprocessor_bounds_owner_alias_materialization_work():
     class CountingWorkBudget:
         def __init__(self):
@@ -5617,6 +5725,66 @@ def test_preprocessor_resolves_struct_scoped_aliases_in_explicit_pointer_casts(
     assert "thread int*" not in float_helper
     assert "elem_type" not in int_helper
     assert "thread float*" not in int_helper
+
+
+@pytest.mark.parametrize(
+    ("initializer", "expected"),
+    [("elem_type(0)", "float2(0)"), ("elem_type{0}", "float2{0}")],
+)
+def test_preprocessor_resolves_struct_scoped_alias_constructor_casts(
+    initializer,
+    expected,
+):
+    code = """
+    struct Tile {
+      using elem_type = float2;
+      elem_type values[2];
+
+      void clear() {
+        values[0] = INITIALIZER;
+      }
+    };
+
+    kernel void k(device float2* output [[buffer(0)]]) {
+      Tile tile;
+      tile.clear();
+      output[0] = tile.values[0];
+    }
+    """.replace("INITIALIZER", initializer)
+
+    output = MetalPreprocessor().preprocess(code)
+    clear_helper = output.split("void Tile__clear", 1)[1].split(";", 1)[0]
+
+    assert expected in clear_helper
+    assert "elem_type" not in clear_helper
+
+
+def test_preprocessor_preserves_qualified_and_shadowed_alias_constructor_casts():
+    code = """
+    struct Other {
+      using elem_type = int;
+    };
+
+    struct Tile {
+      using elem_type = float;
+
+      float convert(float value) {
+        using elem_type = half;
+        return float(elem_type(value)) + float(Other::elem_type(value));
+      }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      Tile tile;
+      output[0] = tile.convert(output[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+    helper = output.split("float Tile__convert", 1)[1].split("}", 1)[0]
+
+    assert "elem_type(value)" in helper
+    assert "Other::elem_type(value)" in helper
 
 
 def test_preprocessor_preserves_local_alias_shadow_in_explicit_cast():

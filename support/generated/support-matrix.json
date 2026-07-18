@@ -619,7 +619,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1555
+        "test_count": 1590
       },
       "translator_codegen": {
         "exists": true,
@@ -771,12 +771,8 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 193,
+        "unsupported_marker_count": 178,
         "unsupported_marker_samples": [
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "CUDA_UNSUPPORTED_FP16_VECTOR_TYPES = {"
-          },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "self.reject_unsupported_generic_functions(ast_node)"
@@ -852,6 +848,10 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "raise ValueError(f\"Unsupported CUDA wave intrinsic {operation}\")"
           }
         ]
       },
@@ -864,7 +864,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 782
+        "test_count": 783
       },
       "translator_codegen": {
         "exists": true,
@@ -888,11 +888,19 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 135,
+        "unsupported_marker_count": 122,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "HIP_UNSUPPORTED_FP16_VECTOR_TYPES = {"
+            "text": "class UnsupportedHIPAstNodeError(ValueError):"
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "project_diagnostic_code = \"project.translate.unsupported-feature\""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"HIP code generation does not support AST node {self.node_type}. \""
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -940,11 +948,7 @@
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "\"\"\"Raise a clear error for unsupported AST nodes.\"\"\""
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "raise NotImplementedError("
+            "text": "raise UnsupportedHIPAstNodeError(node)"
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -965,10 +969,6 @@
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "f\"Unsupported {semantic} return semantic for HIP codegen; \""
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "f\"Unsupported {semantic} stage parameter semantic for HIP codegen; \""
           }
         ]
       },
@@ -981,7 +981,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 832
+        "test_count": 836
       },
       "translator_codegen": {
         "exists": true,
@@ -1239,7 +1239,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 409,
+        "unsupported_marker_count": 411,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",

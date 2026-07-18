@@ -10,6 +10,26 @@ from .SlangLexer import *
 from .SlangParser import *
 
 
+class UnsupportedSlangConformanceError(ValueError):
+    """Raised when Slang conformance semantics cannot be represented."""
+
+    project_diagnostic_code = "project.translate.unsupported-feature"
+    missing_capabilities = ("slang.interface-conformance-lowering",)
+
+    def __init__(self, constructs):
+        self.constructs = tuple(constructs)
+        self.feature = "slang.interface-conformance"
+        self.suggested_action = (
+            "Remove the conformance dependency or add an explicit CrossGL "
+            "interface/conformance lowering."
+        )
+        details = ", ".join(self.constructs)
+        super().__init__(
+            "Reverse Slang to CrossGL does not support interface/conformance "
+            f"constructs: {details}. Suggested action: {self.suggested_action}"
+        )
+
+
 class SlangToCrossGLConverter:
     """Serialize Slang backend AST nodes back into CrossGL source."""
 
@@ -779,11 +799,7 @@ class SlangToCrossGLConverter:
                 constructs.extend(self.format_function_generic_constraints(item))
 
         if constructs:
-            details = ", ".join(constructs)
-            raise NotImplementedError(
-                "Reverse Slang to CrossGL does not support "
-                f"interface/conformance constructs: {details}"
-            )
+            raise UnsupportedSlangConformanceError(constructs)
 
     def format_typedef_generic_constraints(self, typedefs):
         constraints = []

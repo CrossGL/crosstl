@@ -569,7 +569,7 @@ unsupported records. Its project configuration and report must retain the exact
 an execution blocker. The required diagnostic is
 `project.translate.opengl-workgroup-pointer-unsupported` with capability
 `opengl.workgroup-pointer-lowering`; it must retain function
-`GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run`, parameter and backing `tgp_memory`,
+`GEMVKernel_bfloat16_t_1_8_1_32_1_4_false__run`, parameter and backing `tgp_memory`,
 offset `0`, and reason `unprovable-view-access`. The concrete index derivation is
 `sgN = simd_gid % 8`, `simdM = simd_gid / 8`, `bm = simdM`, and
 `tgp_results = tgp_memory + sgN * 2 + bm`. Under the source-required 32-lane
@@ -889,6 +889,65 @@ fixtures containing the five-argument `Atile.load` and `Btile.load` forms from
 Calls that reach a target without a concrete specialization fail with a
 structured diagnostic instead of losing the generic suffix or computation.
 
+At pinned MLX commit
+`4367c73b60541ddd5a266ce4644fd93d20223b6e`, exact high-budget project
+translations of the complete `fp_quantized.metal` source now advance past
+`epilogue_op.apply` for both DirectX and OpenGL. The receiver declaration is
+`thread const TransformNone_float_float& epilogue_op`. This frontier combines
+helper array-decay deduction, specialized struct constexpr assertion evaluation,
+lexical receiver alias resolution, statement-bounded member-template parsing,
+concrete constructor preservation, line-wrapped qualified struct receiver
+materialization, and contextual Metal method receiver resolution. CrossTL commit
+`c7a3c61ad` resolves the contextual receiver on this path. Specialized struct
+constexpr assertion evaluation resolves CrossGL/crosstl#1807.
+
+Dependent helper deduction now resolves the function-local `BK_padded` and
+`BN_padded` expressions together with the file-scope `SIMD_SIZE` constant before
+specializing plain helper templates. Proven non-type arguments are serialized to
+canonical values, so equivalent Boolean and integer spellings identify the same
+concrete struct at the kernel call site and in the generated helper signature.
+The exact DirectX and OpenGL runs each materialize 588 function
+specializations with no unsupported template records. This advances the current
+frontier through the applicable CrossGL/crosstl#1479 and CrossGL/crosstl#1490
+contracts; both issues retain broader project-materialization scope.
+
+Source-scoped project configuration now supplies concrete `true` values for
+`align_M` (ID 200), `align_N` (ID 201), and `align_K` (ID 202) only to
+`fp_quantized.metal`. Both target records preserve `project-source-pattern`
+provenance. This advances the source-scoped configuration contract in
+CrossGL/crosstl#1809 and the concrete function-constant contract in
+CrossGL/crosstl#1538 without applying these identifiers to unrelated sources.
+
+Both targets also advance through equivalent duplicate definitions of
+`BaseMMAFrag_float_8_8::kFragRows` and through construction of
+`QuantizedBlockLoader_float_32_32_36_1_64_16_4`. These paths exercise the
+qualified static-constant contract in CrossGL/crosstl#1491 and the constructor
+address-space provenance contract in CrossGL/crosstl#1810. Equivalent duplicate
+owners now resolve `BaseMMAFrag_float_8_8::frag_type` to its concrete
+two-component float vector, including component access at `k`; this resolves
+CrossGL/crosstl#1811 for the pinned frontier. Constructor factories preserve the
+`BlockLoader_float_16_32_36_1_64::src_ld` const-value initialization and lower
+the partially initialized `MMATile_float_2_1_BaseMMAFrag_float_8_8::val_frags`
+array through ordered element writes. These results advance the broader
+constructor contracts in CrossGL/crosstl#1812 and CrossGL/crosstl#1813.
+
+The complete materialized CrossGL intermediate contains 591 functions. Strict
+function-body parsing now accepts the generic pointer reinterpretation in
+`fp_qmv_wide_impl_bfloat16_t_16_4_2_16`,
+`(vec<bfloat16_t, 4>*)(xv[v] + k0)`, including the generic pointee type. This
+advances CrossGL/crosstl#1814 and removes
+`project.translate.crossgl-function-body-parse-failed` from both exact project
+runs.
+
+DirectX next fails closed with
+`project.translate.directx-cooperative-matrix-unsupported` and OpenGL with
+`project.translate.opengl-cooperative-matrix-unsupported`. Both diagnostics
+identify `CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified>`;
+substituting an ordinary HLSL or GLSL matrix would change distributed fragment
+semantics. CrossGL/crosstl#1602 tracks the required target-independent lane
+layout and software-fallback contract. Neither run emits a target artifact.
+This evidence does not claim runtime integration or numerical parity.
+
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.
 `fp_quantized.metal` then stopped at
@@ -992,3 +1051,9 @@ numeric-to-Boolean returns and signed mixed-width `arange` arithmetic.
 CrossGL/crosstl#1661 is covered for pinned `binary_two.metal` by fixed-array
 resource helper specialization in CrossTL commit `db593d19b` and the required
 OpenGL/SPIR-V 1.3 compilation and validation gate.
+CrossGL/crosstl#1807 is resolved for the pinned `fp_quantized.metal` frontier by
+specialized struct constexpr assertion evaluation; contextual receiver
+materialization remains tracked in CrossGL/crosstl#1479.
+CrossGL/crosstl#1811 is resolved for the same frontier by equivalent duplicate
+struct-alias resolution with concrete component typing and fail-closed conflict
+diagnostics.

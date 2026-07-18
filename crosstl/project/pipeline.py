@@ -1461,6 +1461,9 @@ REPORT_PROJECT_FIELDS = frozenset(
         "variantDefineCounts",
         "specializationConstants",
         "specializationConstantCount",
+        "sourceSpecializationConstants",
+        "sourceSpecializationPatternCount",
+        "sourceSpecializationConstantCounts",
         "variantSpecializationConstants",
         "variantSpecializationConstantCounts",
         "workgroupSize",
@@ -1489,6 +1492,7 @@ SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
+SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY = "source_specialization_constants"
 WORKGROUP_SIZE_CONFIG_KEY = "workgroup_size"
 WORKGROUP_SIZE_RULES_CONFIG_KEY = "workgroup_size_rules"
 WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY = "execution.workgroup-size-specialization"
@@ -3578,6 +3582,50 @@ def _as_specialization_value_mapping(
     return result
 
 
+def _specialization_values_match(left: Any, right: Any) -> bool:
+    return type(left) is type(right) and left == right
+
+
+def _specialization_value_mappings_match(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+) -> bool:
+    return left.keys() == right.keys() and all(
+        _specialization_values_match(left[key], right[key]) for key in left
+    )
+
+
+def _as_source_specialization_value_mapping(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, dict[str, bool | int | float | str]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+
+    result: dict[str, dict[str, bool | int | float | str]] = {}
+    for raw_pattern, raw_values in value.items():
+        if not isinstance(raw_pattern, str) or not raw_pattern.strip():
+            raise ValueError(f"{field_name} keys must be non-empty source patterns")
+        pattern = _normalize_project_relative_path(raw_pattern)
+        pattern_path = _mapping_key_path(field_name, pattern)
+        values = _as_specialization_value_mapping(
+            raw_values,
+            field_name=pattern_path,
+        )
+        existing = result.get(pattern)
+        if existing is not None and not _specialization_value_mappings_match(
+            existing, values
+        ):
+            raise ValueError(
+                f"{field_name} contains conflicting normalized pattern '{pattern}'"
+            )
+        result[pattern] = values
+    return result
+
+
 def _as_workgroup_size(
     value: Any,
     *,
@@ -3762,6 +3810,16 @@ def _variant_specialization_constant_counts(
         name: len(values)
         for name, values in sorted(variants.items())
         if _is_non_empty_string(name) and isinstance(values, Mapping)
+    }
+
+
+def _source_specialization_constant_counts(
+    source_patterns: Mapping[str, Any],
+) -> dict[str, int]:
+    return {
+        pattern: len(values)
+        for pattern, values in sorted(source_patterns.items())
+        if _is_non_empty_string(pattern) and isinstance(values, Mapping)
     }
 
 
@@ -7370,6 +7428,9 @@ class ProjectConfig:
     source_options: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     variants: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     specialization_constants: Mapping[str, Any] = field(default_factory=dict)
+    source_specialization_constants: Mapping[str, Mapping[str, Any]] = field(
+        default_factory=dict
+    )
     variant_specialization_constants: Mapping[str, Mapping[str, Any]] = field(
         default_factory=dict
     )
@@ -7542,6 +7603,14 @@ class ProjectConfig:
             _as_specialization_value_mapping(
                 self.specialization_constants,
                 field_name="ProjectConfig.specialization_constants",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "source_specialization_constants",
+            _as_source_specialization_value_mapping(
+                self.source_specialization_constants,
+                field_name="ProjectConfig.source_specialization_constants",
             ),
         )
         if not isinstance(self.variant_specialization_constants, Mapping):
@@ -8234,6 +8303,21 @@ def _scan_pattern_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                 missing_capabilities=["artifact.entry-point-selection"],
             )
         )
+    for pattern in config.source_specialization_constants:
+        if _is_repository_relative_glob(pattern):
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code=("project.config.source-specialization-pattern-outside-project"),
+                message=(
+                    f"Configured source specialization pattern '{pattern}' is not "
+                    "repository-relative."
+                ),
+                location=location,
+                missing_capabilities=["specialization.constant.materialization"],
+            )
+        )
     for pattern in config.workgroup_size_rules:
         if _is_repository_relative_glob(pattern):
             continue
@@ -8487,6 +8571,20 @@ class ProjectPortabilityReport:
                 "specializationConstantCount": len(
                     self.config.specialization_constants
                 ),
+                "sourceSpecializationConstants": {
+                    pattern: dict(sorted(values.items()))
+                    for pattern, values in sorted(
+                        self.config.source_specialization_constants.items()
+                    )
+                },
+                "sourceSpecializationPatternCount": len(
+                    self.config.source_specialization_constants
+                ),
+                "sourceSpecializationConstantCounts": (
+                    _source_specialization_constant_counts(
+                        self.config.source_specialization_constants
+                    )
+                ),
                 "variantSpecializationConstants": {
                     name: dict(sorted(values.items()))
                     for name, values in sorted(
@@ -8679,6 +8777,12 @@ def load_project_config(
         project.get(SPECIALIZATION_CONSTANTS_CONFIG_KEY),
         field_name=(f"crosstl.toml [project.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"),
     )
+    source_specialization_constants = _as_source_specialization_value_mapping(
+        project.get(SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY),
+        field_name=(
+            "crosstl.toml " f"[project.{SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"
+        ),
+    )
     workgroup_size = _as_workgroup_size(
         project.get(WORKGROUP_SIZE_CONFIG_KEY),
         field_name=f"crosstl.toml [project].{WORKGROUP_SIZE_CONFIG_KEY}",
@@ -8741,6 +8845,7 @@ def load_project_config(
         source_options=source_options,
         variants=_variant_defines(variants),
         specialization_constants=specialization_constants,
+        source_specialization_constants=source_specialization_constants,
         variant_specialization_constants=_variant_specialization_constants(variants),
         workgroup_size=workgroup_size,
         variant_workgroup_sizes=_variant_workgroup_sizes(variants),
@@ -9263,6 +9368,11 @@ def _regular_project_translation_jobs(
             variant=variant,
             defines=defines,
             entry_point=entry_point,
+            specialization_values=_variant_specialization_values(
+                config,
+                variant,
+                relative_path=relative_path,
+            ),
         )
         for variant, defines in _variant_jobs(config)
     ]
@@ -9342,10 +9452,16 @@ def _dispatch_project_translation_jobs(
                 },
             )
         provenance = _dispatch_artifact_provenance(index, artifact)
-        specialization_values = _variant_specialization_values(config, None)
+        specialization_values = _variant_specialization_values(
+            config,
+            None,
+            relative_path=relative_path,
+        )
         for selector, value in artifact.specialization_constants.items():
             existing = specialization_values.get(selector)
-            if existing is not None and existing[0] != value:
+            if existing is not None and not _specialization_values_match(
+                existing[0], value
+            ):
                 raise DispatchArtifactPlanError(
                     "dispatch-specialization-config-conflict",
                     "Host dispatch specialization conflicts with project config.",
@@ -9423,6 +9539,8 @@ def _variant_define_sources(
 def _variant_specialization_values(
     config: ProjectConfig,
     variant: str | None,
+    *,
+    relative_path: str | None = None,
 ) -> dict[str, tuple[Any, dict[str, Any]]]:
     values = {
         selector: (
@@ -9436,6 +9554,57 @@ def _variant_specialization_values(
         )
         for selector, value in config.specialization_constants.items()
     }
+    if relative_path is not None:
+        normalized_path = _normalize_project_relative_path(relative_path)
+        matches_by_selector: dict[str, list[tuple[str, Any, tuple[Any, ...]]]] = {}
+        for pattern, pattern_values in sorted(
+            config.source_specialization_constants.items()
+        ):
+            if not fnmatch.fnmatch(normalized_path, pattern):
+                continue
+            specificity = _entry_point_selector_priority(pattern, normalized_path)[:-1]
+            for selector, value in pattern_values.items():
+                matches_by_selector.setdefault(selector, []).append(
+                    (pattern, value, specificity)
+                )
+
+        for selector, matches in sorted(matches_by_selector.items()):
+            selected_specificity = max(match[2] for match in matches)
+            selected_matches = [
+                match for match in matches if match[2] == selected_specificity
+            ]
+            selected_value = selected_matches[0][1]
+            if any(
+                not _specialization_values_match(selected_value, match[1])
+                for match in selected_matches[1:]
+            ):
+                matches_text = ", ".join(
+                    f"{pattern!r}={value!r}"
+                    for pattern, value, _specificity in selected_matches
+                )
+                raise ValueError(
+                    "ProjectConfig.source_specialization_constants has conflicting "
+                    f"equally specific values for selector {selector!r} and source "
+                    f"{normalized_path!r}: {matches_text}"
+                )
+            pattern, value, _specificity = max(
+                selected_matches,
+                key=lambda match: match[0],
+            )
+            pattern_path = _mapping_key_path(
+                f"project.{SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY}",
+                pattern,
+            )
+            values[selector] = (
+                value,
+                {
+                    "kind": "project-source-pattern",
+                    "path": _mapping_key_path(pattern_path, selector),
+                    "sourcePattern": pattern,
+                    "selector": selector,
+                    "selectorKind": "id" if selector.isdigit() else "name",
+                },
+            )
     if variant is None:
         return values
     for selector, value in config.variant_specialization_constants.get(
@@ -12274,6 +12443,16 @@ def _metal_find_implicit_template_function_calls(
         source,
         list(excluded_spans),
     )
+    constant_owner_spans = [(0, len(source))]
+    constant_type_aliases = preprocessor._collect_local_type_alias_bindings(
+        source,
+        constant_owner_spans,
+    )
+    integral_constants = preprocessor._collect_local_integral_constant_bindings(
+        source,
+        constant_owner_spans,
+        constant_type_aliases,
+    )
     included = list(included_spans) if included_spans is not None else None
     known_return_types = dict(return_types or {})
     for function in functions:
@@ -12359,6 +12538,10 @@ def _metal_find_implicit_template_function_calls(
                 arguments,
                 call_type_environment,
                 known_return_types,
+                static_values=preprocessor._local_integral_constants_at(
+                    integral_constants,
+                    call_position,
+                ),
             )
             if inferred_arguments:
                 calls.append(
@@ -13012,6 +13195,17 @@ def _collect_metal_template_type_bindings(
 
     expected_element = _metal_array_element_type(expected)
     actual_element = _metal_array_element_type(actual)
+    # Function-call array decay binds a pointer parameter through the array's
+    # element type while retaining the existing template conflict checks.
+    if expected_pointee is not None and actual_element is not None:
+        return _collect_metal_template_type_bindings(
+            preprocessor,
+            expected_type=expected_pointee,
+            actual_type=actual_element,
+            bindings=bindings,
+            template_parameters=template_parameters,
+            template_structs_by_name=template_structs_by_name,
+        )
     if expected_element is not None and actual_element is not None:
         return _collect_metal_template_type_bindings(
             preprocessor,
@@ -13069,6 +13263,190 @@ def _collect_metal_template_type_bindings(
     bindings.clear()
     bindings.update(staged_bindings)
     return True
+
+
+def _fold_concrete_metal_struct_template_arguments(
+    preprocessor: Any,
+    source: str,
+) -> str:
+    """Fold proven integral arguments before concrete struct materialization.
+
+    Function-template materialization can expose a struct specialization whose
+    non-type argument is still a compound expression. Folding that expression
+    while its lexical constants and grouping are intact prevents textual
+    parameter substitution from changing the meaning of constexpr data-member
+    initializers in the specialized owner.
+    """
+    working = source
+    for _ in range(preprocessor.max_template_specializations + 1):
+        templates = preprocessor._find_template_structs(working)
+        primary_templates = [
+            template
+            for template in templates
+            if preprocessor._template_struct_specialization_arguments(template) is None
+        ]
+        templates_by_name = {template.name: template for template in primary_templates}
+        if not templates_by_name:
+            return working
+
+        template_spans = preprocessor._find_template_declaration_spans(working)
+        explicit_specialization_keys = (
+            preprocessor._find_explicit_struct_specialization_keys(
+                working,
+                templates_by_name,
+            )
+        )
+        partial_specializations: dict[str, list[tuple[Any, list[str]]]] = {}
+        for template in templates:
+            specialization_arguments = (
+                preprocessor._template_struct_specialization_arguments(template)
+            )
+            if specialization_arguments is not None:
+                partial_specializations.setdefault(template.name, []).append(
+                    (template, specialization_arguments)
+                )
+
+        instantiations, _selected_partials = (
+            preprocessor._find_explicit_template_struct_instantiations(
+                working,
+                templates_by_name,
+                template_spans,
+                explicit_specialization_keys,
+                partial_specializations,
+            )
+        )
+        if not instantiations:
+            return working
+
+        owner_spans = [(0, len(working))]
+        type_aliases = preprocessor._collect_local_type_alias_bindings(
+            working,
+            owner_spans,
+            skip_spans=template_spans,
+        )
+        constexpr_functions = preprocessor._static_constexpr_function_index(working)
+        preprocessor._static_constexpr_helper_values = {}
+        preprocessor._static_constexpr_helper_resolution_stack = []
+        integral_constants = preprocessor._collect_local_integral_constant_bindings(
+            working,
+            owner_spans,
+            type_aliases,
+            constexpr_functions,
+        )
+
+        candidates: list[tuple[int, int, str]] = []
+        for struct_name, _scanner_arguments, span in instantiations:
+            template = templates_by_name.get(struct_name)
+            if template is None:
+                continue
+            parameter_angle_start = working.find("<", template.span[0])
+            if parameter_angle_start == -1:
+                continue
+            parameter_angle_end = preprocessor._find_matching_template_param_angle(
+                working,
+                parameter_angle_start,
+            )
+            if parameter_angle_end is None:
+                continue
+            parameters = preprocessor._parse_template_parameter_list(
+                working[parameter_angle_start + 1 : parameter_angle_end]
+            )
+            if not parameters:
+                continue
+
+            angle_start = working.find("<", span[0], span[1])
+            if angle_start == -1:
+                continue
+            angle_end = preprocessor._find_matching_angle(working, angle_start)
+            if angle_end is None or angle_end >= span[1]:
+                continue
+            arguments = preprocessor._split_top_level_commas(
+                working[angle_start + 1 : angle_end]
+            )
+
+            visible_constants = preprocessor._local_integral_constants_at(
+                integral_constants,
+                span[0],
+            )
+            bindings: dict[str, str] = {}
+            normalized_arguments = list(arguments)
+            folded_argument = False
+            for index, (parameter, argument) in enumerate(
+                zip(parameters, normalized_arguments)
+            ):
+                normalized_argument = argument
+                if not parameter.is_type_parameter and parameter.declared_type:
+                    declared_type = preprocessor._replace_identifiers(
+                        parameter.declared_type,
+                        bindings,
+                    )
+                    value_type = preprocessor._static_constexpr_integral_type(
+                        declared_type
+                    )
+                    if value_type is not None:
+                        resolved_argument = (
+                            preprocessor._substitute_template_argument_static_constants(
+                                argument,
+                                visible_constants,
+                            )
+                        )
+                        resolved_argument = (
+                            preprocessor._replace_concrete_sizeof_expressions(
+                                resolved_argument,
+                                lambda type_text: (
+                                    preprocessor._resolve_type_aliases_at(
+                                        type_text,
+                                        type_aliases,
+                                        span[0],
+                                    )
+                                ),
+                            )
+                        )
+                        resolved_argument, evaluation, _unresolved = (
+                            preprocessor._resolve_static_constexpr_calls(
+                                resolved_argument,
+                                constexpr_functions,
+                                span[0],
+                            )
+                        )
+                        value = preprocessor._proven_integral_constant_value(
+                            value_type,
+                            evaluation,
+                        )
+                        if value is not None:
+                            normalized_argument = value
+                            normalized_arguments[index] = normalized_argument
+                            folded_argument = (
+                                folded_argument or normalized_argument != argument
+                            )
+                if parameter.name is not None:
+                    bindings[parameter.name] = normalized_argument
+
+            if not folded_argument:
+                continue
+            replacement = (
+                working[span[0] : angle_start + 1]
+                + ", ".join(normalized_arguments)
+                + working[angle_end : span[1]]
+            )
+            if replacement != working[span[0] : span[1]]:
+                candidates.append((span[0], span[1], replacement))
+
+        if not candidates:
+            return working
+
+        # Apply innermost references first; a subsequent pass can then fold an
+        # enclosing template argument without overlapping textual replacements.
+        replacements: list[tuple[int, int, str]] = []
+        for candidate in sorted(candidates, key=lambda item: (item[1] - item[0])):
+            if any(
+                candidate[0] < selected[1] and selected[0] < candidate[1]
+                for selected in replacements
+            ):
+                continue
+            replacements.append(candidate)
+        working = preprocessor._apply_text_replacements(working, replacements)
+    return working
 
 
 def _metal_expand_materialized_struct_type(
@@ -14917,6 +15295,26 @@ def _infer_plain_template_helper_arguments(
         getattr(template, "variadic_template_parameters", set()) or set()
     )
     constant_values = dict(static_values or {})
+
+    def inferred_actual_type(argument: str) -> str | None:
+        actual_type = _metal_expression_type(
+            preprocessor,
+            argument,
+            type_environment,
+            return_types,
+        )
+        if not actual_type or not constant_values:
+            return actual_type
+        expanded_type = _metal_expand_materialized_struct_type(
+            preprocessor,
+            actual_type,
+        )
+        resolved_type = preprocessor._substitute_template_argument_static_constants(
+            expanded_type,
+            constant_values,
+        )
+        return resolved_type if resolved_type != expanded_type else actual_type
+
     inference_arguments = [
         preprocessor._substitute_template_argument_static_constants(
             argument,
@@ -14962,12 +15360,7 @@ def _infer_plain_template_helper_arguments(
                 len(call_arguments) - argument_index - remaining_fixed,
             )
             actual_types = [
-                _metal_expression_type(
-                    preprocessor,
-                    argument,
-                    type_environment,
-                    return_types,
-                )
+                inferred_actual_type(argument)
                 for argument in inference_arguments[
                     argument_index : argument_index + variadic_count
                 ]
@@ -14983,12 +15376,7 @@ def _infer_plain_template_helper_arguments(
             continue
         if argument_index >= len(call_arguments):
             continue
-        actual_type = _metal_expression_type(
-            preprocessor,
-            inference_arguments[argument_index],
-            type_environment,
-            return_types,
-        )
+        actual_type = inferred_actual_type(inference_arguments[argument_index])
         argument_index += 1
         if not actual_type:
             continue
@@ -15192,7 +15580,11 @@ def _materialize_plain_template_helper_calls(
             working,
             template_spans,
         )
-        local_constant_owner_spans = [function.body_span for function in functions]
+        # The lexical binding index safely includes translation-unit constants as
+        # well as function locals. This allows helper deduction to resolve proven
+        # file-scope values used by a local concrete type while retaining normal
+        # scope and shadowing rules at each call site.
+        local_constant_owner_spans = [(0, len(working))]
         local_constant_type_aliases = preprocessor._collect_local_type_alias_bindings(
             working,
             local_constant_owner_spans,
@@ -16750,6 +17142,54 @@ def _inline_metal_concrete_using_template_aliases(
     source: str,
     excluded_spans: Sequence[tuple[int, int]],
 ) -> str:
+    concrete_definitions = preprocessor._find_concrete_struct_definitions(source)
+    concrete_name_counts = Counter(struct.name for struct in concrete_definitions)
+    materialized_structs = getattr(
+        preprocessor,
+        "_materialized_struct_specializations",
+        {},
+    )
+    masked_source = _masked_metal_non_code_text(source)
+    qualified_alias_replacements: list[tuple[int, int, str]] = []
+    # Concrete specializations are appended after the functions that requested
+    # them. Resolve their qualified aliases from recorded provenance before the
+    # Metal parser applies ordinary declaration-order visibility.
+    for struct in concrete_definitions:
+        if (
+            struct.name not in materialized_structs
+            or concrete_name_counts[struct.name] != 1
+            or not struct.type_aliases
+        ):
+            continue
+        constants = preprocessor._resolved_static_data_member_initializers(struct)
+        for alias, alias_target in struct.type_aliases.items():
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9_:])(?:typename\s+)?"
+                rf"{re.escape(struct.name)}\s*::\s*{re.escape(alias)}\b"
+            )
+            matches = [
+                match
+                for match in pattern.finditer(masked_source)
+                if not _source_offset_in_spans(match.start(), excluded_spans)
+            ]
+            if not matches:
+                continue
+            target = _metal_resolve_type_identifiers(
+                preprocessor,
+                alias_target,
+                aliases=struct.type_aliases,
+                constants=constants,
+            )
+            qualified_alias_replacements.extend(
+                (match.start(), match.end(), target) for match in matches
+            )
+    if qualified_alias_replacements:
+        source = preprocessor._apply_text_replacements(
+            source,
+            qualified_alias_replacements,
+        )
+        excluded_spans = preprocessor._find_template_declaration_spans(source)
+
     block_spans = _metal_block_spans(preprocessor, source)
     namespace_spans = preprocessor._find_namespace_spans(source)
     template_structs = _metal_template_struct_members(preprocessor, source)
@@ -16764,6 +17204,9 @@ def _inline_metal_concrete_using_template_aliases(
         known_namespaces,
     )
     concrete_structs = _metal_struct_alias_members(preprocessor, source)
+    concrete_struct_spans = [
+        struct.span for struct in preprocessor._find_concrete_struct_definitions(source)
+    ]
     aliases: list[dict[str, Any]] = []
     alias_spans: list[tuple[int, int]] = []
     excluded = list(excluded_spans)
@@ -16842,6 +17285,11 @@ def _inline_metal_concrete_using_template_aliases(
                     break
         scope_span = _metal_enclosing_block_span(block_spans, i)
         if alias_type is None or scope_span is None:
+            i = semicolon + 1
+            continue
+        # The Metal parser retains struct aliases for qualified type resolution.
+        # This pass only owns block-local aliases exposed by materialization.
+        if preprocessor._containing_span(i, concrete_struct_spans) is not None:
             i = semicolon + 1
             continue
         scope_start, scope_end = scope_span
@@ -18742,6 +19190,10 @@ def _project_template_materialization_for_artifact(
     specializations.extend(inferred_plain_specializations)
     materialized = preprocessor._lower_concrete_const_for_loop_callbacks(materialized)
 
+    materialized = _fold_concrete_metal_struct_template_arguments(
+        preprocessor,
+        materialized,
+    )
     existing_struct_specializations = set(
         preprocessor._materialized_struct_specializations
     )
@@ -18749,6 +19201,7 @@ def _project_template_materialization_for_artifact(
         materialized,
         work_budget=explicit_work_budget,
     )
+    materialized = preprocessor._evaluate_static_assertions(materialized)
     materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
     discovered_struct_specializations = (
         set(preprocessor._materialized_struct_specializations)
@@ -19284,9 +19737,11 @@ def _translation_failure_missing_capabilities(
 
 
 def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
+    diagnostic_code = _translation_failure_diagnostic_code(exc)
+    if diagnostic_code == "project.translate.metal-struct-alias-unresolved":
+        return {}
     if (
-        _translation_failure_diagnostic_code(exc)
-        == "project.translate.metal-struct-method"
+        diagnostic_code == "project.translate.metal-struct-method"
         and getattr(exc, "reason", None) == "reference-return-identity-unsupported"
     ):
         return {}
@@ -19552,6 +20007,86 @@ def _metal_template_argument_failure_details(
             argument[name] = value
     if argument:
         details["valueTemplateArgument"] = dict(sorted(argument.items()))
+    return dict(sorted(details.items()))
+
+
+def _metal_struct_alias_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-struct-alias-unresolved"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    struct_alias = {}
+    fields = {
+        "owner": getattr(exc, "owner", None),
+        "aliasName": getattr(exc, "alias_name", None),
+        "requestedSignature": getattr(exc, "requested_signature", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            struct_alias[name] = value
+
+    raw_candidate_identities = tuple(getattr(exc, "candidate_identities", None) or ())
+    raw_candidate_locations = tuple(getattr(exc, "candidate_locations", None) or ())
+    candidate_identities = [
+        (index, identity.strip())
+        for index, identity in enumerate(raw_candidate_identities)
+        if _is_non_empty_string(identity)
+    ]
+    locations_are_paired = len(raw_candidate_locations) == len(
+        raw_candidate_identities
+    ) and all(location is not None for location in raw_candidate_locations)
+    if locations_are_paired and candidate_identities:
+        candidate_records: dict[tuple[Any, ...], tuple[str, dict[str, Any]]] = {}
+        for index, identity in candidate_identities:
+            payload = _translation_failure_location(
+                SimpleNamespace(source_location=raw_candidate_locations[index]), unit
+            ).to_json()
+            location_key = tuple(
+                payload[field_name] for field_name in SOURCE_MAP_SPAN_FIELDS
+            )
+            candidate_records[(*location_key, identity)] = (identity, payload)
+        ordered_records = [candidate_records[key] for key in sorted(candidate_records)]
+        struct_alias["candidateIdentities"] = [
+            identity for identity, _location in ordered_records
+        ]
+        struct_alias["candidateLocations"] = [
+            location for _identity, location in ordered_records
+        ]
+    else:
+        normalized_identities = sorted(
+            {identity for _index, identity in candidate_identities}
+        )
+        if normalized_identities:
+            struct_alias["candidateIdentities"] = normalized_identities
+
+        candidate_locations_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for location in raw_candidate_locations:
+            if location is None:
+                continue
+            payload = _translation_failure_location(
+                SimpleNamespace(source_location=location), unit
+            ).to_json()
+            candidate_locations_by_key[
+                tuple(payload[field_name] for field_name in SOURCE_MAP_SPAN_FIELDS)
+            ] = payload
+        if candidate_locations_by_key:
+            struct_alias["candidateLocations"] = [
+                candidate_locations_by_key[key]
+                for key in sorted(candidate_locations_by_key)
+            ]
+
+    if struct_alias:
+        details["structAlias"] = dict(sorted(struct_alias.items()))
     return dict(sorted(details.items()))
 
 
@@ -20693,6 +21228,7 @@ def _translation_failure_details(
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_template_argument_failure_details(exc, unit, artifact_path),
+        **_metal_struct_alias_failure_details(exc, unit, artifact_path),
         **_metal_callable_failure_details(exc, unit, artifact_path),
         **_metal_callable_alias_failure_details(exc, unit, artifact_path),
         **_template_materialization_failure_details(exc),
@@ -21855,7 +22391,11 @@ def _resolved_project_specialization_constants(
     configured = (
         dict(configured_values)
         if configured_values is not None
-        else _variant_specialization_values(config, variant)
+        else _variant_specialization_values(
+            config,
+            variant,
+            relative_path=unit.relative_path,
+        )
     )
     deferred = target in DEFERRED_SPECIALIZATION_TARGETS
     diagnostics: list[ProjectDiagnostic] = []
@@ -23351,6 +23891,7 @@ def translate_project(
             source_options=config.source_options,
             variants=config.variants,
             specialization_constants=config.specialization_constants,
+            source_specialization_constants=(config.source_specialization_constants),
             variant_specialization_constants=(config.variant_specialization_constants),
             workgroup_size=config.workgroup_size,
             variant_workgroup_sizes=config.variant_workgroup_sizes,
@@ -41603,6 +42144,12 @@ def _project_config_for_scan_validation(
         "project.specializationConstants", specialization_constants
     ):
         return None
+    source_specialization_constants = project.get("sourceSpecializationConstants", {})
+    if _source_specialization_mapping_contract_reasons(
+        "project.sourceSpecializationConstants",
+        source_specialization_constants,
+    ):
+        return None
     raw_variant_specializations = project.get("variantSpecializationConstants", {})
     if _variant_specialization_mapping_contract_reasons(
         "project.variantSpecializationConstants", raw_variant_specializations
@@ -41677,6 +42224,11 @@ def _project_config_for_scan_validation(
         },
         variants=variants,
         specialization_constants=dict(specialization_constants),
+        source_specialization_constants={
+            str(pattern): dict(values)
+            for pattern, values in source_specialization_constants.items()
+            if isinstance(values, Mapping)
+        },
         variant_specialization_constants=variant_specializations,
         workgroup_size=workgroup_size,
         variant_workgroup_sizes={
@@ -44668,6 +45220,12 @@ def _project_config_for_include_validation(
         "project.specializationConstants", specialization_constants
     ):
         specialization_constants = {}
+    source_specialization_constants = project.get("sourceSpecializationConstants", {})
+    if _source_specialization_mapping_contract_reasons(
+        "project.sourceSpecializationConstants",
+        source_specialization_constants,
+    ):
+        source_specialization_constants = {}
     raw_variant_specializations = project.get("variantSpecializationConstants", {})
     if _variant_specialization_mapping_contract_reasons(
         "project.variantSpecializationConstants", raw_variant_specializations
@@ -44706,6 +45264,11 @@ def _project_config_for_include_validation(
         defines=dict(defines),
         variants=variants,
         specialization_constants=dict(specialization_constants),
+        source_specialization_constants={
+            str(pattern): dict(values)
+            for pattern, values in source_specialization_constants.items()
+            if isinstance(values, Mapping)
+        },
         variant_specialization_constants={
             str(name): dict(values)
             for name, values in raw_variant_specializations.items()
@@ -45520,6 +46083,32 @@ def _variant_specialization_mapping_contract_reasons(
             variant_prefix = _mapping_key_path(prefix, variant)
         reasons.extend(
             _specialization_value_mapping_contract_reasons(variant_prefix, constants)
+        )
+    return reasons
+
+
+def _source_specialization_mapping_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = []
+    for pattern, constants in value.items():
+        if not _is_non_empty_string(pattern):
+            reasons.append(f"{prefix} keys must be non-empty source patterns")
+            pattern_prefix = prefix
+        else:
+            pattern_prefix = _mapping_key_path(prefix, str(pattern))
+            if not _is_repository_relative_glob(str(pattern)):
+                reasons.append(f"{pattern_prefix} pattern must be repository-relative")
+            if _normalize_project_relative_path(str(pattern)) != pattern:
+                reasons.append(f"{pattern_prefix} pattern must be normalized")
+        reasons.extend(
+            _specialization_value_mapping_contract_reasons(
+                pattern_prefix,
+                constants,
+            )
         )
     return reasons
 
@@ -46886,6 +47475,58 @@ def _project_metadata_contract_reasons(
                 "project.specializationConstantCount must match "
                 "project.specializationConstants "
                 f"({_value_mismatch_context(count, len(specialization_constants))})"
+            )
+
+    source_specializations = project.get("sourceSpecializationConstants")
+    source_specializations_are_mapping = isinstance(source_specializations, Mapping)
+    if _optional_project_field(
+        project,
+        "sourceSpecializationConstants",
+        required=require_full_metadata,
+    ):
+        reasons.extend(
+            _source_specialization_mapping_contract_reasons(
+                "project.sourceSpecializationConstants",
+                source_specializations,
+            )
+        )
+    if _optional_project_field(
+        project,
+        "sourceSpecializationPatternCount",
+        required=require_full_metadata,
+    ):
+        count = project.get("sourceSpecializationPatternCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.sourceSpecializationPatternCount must be a "
+                "non-negative integer"
+            )
+        elif source_specializations_are_mapping and count != len(
+            source_specializations
+        ):
+            reasons.append(
+                "project.sourceSpecializationPatternCount must match "
+                "project.sourceSpecializationConstants "
+                f"({_value_mismatch_context(count, len(source_specializations))})"
+            )
+    if _optional_project_field(
+        project,
+        "sourceSpecializationConstantCounts",
+        required=require_full_metadata,
+    ):
+        counts = project.get("sourceSpecializationConstantCounts")
+        if source_specializations_are_mapping:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "project.sourceSpecializationConstantCounts",
+                    counts,
+                    _source_specialization_constant_counts(source_specializations),
+                    "project.sourceSpecializationConstants",
+                )
+            )
+        elif not isinstance(counts, Mapping):
+            reasons.append(
+                "project.sourceSpecializationConstantCounts must be an object"
             )
 
     variant_specializations = project.get("variantSpecializationConstants")

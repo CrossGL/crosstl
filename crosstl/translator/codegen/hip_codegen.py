@@ -187,22 +187,21 @@ HIP_INTEGER_BIT_FUNCTION_ALIASES = {
     "firstbithigh": "findMSB",
 }
 
-HIP_UNSUPPORTED_FP16_VECTOR_TYPES = {
-    "vec4<f16>",
-    "vec4<float16>",
-    "vec4<half>",
-    "f16vec4",
-    "float16vec4",
-    "half4",
-}
-
-HIP_FP16_VEC3_TYPES = {
-    "vec3<f16>",
-    "vec3<float16>",
-    "vec3<half>",
-    "f16vec3",
-    "float16vec3",
-    "half3",
+HIP_FP16_VECTOR_TYPES = {
+    "cgl_half3": 3,
+    "cgl_half4": 4,
+    "vec3<f16>": 3,
+    "vec3<float16>": 3,
+    "vec3<half>": 3,
+    "f16vec3": 3,
+    "float16vec3": 3,
+    "half3": 3,
+    "vec4<f16>": 4,
+    "vec4<float16>": 4,
+    "vec4<half>": 4,
+    "f16vec4": 4,
+    "float16vec4": 4,
+    "half4": 4,
 }
 
 HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES = {
@@ -218,6 +217,25 @@ HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES = {
     "f32",
     "f64",
 }
+
+
+class UnsupportedHIPAstNodeError(ValueError):
+    """Raised when HIP codegen cannot safely lower an AST node."""
+
+    project_diagnostic_code = "project.translate.unsupported-feature"
+    missing_capabilities = ("hip.ast-node-lowering",)
+
+    def __init__(self, node):
+        self.node_type = type(node).__name__
+        self.feature = f"hip.ast-node.{self.node_type}"
+        self.source_location = getattr(node, "source_location", None)
+        self.suggested_action = (
+            f"Implement visit_{self.node_type} with semantics-preserving HIP lowering."
+        )
+        super().__init__(
+            f"HIP code generation does not support AST node {self.node_type}. "
+            f"Suggested action: {self.suggested_action}"
+        )
 
 
 class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
@@ -375,12 +393,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "vec4<f64>": "double4",
             "f16vec2": "half2",
             "f16vec3": "cgl_half3",
+            "f16vec4": "cgl_half4",
             "float16vec3": "cgl_half3",
+            "float16vec4": "cgl_half4",
             "half3": "cgl_half3",
+            "half4": "cgl_half4",
             "half2": "half2",
             "vec3<f16>": "cgl_half3",
             "vec3<float16>": "cgl_half3",
             "vec3<half>": "cgl_half3",
+            "vec4<f16>": "cgl_half4",
+            "vec4<float16>": "cgl_half4",
+            "vec4<half>": "cgl_half4",
             "bvec2": "uchar2",
             "bvec3": "uchar3",
             "bvec4": "uchar4",
@@ -546,6 +570,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "vec3<f16>": "cgl_make_half3",
             "vec3<float16>": "cgl_make_half3",
             "vec3<half>": "cgl_make_half3",
+            "f16vec4": "cgl_make_half4",
+            "float16vec4": "cgl_make_half4",
+            "half4": "cgl_make_half4",
+            "vec4<f16>": "cgl_make_half4",
+            "vec4<float16>": "cgl_make_half4",
+            "vec4<half>": "cgl_make_half4",
             "vec2<f32>": "make_float2",
             "vec3<f32>": "make_float3",
             "vec4<f32>": "make_float4",
@@ -1383,10 +1413,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return visitor(node)
 
     def generic_visit(self, node: ASTNode) -> str:
-        """Raise a clear error for unsupported AST nodes."""
-        raise NotImplementedError(
-            f"Code generation not implemented for {type(node).__name__}"
-        )
+        """Fail closed when no semantics-preserving HIP visitor exists."""
+        raise UnsupportedHIPAstNodeError(node)
 
     def ordered_generic_struct_specializations(self):
         specializations = self.generic_struct_specializations or {}
@@ -3997,10 +4025,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def hip_half_constructor_expression(self, constructor_type, raw_args, args):
         """Lower CrossGL FP16 constructors to HIP's documented half intrinsics."""
-        unsupported_type = self.hip_unsupported_fp16_vector_type(constructor_type)
-        if unsupported_type is not None:
-            self.raise_unsupported_hip_fp16_vector_type(unsupported_type)
-
         if constructor_type in {"f16", "half", "float16"}:
             if not args:
                 return "half{}"
@@ -6003,27 +6027,29 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return self.map_type(type_name)
 
     def vector_type_info(self, type_name):
-        half3_info = self.hip_half3_vector_type_info(type_name)
-        if half3_info is not None:
-            return half3_info
+        half_vector_info = self.hip_half_vector_type_info(type_name)
+        if half_vector_info is not None:
+            return half_vector_info
         narrow_info = self.hip_narrow_integer_vector_type_info(type_name)
         if narrow_info is not None:
             return narrow_info
         return super().vector_type_info(type_name)
 
-    def hip_half3_vector_type_info(self, type_name):
+    def hip_half_vector_type_info(self, type_name):
         type_text = self.type_name_string(type_name)
         if type_text is None:
             return None
         compact_type = "".join(str(type_text).split())
-        if compact_type not in HIP_FP16_VEC3_TYPES and compact_type != "cgl_half3":
+        component_count = HIP_FP16_VECTOR_TYPES.get(compact_type)
+        if component_count is None:
             return None
-        self.require_hip_half3_helper()
+        self.require_hip_half_vector_helper(component_count)
+        vector_type = f"cgl_half{component_count}"
         return {
-            "type": "cgl_half3",
-            "constructor": "cgl_make_half3",
+            "type": vector_type,
+            "constructor": f"cgl_make_half{component_count}",
             "component_type": "half",
-            "components": ("x", "y", "z"),
+            "components": ("x", "y", "z", "w")[:component_count],
         }
 
     def hip_narrow_integer_vector_type_info(self, type_name):
@@ -6061,44 +6087,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "components": components,
         }
 
-    def hip_unsupported_fp16_vector_type(self, type_name):
-        type_text = self.type_name_string(type_name)
-        if type_text is None:
-            return None
-        compact_type = "".join(str(type_text).split())
-        if compact_type in HIP_UNSUPPORTED_FP16_VECTOR_TYPES:
-            return compact_type
-        return None
-
-    def raise_unsupported_hip_fp16_vector_type(self, type_name):
-        raise ValueError(
-            "HIP does not support FP16 vector type "
-            f"{type_name}; supported FP16 HIP aliases are f16/half "
-            "and vec2<f16>/half2; vec3<f16>/half3 lowers to cgl_half3"
-        )
-
     def require_hip_half3_helper(self):
-        helper_name = "cgl_half3_type"
+        self.require_hip_half_vector_helper(3)
+
+    def require_hip_half4_helper(self):
+        self.require_hip_half_vector_helper(4)
+
+    def require_hip_half_conversion_helper(self):
+        helper_name = "cgl_half_conversion"
         if helper_name in self.helper_functions:
             return
         self.helper_functions[helper_name] = (
-            "struct cgl_half3\n"
-            "{\n"
-            "    half x;\n"
-            "    half y;\n"
-            "    half z;\n"
-            "\n"
-            "    __host__ __device__ cgl_half3()\n"
-            "        : x(__float2half(0.0f)), y(__float2half(0.0f)), z(__float2half(0.0f))\n"
-            "    {\n"
-            "    }\n"
-            "\n"
-            "    __host__ __device__ cgl_half3(half x_value, half y_value, half z_value)\n"
-            "        : x(x_value), y(y_value), z(z_value)\n"
-            "    {\n"
-            "    }\n"
-            "};\n"
-            "\n"
             "__host__ __device__ inline half cgl_to_half(half value)\n"
             "{\n"
             "    return value;\n"
@@ -6108,17 +6107,62 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "__host__ __device__ inline half cgl_to_half(T value)\n"
             "{\n"
             "    return __float2half(static_cast<float>(value));\n"
+            "}"
+        )
+
+    def require_hip_half_vector_helper(self, component_count):
+        self.require_hip_half_conversion_helper()
+        helper_name = f"cgl_half{component_count}_type"
+        if helper_name in self.helper_functions:
+            return
+
+        vector_type = f"cgl_half{component_count}"
+        components = ("x", "y", "z", "w")[:component_count]
+        fields = "\n".join(f"    half {component};" for component in components)
+        zero_initializers = ", ".join(
+            f"{component}(__float2half(0.0f))" for component in components
+        )
+        parameters = ", ".join(f"half {component}_value" for component in components)
+        value_initializers = ", ".join(
+            f"{component}({component}_value)" for component in components
+        )
+        template_parameters = ", ".join(
+            f"typename {component.upper()}" for component in components
+        )
+        make_parameters = ", ".join(
+            f"{component.upper()} {component}" for component in components
+        )
+        make_arguments = ", ".join(
+            f"cgl_to_half({component})" for component in components
+        )
+        alignment = " alignas(8)" if component_count == 4 else ""
+        self.helper_functions[helper_name] = (
+            f"struct{alignment} {vector_type}\n"
+            "{\n"
+            f"{fields}\n"
+            "\n"
+            f"    __host__ __device__ {vector_type}()\n"
+            f"        : {zero_initializers}\n"
+            "    {\n"
+            "    }\n"
+            "\n"
+            f"    __host__ __device__ {vector_type}({parameters})\n"
+            f"        : {value_initializers}\n"
+            "    {\n"
+            "    }\n"
+            "};\n"
+            "\n"
+            f"__host__ __device__ inline {vector_type} "
+            f"cgl_make_half{component_count}()\n"
+            "{\n"
+            f"    return {vector_type}();\n"
             "}\n"
             "\n"
-            "__host__ __device__ inline cgl_half3 cgl_make_half3()\n"
+            f"template <{template_parameters}>\n"
+            f"__host__ __device__ inline {vector_type} "
+            f"cgl_make_half{component_count}({make_parameters})\n"
             "{\n"
-            "    return cgl_half3();\n"
-            "}\n"
-            "\n"
-            "template <typename X, typename Y, typename Z>\n"
-            "__host__ __device__ inline cgl_half3 cgl_make_half3(X x, Y y, Z z)\n"
-            "{\n"
-            "    return cgl_half3(cgl_to_half(x), cgl_to_half(y), cgl_to_half(z));\n"
+            f"    return {vector_type}({make_arguments});\n"
             "}"
         )
 
@@ -9059,7 +9103,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 size = type_node.size
                 if element_type == "float":
                     return f"float{size}"
-                elif element_type == "f16":
+                elif element_type in {"f16", "float16", "half"}:
                     return f"vec{size}<f16>"
                 elif element_type == "int":
                     return f"int{size}"
@@ -9081,10 +9125,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             type_str = self.convert_type_node_to_string(type_name)
         else:
             type_str = str(type_name)
-
-        unsupported_type = self.hip_unsupported_fp16_vector_type(type_str)
-        if unsupported_type is not None:
-            self.raise_unsupported_hip_fp16_vector_type(unsupported_type)
 
         generic_enum_type = generic_enum_specialized_type_name(self, type_str)
         if generic_enum_type is not None:
@@ -9194,6 +9234,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         base_type = str(mapped_type).split("[", 1)[0].strip()
         if base_type == "cgl_half3":
             self.require_hip_half3_helper()
+        if base_type == "cgl_half4":
+            self.require_hip_half4_helper()
         if base_type in {
             "CglRayTracingAccelerationStructure",
             "CglRayDesc",

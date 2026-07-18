@@ -1291,12 +1291,17 @@ class TestHipCodeGen:
 
     def test_qualified_scalar_math_builtins_convert_to_crossgl_reparse(self):
         code = """
+        namespace hstd = std;
+        namespace hhip = hip::std;
+
         __device__ float qualified_math(float x, float y, float z) {
+            hstd::uint64_t count = 0;
             float roots = ::sqrtf(x) + std::sqrtf(y) + ::rsqrtf(z);
             float extrema = std::fminf(x, y) + std::fmaxf(y, z);
+            float alias_extrema = hstd::fminf(x, z) + hhip::fmaxf(y, z);
             float magnitude = ::std::fabs(x);
             float fused = ::std::fmaf(x, y, z);
-            return roots + extrema + magnitude + fused;
+            return roots + extrema + alias_extrema + magnitude + fused + count;
         }
         """
         lexer = HipLexer(code)
@@ -1306,11 +1311,15 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
+        assert "var count: u64 = 0;" in result
         assert "var roots: f32 = ((sqrt(x) + sqrt(y)) + inversesqrt(z));" in result
         assert "var extrema: f32 = (min(x, y) + max(y, z));" in result
+        assert "var alias_extrema: f32 = (min(x, z) + max(y, z));" in result
         assert "var magnitude: f32 = abs(x);" in result
         assert "var fused: f32 = fma(x, y, z);" in result
         for raw_name in {
+            "hstd::",
+            "hhip::",
             "::sqrtf",
             "std::sqrtf",
             "::rsqrtf",
@@ -1558,7 +1567,7 @@ class TestHipCodeGen:
         __global__ void warp(unsigned long long mask, int pred, int value, int lane, unsigned int* out) {
             unsigned long long active = __activemask();
             unsigned long long bits = __ballot_sync(0xffffffffffffffff, pred);
-            int all_set = __all_sync(0xffffffffffffffff, pred);
+            int all_set = ::__all_sync(0xffffffffffffffff, pred);
             int y = __shfl_sync(0xffffffffffffffff, value, lane);
             int unsupported = __shfl_xor_sync(mask, value, lane);
             out[lane] = y + unsupported + all_set + active + bits;
@@ -1586,6 +1595,7 @@ class TestHipCodeGen:
             "directly supported in CrossGL */ 0"
         ) in result
         assert "__shfl_sync(0xffffffffffffffff, value, lane)" not in result
+        assert "::__all_sync" not in result
         assert "__activemask();" not in result
 
     def test_rocm_docs_legacy_warp_any_all_codegen_reparse(self):
