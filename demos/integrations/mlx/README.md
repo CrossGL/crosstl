@@ -439,25 +439,30 @@ separate.
 A selected DirectX replay of `quantized.metal` now emits one artifact with zero
 translation diagnostics for `affine_quantize_float_gs_32_b_2`. It materializes
 six reachable specializations and three concrete records while pruning 110,861
-unreachable candidates. The generated HLSL is 5,737 bytes with SHA-256
-`c2737b9d324578209c15899cb9a1dad94697b041c0bcfd0c1276a809d36f8f88`.
+unreachable candidates. The generated HLSL is 5,271 bytes with SHA-256
+`bcc7ba3b8fefe4ebe193f5736036da86a98f02c4f9ef0bb792a5b1f7ffaafc92`.
 This path verifies the completed template-member and owner-dependent `constexpr`
-work tracked by CrossGL/crosstl#1476 and CrossGL/crosstl#1672. Native 16-bit HLSL
-emission under
-[#1799](https://github.com/CrossGL/crosstl/issues/1799) and concrete
-`static_assert` evaluation under
-[#1800](https://github.com/CrossGL/crosstl/issues/1800) are resolved for this
-selected entry. The native-profile helper contract under #1799 is also resolved
-across the pinned bfloat frontier. Contextual narrowing under
+work tracked by CrossGL/crosstl#1476 and CrossGL/crosstl#1672. After unreachable
+materializations are pruned, this selected float specialization contains no live
+native-width 16-bit types, and its report records `requiredCapabilities=[]`.
+Native 16-bit HLSL support under
+[#1799](https://github.com/CrossGL/crosstl/issues/1799) remains resolved and
+validated elsewhere, including the pinned bfloat frontier, but is not required
+by this selected specialization. Concrete `static_assert` evaluation under
+[#1800](https://github.com/CrossGL/crosstl/issues/1800) is resolved for this
+selected entry. Contextual narrowing under
 [#1801](https://github.com/CrossGL/crosstl/issues/1801) remains recorded as
 historical resolved evidence for this selected entry, while the pinned frontier
-destination-conversion contract is resolved. The artifact requires the
-`directx.native-16bit-types` capability and contains no remaining
-`static_assert`. Official DXC validation with profile `cs_6_2`,
+destination-conversion contract is resolved. The artifact contains no remaining
+`static_assert`. Its ordinary type contract needs no native-16-bit profile
+uplift, while the generated wave intrinsics keep the configured project and
+compiler target scoped to `directx-12`. Official DXC validation with profile
+`cs_6_0`, no
 `-enable-16bit-types`, and `-WX` passes. The typed resource store is emitted as
 `out_[uint((out_index + 4))] = uint(((output & 1095216660480ull) >> 32));`.
 The locally generated DXIL was nonempty; its byte size is not treated as a
-cross-version compiler invariant.
+cross-version compiler invariant. This evidence covers translation and compiler
+acceptance only; it does not claim runtime execution or numerical parity.
 
 The adjacent DirectX entry `affine_gather_qmv_fast_float_gs_32_b_2` now
 advances through the logical `static_assert` covered by

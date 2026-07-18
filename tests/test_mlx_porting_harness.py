@@ -7534,10 +7534,12 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     readme = MLX_README_PATH.read_text(encoding="utf-8")
     normalized_readme = " ".join(readme.split())
 
-    assert "Native 16-bit HLSL emission" in normalized_readme
-    assert "concrete `static_assert` evaluation" in normalized_readme
+    assert "Native 16-bit HLSL support" in normalized_readme
+    assert "Concrete `static_assert` evaluation" in normalized_readme
     assert "Official DXC validation" in normalized_readme
-    assert "`-enable-16bit-types`, and `-WX` passes" in normalized_readme
+    assert "profile `cs_6_0`, no `-enable-16bit-types`, and `-WX` passes" in (
+        normalized_readme
+    )
     assert "zero warnings across all 468 entry-point runs" in normalized_readme
     assert "records this as a warning-clean contract" in normalized_readme
     assert "rejects any newly observed warning" in normalized_readme
@@ -7564,14 +7566,22 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "compiler acceptance and a warning-clean diagnostic contract" in (
         normalized_readme
     )
-    assert "native-profile helper contract under #1799 is also resolved" in (
+    assert "this selected float specialization contains no live" in normalized_readme
+    assert "native-width 16-bit types" in normalized_readme
+    assert "its report records `requiredCapabilities=[]`" in normalized_readme
+    assert "remains resolved and validated elsewhere" in normalized_readme
+    assert "but is not required by this selected specialization" in (normalized_readme)
+    assert "needs no native-16-bit profile uplift" in normalized_readme
+    assert "wave intrinsics keep the configured project and compiler target" in (
         normalized_readme
     )
+    assert "scoped to `directx-12`" in normalized_readme
     assert "historical resolved evidence for this selected entry" in normalized_readme
     assert "pinned frontier destination-conversion contract is resolved" in (
         normalized_readme
     )
     assert "cross-version compiler invariant" in normalized_readme
+    assert "does not claim runtime execution or numerical parity" in normalized_readme
     assert (
         "`out_[uint((out_index + 4))] = " "uint(((output & 1095216660480ull) >> 32));`"
     ) in normalized_readme
@@ -7595,9 +7605,23 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["status"] == "translated-dxc-validated"
     assert directx["artifact_count"] == 1
     assert directx["translation_diagnostic_count"] == 0
+    assert directx["configured_project_target"] == "directx-12"
+    assert directx["compiler_target_profiles"] == ["directx-12"]
+    assert directx["required_capabilities"] == []
     assert directx["generated_hlsl"] == {
-        "sha256": "c2737b9d324578209c15899cb9a1dad94697b041c0bcfd0c1276a809d36f8f88",
-        "size_bytes": 5737,
+        "sha256": "bcc7ba3b8fefe4ebe193f5736036da86a98f02c4f9ef0bb792a5b1f7ffaafc92",
+        "size_bytes": 5271,
+    }
+    assert directx["materialization"] == {
+        "reachable_specialization_count": 6,
+        "concrete_specialization_count": 3,
+        "pruned_candidate_count": 110861,
+    }
+    assert directx["native_16_bit_emission"] == {
+        "status": "not-required-for-selected-entry",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1799",
+        "support_status": "resolved-and-validated-elsewhere",
+        "reason": "unreachable-native-width-materializations-pruned",
     }
     assert directx["concrete_static_assertion_evaluation"] == {
         "status": "resolved-for-selected-entry",
@@ -7606,8 +7630,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     }
     assert directx["compiler_validation"] == {
         "compiler": "dxc",
-        "profile": "cs_6_2",
-        "compiler_arguments": ["-enable-16bit-types"],
+        "profile": "cs_6_0",
+        "compiler_arguments": [],
         "warnings_as_errors": True,
         "status": "passed",
         "observed_failure_count": 0,
