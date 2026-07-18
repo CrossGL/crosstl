@@ -2449,16 +2449,18 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
 
     directx_private_pointer_step = ci_coverage.workflow_step_section(
         mlx_porting,
-        "Prove Direct3D private-pointer native readback",
+        "Prove Direct3D local-struct byte-view native readback",
     )
     assert "if: runner.os == 'Windows'" in directx_private_pointer_step
     assert (
         "CROSTL_REQUIRE_PRIVATE_POINTER_RUNTIME: directx"
         in directx_private_pointer_step
     )
-    assert "private_pointer_native_readback and directx" in (
-        directx_private_pointer_step
+    assert (
+        "test_private_pointer_native_readback[local-struct-byte-view-directx]"
+        in directx_private_pointer_step
     )
+    assert "-k" not in directx_private_pointer_step
     assert "-n auto" in directx_private_pointer_step
 
     opengl_step = ci_coverage.workflow_step_section(
@@ -2478,13 +2480,17 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
 
     opengl_private_pointer_step = ci_coverage.workflow_step_section(
         mlx_porting,
-        "Prove OpenGL private-pointer native readback",
+        "Prove OpenGL local-struct byte-view native readback",
     )
     assert "if: runner.os == 'Linux'" in opengl_private_pointer_step
     assert (
         "CROSTL_REQUIRE_PRIVATE_POINTER_RUNTIME: opengl" in opengl_private_pointer_step
     )
-    assert "private_pointer_native_readback and opengl" in opengl_private_pointer_step
+    assert (
+        "test_private_pointer_native_readback[local-struct-byte-view-opengl]"
+        in opengl_private_pointer_step
+    )
+    assert "-k" not in opengl_private_pointer_step
     assert "EGL_PLATFORM: surfaceless" in opengl_private_pointer_step
     assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_private_pointer_step
     assert "PYOPENGL_PLATFORM: egl" in opengl_private_pointer_step

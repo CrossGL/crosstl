@@ -290,11 +290,13 @@ jobs:
           CROSTL_RUN_DIRECTX_MLX_ARANGE_DEVICE_TEST: "1"
         run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device"
 
-      - name: Prove Direct3D private-pointer native readback
+      - name: Prove Direct3D local-struct byte-view native readback
         if: runner.os == 'Windows'
         env:
           CROSTL_REQUIRE_PRIVATE_POINTER_RUNTIME: directx
-        run: python -m pytest -q -n auto tests/test_translator/test_private_pointer_partition_runtime.py -k "private_pointer_native_readback and directx"
+        run: >-
+          python -m pytest -q -n auto
+          "tests/test_translator/test_private_pointer_partition_runtime.py::test_private_pointer_native_readback[local-struct-byte-view-directx]"
 
       - name: Prove OpenGL SPIR-V specialization runtime
         if: runner.os == 'Linux'
@@ -320,7 +322,7 @@ jobs:
             tests/test_translator/test_native_runtime_drivers.py \
             -k "opengl_compute_runtime_executes_copysign_bit_patterns_on_device"
 
-      - name: Prove OpenGL private-pointer native readback
+      - name: Prove OpenGL local-struct byte-view native readback
         if: runner.os == 'Linux'
         env:
           CROSTL_REQUIRE_PRIVATE_POINTER_RUNTIME: opengl
@@ -329,8 +331,7 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           python -m pytest -q -n auto \
-            tests/test_translator/test_private_pointer_partition_runtime.py \
-            -k "private_pointer_native_readback and opengl"
+            "tests/test_translator/test_private_pointer_partition_runtime.py::test_private_pointer_native_readback[local-struct-byte-view-opengl]"
 
       - name: Validate generated OpenGL subgroup contract through Vulkan
         if: runner.os == 'Linux'

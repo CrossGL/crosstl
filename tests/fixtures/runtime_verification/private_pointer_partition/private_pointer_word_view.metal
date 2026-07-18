@@ -7,8 +7,14 @@ struct WordBlock {
 
 uint sum_bytes(const thread uint8_t* bytes) {
     uint total = 0;
-    for (uint index = 0; index < 8; ++index) {
-        total += uint(bytes[index]) * (index + 1);
+    if constexpr (4 == 4) {
+        for (uint index = 0; index < 8; ++index) {
+            total += uint(bytes[index]) * (index + 1);
+        }
+    } else {
+        for (uint index = 0; index < 16; ++index) {
+            total += uint(bytes[index]) * (index + 1);
+        }
     }
     return total;
 }
