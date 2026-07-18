@@ -50,6 +50,10 @@ from .native_loader_abi_package import (
     NATIVE_LOADER_ABI_PACKAGE_VERSION,
     build_native_loader_abi_package,
 )
+from .native_loader_dispatch import (
+    NativeLoaderDispatchError,
+    build_native_loader_dispatch_request,
+)
 from .native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
@@ -208,6 +212,7 @@ __all__ = [
     "NativeRuntimeParityAdapter",
     "NativeRuntimeValidationCommand",
     "NativeLoaderABIError",
+    "NativeLoaderDispatchError",
     "OpenGLRuntimeParityAdapter",
     "OpenGLComputeRuntime",
     "RuntimeAdapter",
@@ -254,6 +259,7 @@ __all__ = [
     "build_runtime_binding_manifest",
     "build_native_loader_abi_descriptor",
     "build_native_loader_abi_package",
+    "build_native_loader_dispatch_request",
     "build_runtime_test_manifest",
     "build_runtime_host_loader_scaffolds",
     "build_runtime_host_integration_handoff",
