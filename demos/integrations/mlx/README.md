@@ -1072,13 +1072,18 @@ An independent Metal fixture, `private_pointer_word_view.metal`, initializes a
 local struct with two 32-bit words, reads its eight bytes through a const
 thread-local byte view, and computes the order-sensitive checksum
 `sum(byte[index] * (index + 1))`. Its required readback is `[204]`. The Metal
-source compiles locally as Metal 3.2 with Apple metal `32023.918`, and translated
-DirectX and OpenGL native execution is wired into the platform CI jobs. Target
-execution has not yet been observed for this fixture and remains pending this
-branch's CI.
+source compiles locally as Metal 3.2 with Apple metal `32023.918`.
+[GitHub Actions run 29649620337](https://github.com/CrossGL/crosstl/actions/runs/29649620337)
+produced the exact `[204]` readback on `windows-latest` through Direct3D and on
+`ubuntu-latest` through OpenGL. The passing steps were
+`Prove Direct3D local-struct byte-view native readback` and
+`Prove OpenGL local-struct byte-view native readback`, respectively. Both tests
+required their native runtime and reported zero mismatches with zero absolute
+and relative tolerance.
 
-These fixture-level proofs do not establish complete MLX artifact translation,
-MLX host runtime integration, or numerical parity for MLX workloads.
+These reduced fixture-level proofs do not establish complete MLX artifact
+translation, full MLX host runtime integration, full MLX test-suite execution,
+or numerical parity for MLX workloads.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.

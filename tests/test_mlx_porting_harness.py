@@ -2951,7 +2951,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 "numerical_parity_claimed": False,
             },
             "local_struct_byte_view": {
-                "status": "target-native-execution-pending-ci",
+                "status": "native-execution-observed-in-ci",
                 "source": (
                     "tests/fixtures/runtime_verification/"
                     "private_pointer_partition/private_pointer_word_view.metal"
@@ -2961,6 +2961,9 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                     "sum(byte[index] * (index + 1)) for index 0 through 7"
                 ),
                 "order_sensitive": True,
+                "ci_run_url": (
+                    "https://github.com/CrossGL/crosstl/actions/runs/29649620337"
+                ),
                 "source_validation": {
                     "platform": "macos",
                     "compiler": "xcrun metal",
@@ -2972,21 +2975,26 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                     "directx": {
                         "ci_platform": "windows-latest",
                         "runtime": "direct3d",
+                        "workflow_step": (
+                            "Prove Direct3D local-struct byte-view native readback"
+                        ),
                         "native_execution_wired": True,
-                        "native_execution_observed": False,
-                        "verification_status": "pending-branch-ci",
+                        "native_execution_observed": True,
                     },
                     "opengl": {
                         "ci_platform": "ubuntu-latest",
                         "runtime": "opengl",
+                        "workflow_step": (
+                            "Prove OpenGL local-struct byte-view native readback"
+                        ),
                         "native_execution_wired": True,
-                        "native_execution_observed": False,
-                        "verification_status": "pending-branch-ci",
+                        "native_execution_observed": True,
                     },
                 },
                 "local_execution_attempted": False,
                 "local_execution_verified": False,
                 "mlx_runtime_included": False,
+                "full_mlx_test_suite_included": False,
                 "numerical_parity_claimed": False,
             },
         },
@@ -3318,11 +3326,20 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "compiles locally as Metal 3.2 with Apple metal `32023.918`" in " ".join(
         readme.split()
     )
-    assert "remains pending this branch's CI" in " ".join(readme.split())
+    assert "GitHub Actions run 29649620337" in " ".join(readme.split())
+    assert "produced the exact `[204]` readback" in " ".join(readme.split())
+    assert "`windows-latest` through Direct3D" in " ".join(readme.split())
+    assert "`ubuntu-latest` through OpenGL" in " ".join(readme.split())
+    assert "`Prove Direct3D local-struct byte-view native readback`" in readme
+    assert "`Prove OpenGL local-struct byte-view native readback`" in readme
+    assert "reported zero mismatches with zero absolute and relative tolerance" in (
+        " ".join(readme.split())
+    )
     assert "do not establish complete MLX artifact translation" in " ".join(
         readme.split()
     )
-    assert "MLX host runtime integration" in " ".join(readme.split())
+    assert "full MLX host runtime integration" in " ".join(readme.split())
+    assert "full MLX test-suite execution" in " ".join(readme.split())
     assert "numerical parity for MLX workloads" in " ".join(readme.split())
 
 

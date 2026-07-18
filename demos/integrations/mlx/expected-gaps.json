@@ -1298,13 +1298,14 @@
         "numerical_parity_claimed": false
       },
       "local_struct_byte_view": {
-        "status": "target-native-execution-pending-ci",
+        "status": "native-execution-observed-in-ci",
         "source": "tests/fixtures/runtime_verification/private_pointer_partition/private_pointer_word_view.metal",
         "expected_readback": [
           204
         ],
         "readback_contract": "sum(byte[index] * (index + 1)) for index 0 through 7",
         "order_sensitive": true,
+        "ci_run_url": "https://github.com/CrossGL/crosstl/actions/runs/29649620337",
         "source_validation": {
           "platform": "macos",
           "compiler": "xcrun metal",
@@ -1316,21 +1317,22 @@
           "directx": {
             "ci_platform": "windows-latest",
             "runtime": "direct3d",
+            "workflow_step": "Prove Direct3D local-struct byte-view native readback",
             "native_execution_wired": true,
-            "native_execution_observed": false,
-            "verification_status": "pending-branch-ci"
+            "native_execution_observed": true
           },
           "opengl": {
             "ci_platform": "ubuntu-latest",
             "runtime": "opengl",
+            "workflow_step": "Prove OpenGL local-struct byte-view native readback",
             "native_execution_wired": true,
-            "native_execution_observed": false,
-            "verification_status": "pending-branch-ci"
+            "native_execution_observed": true
           }
         },
         "local_execution_attempted": false,
         "local_execution_verified": false,
         "mlx_runtime_included": false,
+        "full_mlx_test_suite_included": false,
         "numerical_parity_claimed": false
       }
     },
