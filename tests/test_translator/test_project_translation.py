@@ -50569,6 +50569,87 @@ def test_translate_project_lowers_materialized_pointer_reinterpretation(tmp_path
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("target", "extension"),
+    (
+        pytest.param("directx", "hlsl", id="directx"),
+        pytest.param("opengl", "glsl", id="opengl"),
+    ),
+)
+def test_translate_project_lowers_read_only_local_struct_byte_view(
+    tmp_path, target, extension
+):
+    repo = tmp_path / target
+    repo.mkdir()
+    source_path = repo / "local_struct_byte_view.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct WordBlock {
+                uint32_t words[2];
+            };
+
+            inline uint sum8(const thread uint8_t* bytes) {
+                uint total = 0;
+                for (int index = 0; index < 8; ++index) {
+                    total += bytes[index];
+                }
+                return total;
+            }
+
+            kernel void local_struct_byte_view(
+                device uint* output [[buffer(0)]]) {
+                thread WordBlock local;
+                local.words[0] = 67305985u;
+                local.words[1] = 134678021u;
+                output[0] = sum8((const thread uint8_t*)&local);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    expected_path = f"out/{target}/local_struct_byte_view.{extension}"
+    assert artifact["status"] == "translated"
+    assert artifact["path"] == expected_path
+    assert artifact["source"] == source_path.name
+    assert artifact["sourceBackend"] == "metal"
+    assert artifact["provenance"] == {
+        "pipeline": "single-file-translate",
+        "intermediate": "crossgl",
+    }
+    assert artifact["sourceMap"]["source"]["file"] == source_path.name
+    assert artifact["sourceMap"]["generated"]["file"] == expected_path
+    assert artifact["sourceRemap"]["generatedFile"] == expected_path
+
+    generated = (repo / expected_path).read_text(encoding="utf-8")
+    assert "PointerReinterpretNode" not in generated
+    if target == "directx":
+        assert "bytes[uint(((bytes_base + index)) / 4)]" in generated
+        assert ">> uint((((bytes_base + index)) % 4) * 8)) & 255u" in generated
+        assert "sum8(local.words, 0)" in generated
+        HLSLParser(HLSLLexer(generated).tokenize()).parse()
+        assert_directx_compute_validates_if_available(generated, tmp_path)
+    else:
+        assert "bitfieldExtract(bytes.words[" in generated
+        assert ", 8)" in generated
+        assert "sum8(local, 0)" in generated
+        GLSLParser(GLSLLexer(generated).tokenize(), "compute").parse()
+        assert_compute_glsl_validates_if_available(generated, tmp_path)
+
+
 def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_path):
     from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 
