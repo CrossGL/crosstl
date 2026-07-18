@@ -19505,6 +19505,9 @@ def _project_template_materialization_for_artifact(
         materialized,
         _metal_template_parameter_name_set(preprocessor, unit, materialized),
     )
+    materialized = preprocessor._substitute_local_integral_constant_array_extents(
+        materialized
+    )
     post_materialization_unsupported = (
         _post_materialization_unresolved_metal_template_type_records(
             preprocessor=preprocessor,

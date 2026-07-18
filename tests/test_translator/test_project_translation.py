@@ -15811,6 +15811,74 @@ def test_translate_project_opengl_materializes_quantized_local_template_alias(
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_metal_project_materialization_propagates_local_constexpr_extents(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <int WordBits, int Bits>
+        constexpr int get_pack_factor() {
+            return WordBits / Bits;
+        }
+
+        template <typename T, int Count>
+        void load_vector(const device T* source, thread T* values) {
+            for (int index = 0; index < Count; ++index) {
+                values[index] = source[index];
+            }
+        }
+
+        template <typename T, int Bits>
+        [[kernel]] void dispatch(
+            const device T* source [[buffer(0)]],
+            device T* output [[buffer(1)]]) {
+            constexpr int packs_per_thread = 2;
+            constexpr int pack_factor = get_pack_factor<32, Bits>();
+            constexpr int values_per_thread = pack_factor * packs_per_thread;
+            thread T values[values_per_thread];
+            load_vector<T, values_per_thread>(source, values);
+            output[0] = values[0];
+        }
+
+        instantiate_kernel("dispatch_float_4", dispatch, float, 4)
+        """).strip() + "\n"
+    source_path = shader_dir / "dispatch.metal"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="shaders/dispatch.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash={"sha256": "test"},
+        source_size_bytes=len(source.encode("utf-8")),
+    )
+
+    materialized = project_pipeline._project_template_materialization_for_artifact(
+        unit=unit,
+        target=target,
+        variant=None,
+        defines={},
+        define_sources={},
+        include_paths=[],
+        source_options={},
+    )
+
+    assert materialized is not None
+    assert not materialized.blocked
+    assert list(materialized.diagnostics) == []
+    assert re.search(r"thread\s+float\s+values\s*\[\s*16\s*\]", materialized.text)
+    assert "load_vector_float_16(source, values);" in materialized.text
+    assert "load_vector_float_values_per_thread" not in materialized.text
+    assert not re.search(r"values\s*\[\s*values_per_thread\s*\]", materialized.text)
+
+
 def test_translate_project_materializes_helper_arguments_from_local_type_aliases(
     tmp_path,
 ):
