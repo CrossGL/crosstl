@@ -5919,6 +5919,57 @@ def test_codegen_hoists_function_local_typedef_struct_for_project_targets(tmp_pa
     assert_opengl_compute_validates_if_available(glsl, tmp_path, "local-typedef-struct")
 
 
+def test_codegen_hoists_named_local_struct_with_qualified_pointer_cast():
+    crossgl = convert("""
+        kernel void copy_words(
+            const device uint* input [[buffer(0)]],
+            device uint* output [[buffer(1)]]) {
+            constexpr int word_count = 2;
+            struct WordBlock {
+                uint values[word_count];
+            };
+            thread WordBlock local =
+                *reinterpret_cast<const device WordBlock*>(input);
+            output[0] = local.values[0];
+        }
+        """)
+
+    canonical = "MetalLocal_copy_words_WordBlock"
+    assert f"struct {canonical} {{" in crossgl
+    assert "uint[2] values;" in crossgl
+    assert f"thread {canonical} local = (*({canonical}*)input);" in crossgl
+    assert "const device WordBlock" not in crossgl
+    strict_ast = CrossGLParser(
+        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
+    ).parse()
+    assert strict_ast is not None
+
+
+def test_codegen_resolves_alias_chain_to_named_local_struct():
+    crossgl = convert("""
+        uint read_word() {
+            struct WordBlock {
+                uint layout;
+            };
+            using BlockAlias = WordBlock;
+            typedef struct WordBlock ElaboratedAlias;
+            thread BlockAlias direct;
+            thread ElaboratedAlias elaborated;
+            return direct.layout + elaborated.layout;
+        }
+        """)
+
+    canonical = "MetalLocal_read_word_WordBlock"
+    assert f"struct {canonical}" in crossgl
+    assert "uint layout_;" in crossgl
+    assert f"thread {canonical} direct" in crossgl
+    assert f"thread {canonical} elaborated" in crossgl
+    assert "return direct.layout_ + elaborated.layout_;" in crossgl
+    assert "BlockAlias" not in crossgl
+    assert "ElaboratedAlias" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_materializes_local_typedef_struct_per_value_specialization():
     crossgl = convert("""
         template <int Width>
@@ -5973,6 +6024,33 @@ def test_codegen_folds_transitive_constexpr_local_struct_extent():
     assert "struct MetalLocal_make_block_float_16_4_Block" in crossgl
     assert "uint[2] values;" in crossgl
     assert "thread MetalLocal_make_block_float_16_4_Block local" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_prefers_constexpr_non_template_zero_argument_overload_for_extent():
+    crossgl = convert("""
+        template <int Width = 2>
+        constexpr int block_width() {
+            return Width;
+        }
+
+        constexpr int block_width() {
+            return 3;
+        }
+
+        uint read_word() {
+            constexpr int width = block_width();
+            typedef struct {
+                uint values[width];
+            } Block;
+            thread Block local;
+            return local.values[0];
+        }
+        """)
+
+    assert "struct MetalLocal_read_word_Block" in crossgl
+    assert "uint[3] values;" in crossgl
+    assert "const int width = 3;" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
@@ -6082,6 +6160,85 @@ def test_codegen_rejects_unresolved_function_local_struct_extent():
     assert diagnostic.function_name == "prepare"
     assert diagnostic.type_name == "LocalValue"
     assert diagnostic.unresolved_dependencies == ("Width",)
+    assert diagnostic.source_location is not None
+
+
+@pytest.mark.parametrize(
+    ("declaration", "reason"),
+    [
+        (
+            "typedef union { uint bits; float value; } LocalValue;",
+            "union storage semantics",
+        ),
+        (
+            "class LocalValue { uint value; };",
+            "class storage semantics",
+        ),
+        (
+            "struct LocalValue : BaseValue { uint value; };",
+            "base classes",
+        ),
+        (
+            "struct LocalValue { using Word = uint; Word value; };",
+            "aggregate-scoped type aliases",
+        ),
+        (
+            "struct LocalValue { LocalValue() {} uint value; };",
+            "constructors or call operators",
+        ),
+        (
+            "struct LocalValue { uint operator()() { return 0; } uint value; };",
+            "constructors or call operators",
+        ),
+        (
+            "typedef struct { uint value = 7; } LocalValue;",
+            "default initializer",
+        ),
+        (
+            "typedef struct alignas(16) { uint value; } LocalValue;",
+            "alignment or attributes",
+        ),
+        (
+            "typedef struct { volatile uint value; } LocalValue;",
+            "unsupported qualifiers",
+        ),
+        (
+            "typedef struct { alignas(16) uint value; } LocalValue;",
+            "member 'value' has alignment or attributes",
+        ),
+        (
+            "typedef struct { uint value; } LocalValue[2];",
+            "typedef declarator changes",
+        ),
+        (
+            "typedef struct { uint value; } *LocalValue;",
+            "typedef declarator changes",
+        ),
+        (
+            "struct LocalValue { uint value; } local;",
+            "trailing object declaration",
+        ),
+        (
+            "struct LocalValue {};",
+            "empty aggregates",
+        ),
+    ],
+)
+def test_codegen_rejects_local_aggregate_semantics_lost_by_hoisting(
+    declaration, reason
+):
+    with pytest.raises(MetalFunctionLocalTypeResolutionError) as exc_info:
+        convert(f"""
+            uint read_word() {{
+                {declaration}
+                return 0;
+            }}
+            """)
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "read_word"
+    assert diagnostic.type_name == "LocalValue"
+    assert reason in diagnostic.reason
     assert diagnostic.source_location is not None
 
 

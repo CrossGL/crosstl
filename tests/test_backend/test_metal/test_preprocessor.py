@@ -4428,6 +4428,49 @@ def test_preprocessor_lowers_call_operator_functor():
     assert "Sum__operator_call(op, in[i], out[i])" in output
 
 
+def test_preprocessor_keeps_function_local_call_operator_with_owner_type():
+    code = """
+    uint read_word() {
+        struct LocalValue {
+            uint operator()() { return 7; }
+            uint value;
+        };
+        LocalValue local;
+        return local();
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct LocalValue" in output
+    assert "uint operator()() { return 7; }" in output
+    assert "return local();" in output
+    assert "LocalValue__operator_call" not in output
+
+
+def test_preprocessor_keeps_method_local_call_operator_with_owner_type():
+    code = """
+    struct Outer {
+        uint read_word() {
+            struct LocalValue {
+                uint operator()() { return 7; }
+                uint value;
+            };
+            LocalValue local;
+            return local();
+        }
+    };
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "uint Outer__read_word(thread Outer& self)" in output
+    assert "struct LocalValue" in output
+    assert "uint operator()() { return 7; }" in output
+    assert "return local();" in output
+    assert "LocalValue__operator_call" not in output
+
+
 def test_preprocessor_lowers_materialized_template_functor():
     # After the struct-template materializer produces a concrete `Sum_float`, the
     # member-function lowering pass lowers its `operator()` and rewrites the call.

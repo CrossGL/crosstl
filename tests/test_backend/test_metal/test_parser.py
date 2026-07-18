@@ -663,6 +663,48 @@ def test_parse_block_scope_typedef_struct_retains_members_and_source_location():
     assert local.vtype == "WordView"
 
 
+def test_parse_block_scope_named_struct_is_retained_without_type_leakage():
+    parser = MetalParser(tokenize_code("""
+        uint read_word() {
+            struct LocalWords {
+                uint values[2];
+            };
+            thread LocalWords local;
+            return local.values[0];
+        }
+
+        uint sibling() {
+            return 0;
+        }
+        """))
+    ast = parser.parse()
+
+    aggregate, local, _return = ast.functions[0].body
+    assert isinstance(aggregate, StructNode)
+    assert aggregate.name == "LocalWords"
+    assert aggregate.declaration_source_location is not None
+    assert aggregate.trailing_declarations == []
+    assert local.vtype == "LocalWords"
+    assert "LocalWords" not in parser.known_types
+
+
+def test_parse_block_scope_typedef_struct_preserves_alias_declarator_shape():
+    ast = parse_ok("""
+        void prepare() {
+            typedef struct {
+                uint value;
+            } Blocks[2];
+        }
+        """)
+
+    aggregate = ast.functions[0].body[0]
+    assert isinstance(aggregate, StructNode)
+    assert aggregate.name == "Blocks"
+    assert aggregate.typedef_array_sizes == ["2"]
+    assert aggregate.typedef_declarator_type_suffix == ""
+    assert aggregate.typedef_declarator_type_suffix_grouped is False
+
+
 def test_parse_block_scope_typedef_does_not_leak_to_sibling_function():
     code = """
     void first() {

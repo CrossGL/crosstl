@@ -2222,12 +2222,36 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         if not structs:
             return code
+        all_struct_spans = [struct.span for struct in structs]
+        local_owner_spans = [
+            function.body_span
+            for function in self._find_non_template_function_definitions(
+                code,
+                all_struct_spans,
+            )
+        ]
+        local_owner_spans.extend(
+            method.span
+            for struct in structs
+            for method in (*struct.methods, *struct.template_methods)
+        )
+        local_owner_spans.extend(
+            constructor.span
+            for struct in structs
+            for constructor in struct.constructors
+            if constructor.span is not None
+        )
         # Only structs that actually declare at least one member function (a
         # concrete method OR a template method) need rewriting; everything else
         # stays untouched so method-free structs and existing kernels are
-        # byte-identical.
+        # byte-identical. Function-local methods stay in the aggregate so the
+        # reverse frontend can reject unsupported hoisting with source context;
+        # moving them to file scope would leave a dangling local owner type.
         structs_with_methods = [
-            struct for struct in structs if struct.methods or struct.template_methods
+            struct
+            for struct in structs
+            if (struct.methods or struct.template_methods)
+            and self._containing_span(struct.span[0], local_owner_spans) is None
         ]
         if not structs_with_methods:
             return self._canonicalize_qualified_struct_alias_templates(code, structs)
@@ -2238,7 +2262,6 @@ class MetalPreprocessor(HLSLPreprocessor):
         # struct is only promoted when it is actually CONSTRUCTED in a form we can
         # rewrite (every pointer expression is sourced from a construction
         # argument); otherwise it falls back to the ordinary path unchanged.
-        all_struct_spans = [struct.span for struct in structs]
         promotion_plans: Dict[str, _PointerPromotionPlan] = {}
         for struct in structs_with_methods:
             plan = self._pointer_promotion_plan(struct)

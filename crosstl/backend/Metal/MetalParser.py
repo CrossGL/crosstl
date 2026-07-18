@@ -1925,7 +1925,13 @@ class MetalParser:
                 )
             return declaration
         if self.is_union_alias_start():
-            return self.parse_typedef_union()
+            declaration = self.parse_typedef_union()
+            if isinstance(declaration, StructNode):
+                self.annotate_declaration_scope(declaration)
+                declaration.declaration_source_location = self.source_span_from_tokens(
+                    start_token, self.tokens[self.pos - 1]
+                )
+            return declaration
         if self.current_token[0] == "ENUM":
             return self.parse_typedef_enum()
         qualifiers = []
@@ -2043,12 +2049,9 @@ class MetalParser:
             self.eat("LBRACE")
             members = self.parse_struct_members()
             self.eat("RBRACE")
-            (
-                alias_name,
-                _array_sizes,
-                _type_suffix,
-                _grouped_suffix,
-            ) = self.parse_declarator()
+            alias_name, array_sizes, type_suffix, grouped_suffix = (
+                self.parse_declarator()
+            )
             self.eat("SEMICOLON")
             union_name = alias_name or tag_name
             if not union_name:
@@ -2057,6 +2060,10 @@ class MetalParser:
             union_node = StructNode(union_name, members)
             union_node.typedef_tag = tag_name
             union_node.aggregate_kind = "union"
+            union_node.is_typedef_aggregate = True
+            union_node.typedef_array_sizes = array_sizes
+            union_node.typedef_declarator_type_suffix = type_suffix
+            union_node.typedef_declarator_type_suffix_grouped = grouped_suffix
             return union_node
 
         if not tag_name:
@@ -2154,12 +2161,9 @@ class MetalParser:
             members = self.parse_struct_members()
             self.eat("RBRACE")
             struct_attributes.extend(self.parse_attributes())
-            (
-                alias_name,
-                _array_sizes,
-                _type_suffix,
-                _grouped_suffix,
-            ) = self.parse_declarator()
+            alias_name, array_sizes, type_suffix, grouped_suffix = (
+                self.parse_declarator()
+            )
             self.eat("SEMICOLON")
             struct_name = alias_name or tag_name
             if not struct_name:
@@ -2167,8 +2171,12 @@ class MetalParser:
             self.register_known_type(struct_name)
             struct_node = StructNode(struct_name, members)
             struct_node.typedef_tag = tag_name
+            struct_node.is_typedef_aggregate = True
             struct_node.attributes = struct_attributes
             struct_node.alignas = alignas_specs
+            struct_node.typedef_array_sizes = array_sizes
+            struct_node.typedef_declarator_type_suffix = type_suffix
+            struct_node.typedef_declarator_type_suffix_grouped = grouped_suffix
             return struct_node
 
         if not tag_name:
@@ -2773,11 +2781,11 @@ class MetalParser:
             raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
         name = self.current_token[1]
         self.eat(self.current_token[0])
-        self.known_types.add(name)
+        self.register_known_type(name)
         if self.current_token[0] == "LESS_THAN":
             template_args = self.parse_template_argument_suffix()
             name = f"{name}<{self.format_generic_type_tokens(template_args)}>"
-            self.known_types.add(name)
+            self.register_known_type(name)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
@@ -2830,11 +2838,11 @@ class MetalParser:
             raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
         name = self.current_token[1]
         self.eat(self.current_token[0])
-        self.known_types.add(name)
+        self.register_known_type(name)
         if self.current_token[0] == "LESS_THAN":
             template_args = self.parse_template_argument_suffix()
             name = f"{name}<{self.format_generic_type_tokens(template_args)}>"
-            self.known_types.add(name)
+            self.register_known_type(name)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
@@ -2916,7 +2924,7 @@ class MetalParser:
         name = self.current_token[1] if self.is_current_name_token() else None
         if name:
             self.eat(self.current_token[0])
-            self.known_types.add(name)
+            self.register_known_type(name)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
@@ -4103,6 +4111,12 @@ class MetalParser:
             alias = self.parse_typedef()
             return alias if isinstance(alias, (TypeAliasNode, StructNode)) else None
         if self.is_nested_aggregate_declaration_start():
+            if self.current_token[0] == "STRUCT":
+                return self.parse_struct()
+            if self.current_token[0] == "CLASS":
+                return self.parse_class()
+            if self.is_union_alias_start():
+                return self.parse_union()
             self.skip_nested_aggregate_declaration()
             return None
         if self.current_token[0] == "LBRACE":

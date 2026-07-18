@@ -5982,6 +5982,7 @@ class MetalToCrossGLConverter:
         call_arguments,
         explicit_template_arguments=None,
         function_index=None,
+        prefer_constexpr_non_template=False,
     ):
         functions = (
             self.value_template_functions if function_index is None else function_index
@@ -6033,13 +6034,19 @@ class MetalToCrossGLConverter:
             return matching[0] if matching[0] in value_candidates else None
 
         # A non-template exact match wins over a same-signature function
-        # template in C++. Leave that call on the ordinary overload.
+        # template in C++. Ordinary call materialization leaves that overload
+        # unchanged; constexpr evaluation can select it directly.
         non_template_matches = [
             function
             for function in matching
             if not self.value_template_parameter_names(function)
         ]
         if len(non_template_matches) == 1:
+            if (
+                prefer_constexpr_non_template
+                and non_template_matches[0] in value_candidates
+            ):
+                return non_template_matches[0]
             return None
 
         ambiguous = matching or overloads
@@ -6235,6 +6242,7 @@ class MetalToCrossGLConverter:
                 getattr(call, "args", []) or [],
                 explicit_template_arguments=explicit_arguments,
                 function_index=self.constexpr_value_template_functions,
+                prefer_constexpr_non_template=True,
             )
             if function is None:
                 return None
@@ -8855,6 +8863,58 @@ class MetalToCrossGLConverter:
             unresolved_dependencies=unresolved_dependencies,
         )
 
+    def validate_local_aggregate_shape(self, struct_node):
+        aggregate_kind = getattr(struct_node, "aggregate_kind", None) or "struct"
+        if aggregate_kind != "struct":
+            raise self.local_aggregate_error(
+                struct_node,
+                f"{aggregate_kind} storage semantics cannot be represented by "
+                "struct hoisting",
+            )
+        if getattr(struct_node, "base_types", None):
+            raise self.local_aggregate_error(
+                struct_node,
+                "base classes cannot be represented by aggregate hoisting",
+            )
+        if getattr(struct_node, "alignas", None) or getattr(
+            struct_node, "attributes", None
+        ):
+            raise self.local_aggregate_error(
+                struct_node,
+                "aggregate alignment or attributes would be lost during hoisting",
+            )
+        if getattr(struct_node, "type_aliases", None):
+            raise self.local_aggregate_error(
+                struct_node,
+                "aggregate-scoped type aliases are not materialized",
+            )
+        if getattr(struct_node, "constructors", None) or getattr(
+            struct_node, "call_operator_declarations", None
+        ):
+            raise self.local_aggregate_error(
+                struct_node,
+                "constructors or call operators cannot be represented by aggregate "
+                "hoisting",
+            )
+        if getattr(struct_node, "trailing_declarations", None):
+            raise self.local_aggregate_error(
+                struct_node,
+                "a trailing object declaration cannot be separated from its local "
+                "type",
+            )
+        if getattr(struct_node, "typedef_array_sizes", None) or getattr(
+            struct_node, "typedef_declarator_type_suffix", ""
+        ):
+            raise self.local_aggregate_error(
+                struct_node,
+                "the typedef declarator changes the aggregate type",
+            )
+        if not (getattr(struct_node, "members", None) or []):
+            raise self.local_aggregate_error(
+                struct_node,
+                "empty aggregates have target-dependent size and layout",
+            )
+
     def reserve_local_aggregate_name(self, source_name):
         function_name = self.sanitize_identifier(
             self.current_function_specialization
@@ -8882,6 +8942,10 @@ class MetalToCrossGLConverter:
         tag_name = getattr(struct_node, "typedef_tag", None)
         if tag_name:
             names.append(f"struct {tag_name}")
+        elif not getattr(struct_node, "is_typedef_aggregate", False):
+            source_name = getattr(struct_node, "name", None)
+            if source_name:
+                names.append(f"struct {source_name}")
         return names
 
     def bind_local_aggregate_aliases(self, struct_node, canonical_name):
@@ -9035,6 +9099,7 @@ class MetalToCrossGLConverter:
             self.bind_local_aggregate_aliases(struct_node, canonical_name)
             return canonical_name
 
+        self.validate_local_aggregate_shape(struct_node)
         canonical_name = self.reserve_local_aggregate_name(
             getattr(struct_node, "name", None)
             or getattr(struct_node, "typedef_tag", None)
@@ -9049,6 +9114,29 @@ class MetalToCrossGLConverter:
                 raise self.local_aggregate_error(
                     struct_node,
                     "only concrete data members can be hoisted",
+                    source_location=getattr(member, "source_location", None),
+                )
+            if getattr(member, "default_value", None) is not None:
+                raise self.local_aggregate_error(
+                    struct_node,
+                    f"member '{member.name}' has a default initializer",
+                    source_location=getattr(member, "source_location", None),
+                )
+            if getattr(member, "qualifiers", None):
+                qualifiers = ", ".join(
+                    str(qualifier) for qualifier in member.qualifiers
+                )
+                raise self.local_aggregate_error(
+                    struct_node,
+                    f"member '{member.name}' has unsupported qualifiers "
+                    f"'{qualifiers}'",
+                    source_location=getattr(member, "source_location", None),
+                )
+            if getattr(member, "alignas", None) or getattr(member, "attributes", None):
+                raise self.local_aggregate_error(
+                    struct_node,
+                    f"member '{member.name}' has alignment or attributes that "
+                    "would be lost during hoisting",
                     source_location=getattr(member, "source_location", None),
                 )
             source_type, mapped_type = self.resolve_local_aggregate_member_type(
@@ -9124,10 +9212,13 @@ class MetalToCrossGLConverter:
         # Unresolved user-template aliases remain untouched until their template
         # arguments have been materialized by the Metal frontend.
         mapped_alias_type = self.map_type(alias_type)
+        local_aggregate_type_names = {
+            declaration["name"] for declaration in self.local_aggregate_declarations
+        }
         concrete_struct_alias = (
             alias_type in self.struct_name_map
             and mapped_alias_type in self.struct_name_map.values()
-        )
+        ) or mapped_alias_type in local_aggregate_type_names
         if (
             getattr(alias, "qualifiers", None)
             or getattr(alias, "array_sizes", None)
@@ -9952,7 +10043,7 @@ class MetalToCrossGLConverter:
                         operation="member-access",
                     )
                 return f"{obj}.lanes[{lane}]"
-            return f"{obj}.{expr.member}"
+            return f"{obj}.{self.sanitize_identifier(expr.member)}"
         elif isinstance(expr, ArrayAccessNode):
             cooperative_matrix_element = self.metal_cooperative_matrix_element_access(
                 expr
