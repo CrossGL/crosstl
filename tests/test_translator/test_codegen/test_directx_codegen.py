@@ -42575,6 +42575,77 @@ def test_hlsl_private_pointer_view_rejects_unprovable_offset(offset):
     }
 
 
+@pytest.mark.parametrize(
+    ("values_per_thread", "group_size"),
+    [
+        pytest.param(8, 16, id="true-comparison"),
+        pytest.param(32, 16, id="false-comparison"),
+    ],
+)
+def test_hlsl_private_pointer_partition_selects_concrete_ternary_branch(
+    values_per_thread, group_size, tmp_path
+):
+    shader = f"""
+    shader ConcretePrivatePointerPartition {{
+        float consume(thread float* values) {{
+            return values[0];
+        }}
+
+        void dispatch() {{
+            const int values_per_thread = {values_per_thread};
+            const int group_size = {group_size};
+            const int steps_per_thread =
+                values_per_thread < group_size
+                    ? 1
+                    : values_per_thread / group_size;
+            const int values_per_step =
+                values_per_thread / steps_per_thread;
+            float x_thread[values_per_thread];
+            float total = 0.0;
+            for (int k = 0; k < steps_per_thread; ++k) {{
+                total += consume(x_thread + k * values_per_step);
+            }}
+        }}
+    }}
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        f"float consume(inout float values[{values_per_thread}], int values_base)"
+        in generated
+    )
+    assert "consume(x_thread, (k * values_per_step))" in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_private_pointer_partition_keeps_unknown_ternary_branches():
+    shader = """
+    shader UnknownPrivatePointerPartition {
+        float consume(thread float* values) {
+            return values[0];
+        }
+
+        void dispatch(bool single_step) {
+            const int values_per_thread = 32;
+            const int steps_per_thread = single_step ? 1 : 2;
+            const int values_per_step =
+                values_per_thread / steps_per_thread;
+            float x_thread[values_per_thread];
+            float total = 0.0;
+            for (int k = 0; k < steps_per_thread; ++k) {
+                total += consume(x_thread + k * values_per_step);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXPrivatePointerParameterError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.reason == "unprovable-view-offset"
+
+
 def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes(tmp_path):
     shader = """
     shader WorkgroupPointerViews {

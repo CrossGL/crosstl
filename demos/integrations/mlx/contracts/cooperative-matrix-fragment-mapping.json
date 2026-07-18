@@ -128,36 +128,82 @@
     "replay": {
       "scope": "full-source-exact-high-budget",
       "mode": "explicit-opt-in",
-      "elapsedSeconds": 747.678,
+      "elapsedSeconds": 765.091,
       "codegenFactoryOverrides": [
         "crosstl.project.pipeline.get_codegen",
         "crosstl._crosstl.get_codegen"
       ],
       "projectConfigurationWired": false
     },
+    "resolvedPrivatePointerContracts": [
+      {
+        "target": "directx",
+        "contract": "concrete-ternary-condition-selection",
+        "resolvedIssue": "https://github.com/CrossGL/crosstl/issues/1826"
+      },
+      {
+        "target": "opengl",
+        "contract": "compile-time-global-preparation-before-private-pointer-analysis",
+        "resolvedIssue": "https://github.com/CrossGL/crosstl/issues/1826"
+      }
+    ],
     "targets": {
       "directx": {
         "boundaryDiagnostic": "project.translate.directx-private-pointer-unsupported",
         "missingCapability": "directx.private-pointer-parameter-lowering",
         "privatePointer": {
+          "function": "qouter_float_2_8_4",
+          "parameter": "w",
+          "reason": "missing-view-backing",
+          "sourceExpression": "(thread uint8_t*)&w_local",
+          "source": "mlx/backend/metal/kernels/fp_quantized.h"
+        },
+        "advancedPast": {
           "function": "qdot_float_16_4",
           "parameter": "x_thread",
-          "backingArray": "x_thread",
           "reason": "unprovable-view-offset"
         },
+        "blockedBy": "https://github.com/CrossGL/crosstl/issues/1546",
         "artifactEmitted": false
       },
       "opengl": {
         "boundaryDiagnostic": "project.translate.opengl-private-pointer-unsupported",
         "missingCapability": "opengl.private-pointer-parameter-lowering",
         "privatePointer": {
+          "function": "qouter_float_2_8_4",
+          "parameter": "w",
+          "reason": "missing-view-backing",
+          "sourceExpression": "(thread uint8_t*)&w_local",
+          "source": "mlx/backend/metal/kernels/fp_quantized.h"
+        },
+        "advancedPast": {
           "function": "qdot_float_16_4",
           "parameter": "x_thread",
-          "backingArray": "x_thread",
           "reason": "unprovable-view-offset"
         },
+        "blockedBy": "https://github.com/CrossGL/crosstl/issues/1546",
         "artifactEmitted": false
       }
+    },
+    "reducedRuntimeProof": {
+      "status": "native-execution-wired-not-locally-executed",
+      "source": "tests/fixtures/runtime_verification/private_pointer_partition/private_pointer_partition.cgl",
+      "expectedReadback": [100, 101, 102, 103, 200, 201, 202, 203],
+      "targets": {
+        "directx": {
+          "ciPlatform": "windows",
+          "runtime": "direct3d",
+          "nativeExecutionWired": true
+        },
+        "opengl": {
+          "ciPlatform": "linux",
+          "runtime": "opengl",
+          "nativeExecutionWired": true
+        }
+      },
+      "localExecutionAttempted": false,
+      "localExecutionVerified": false,
+      "mlxRuntimeIncluded": false
     }
   },
   "scope": {
@@ -173,12 +219,13 @@
     "resolvedIssues": [
       "https://github.com/CrossGL/crosstl/issues/1610",
       "https://github.com/CrossGL/crosstl/issues/1823",
-      "https://github.com/CrossGL/crosstl/issues/1824"
+      "https://github.com/CrossGL/crosstl/issues/1824",
+      "https://github.com/CrossGL/crosstl/issues/1826"
     ],
     "trackedIssues": [
       "https://github.com/CrossGL/crosstl/issues/1602",
       "https://github.com/CrossGL/crosstl/issues/1820",
-      "https://github.com/CrossGL/crosstl/issues/1826"
+      "https://github.com/CrossGL/crosstl/issues/1546"
     ]
   }
 }

@@ -993,24 +993,38 @@ The verified full pinned `fp_quantized.metal` replay enables lane-local
 cooperative-matrix lowering explicitly through both code-generation factory
 paths, `crosstl.project.pipeline.get_codegen` and
 `crosstl._crosstl.get_codegen`; this option is not yet available through project
-configuration. The replay completed in 747.678 seconds. DirectX and OpenGL each
+configuration. The replay completed in 765.091 seconds. DirectX and OpenGL each
 materialized 604 function specializations with no unsupported specialization
-records, and neither emitted an artifact. Both targets stop at private-pointer
-parameter `qdot_float_16_4.x_thread`, with backing array `x_thread` and reason
-`unprovable-view-offset`. DirectX reports
+records, and neither emitted an artifact. Both targets advanced past
+`qdot_float_16_4.x_thread` and its `unprovable-view-offset` boundary. DirectX
+now selects the concrete branch of the local `steps_per_thread` ternary during
+private-pointer analysis. OpenGL now prepares compile-time globals before that
+analysis. These target contracts resolve CrossGL/crosstl#1826.
+
+The current boundary is private-pointer parameter `qouter_float_2_8_4.w`. Its
+source expression `(thread uint8_t*)&w_local` in
+`mlx/backend/metal/kernels/fp_quantized.h` requires a byte-reinterpreted view
+over local storage, so both targets report `missing-view-backing`. DirectX reports
 `project.translate.directx-private-pointer-unsupported` with missing capability
 `directx.private-pointer-parameter-lowering`; OpenGL reports
 `project.translate.opengl-private-pointer-unsupported` with missing capability
-`opengl.private-pointer-parameter-lowering`.
+`opengl.private-pointer-parameter-lowering`. CrossGL/crosstl#1546 tracks the
+required byte-address provenance.
 
 This replay confirms that the transitive local `constexpr` chain defining the
 symbolic `values_per_thread`, including its fixed array extents, is materialized.
-The former `missing-fixed-array-extent` and `missing-view-backing` boundaries are
-also resolved. CrossGL/crosstl#1824 is complete for this source-materialization
-contract; the generalized private-pointer view-offset blocker is tracked in
-CrossGL/crosstl#1826. The result does not establish complete source translation,
-target artifact validation, runtime integration, runtime execution, or numerical
-parity.
+The former `missing-fixed-array-extent` and `missing-view-backing` boundaries for
+the `x_thread` partition are also resolved. CrossGL/crosstl#1824 is complete for
+this source-materialization contract. The current `w_local` byte-reinterpretation
+boundary is a distinct use of `missing-view-backing`. The result does not
+establish complete source translation, target artifact validation, runtime
+integration, runtime execution, or numerical parity.
+
+A shared reduced CrossGL fixture exercises the resolved partition contract with
+the required readback `[100, 101, 102, 103, 200, 201, 202, 203]`. Native execution
+is wired into Windows Direct3D and Linux OpenGL CI. Those native checks were not
+executed during this local replay, so this evidence does not claim observed CI
+execution, an MLX runtime port, or MLX numerical parity.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.

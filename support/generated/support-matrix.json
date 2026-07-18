@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1353
+        "test_count": 1355
       },
       "translator_codegen": {
         "exists": true,
@@ -248,7 +248,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1487
+        "test_count": 1489
       },
       "translator_codegen": {
         "exists": true,

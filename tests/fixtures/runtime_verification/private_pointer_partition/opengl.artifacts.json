@@ -1,0 +1,66 @@
+{
+  "kind": "crosstl-runtime-artifact-manifest",
+  "project": {
+    "root": ".",
+    "targets": [
+      "opengl"
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "opengl|tests/fixtures/runtime_verification/private_pointer_partition/private_pointer_partition.cgl|native-readback",
+      "source": "tests/fixtures/runtime_verification/private_pointer_partition/private_pointer_partition.cgl",
+      "path": "out/opengl/private_pointer_partition.glsl",
+      "target": "opengl",
+      "sourceBackend": "cgl",
+      "stage": "compute",
+      "variant": "native-readback",
+      "status": "translated",
+      "entryPoints": [
+        {
+          "name": "main",
+          "stage": "compute",
+          "executionConfig": {
+            "numthreads": [
+              1,
+              1,
+              1
+            ]
+          },
+          "workgroupSize": [
+            1,
+            1,
+            1
+          ]
+        }
+      ],
+      "resourceBindings": [
+        {
+          "id": "buffer|0|output",
+          "name": "output",
+          "kind": "buffer",
+          "type": "RWStructuredBuffer<uint>",
+          "set": 0,
+          "binding": 0,
+          "access": "write"
+        }
+      ],
+      "dispatch": {
+        "status": "available",
+        "workgroups": [
+          {
+            "entryPoint": "main",
+            "stage": "compute",
+            "workgroupSize": [
+              1,
+              1,
+              1
+            ],
+            "source": "fixture"
+          }
+        ],
+        "diagnostics": []
+      }
+    }
+  ]
+}

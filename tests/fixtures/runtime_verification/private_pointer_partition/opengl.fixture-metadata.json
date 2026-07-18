@@ -1,0 +1,83 @@
+{
+  "kind": "crosstl-project-runtime-fixture-metadata",
+  "metadata": {
+    "fixtureSet": "private-pointer-partition-runtime-proofs"
+  },
+  "fixtures": [
+    {
+      "id": "opengl-private-pointer-partition-readback-u32",
+      "selector": {
+        "source": "tests/fixtures/runtime_verification/private_pointer_partition/private_pointer_partition.cgl",
+        "target": "opengl",
+        "variant": "native-readback"
+      },
+      "expectedOutputs": [
+        {
+          "name": "output",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            8
+          ],
+          "values": [
+            100,
+            101,
+            102,
+            103,
+            200,
+            201,
+            202,
+            203
+          ]
+        }
+      ],
+      "runtimeAdapter": {
+        "id": "opengl-private-pointer-partition-contract-v1",
+        "entryPoints": [
+          {
+            "name": "main",
+            "stage": "compute",
+            "workgroupSize": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "resourceBindings": [
+          {
+            "id": "buffer|0|output",
+            "name": "output",
+            "kind": "buffer",
+            "type": "RWStructuredBuffer<uint>",
+            "set": 0,
+            "binding": 0,
+            "access": "write",
+            "value": "output"
+          }
+        ],
+        "dispatch": {
+          "entryPoint": "main",
+          "globalSize": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      "metadata": {
+        "proof": "private-pointer-partition-caller-visible-readback",
+        "testCommand": [
+          "python",
+          "-m",
+          "pytest",
+          "-n",
+          "auto",
+          "tests/test_translator/test_private_pointer_partition_runtime.py",
+          "-k",
+          "private_pointer_partition_native_readback and opengl"
+        ]
+      }
+    }
+  ]
+}
