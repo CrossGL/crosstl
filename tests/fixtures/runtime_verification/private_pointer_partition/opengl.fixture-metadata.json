@@ -75,7 +75,7 @@
           "auto",
           "tests/test_translator/test_private_pointer_partition_runtime.py",
           "-k",
-          "private_pointer_partition_native_readback and opengl"
+          "private_pointer_native_readback and opengl"
         ]
       }
     }

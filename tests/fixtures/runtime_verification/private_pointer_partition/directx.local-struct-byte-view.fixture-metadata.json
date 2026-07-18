@@ -1,13 +1,13 @@
 {
   "kind": "crosstl-project-runtime-fixture-metadata",
   "metadata": {
-    "fixtureSet": "private-pointer-partition-runtime-proofs"
+    "fixtureSet": "private-pointer-local-struct-byte-view-runtime-proofs"
   },
   "fixtures": [
     {
-      "id": "directx-private-pointer-partition-readback-u32",
+      "id": "directx-private-pointer-local-struct-byte-view-readback-u32",
       "selector": {
-        "source": "tests/fixtures/runtime_verification/private_pointer_partition/private_pointer_partition.cgl",
+        "source": "tests/fixtures/runtime_verification/private_pointer_partition/private_pointer_word_view.metal",
         "target": "directx",
         "variant": "native-readback"
       },
@@ -17,22 +17,15 @@
           "kind": "buffer",
           "dtype": "uint32",
           "shape": [
-            8
+            1
           ],
           "values": [
-            100,
-            101,
-            102,
-            103,
-            200,
-            201,
-            202,
-            203
+            36
           ]
         }
       ],
       "runtimeAdapter": {
-        "id": "directx-private-pointer-partition-contract-v1",
+        "id": "directx-private-pointer-local-struct-byte-view-contract-v1",
         "entryPoints": [
           {
             "name": "CSMain",
@@ -66,7 +59,7 @@
         }
       },
       "metadata": {
-        "proof": "private-pointer-partition-caller-visible-readback",
+        "proof": "private-pointer-local-struct-byte-view-readback",
         "testCommand": [
           "python",
           "-m",

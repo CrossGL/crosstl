@@ -1,14 +1,14 @@
 {
   "kind": "crosstl-project-runtime-fixture-metadata",
   "metadata": {
-    "fixtureSet": "private-pointer-partition-runtime-proofs"
+    "fixtureSet": "private-pointer-local-struct-byte-view-runtime-proofs"
   },
   "fixtures": [
     {
-      "id": "directx-private-pointer-partition-readback-u32",
+      "id": "opengl-private-pointer-local-struct-byte-view-readback-u32",
       "selector": {
-        "source": "tests/fixtures/runtime_verification/private_pointer_partition/private_pointer_partition.cgl",
-        "target": "directx",
+        "source": "tests/fixtures/runtime_verification/private_pointer_partition/private_pointer_word_view.metal",
+        "target": "opengl",
         "variant": "native-readback"
       },
       "expectedOutputs": [
@@ -17,25 +17,18 @@
           "kind": "buffer",
           "dtype": "uint32",
           "shape": [
-            8
+            1
           ],
           "values": [
-            100,
-            101,
-            102,
-            103,
-            200,
-            201,
-            202,
-            203
+            36
           ]
         }
       ],
       "runtimeAdapter": {
-        "id": "directx-private-pointer-partition-contract-v1",
+        "id": "opengl-private-pointer-local-struct-byte-view-contract-v1",
         "entryPoints": [
           {
-            "name": "CSMain",
+            "name": "main",
             "stage": "compute",
             "workgroupSize": [
               1,
@@ -57,7 +50,7 @@
           }
         ],
         "dispatch": {
-          "entryPoint": "CSMain",
+          "entryPoint": "main",
           "globalSize": [
             1,
             1,
@@ -66,7 +59,7 @@
         }
       },
       "metadata": {
-        "proof": "private-pointer-partition-caller-visible-readback",
+        "proof": "private-pointer-local-struct-byte-view-readback",
         "testCommand": [
           "python",
           "-m",
@@ -75,7 +68,7 @@
           "auto",
           "tests/test_translator/test_private_pointer_partition_runtime.py",
           "-k",
-          "private_pointer_native_readback and directx"
+          "private_pointer_native_readback and opengl"
         ]
       }
     }
