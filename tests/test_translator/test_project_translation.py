@@ -48557,6 +48557,36 @@ def test_translate_project_metal_implicit_template_helper_materializes_to_target
     assert validation["success"] is True
 
 
+def test_metal_materialization_reuses_defaulted_zero_argument_helper(tmp_path):
+    source = textwrap.dedent("""
+        template <int WordSize = 8>
+        inline constexpr short get_bytes_per_pack() {
+            return WordSize / 8;
+        }
+
+        [[kernel]] void launch(device uint* out [[buffer(0)]]) {
+            constexpr int explicit_bytes = get_bytes_per_pack<8>();
+            constexpr int default_bytes = get_bytes_per_pack();
+            out[0] = explicit_bytes + default_bytes;
+        }
+        """).strip()
+    source_path = tmp_path / "defaulted_helper.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    materialized = project_pipeline.materialize_metal_source_for_target(
+        source=source,
+        file_path=source_path,
+        target="directx",
+    )
+
+    assert materialized is not None
+    assert materialized.text.count("inline constexpr short get_bytes_per_pack_8()") == 1
+    assert materialized.text.count("get_bytes_per_pack_8()") == 3
+    assert "get_bytes_per_pack();" not in materialized.text
+    assert materialized.metadata["specializationCount"] == 1
+    assert materialized.metadata["unsupported"] == []
+
+
 def test_translate_project_metal_source_instantiation_propagates_plain_helper_bindings_for_opengl(
     tmp_path,
 ):
