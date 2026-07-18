@@ -904,7 +904,7 @@ def _resource_bindings(
             RuntimeResourceBinding(
                 binding_id=name,
                 name=name,
-                kind=binding["kind"],
+                kind=kind,
                 type_name=binding["type"],
                 set=coordinates["set"],
                 binding=coordinates["binding"],

@@ -431,6 +431,31 @@ def test_accepts_read_write_bindings_as_output_only(tmp_path, target, namespace)
     assert request.execution_plan.resource_bindings[1].source == "expectedOutput"
 
 
+@pytest.mark.parametrize(
+    ("target", "input_kind", "input_namespace"),
+    [
+        ("directx", "constantbuffer", "cbv"),
+        ("opengl", "uniform", "uniform-buffer"),
+    ],
+)
+def test_normalizes_supported_resource_kind_aliases(
+    tmp_path, target, input_kind, input_namespace
+):
+    descriptor = _write_descriptor(tmp_path, target)
+    descriptor["bindings"][0].update(
+        kind=input_kind,
+        namespace=input_namespace,
+    )
+    descriptor["bindings"][1]["kind"] = "storage-buffer"
+
+    request = _build(tmp_path, target, descriptor=descriptor)
+
+    assert [binding.kind for binding in request.adapter_contract.resource_bindings] == [
+        "constant-buffer",
+        "buffer",
+    ]
+
+
 @pytest.mark.parametrize("target", ["directx", "opengl"])
 def test_rejects_read_write_binding_supplied_only_as_input(tmp_path, target):
     descriptor = _write_descriptor(tmp_path, target)
