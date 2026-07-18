@@ -6069,6 +6069,10 @@ def test_cooperative_matrix_type_three_argument_form_uses_canonical_defaults():
         "unspecified",
         "unspecified",
     )
+    assert matrix_type.fragment_layout is None
+    assert matrix_type.subgroup_size is None
+    assert matrix_type.elements_per_lane is None
+    assert matrix_type.fragment_provenance is None
     assert matrix_type.name == "CooperativeMatrix"
     assert matrix_type.generic_args == [
         matrix_type.element_type,
@@ -6109,6 +6113,142 @@ def test_cooperative_matrix_type_six_argument_form_preserves_metadata():
     ]
 
 
+def test_cooperative_matrix_type_extended_form_round_trips_fragment_contract():
+    code = """
+    shader CooperativeMatrixFragmentContract {
+        void consume(
+            CooperativeMatrix<
+                f16, 8, 8, subgroup, accumulator, row_major, dense, 32, 2,
+                source_fixture
+            > matrix
+        ) {}
+    }
+    """
+
+    parser = Parser(tokenize_code(code))
+    ast = parser.parse()
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(matrix_type, CooperativeMatrixType)
+    assert matrix_type.fragment_layout == "dense"
+    assert matrix_type.subgroup_size == 32
+    assert matrix_type.elements_per_lane == 2
+    assert matrix_type.fragment_provenance == "source_fixture"
+    assert matrix_type.generic_args[6:] == ["dense", 32, 2, "source_fixture"]
+
+    serialized_type = parser.format_type_argument(matrix_type)
+    round_trip_ast = parse_code(tokenize_code(f"""
+            shader CooperativeMatrixFragmentRoundTrip {{
+                void consume({serialized_type} matrix) {{}}
+            }}
+            """))
+    round_trip_type = round_trip_ast.functions[0].parameters[0].param_type
+
+    assert round_trip_type.fragment_layout == matrix_type.fragment_layout
+    assert round_trip_type.subgroup_size == matrix_type.subgroup_size
+    assert round_trip_type.elements_per_lane == matrix_type.elements_per_lane
+    assert round_trip_type.fragment_provenance == matrix_type.fragment_provenance
+    assert parser.format_type_argument(round_trip_type) == serialized_type
+
+
+def test_cooperative_matrix_type_extended_form_preserves_symbolic_values():
+    code = """
+    shader CooperativeMatrixSymbolicFragmentContract {
+        void consume(
+            CooperativeMatrix<
+                float,
+                TILE_ROWS,
+                TILE_COLS,
+                subgroup,
+                matrix_a,
+                unspecified,
+                source_profile,
+                SUBGROUP_SIZE,
+                ELEMENTS_PER_LANE,
+                source_profile_manifest
+            > matrix
+        ) {}
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(matrix_type.subgroup_size, NamedType)
+    assert isinstance(matrix_type.elements_per_lane, NamedType)
+    assert matrix_type.fragment_layout == "source_profile"
+    assert matrix_type.subgroup_size.name == "SUBGROUP_SIZE"
+    assert matrix_type.elements_per_lane.name == "ELEMENTS_PER_LANE"
+    assert matrix_type.fragment_provenance == "source_profile_manifest"
+    assert matrix_type.generic_args[7:] == [
+        matrix_type.subgroup_size,
+        matrix_type.elements_per_lane,
+        "source_profile_manifest",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("generic_arguments", "expected_extension"),
+    [
+        ("dense", ["dense"]),
+        ("unspecified, 32", ["unspecified", 32]),
+        ("unspecified, unspecified, 2", ["unspecified", "unspecified", 2]),
+        (
+            "unspecified, unspecified, unspecified, source_manifest",
+            ["unspecified", "unspecified", "unspecified", "source_manifest"],
+        ),
+    ],
+)
+def test_cooperative_matrix_type_accepts_partial_fragment_contracts(
+    generic_arguments, expected_extension
+):
+    code = f"""
+    shader CooperativeMatrixPartialFragmentContract {{
+        void consume(
+            CooperativeMatrix<
+                float, 8, 8, subgroup, unspecified, unspecified,
+                {generic_arguments}
+            > matrix
+        ) {{}}
+    }}
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert matrix_type.generic_args[6:] == expected_extension
+
+
+def test_cooperative_matrix_type_omits_fully_unspecified_fragment_contract():
+    code = """
+    shader CooperativeMatrixUnspecifiedFragmentContract {
+        void consume(
+            CooperativeMatrix<
+                float,
+                8,
+                8,
+                subgroup,
+                unspecified,
+                unspecified,
+                unspecified,
+                unspecified,
+                unspecified,
+                unspecified
+            > matrix
+        ) {}
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert matrix_type.fragment_layout is None
+    assert matrix_type.subgroup_size is None
+    assert matrix_type.elements_per_lane is None
+    assert matrix_type.fragment_provenance is None
+    assert len(matrix_type.generic_args) == 6
+
+
 def test_cooperative_matrix_type_preserves_symbolic_dimensions():
     code = """
     shader CooperativeMatrixDimensions {
@@ -6127,6 +6267,34 @@ def test_cooperative_matrix_type_preserves_symbolic_dimensions():
         "TILE_COLS",
     )
     assert matrix_type.generic_args[1:3] == [matrix_type.rows, matrix_type.cols]
+
+
+def test_cooperative_matrix_fragment_dimensions_participate_in_ast_traversal():
+    rows = IdentifierNode("ROWS")
+    cols = IdentifierNode("COLS")
+    subgroup_size = IdentifierNode("SUBGROUP_SIZE")
+    elements_per_lane = IdentifierNode("ELEMENTS_PER_LANE")
+    matrix_type = CooperativeMatrixType(
+        PrimitiveType("f16"),
+        rows,
+        cols,
+        fragment_layout="dense",
+        subgroup_size=subgroup_size,
+        elements_per_lane=elements_per_lane,
+    )
+
+    matrix_type.bind_parent_links()
+
+    assert list(matrix_type.walk()) == [
+        matrix_type,
+        matrix_type.element_type,
+        rows,
+        cols,
+        subgroup_size,
+        elements_per_lane,
+    ]
+    assert subgroup_size.parent is matrix_type
+    assert elements_per_lane.parent is matrix_type
 
 
 @pytest.mark.parametrize(
@@ -6212,7 +6380,10 @@ def test_cooperative_matrix_nodes_participate_in_walk_and_parent_binding():
     "generic_arguments",
     [
         "float, 16",
-        "float, 16, 8, subgroup, matrix_a, row_major, extra",
+        (
+            "float, 16, 8, subgroup, matrix_a, row_major, dense, 32, 8, "
+            "source_fixture, extra"
+        ),
     ],
 )
 def test_cooperative_matrix_type_rejects_invalid_arity(generic_arguments):
@@ -6226,8 +6397,86 @@ def test_cooperative_matrix_type_rejects_invalid_arity(generic_arguments):
         parse_code(tokenize_code(code))
 
     assert str(exc_info.value) == (
-        "CooperativeMatrix expects 3 to 6 generic arguments: "
-        "element type, rows, columns, scope, use, and layout"
+        "CooperativeMatrix expects 3 to 10 generic arguments: "
+        "element type, rows, columns, scope, use, layout, fragment layout, "
+        "subgroup size, elements per lane, and fragment provenance"
+    )
+
+
+@pytest.mark.parametrize("fragment_layout", ["dense", "metal_thread_elements"])
+def test_cooperative_matrix_type_rejects_inconsistent_complete_fragment_contract(
+    fragment_layout,
+):
+    code = f"""
+    shader InvalidCooperativeMatrixFragmentContract {{
+        void consume(
+            CooperativeMatrix<
+                float, 8, 8, subgroup, matrix_a, row_major,
+                {fragment_layout}, 32, 1
+            > matrix
+        ) {{}}
+    }}
+    """
+
+    with pytest.raises(SyntaxError) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert str(exc_info.value) == (
+        f"CooperativeMatrix {fragment_layout} fragment layout is inconsistent: "
+        "rows=8 * columns=8 produces 64 matrix elements, but "
+        "subgroup_size=32 * elements_per_lane=1 produces "
+        "32 distributed elements"
+    )
+
+
+def test_cooperative_matrix_ast_rejects_inconsistent_dense_fragment_contract():
+    with pytest.raises(ValueError) as exc_info:
+        CooperativeMatrixType(
+            PrimitiveType("float"),
+            8,
+            8,
+            fragment_layout="dense",
+            subgroup_size=32,
+            elements_per_lane=1,
+        )
+
+    assert str(exc_info.value) == (
+        "CooperativeMatrix dense fragment layout is inconsistent: "
+        "rows=8 * columns=8 produces 64 matrix elements, but "
+        "subgroup_size=32 * elements_per_lane=1 produces "
+        "32 distributed elements"
+    )
+
+
+@pytest.mark.parametrize(
+    ("subgroup_size", "elements_per_lane", "field", "value"),
+    [
+        (0, 2, "subgroup_size", 0),
+        (-32, 2, "subgroup_size", -32),
+        ("true", 2, "subgroup_size", True),
+        (32, 0, "elements_per_lane", 0),
+        (32, -2, "elements_per_lane", -2),
+    ],
+)
+def test_cooperative_matrix_type_rejects_non_positive_fragment_dimensions(
+    subgroup_size, elements_per_lane, field, value
+):
+    code = f"""
+    shader InvalidCooperativeMatrixFragmentDimension {{
+        void consume(
+            CooperativeMatrix<
+                float, 8, 8, subgroup, matrix_a, row_major,
+                source_profile, {subgroup_size}, {elements_per_lane}
+            > matrix
+        ) {{}}
+    }}
+    """
+
+    with pytest.raises(SyntaxError) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert str(exc_info.value) == (
+        f"CooperativeMatrix {field} must be a positive integer, got {value}"
     )
 
 

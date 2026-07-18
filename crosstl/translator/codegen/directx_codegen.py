@@ -987,10 +987,140 @@ class DirectXCooperativeMatrixUnsupportedError(ValueError):
     project_diagnostic_code = "project.translate.directx-cooperative-matrix-unsupported"
     missing_capabilities = ("directx.cooperative-matrix-lowering",)
 
-    def __init__(self, message, *, operation=None, source_location=None):
+    def __init__(
+        self,
+        message,
+        *,
+        operation=None,
+        matrix_type=None,
+        fragment_layout=None,
+        subgroup_size=None,
+        elements_per_lane=None,
+        fragment_provenance=None,
+        reason=None,
+        source_location=None,
+    ):
         super().__init__(message)
+        if fragment_layout is None:
+            fragment_layout = getattr(matrix_type, "fragment_layout", None)
+        if subgroup_size is None:
+            subgroup_size = getattr(matrix_type, "subgroup_size", None)
+        if elements_per_lane is None:
+            elements_per_lane = getattr(matrix_type, "elements_per_lane", None)
+        if fragment_provenance is None:
+            fragment_provenance = getattr(matrix_type, "fragment_provenance", None)
+
         self.operation = operation
+        self.matrix_type = matrix_type
+        self.fragment_layout = fragment_layout
+        self.subgroup_size = subgroup_size
+        self.elements_per_lane = elements_per_lane
+        self.fragment_provenance = fragment_provenance
+        self.reason = reason
+        details = {
+            "fragmentLayout": _directx_cooperative_matrix_detail_value(fragment_layout),
+            "subgroupSize": _directx_cooperative_matrix_detail_value(subgroup_size),
+            "elementsPerLane": _directx_cooperative_matrix_detail_value(
+                elements_per_lane
+            ),
+            "fragmentProvenance": _directx_cooperative_matrix_detail_value(
+                fragment_provenance
+            ),
+        }
+        self.details = {
+            name: value for name, value in details.items() if value is not None
+        }
         self.source_location = source_location
+
+
+def _directx_cooperative_matrix_detail_value(value):
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    literal_value = getattr(value, "value", None)
+    if literal_value is not None:
+        return literal_value
+    name = getattr(value, "name", None)
+    if name is not None:
+        return name
+    if isinstance(value, (int, float, str)):
+        return value
+    return str(value)
+
+
+def _directx_cooperative_matrix_fragment_contract(matrix_type):
+    """Return the lane-fragment contract retained by a cooperative matrix type."""
+    return {
+        "fragment_layout": getattr(matrix_type, "fragment_layout", None),
+        "subgroup_size": getattr(matrix_type, "subgroup_size", None),
+        "elements_per_lane": getattr(matrix_type, "elements_per_lane", None),
+        "fragment_provenance": getattr(matrix_type, "fragment_provenance", None),
+    }
+
+
+def _directx_cooperative_matrix_contract_type(matrix_type):
+    if isinstance(matrix_type, CooperativeMatrixType):
+        return matrix_type
+
+    base_name, generic_args = generic_type_parts(str(matrix_type).strip())
+    if base_name.rsplit("::", 1)[-1] != "CooperativeMatrix" or not (
+        3 <= len(generic_args) <= 10
+    ):
+        return matrix_type
+
+    defaults = [
+        "subgroup",
+        "unspecified",
+        "unspecified",
+        "unspecified",
+        "unspecified",
+        "unspecified",
+        "unspecified",
+    ]
+    generic_args = [*generic_args, *defaults[len(generic_args) - 3 :]]
+
+    def dimension(value):
+        value = str(value).strip()
+        return int(value) if re.fullmatch(r"[+-]?\d+", value) else NamedType(value)
+
+    def optional_label(value):
+        value = str(value).strip()
+        return None if value == "unspecified" else value
+
+    def optional_dimension(value):
+        value = str(value).strip()
+        return None if value == "unspecified" else dimension(value)
+
+    try:
+        return CooperativeMatrixType(
+            NamedType(str(generic_args[0]).strip()),
+            dimension(generic_args[1]),
+            dimension(generic_args[2]),
+            str(generic_args[3]).strip(),
+            str(generic_args[4]).strip(),
+            str(generic_args[5]).strip(),
+            optional_label(generic_args[6]),
+            optional_dimension(generic_args[7]),
+            optional_dimension(generic_args[8]),
+            optional_label(generic_args[9]),
+        )
+    except ValueError:
+        return matrix_type
+
+
+def _directx_cooperative_matrix_fragment_contract_message(contract):
+    """Render retained requirements without supplying target-specific defaults."""
+
+    def render(value):
+        normalized = _directx_cooperative_matrix_detail_value(value)
+        return "unspecified" if normalized is None else str(normalized)
+
+    return (
+        "required fragment contract: "
+        f"fragment_layout={render(contract['fragment_layout'])}, "
+        f"subgroup_size={render(contract['subgroup_size'])}, "
+        f"elements_per_lane={render(contract['elements_per_lane'])}, "
+        f"fragment_provenance={render(contract['fragment_provenance'])}"
+    )
 
 
 class DirectXAtomicFenceLoweringError(ValueError):
@@ -14035,11 +14165,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
             operation = expr.operation
+            matrix_type = getattr(expr, "result_type", None)
+            fragment_contract = _directx_cooperative_matrix_fragment_contract(
+                matrix_type
+            )
+            fragment_contract_message = (
+                _directx_cooperative_matrix_fragment_contract_message(fragment_contract)
+            )
             raise DirectXCooperativeMatrixUnsupportedError(
                 "DirectX cooperative matrix lowering is unavailable for "
                 f"operation '{operation}'; emitting a regular HLSL expression "
-                "would not preserve distributed matrix semantics",
+                "would not preserve distributed matrix semantics; "
+                f"{fragment_contract_message}",
                 operation=operation,
+                matrix_type=matrix_type,
+                **fragment_contract,
+                reason="unsupported-operation",
                 source_location=getattr(expr, "source_location", None),
             )
         elif isinstance(expr, str):
@@ -38087,11 +38228,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "float"
 
         if isinstance(vtype, CooperativeMatrixType):
+            fragment_contract = _directx_cooperative_matrix_fragment_contract(vtype)
+            fragment_contract_message = (
+                _directx_cooperative_matrix_fragment_contract_message(fragment_contract)
+            )
             raise DirectXCooperativeMatrixUnsupportedError(
                 "DirectX cooperative matrix type lowering is unavailable; "
                 "emitting a regular HLSL matrix type would not preserve "
-                "distributed matrix semantics",
+                "distributed matrix semantics; "
+                f"{fragment_contract_message}",
                 operation="type",
+                matrix_type=vtype,
+                **fragment_contract,
+                reason="unsupported-type",
                 source_location=getattr(vtype, "source_location", None),
             )
 
@@ -38111,11 +38260,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             cooperative_args
             and cooperative_base.rsplit("::", 1)[-1] == "CooperativeMatrix"
         ):
+            matrix_type = _directx_cooperative_matrix_contract_type(vtype)
+            fragment_contract = _directx_cooperative_matrix_fragment_contract(
+                matrix_type
+            )
+            fragment_contract_message = (
+                _directx_cooperative_matrix_fragment_contract_message(fragment_contract)
+            )
             raise DirectXCooperativeMatrixUnsupportedError(
                 "DirectX cooperative matrix type lowering is unavailable; "
                 f"'{vtype_str}' cannot be represented as a regular HLSL matrix "
-                "without changing distributed matrix semantics",
+                "without changing distributed matrix semantics; "
+                f"{fragment_contract_message}",
                 operation="type",
+                matrix_type=matrix_type,
+                **fragment_contract,
+                reason="unsupported-type",
                 source_location=getattr(vtype, "source_location", None),
             )
 

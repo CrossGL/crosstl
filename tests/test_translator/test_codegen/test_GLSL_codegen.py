@@ -821,10 +821,96 @@ def test_opengl_cooperative_matrix_type_reports_structured_error():
         "project.translate.opengl-cooperative-matrix-unsupported"
     )
     assert error.missing_capabilities == ("opengl.cooperative-matrix-lowering",)
-    assert error.operation is None
+    assert error.operation == "type"
     assert error.matrix_type is matrix_type
+    assert error.fragment_layout is None
+    assert error.subgroup_size is None
+    assert error.elements_per_lane is None
+    assert error.fragment_provenance is None
+    assert error.details == {}
     assert error.reason == "unsupported-type"
     assert error.source_location == source_location
+    assert "subgroup_size=unspecified" in str(error)
+    assert "32" not in str(error)
+
+
+def test_opengl_cooperative_matrix_type_reports_known_fragment_requirements():
+    matrix_type = CooperativeMatrixType(
+        PrimitiveType("float"),
+        8,
+        8,
+        scope="subgroup",
+        use="accumulator",
+        fragment_layout="metal_simdgroup_8x8_f32",
+        subgroup_size=32,
+        elements_per_lane=2,
+        fragment_provenance="mlx_fragment_contract",
+    )
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        GLSLCodeGen().map_type(matrix_type)
+
+    error = exc_info.value
+    assert error.operation == "type"
+    assert error.matrix_type is matrix_type
+    assert error.fragment_layout == "metal_simdgroup_8x8_f32"
+    assert error.subgroup_size == 32
+    assert error.elements_per_lane == 2
+    assert error.fragment_provenance == "mlx_fragment_contract"
+    assert error.details == {
+        "fragmentLayout": "metal_simdgroup_8x8_f32",
+        "subgroupSize": 32,
+        "elementsPerLane": 2,
+        "fragmentProvenance": "mlx_fragment_contract",
+    }
+    assert "fragment_layout=metal_simdgroup_8x8_f32" in str(error)
+    assert "subgroup_size=32" in str(error)
+    assert "elements_per_lane=2" in str(error)
+    assert "fragment_provenance=mlx_fragment_contract" in str(error)
+
+
+def test_opengl_cooperative_matrix_error_normalizes_symbolic_fragment_values():
+    matrix_type = CooperativeMatrixType(
+        PrimitiveType("float"),
+        NamedType("ROWS"),
+        NamedType("COLS"),
+        fragment_layout="source_profile",
+        subgroup_size=NamedType("SUBGROUP_SIZE"),
+        elements_per_lane=NamedType("ELEMENTS_PER_LANE"),
+        fragment_provenance="source_manifest",
+    )
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        GLSLCodeGen().map_type(matrix_type)
+
+    assert exc_info.value.details == {
+        "fragmentLayout": "source_profile",
+        "subgroupSize": "SUBGROUP_SIZE",
+        "elementsPerLane": "ELEMENTS_PER_LANE",
+        "fragmentProvenance": "source_manifest",
+    }
+
+
+def test_opengl_cooperative_matrix_string_retains_fragment_contract():
+    source_type = (
+        "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, "
+        "metal_thread_elements, 32, 2, metal_thread_elements_reference_view>"
+    )
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        GLSLCodeGen().map_type(source_type)
+
+    error = exc_info.value
+    assert isinstance(error.matrix_type, CooperativeMatrixType)
+    assert error.matrix_type.element_type.name == "float"
+    assert error.matrix_type.rows == 8
+    assert error.matrix_type.cols == 8
+    assert error.details == {
+        "fragmentLayout": "metal_thread_elements",
+        "subgroupSize": 32,
+        "elementsPerLane": 2,
+        "fragmentProvenance": "metal_thread_elements_reference_view",
+    }
 
 
 def test_opengl_cooperative_matrix_shader_fails_before_generic_type_emission():
@@ -849,7 +935,15 @@ def test_opengl_cooperative_matrix_shader_fails_before_generic_type_emission():
 
 def test_opengl_cooperative_matrix_operation_reports_structured_error():
     source_location = {"line": 12, "column": 17}
-    result_type = CooperativeMatrixType(PrimitiveType("float"), 16, 8)
+    result_type = CooperativeMatrixType(
+        PrimitiveType("float"),
+        8,
+        8,
+        fragment_layout="metal_simdgroup_8x8_f32",
+        subgroup_size=32,
+        elements_per_lane=2,
+        fragment_provenance="mlx_fragment_contract",
+    )
     operation = CooperativeMatrixOpNode(
         "multiply_accumulate",
         [],
@@ -873,8 +967,22 @@ def test_opengl_cooperative_matrix_operation_reports_structured_error():
     assert error.missing_capabilities == ("opengl.cooperative-matrix-lowering",)
     assert error.operation == "multiply_accumulate"
     assert error.matrix_type is result_type
+    assert error.fragment_layout == "metal_simdgroup_8x8_f32"
+    assert error.subgroup_size == 32
+    assert error.elements_per_lane == 2
+    assert error.fragment_provenance == "mlx_fragment_contract"
+    assert error.details == {
+        "fragmentLayout": "metal_simdgroup_8x8_f32",
+        "subgroupSize": 32,
+        "elementsPerLane": 2,
+        "fragmentProvenance": "mlx_fragment_contract",
+    }
     assert error.reason == "unsupported-operation"
     assert error.source_location == source_location
+    assert "fragment_layout=metal_simdgroup_8x8_f32" in str(error)
+    assert "subgroup_size=32" in str(error)
+    assert "elements_per_lane=2" in str(error)
+    assert "fragment_provenance=mlx_fragment_contract" in str(error)
 
 
 def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value):

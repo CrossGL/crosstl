@@ -30,12 +30,49 @@ The type system is represented with ``TypeNode`` subclasses:
      - Fixed-width vector values such as ``vec3`` or ``uvec4``
    * - ``MatrixType``
      - Matrix values such as ``mat4`` and rectangular matrix forms
+   * - ``CooperativeMatrixType``
+     - Matrix values distributed across a subgroup or other execution scope
    * - ``ArrayType``
      - Static or dynamic arrays
    * - ``NamedType``
      - User-defined and backend resource types
    * - ``GenericType``
      - Generic type parameters and constraints
+
+Cooperative matrix fragment contracts
+-------------------------------------
+
+``CooperativeMatrixType`` keeps logical matrix metadata separate from the
+lane-local fragment contract. The canonical CrossGL spelling accepts the
+following ordered arguments::
+
+   CooperativeMatrix<
+       element_type,
+       rows,
+       columns,
+       scope,
+       use,
+       memory_layout,
+       fragment_layout,
+       subgroup_size,
+       elements_per_lane,
+       fragment_provenance
+   >
+
+The first three arguments are required. Existing three- through six-argument
+forms remain valid; omitted fragment fields are ``unspecified``. A concrete
+``dense`` or ``metal_thread_elements`` layout must satisfy
+``rows * columns == subgroup_size * elements_per_lane``. Other layout labels
+may describe an opaque source profile and remain fail-closed until a target
+implements that profile.
+
+``fragment_provenance`` records how the frontend proved the fragment contract;
+it is not a target capability or a substitute for a coordinate mapping. Metal
+whole-fragment ``thread_elements()`` reference views use the
+``metal_thread_elements`` layout and expand to ordered
+``cooperative_matrix_element`` operations. Incompatible component types,
+dependent widths, and conflicting fragment contracts produce structured
+diagnostics instead of ordinary casts.
 
 Declaration nodes
 -----------------

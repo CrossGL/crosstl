@@ -20578,6 +20578,121 @@ def _directx_bfloat16_failure_details(
     return dict(sorted(details.items()))
 
 
+def _cooperative_matrix_detail_value(value: Any) -> str | int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if _is_non_empty_string(value):
+        return value
+
+    literal_value = getattr(value, "value", None)
+    if isinstance(literal_value, int) and not isinstance(literal_value, bool):
+        return literal_value
+    if _is_non_empty_string(literal_value):
+        return literal_value
+
+    name = getattr(value, "name", None)
+    if _is_non_empty_string(name):
+        return name
+    return None
+
+
+def _cooperative_matrix_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-cooperative-matrix-unsupported",
+        "project.translate.opengl-cooperative-matrix-unsupported",
+    }:
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    matrix_type = getattr(exc, "matrix_type", None)
+    contract = {}
+    fields = {
+        "operation": getattr(exc, "operation", None),
+        "elementType": getattr(matrix_type, "element_type", None),
+        "rows": getattr(matrix_type, "rows", None),
+        "columns": getattr(matrix_type, "cols", None),
+        "scope": getattr(matrix_type, "scope", None),
+        "use": getattr(matrix_type, "use", None),
+        "memoryLayout": getattr(matrix_type, "layout", None),
+        "fragmentLayout": (
+            getattr(exc, "fragment_layout", None)
+            or getattr(matrix_type, "fragment_layout", None)
+        ),
+        "subgroupSize": (
+            getattr(exc, "subgroup_size", None)
+            or getattr(matrix_type, "subgroup_size", None)
+        ),
+        "elementsPerLane": (
+            getattr(exc, "elements_per_lane", None)
+            or getattr(matrix_type, "elements_per_lane", None)
+        ),
+        "fragmentProvenance": (
+            getattr(exc, "fragment_provenance", None)
+            or getattr(matrix_type, "fragment_provenance", None)
+        ),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        normalized = _cooperative_matrix_detail_value(value)
+        if normalized is not None:
+            contract[name] = normalized
+    if contract:
+        details["cooperativeMatrix"] = dict(sorted(contract.items()))
+    return dict(sorted(details.items()))
+
+
+def _metal_cooperative_matrix_fragment_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if (
+        _translation_failure_diagnostic_code(exc)
+        != "project.translate.metal-cooperative-matrix-fragment-unsupported"
+    ):
+        return {}
+
+    fragment = {}
+    fields = {
+        "matrixType": getattr(exc, "matrix_type", None),
+        "fragmentType": getattr(exc, "fragment_type", None),
+        "direction": getattr(exc, "direction", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            fragment[name] = value
+        elif value is not None:
+            rendered = str(value).strip()
+            if rendered:
+                fragment[name] = rendered
+
+    qualifiers = [
+        str(qualifier).strip()
+        for qualifier in getattr(exc, "qualifiers", ()) or ()
+        if str(qualifier).strip()
+    ]
+    if qualifiers:
+        fragment["qualifiers"] = qualifiers
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    if fragment:
+        details["cooperativeMatrixFragment"] = dict(sorted(fragment.items()))
+    return dict(sorted(details.items()))
+
+
 def _directx_resource_pointer_array_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -21209,6 +21324,8 @@ def _translation_failure_details(
         **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
         **_directx_private_pointer_failure_details(exc, unit, artifact_path),
         **_directx_bfloat16_failure_details(exc, unit, artifact_path),
+        **_cooperative_matrix_failure_details(exc, unit, artifact_path),
+        **_metal_cooperative_matrix_fragment_failure_details(exc, unit, artifact_path),
         **_directx_resource_pointer_array_failure_details(exc, unit, artifact_path),
         **_directx_trailing_zero_failure_details(exc, unit, artifact_path),
         **_opengl_private_pointer_failure_details(exc, unit, artifact_path),

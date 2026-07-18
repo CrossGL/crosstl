@@ -2701,10 +2701,11 @@ class Parser:
 
     def cooperative_matrix_type(self, generic_args):
         """Build the canonical cooperative matrix type from generic arguments."""
-        if not 3 <= len(generic_args) <= 6:
+        if not 3 <= len(generic_args) <= 10:
             raise SyntaxError(
-                "CooperativeMatrix expects 3 to 6 generic arguments: "
-                "element type, rows, columns, scope, use, and layout"
+                "CooperativeMatrix expects 3 to 10 generic arguments: "
+                "element type, rows, columns, scope, use, layout, fragment "
+                "layout, subgroup size, elements per lane, and fragment provenance"
             )
 
         element_type = generic_args[0]
@@ -2725,19 +2726,67 @@ class Parser:
             generic_args[5] if len(generic_args) > 5 else None,
             "unspecified",
         )
-        return CooperativeMatrixType(
-            element_type,
-            rows,
-            cols,
-            scope,
-            use,
-            layout,
+        fragment_layout = self.cooperative_matrix_optional_contract_label(
+            generic_args[6] if len(generic_args) > 6 else None,
         )
+        subgroup_size = self.cooperative_matrix_optional_dimension(
+            generic_args[7] if len(generic_args) > 7 else None
+        )
+        elements_per_lane = self.cooperative_matrix_optional_dimension(
+            generic_args[8] if len(generic_args) > 8 else None
+        )
+        fragment_provenance = self.cooperative_matrix_optional_contract_label(
+            generic_args[9] if len(generic_args) > 9 else None,
+        )
+        try:
+            return CooperativeMatrixType(
+                element_type,
+                rows,
+                cols,
+                scope,
+                use,
+                layout,
+                fragment_layout,
+                subgroup_size,
+                elements_per_lane,
+                fragment_provenance,
+            )
+        except ValueError as error:
+            raise SyntaxError(str(error)) from error
 
     def cooperative_matrix_dimension(self, argument):
-        if isinstance(argument, LiteralNode) and isinstance(argument.value, int):
+        if isinstance(argument, LiteralNode) and type(argument.value) is int:
             return argument.value
+        if (
+            isinstance(argument, UnaryOpNode)
+            and argument.op in {"+", "-"}
+            and isinstance(argument.operand, LiteralNode)
+            and type(argument.operand.value) is int
+        ):
+            value = argument.operand.value
+            return value if argument.op == "+" else -value
         return argument
+
+    def cooperative_matrix_optional_dimension(self, argument):
+        if argument is None:
+            return None
+        if isinstance(argument, LiteralNode) and isinstance(argument.value, bool):
+            return argument.value
+        if isinstance(argument, (IdentifierNode, NamedType)):
+            if argument.name == CooperativeMatrixType.UNSPECIFIED_FRAGMENT_CONTRACT:
+                return None
+            if argument.name in {"true", "false"}:
+                return argument.name == "true"
+        return self.cooperative_matrix_dimension(argument)
+
+    def cooperative_matrix_optional_contract_label(self, argument):
+        label = self.cooperative_matrix_contract_label(
+            argument,
+            CooperativeMatrixType.UNSPECIFIED_FRAGMENT_CONTRACT,
+        )
+        if label == CooperativeMatrixType.UNSPECIFIED_FRAGMENT_CONTRACT:
+            return None
+        return label
 
     def cooperative_matrix_contract_label(self, argument, default):
         if argument is None:

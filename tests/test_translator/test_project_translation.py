@@ -9356,6 +9356,150 @@ def test_translate_project_reports_directx_trailing_zero_builtin_contract(tmp_pa
     assert not (repo / artifact["path"]).exists()
 
 
+@pytest.mark.parametrize(
+    ("target", "diagnostic_code", "missing_capability", "extension"),
+    [
+        (
+            "directx",
+            "project.translate.directx-cooperative-matrix-unsupported",
+            "directx.cooperative-matrix-lowering",
+            "hlsl",
+        ),
+        (
+            "opengl",
+            "project.translate.opengl-cooperative-matrix-unsupported",
+            "opengl.cooperative-matrix-lowering",
+            "glsl",
+        ),
+    ],
+)
+def test_translate_project_reports_cooperative_matrix_fragment_contract(
+    tmp_path,
+    target,
+    diagnostic_code,
+    missing_capability,
+    extension,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "cooperative_matrix.cgl").write_text(
+        textwrap.dedent("""
+            shader CooperativeMatrixFragmentContract {
+                compute {
+                    void main() {
+                        CooperativeMatrix<
+                            float,
+                            8,
+                            8,
+                            subgroup,
+                            accumulator,
+                            row_major,
+                            dense,
+                            32,
+                            2,
+                            source_fixture
+                        > value;
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="translated",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {diagnostic_code: 1}
+    assert payload["summary"]["missingCapabilityCounts"] == {missing_capability: 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == diagnostic_code
+    assert diagnostic["target"] == target
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["missingCapabilities"] == [missing_capability]
+    assert diagnostic["details"] == {
+        "cooperativeMatrix": {
+            "columns": 8,
+            "elementType": "float",
+            "elementsPerLane": 2,
+            "fragmentLayout": "dense",
+            "fragmentProvenance": "source_fixture",
+            "memoryLayout": "row_major",
+            "operation": "type",
+            "reason": "unsupported-type",
+            "rows": 8,
+            "scope": "subgroup",
+            "subgroupSize": 32,
+            "use": "accumulator",
+        },
+        "sourcePath": "cooperative_matrix.cgl",
+        "targetArtifact": f"translated/{target}/cooperative_matrix.{extension}",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+
+def test_translate_project_reports_invalid_metal_matrix_fragment_cast(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "invalid_fragment.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            void invalid_fragment_write(
+                thread metal::simdgroup_matrix<float, 8, 8>& matrix,
+                thread float2& fragment) {
+              reinterpret_cast<thread half2&>(
+                  matrix.thread_elements()) = half2(fragment);
+            }
+
+            kernel void unused_entry() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+    ).to_json()
+
+    diagnostic_code = "project.translate.metal-cooperative-matrix-fragment-unsupported"
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {diagnostic_code: 1}
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.cooperative-matrix-fragment-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == diagnostic_code
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["details"] == {
+        "cooperativeMatrixFragment": {
+            "direction": "write",
+            "fragmentType": "half2&",
+            "matrixType": "metal::simdgroup_matrix<float,8,8>",
+            "qualifiers": ["thread"],
+            "reason": (
+                "fragment component type 'half' does not match matrix component "
+                "type 'float'"
+            ),
+        },
+        "sourcePath": "invalid_fragment.metal",
+        "targetArtifact": "translated/directx/invalid_fragment.hlsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+
 def test_translate_project_reports_unsupported_opengl_index_type(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
