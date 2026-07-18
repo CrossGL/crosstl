@@ -15290,8 +15290,8 @@ def test_translate_project_folds_concrete_metal_sizeof_across_targets(tmp_path):
     }
     assert all(artifact["status"] == "translated" for artifact in artifacts.values())
     assert all("sizeof" not in output for output in outputs.values())
-    assert "scratch[(64 * 68)]" in outputs["directx"]
-    assert "scratch[(64 * 68)]" in outputs["opengl"]
+    assert "scratch[4352]" in outputs["directx"]
+    assert "scratch[4352]" in outputs["opengl"]
     assert re.search(r"OpConstant %\d+ 4352\b", outputs["vulkan"])
     assert "OpTypeArray" in outputs["vulkan"]
     assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
