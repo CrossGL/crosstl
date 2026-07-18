@@ -17142,6 +17142,54 @@ def _inline_metal_concrete_using_template_aliases(
     source: str,
     excluded_spans: Sequence[tuple[int, int]],
 ) -> str:
+    concrete_definitions = preprocessor._find_concrete_struct_definitions(source)
+    concrete_name_counts = Counter(struct.name for struct in concrete_definitions)
+    materialized_structs = getattr(
+        preprocessor,
+        "_materialized_struct_specializations",
+        {},
+    )
+    masked_source = _masked_metal_non_code_text(source)
+    qualified_alias_replacements: list[tuple[int, int, str]] = []
+    # Concrete specializations are appended after the functions that requested
+    # them. Resolve their qualified aliases from recorded provenance before the
+    # Metal parser applies ordinary declaration-order visibility.
+    for struct in concrete_definitions:
+        if (
+            struct.name not in materialized_structs
+            or concrete_name_counts[struct.name] != 1
+            or not struct.type_aliases
+        ):
+            continue
+        constants = preprocessor._resolved_static_data_member_initializers(struct)
+        for alias, alias_target in struct.type_aliases.items():
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9_:])(?:typename\s+)?"
+                rf"{re.escape(struct.name)}\s*::\s*{re.escape(alias)}\b"
+            )
+            matches = [
+                match
+                for match in pattern.finditer(masked_source)
+                if not _source_offset_in_spans(match.start(), excluded_spans)
+            ]
+            if not matches:
+                continue
+            target = _metal_resolve_type_identifiers(
+                preprocessor,
+                alias_target,
+                aliases=struct.type_aliases,
+                constants=constants,
+            )
+            qualified_alias_replacements.extend(
+                (match.start(), match.end(), target) for match in matches
+            )
+    if qualified_alias_replacements:
+        source = preprocessor._apply_text_replacements(
+            source,
+            qualified_alias_replacements,
+        )
+        excluded_spans = preprocessor._find_template_declaration_spans(source)
+
     block_spans = _metal_block_spans(preprocessor, source)
     namespace_spans = preprocessor._find_namespace_spans(source)
     template_structs = _metal_template_struct_members(preprocessor, source)
@@ -17156,6 +17204,9 @@ def _inline_metal_concrete_using_template_aliases(
         known_namespaces,
     )
     concrete_structs = _metal_struct_alias_members(preprocessor, source)
+    concrete_struct_spans = [
+        struct.span for struct in preprocessor._find_concrete_struct_definitions(source)
+    ]
     aliases: list[dict[str, Any]] = []
     alias_spans: list[tuple[int, int]] = []
     excluded = list(excluded_spans)
@@ -17234,6 +17285,11 @@ def _inline_metal_concrete_using_template_aliases(
                     break
         scope_span = _metal_enclosing_block_span(block_spans, i)
         if alias_type is None or scope_span is None:
+            i = semicolon + 1
+            continue
+        # The Metal parser retains struct aliases for qualified type resolution.
+        # This pass only owns block-local aliases exposed by materialization.
+        if preprocessor._containing_span(i, concrete_struct_spans) is not None:
             i = semicolon + 1
             continue
         scope_start, scope_end = scope_span
@@ -19681,9 +19737,11 @@ def _translation_failure_missing_capabilities(
 
 
 def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
+    diagnostic_code = _translation_failure_diagnostic_code(exc)
+    if diagnostic_code == "project.translate.metal-struct-alias-unresolved":
+        return {}
     if (
-        _translation_failure_diagnostic_code(exc)
-        == "project.translate.metal-struct-method"
+        diagnostic_code == "project.translate.metal-struct-method"
         and getattr(exc, "reason", None) == "reference-return-identity-unsupported"
     ):
         return {}
@@ -19949,6 +20007,86 @@ def _metal_template_argument_failure_details(
             argument[name] = value
     if argument:
         details["valueTemplateArgument"] = dict(sorted(argument.items()))
+    return dict(sorted(details.items()))
+
+
+def _metal_struct_alias_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-struct-alias-unresolved"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    struct_alias = {}
+    fields = {
+        "owner": getattr(exc, "owner", None),
+        "aliasName": getattr(exc, "alias_name", None),
+        "requestedSignature": getattr(exc, "requested_signature", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            struct_alias[name] = value
+
+    raw_candidate_identities = tuple(getattr(exc, "candidate_identities", None) or ())
+    raw_candidate_locations = tuple(getattr(exc, "candidate_locations", None) or ())
+    candidate_identities = [
+        (index, identity.strip())
+        for index, identity in enumerate(raw_candidate_identities)
+        if _is_non_empty_string(identity)
+    ]
+    locations_are_paired = len(raw_candidate_locations) == len(
+        raw_candidate_identities
+    ) and all(location is not None for location in raw_candidate_locations)
+    if locations_are_paired and candidate_identities:
+        candidate_records: dict[tuple[Any, ...], tuple[str, dict[str, Any]]] = {}
+        for index, identity in candidate_identities:
+            payload = _translation_failure_location(
+                SimpleNamespace(source_location=raw_candidate_locations[index]), unit
+            ).to_json()
+            location_key = tuple(
+                payload[field_name] for field_name in SOURCE_MAP_SPAN_FIELDS
+            )
+            candidate_records[(*location_key, identity)] = (identity, payload)
+        ordered_records = [candidate_records[key] for key in sorted(candidate_records)]
+        struct_alias["candidateIdentities"] = [
+            identity for identity, _location in ordered_records
+        ]
+        struct_alias["candidateLocations"] = [
+            location for _identity, location in ordered_records
+        ]
+    else:
+        normalized_identities = sorted(
+            {identity for _index, identity in candidate_identities}
+        )
+        if normalized_identities:
+            struct_alias["candidateIdentities"] = normalized_identities
+
+        candidate_locations_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for location in raw_candidate_locations:
+            if location is None:
+                continue
+            payload = _translation_failure_location(
+                SimpleNamespace(source_location=location), unit
+            ).to_json()
+            candidate_locations_by_key[
+                tuple(payload[field_name] for field_name in SOURCE_MAP_SPAN_FIELDS)
+            ] = payload
+        if candidate_locations_by_key:
+            struct_alias["candidateLocations"] = [
+                candidate_locations_by_key[key]
+                for key in sorted(candidate_locations_by_key)
+            ]
+
+    if struct_alias:
+        details["structAlias"] = dict(sorted(struct_alias.items()))
     return dict(sorted(details.items()))
 
 
@@ -21090,6 +21228,7 @@ def _translation_failure_details(
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_template_argument_failure_details(exc, unit, artifact_path),
+        **_metal_struct_alias_failure_details(exc, unit, artifact_path),
         **_metal_callable_failure_details(exc, unit, artifact_path),
         **_metal_callable_alias_failure_details(exc, unit, artifact_path),
         **_template_materialization_failure_details(exc),

@@ -995,7 +995,22 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _materialize_explicit_template_struct_instantiations_impl(
         self, code: str, *, work_budget: Optional[object] = None
     ) -> str:
-        materialized_names: Dict[Tuple[str, Tuple[str, ...]], str] = {}
+        concrete_name_counts: Dict[str, int] = {}
+        for struct in self._find_concrete_struct_definitions(code):
+            concrete_name_counts[struct.name] = (
+                concrete_name_counts.get(struct.name, 0) + 1
+            )
+        # Project materialization can expose new references and run this pass
+        # again. Reuse only a recorded specialization with one surviving concrete
+        # declaration; missing or duplicate declarations must be handled again.
+        materialized_names: Dict[Tuple[str, Tuple[str, ...]], str] = {
+            (source_name, tuple(source_arguments)): specialized_name
+            for specialized_name, (
+                source_name,
+                source_arguments,
+            ) in self._materialized_struct_specializations.items()
+            if concrete_name_counts.get(specialized_name) == 1
+        }
         working = code
         # Each iteration resolves one "layer" of instantiations; the bound mirrors
         # the specialization budget so deeply nested or pathological inputs cannot
@@ -3336,6 +3351,27 @@ class MetalPreprocessor(HLSLPreprocessor):
             if angle_end is not None:
                 add_replacement(angle_start + 1, angle_end)
 
+        # Function-style and braced casts name the type directly. Restrict this
+        # to unqualified owner aliases so another struct's member alias and a
+        # block-local alias keep their own scope.
+        alias_pattern = "|".join(
+            re.escape(alias) for alias in sorted(alias_names, key=len, reverse=True)
+        )
+        constructor_pattern = re.compile(
+            rf"(?<![A-Za-z0-9_:])(?P<type>{alias_pattern})\s*(?=[({{])"
+        )
+        for match in constructor_pattern.finditer(body):
+            if self._containing_span(match.start(), ignored_spans) is not None:
+                continue
+            prefix = body[: match.start()].rstrip()
+            if prefix.endswith(("::", ".", "->")):
+                continue
+            if match.group("type") in self._shadowed_type_aliases_at(
+                local_aliases, match.start()
+            ):
+                continue
+            add_replacement(match.start("type"), match.end("type"))
+
         # Parenthesized expressions overlap C-style cast syntax. Only rewrite a
         # span that resolves to a pointer/reference type and has a concrete cast
         # operand; ambiguous scalar groups remain unchanged.
@@ -3359,9 +3395,6 @@ class MetalPreprocessor(HLSLPreprocessor):
         }
         for alias_target in struct.type_aliases.values():
             allowed_c_style_identifiers.update(IDENTIFIER_RE.findall(alias_target))
-        alias_pattern = "|".join(
-            re.escape(alias) for alias in sorted(alias_names, key=len, reverse=True)
-        )
         c_style_cast_pattern = re.compile(
             rf"\((?P<type>[^(){{}};]*\b(?:{alias_pattern})\b[^(){{}};]*)\)"
         )

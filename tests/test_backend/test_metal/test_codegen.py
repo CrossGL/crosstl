@@ -26,6 +26,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalStageEntryArrayResourceError,
     MetalStandardLibraryWrapperLoweringError,
     MetalStaticConstantResolutionError,
+    MetalStructAliasResolutionError,
     MetalStructMethodCallResolutionError,
     MetalTemplateArgumentResolutionError,
     MetalToCrossGLConverter,
@@ -9509,6 +9510,118 @@ def test_codegen_type_alias_member_array_keeps_component_type():
     assert "CrossGLMetalVectorIndex_vec2_set(tile.values[0], lane, 1.0f);" in crossgl
 
 
+def test_codegen_struct_scoped_alias_member_array_keeps_component_type(tmp_path):
+    source = """
+    struct Tile {
+        using frag_type = metal::vec<float, 2>;
+        frag_type val_frags[4];
+    };
+
+    kernel void read_fragment(
+        device float* output [[buffer(0)]],
+        uint2 index [[thread_position_in_grid]]) {
+        Tile tile;
+        tile.val_frags[0] = metal::vec<float, 2>(1.0f);
+        output[index.x] = tile.val_frags[index.x & 3u][index.y & 1u];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "vec2[4] val_frags;" in normalized
+    assert (
+        "CrossGLMetalVectorIndex_vec2_get("
+        "tile.val_frags[index.x & 3u], index.y & 1u)" in normalized
+    )
+
+    shader = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(shader)
+    glsl = GLSLCodeGen().generate(shader)
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+    assert "frag_type" not in hlsl
+    assert "frag_type" not in glsl
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "struct-scoped-alias-member-array.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(tmp_path / "struct-scoped-alias-member-array.dxil"),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    assert_opengl_compute_validates_if_available(
+        glsl,
+        tmp_path,
+        "struct-scoped-alias-member-array",
+    )
+
+
+@pytest.mark.parametrize(
+    ("second_alias", "reason"),
+    [
+        (
+            "",
+            "a visible declaration does not define exactly one concrete alias",
+        ),
+        (
+            "using frag_type = metal::vec<float, 4>;",
+            "visible declarations define conflicting concrete alias targets",
+        ),
+    ],
+)
+def test_codegen_rejects_non_unique_struct_member_alias_owner(second_alias, reason):
+    source = f"""
+    struct Tile {{
+        using frag_type = metal::vec<float, 2>;
+        frag_type val_frags[4];
+    }};
+
+    struct Tile {{
+        {second_alias}
+        frag_type val_frags[4];
+    }};
+    """
+
+    with pytest.raises(MetalStructAliasResolutionError) as exc_info:
+        convert_without_preprocessing(source, file_path="struct-member-alias.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.owner == "Tile"
+    assert diagnostic.alias_name == "frag_type"
+    assert diagnostic.reason == reason
+    assert diagnostic.source_location["file"] == "struct-member-alias.metal"
+
+
+def test_codegen_does_not_capture_qualified_static_call_as_struct_alias():
+    source = """
+    struct Fragment {
+        using frag_type = metal::vec<float, 2>;
+    };
+
+    void load_fragment(thread Fragment::frag_type& value) {
+        Fragment:: load(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+
+    assert "load(value);" in crossgl
+
+
 def test_codegen_resource_vector_components_preserve_buffer_indexing(tmp_path):
     source = """
     kernel void resource_components(
@@ -9909,6 +10022,321 @@ def test_codegen_reports_user_aggregate_subscript_result_type():
     assert diagnostic.reason == (
         "the user-defined aggregate subscript result type cannot be inferred"
     )
+
+
+def test_codegen_resolves_equivalent_duplicate_concrete_struct_alias_for_indexing():
+    source = """
+    namespace mlx {
+    namespace steel {
+    struct Fragment_float {
+        typedef metal::vec<float, 2> frag_type;
+    };
+    }
+    }
+
+    namespace mlx {
+    namespace steel {
+    struct Fragment_float {
+        typedef metal::vec<float, 2> frag_type;
+    };
+    }
+    }
+
+    using namespace mlx::steel;
+
+    float read_lane(Fragment_float::frag_type value, ushort lane) {
+        auto selected = value[lane];
+        return selected;
+    }
+    """
+
+    crossgl = convert(source)
+    normalized = normalize(crossgl)
+    assert "float read_lane(vec2 value, uint16 lane)" in normalized
+    assert (
+        "float selected = CrossGLMetalVectorIndex_vec2_get(value, lane);" in normalized
+    )
+    parse_crossgl(crossgl)
+
+
+def test_equivalent_duplicate_struct_alias_reaches_project_targets(tmp_path):
+    source = """
+    struct Fragment_float {
+        typedef metal::vec<float, 2> frag_type;
+    };
+
+    struct Fragment_float {
+        typedef metal::vec<float, 2> frag_type;
+    };
+
+    kernel void alias_kernel(
+        device float* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        Fragment_float::frag_type values =
+            Fragment_float::frag_type(float(gid));
+        out[gid] = values[gid & 1u];
+    }
+    """
+    repo = tmp_path / "equivalent-struct-alias"
+    repo.mkdir()
+    source_path = repo / "alias.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    report = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+    assert payload["summary"]["translatedCount"] == 2, payload
+    assert payload["summary"]["failedCount"] == 0, payload
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    outputs = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+
+    HLSLParser(HLSLLexer(outputs["directx"]).tokenize()).parse()
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        source_output = tmp_path / "equivalent-struct-alias.hlsl"
+        binary_output = tmp_path / "equivalent-struct-alias.dxil"
+        source_output.write_text(outputs["directx"], encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(source_output),
+                "-Fo",
+                str(binary_output),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert binary_output.stat().st_size > 0
+
+    assert_opengl_compute_validates_if_available(
+        outputs["opengl"],
+        tmp_path,
+        "equivalent-struct-alias",
+    )
+
+
+def test_codegen_resolves_equivalent_chained_struct_alias_with_static_width():
+    source = """
+    namespace mlx {
+    namespace steel {
+    struct Fragment_float {
+        static constexpr int kElemsPerFrag = 1 + 1;
+        using storage_type = metal::vec<float, kElemsPerFrag>;
+        using frag_type = storage_type;
+    };
+    }
+    }
+
+    namespace mlx {
+    namespace steel {
+    struct Fragment_float {
+        static constexpr int kElemsPerFrag = 2;
+        using storage_type = metal::vec<float, kElemsPerFrag>;
+        using frag_type = storage_type;
+    };
+    }
+    }
+
+    using namespace mlx::steel;
+
+    float read_lane(Fragment_float::frag_type value, ushort lane) {
+        return value[lane];
+    }
+    """
+
+    crossgl = convert(source)
+    assert "float read_lane(vec2 value, uint16 lane)" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_resolves_equivalent_struct_array_alias_with_static_extent():
+    source = """
+    struct Fragment_float {
+        static constexpr int kWidth = 1 + 1;
+        typedef float lane_type[kWidth];
+    };
+
+    struct Fragment_float {
+        static constexpr int kWidth = 2;
+        typedef float lane_type[kWidth];
+    };
+
+    float read_lane(Fragment_float::lane_type value, ushort lane) {
+        return value[lane];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    assert "float read_lane(float[2] value, uint16 lane)" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_rejects_constexpr_only_duplicate_without_materialization_provenance():
+    source = """
+    struct BaseMMAFrag_float_8_8 {
+        static constexpr int kFragRows = 8;
+        static constexpr int kFragCols = 8;
+        static constexpr int kElemsPerFrag = 2;
+        static constexpr int kElemRows = 1;
+        static constexpr int kElemCols = 2;
+    };
+
+    struct BaseMMAFrag_float_8_8 {
+        static constexpr int kElemsPerFrag = 1 + 1;
+        typedef metal::vec<float, kElemsPerFrag> frag_type;
+    };
+
+    struct BaseMMAFrag_float_8_8 {
+        static constexpr int kElemsPerFrag = 2;
+        typedef metal::vec<float, kElemsPerFrag> frag_type;
+    };
+
+    float read_lane(BaseMMAFrag_float_8_8::frag_type value, ushort lane) {
+        return value[lane];
+    }
+    """
+
+    with pytest.raises(MetalStructAliasResolutionError) as exc_info:
+        convert_without_preprocessing(source, file_path="unproven-owner-fragment.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.owner == "BaseMMAFrag_float_8_8"
+    assert diagnostic.alias_name == "frag_type"
+    assert diagnostic.reason == (
+        "a visible declaration does not define exactly one concrete alias"
+    )
+    assert diagnostic.source_location["file"] == "unproven-owner-fragment.metal"
+
+
+def test_codegen_rejects_missing_struct_alias_on_runtime_owner_fragment():
+    source = """
+    struct Fragment_float {
+        static constexpr int width = 2;
+        float runtime_value;
+    };
+
+    struct Fragment_float {
+        typedef metal::vec<float, 2> frag_type;
+    };
+
+    float read_lane(Fragment_float::frag_type value, ushort lane) {
+        return value[lane];
+    }
+    """
+
+    with pytest.raises(MetalStructAliasResolutionError) as exc_info:
+        convert_without_preprocessing(source, file_path="runtime-owner-fragment.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.owner == "Fragment_float"
+    assert diagnostic.alias_name == "frag_type"
+    assert diagnostic.reason == (
+        "a visible declaration does not define exactly one concrete alias"
+    )
+    assert diagnostic.source_location["file"] == "runtime-owner-fragment.metal"
+
+
+def test_codegen_rejects_conflicting_duplicate_concrete_struct_alias():
+    source = """
+    namespace mlx {
+    namespace steel {
+    struct Fragment_float {
+        typedef metal::vec<float, 2> frag_type;
+    };
+    }
+    }
+
+    namespace mlx {
+    namespace steel {
+    struct Fragment_float {
+        typedef metal::vec<float, 4> frag_type;
+    };
+    }
+    }
+
+    using namespace mlx::steel;
+
+    float read_lane(Fragment_float::frag_type value, ushort lane) {
+        return value[lane];
+    }
+    """
+
+    with pytest.raises(MetalStructAliasResolutionError) as exc_info:
+        convert_without_preprocessing(source, file_path="duplicate-alias.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-struct-alias-unresolved"
+    )
+    assert diagnostic.owner == "mlx::steel::Fragment_float"
+    assert diagnostic.alias_name == "frag_type"
+    assert diagnostic.requested_signature == ("mlx::steel::Fragment_float::frag_type")
+    assert diagnostic.reason == (
+        "visible declarations define conflicting concrete alias targets"
+    )
+    assert diagnostic.candidate_identities == (
+        "mlx::steel::Fragment_float::frag_type=metal::vec<float,2>",
+        "mlx::steel::Fragment_float::frag_type=metal::vec<float,4>",
+    )
+    assert str(diagnostic).endswith(
+        "candidates are "
+        "mlx::steel::Fragment_float::frag_type=metal::vec<float,2>, "
+        "mlx::steel::Fragment_float::frag_type=metal::vec<float,4>"
+    )
+    assert len(diagnostic.candidate_locations) == 2
+    assert diagnostic.source_location["file"] == "duplicate-alias.metal"
+
+
+@pytest.mark.parametrize(
+    ("first_alias", "second_alias"),
+    [
+        (
+            "typedef device const float* lane_type;",
+            "typedef threadgroup const float* lane_type;",
+        ),
+        ("typedef float* lane_type;", "typedef float** lane_type;"),
+        ("typedef float lane_type[2];", "typedef float lane_type[4];"),
+    ],
+)
+def test_codegen_rejects_duplicate_struct_alias_qualifier_or_shape_conflicts(
+    first_alias, second_alias
+):
+    source = f"""
+    struct Fragment_float {{
+        {first_alias}
+    }};
+
+    struct Fragment_float {{
+        {second_alias}
+    }};
+
+    void consume(Fragment_float::lane_type value) {{}}
+    """
+
+    with pytest.raises(MetalStructAliasResolutionError) as exc_info:
+        convert_without_preprocessing(source, file_path="alias-shape.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.owner == "Fragment_float"
+    assert diagnostic.alias_name == "lane_type"
+    assert diagnostic.reason == (
+        "visible declarations define conflicting concrete alias targets"
+    )
+    assert len(diagnostic.candidate_identities) == 2
+    assert len(diagnostic.candidate_locations) == 2
 
 
 def test_mlx_materialized_collapsed_member_overloads_reach_project_targets(tmp_path):

@@ -16185,6 +16185,31 @@ def test_metal_concrete_template_struct_resolves_visible_using_namespace():
     assert "float value = 0;" in output
 
 
+def test_metal_concrete_alias_inlining_preserves_struct_scoped_aliases():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        struct Fragment {
+            typedef metal::vec<float, 2> frag_type;
+        };
+
+        void consume() {
+            using Scalar = float;
+            Scalar value = 1.0f;
+        }
+        """)
+
+    output = project_pipeline._inline_metal_concrete_using_template_aliases(
+        MetalPreprocessor(),
+        source,
+        [],
+    )
+
+    assert "typedef metal::vec<float, 2> frag_type;" in output
+    assert "using Scalar" not in output
+    assert "float value = 1.0f;" in output
+
+
 def test_metal_template_alias_canonicalization_preserves_lexical_lookup():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
@@ -49322,6 +49347,189 @@ def test_translate_project_reports_unresolved_metal_struct_sibling_call(
     assert not (repo / artifact["path"]).exists()
 
 
+def test_translate_project_reports_conflicting_concrete_metal_struct_aliases(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "duplicate_alias.metal").write_text(
+        textwrap.dedent("""
+            namespace mlx {
+            namespace steel {
+            struct Fragment_float {
+                typedef metal::vec<float, 2> frag_type;
+            };
+            }
+            }
+
+            namespace mlx {
+            namespace steel {
+            struct Fragment_float {
+                typedef metal::vec<float, 4> frag_type;
+            };
+            }
+            }
+
+            using namespace mlx::steel;
+
+            float read_lane(Fragment_float::frag_type value, ushort lane) {
+                return value[lane];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-struct-alias-unresolved": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.struct-alias-resolution": 1
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.metal-struct-alias-unresolved"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "duplicate_alias.metal"
+    assert diagnostic["location"]["line"] == 4
+    assert diagnostic["location"]["column"] == 5
+    assert diagnostic["missingCapabilities"] == ["metal.struct-alias-resolution"]
+    assert diagnostic["details"] == {
+        "sourcePath": "duplicate_alias.metal",
+        "structAlias": {
+            "aliasName": "frag_type",
+            "candidateIdentities": [
+                "mlx::steel::Fragment_float::frag_type=metal::vec<float,2>",
+                "mlx::steel::Fragment_float::frag_type=metal::vec<float,4>",
+            ],
+            "candidateLocations": [
+                {
+                    "column": 5,
+                    "endColumn": 44,
+                    "endLine": 4,
+                    "endOffset": 101,
+                    "file": "duplicate_alias.metal",
+                    "length": 39,
+                    "line": 4,
+                    "offset": 62,
+                },
+                {
+                    "column": 5,
+                    "endColumn": 44,
+                    "endLine": 12,
+                    "endOffset": 211,
+                    "file": "duplicate_alias.metal",
+                    "length": 39,
+                    "line": 12,
+                    "offset": 172,
+                },
+            ],
+            "owner": "mlx::steel::Fragment_float",
+            "reason": "visible declarations define conflicting concrete alias targets",
+            "requestedSignature": "mlx::steel::Fragment_float::frag_type",
+        },
+        "targetArtifact": "out/directx/duplicate_alias.hlsl",
+    }
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+    reconstructed = next(
+        item
+        for item in validation["diagnostics"]
+        if item["code"] == "project.translate.metal-struct-alias-unresolved"
+    )
+    assert reconstructed == diagnostic
+
+
+def test_translate_project_canonicalizes_metal_struct_alias_candidates(
+    tmp_path,
+    monkeypatch,
+):
+    from crosstl.backend.Metal.MetalCrossGLCodeGen import (
+        MetalStructAliasResolutionError,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ordered_alias.metal").write_text(
+        "float read_value(float value) { return value; }\n",
+        encoding="utf-8",
+    )
+
+    early_location = {
+        "file": "ordered_alias.metal",
+        "line": 3,
+        "column": 2,
+        "offset": 20,
+        "length": 4,
+        "end_line": 3,
+        "end_column": 6,
+        "end_offset": 24,
+    }
+    late_location = {
+        "file": "ordered_alias.metal",
+        "line": 9,
+        "column": 2,
+        "offset": 80,
+        "length": 4,
+        "end_line": 9,
+        "end_column": 6,
+        "end_offset": 84,
+    }
+
+    def raise_unresolved_alias(*_args, **_kwargs):
+        raise MetalStructAliasResolutionError(
+            "Fragment_float",
+            "frag_type",
+            "visible declarations define conflicting concrete alias targets",
+            candidate_identities=("late", "early", "late"),
+            candidate_locations=(late_location, early_location, late_location),
+            source_location=early_location,
+        )
+
+    monkeypatch.setattr(project_pipeline, "translate", raise_unresolved_alias)
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    )
+    diagnostic = report.to_json()["diagnostics"][0]
+    struct_alias = diagnostic["details"]["structAlias"]
+
+    assert struct_alias["candidateIdentities"] == ["early", "late"]
+    assert [location["line"] for location in struct_alias["candidateLocations"]] == [
+        3,
+        9,
+    ]
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    reconstructed = next(
+        item
+        for item in validation["diagnostics"]
+        if item["code"] == "project.translate.metal-struct-alias-unresolved"
+    )
+    assert reconstructed == diagnostic
+
+
 def test_translate_project_metal_implicit_type_environment_cache_bounds_repeated_work(
     tmp_path,
 ):
@@ -50849,6 +51057,58 @@ def test_translate_project_resolves_owner_aliases_in_explicit_casts(tmp_path):
     assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
     assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+
+
+def test_translate_project_preserves_materialized_partial_struct_alias(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "partial_struct_alias.metal").write_text(
+        textwrap.dedent("""
+            template <typename T, int Rows, int Columns>
+            struct BaseFrag {
+                static_assert(Rows == 8, "Rows must be eight");
+                static_assert(Columns == 8, "Columns must be eight");
+            };
+
+            template <typename T>
+            struct BaseFrag<T, 8, 8> {
+                static constexpr int kElems = 2;
+                typedef metal::vec<T, kElems> frag_type;
+            };
+
+            template <typename T>
+            [[kernel]] void partial_alias_kernel(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                typename BaseFrag<T, 8, 8>::frag_type values =
+                    BaseFrag<T, 8, 8>::frag_type(T(gid));
+                out[gid] = values[gid & 1u];
+            }
+
+            instantiate_kernel(
+                "partial_alias_kernel_float", partial_alias_kernel, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl"}
+    outputs = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    assert all("frag_type" not in output for output in outputs.values())
+    assert all("WARNING" not in output for output in outputs.values())
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
 
 
 def test_translate_project_resolves_struct_owned_alias_template_vectors(tmp_path):

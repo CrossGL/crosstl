@@ -429,6 +429,36 @@ class MetalAliasTemplateResolutionError(ValueError):
         )
 
 
+class MetalStructAliasResolutionError(ValueError):
+    """Raised when a struct-scoped Metal alias has no unique concrete type."""
+
+    project_diagnostic_code = "project.translate.metal-struct-alias-unresolved"
+    missing_capabilities = ("metal.struct-alias-resolution",)
+
+    def __init__(
+        self,
+        owner,
+        alias_name,
+        reason,
+        *,
+        candidate_identities=(),
+        candidate_locations=(),
+        source_location=None,
+    ):
+        self.owner = owner
+        self.alias_name = alias_name
+        self.requested_signature = f"{owner}::{alias_name}"
+        self.reason = reason
+        self.candidate_identities = tuple(candidate_identities)
+        self.candidate_locations = tuple(candidate_locations)
+        self.source_location = source_location
+        candidates = ", ".join(self.candidate_identities) or "<none>"
+        super().__init__(
+            "Cannot materialize Metal struct alias "
+            f"'{self.requested_signature}': {reason}; candidates are {candidates}"
+        )
+
+
 class MetalCallableLoweringError(ValueError):
     """Raised when a Metal callback cannot be lowered without changing semantics."""
 
@@ -1219,6 +1249,7 @@ class MetalToCrossGLConverter:
         self.alias_template_structs = []
         self.alias_template_structs_by_qualified_name = {}
         self.alias_template_using_namespaces = []
+        self.struct_member_alias_resolution_stack = []
         self.current_type_resolution_context = None
         self.callable_type_aliases = {}
         self.callable_alias_declarations = {}
@@ -1239,6 +1270,7 @@ class MetalToCrossGLConverter:
         self.global_sampler_names = set()
         self.suppress_structured_buffer_index_lowering = False
         self.struct_member_types = {}
+        self.resolved_struct_member_types = {}
         self.struct_declarations = {}
         self.struct_name_map = {}
         self.ambiguous_struct_names = set()
@@ -2856,6 +2888,7 @@ class MetalToCrossGLConverter:
 
     def collect_struct_member_types(self, structs):
         member_types = {}
+        self.resolved_struct_member_types = {}
         for struct_node in structs or []:
             struct_name = getattr(struct_node, "name", None)
             if not struct_name:
@@ -2863,11 +2896,65 @@ class MetalToCrossGLConverter:
             members = {}
             for member in getattr(struct_node, "members", []) or []:
                 member_name = getattr(member, "name", None)
-                member_type = self.metal_declaration_expression_type(member)
+                member_type = self.resolve_struct_member_declaration_type(
+                    struct_node, member
+                )
                 if member_name and member_type:
                     members[member_name] = member_type
             member_types[struct_name] = members
         return member_types
+
+    def resolve_struct_member_declaration_type(self, struct_node, member):
+        declared_type = self.resolve_struct_member_base_type(struct_node, member)
+        if declared_type is None:
+            return None
+        self.resolved_struct_member_types[id(member)] = declared_type
+        array_suffix = "".join(
+            "[]" if size is None else f"[{self.format_array_extent(size)}]"
+            for size in getattr(member, "array_sizes", []) or []
+        )
+        return f"{declared_type}{array_suffix}"
+
+    def resolve_struct_member_base_type(self, struct_node, member):
+        declared_type = str(getattr(member, "vtype", None) or "").strip()
+        if not declared_type:
+            return None
+
+        candidate = re.sub(r"^typename\s+", "", declared_type).strip()
+        suffix = ""
+        while candidate.endswith(("*", "&")):
+            suffix = candidate[-1] + suffix
+            candidate = candidate[:-1].strip()
+
+        alias_names = {
+            getattr(alias, "name", None)
+            for alias in getattr(struct_node, "type_aliases", None) or []
+            if getattr(alias, "name", None)
+        }
+        if candidate in alias_names:
+            if getattr(struct_node, "template_parameters", None):
+                return declared_type
+            owner = self.normalize_qualified_type_name(
+                getattr(struct_node, "qualified_name", None) or struct_node.name
+            )
+            previous_context = self.current_type_resolution_context
+            self.current_type_resolution_context = member
+            try:
+                resolved = self.resolve_dependent_alias_type(
+                    owner, candidate, required=True
+                )
+            finally:
+                self.current_type_resolution_context = previous_context
+            if resolved is None:
+                raise self.struct_member_alias_error(
+                    owner,
+                    candidate,
+                    "the owning declaration does not define a concrete alias",
+                    [struct_node],
+                )
+            declared_type = f"{resolved}{suffix}"
+
+        return declared_type
 
     def prepare_metal_constructor_contracts(self, structs):
         self.constructor_contracts_by_owner = {}
@@ -4071,11 +4158,9 @@ class MetalToCrossGLConverter:
 
         resolved_candidates = []
         for candidate in candidates:
-            identity, rendered, reason = (
-                self.resolve_struct_static_constant_candidate(
-                    candidate,
-                    member_name,
-                )
+            identity, rendered, reason = self.resolve_struct_static_constant_candidate(
+                candidate,
+                member_name,
             )
             if reason is not None:
                 raise MetalStaticConstantResolutionError(
@@ -4313,6 +4398,7 @@ class MetalToCrossGLConverter:
         self.alias_template_using_namespaces = list(
             getattr(ast, "using_namespace_directives", []) or []
         )
+        self.struct_member_alias_resolution_stack = []
         self.current_type_resolution_context = None
 
     def alias_resolution_namespace(self):
@@ -4845,7 +4931,7 @@ class MetalToCrossGLConverter:
         )
         return f"{name}<{', '.join(arguments)}>"
 
-    def struct_template_for_dependent_owner(self, owner):
+    def struct_templates_for_dependent_owner(self, owner):
         instance = self.alias_template_instance_parts(owner)
         owner_name, arguments = instance if instance is not None else (owner, [])
         canonical_arguments = tuple(
@@ -4887,18 +4973,82 @@ class MetalToCrossGLConverter:
             matches = exact or primary
             if not matches:
                 continue
-            if len(matches) != 1:
-                declaration = matches[0]
-                signature = str(owner)
-                raise self.alias_template_error(
-                    declaration,
-                    signature,
-                    "dependent owner lookup is ambiguous in the declaration context",
-                )
-            return matches[0], arguments, bool(exact)
+            return matches, arguments, bool(exact)
         return None
 
-    def resolve_struct_member_alias(
+    def struct_member_alias_error(
+        self,
+        owner,
+        member_name,
+        reason,
+        candidates,
+        aliases=(),
+        candidate_identities=(),
+    ):
+        representative = next(iter(aliases), None) or next(iter(candidates), None)
+        candidate_locations = tuple(
+            (
+                getattr(aliases[index], "source_location", None)
+                if index < len(aliases)
+                else None
+            )
+            or getattr(candidate, "declaration_source_location", None)
+            for index, candidate in enumerate(candidates)
+        )
+        return MetalStructAliasResolutionError(
+            owner,
+            member_name,
+            reason,
+            candidate_identities=(
+                tuple(candidate_identities)
+                or tuple(
+                    self.normalize_qualified_type_name(
+                        getattr(candidate, "qualified_name", None) or candidate.name
+                    )
+                    for candidate in candidates
+                )
+            ),
+            candidate_locations=candidate_locations,
+            source_location=(
+                getattr(representative, "source_location", None)
+                or getattr(representative, "declaration_source_location", None)
+            ),
+        )
+
+    def struct_alias_integral_bindings(self, struct_node, scalar_bindings):
+        members, duplicates = self.struct_compile_time_static_members(struct_node)
+        values = {}
+        for name, value in scalar_bindings.items():
+            resolved = evaluate_literal_int_expression(value, values)
+            if resolved is not None:
+                values[name] = int(resolved)
+
+        pending = dict(members)
+        owner_names = self.struct_static_constant_declaration_names(struct_node)
+        while pending:
+            progress = False
+            for name, member in list(pending.items()):
+                member_type = self.normalized_metal_type(
+                    self.resolve_type_alias(getattr(member, "vtype", None))
+                )
+                if member_type not in self.constexpr_integral_type_names():
+                    continue
+                value = evaluate_literal_int_expression(
+                    getattr(member, "default_value", None), values
+                )
+                if value is None:
+                    continue
+                value = int(value)
+                values[name] = value
+                for owner_name in owner_names:
+                    values[f"{owner_name}::{name}"] = value
+                del pending[name]
+                progress = True
+            if not progress:
+                break
+        return values, duplicates, set(pending)
+
+    def struct_member_alias_candidate(
         self,
         struct_node,
         member_name,
@@ -4942,7 +5092,7 @@ class MetalToCrossGLConverter:
         )
         local_target = self.normalize_qualified_type_name(target)
         if re.fullmatch(r"[A-Za-z_]\w*", local_target):
-            chained = self.resolve_struct_member_alias(
+            chained = self.struct_member_alias_candidate(
                 struct_node,
                 local_target,
                 scalar_bindings,
@@ -4951,35 +5101,170 @@ class MetalToCrossGLConverter:
                 member_stack=(*member_stack, member_name),
             )
             if chained is not None:
-                return chained
+                target, nested_qualifiers, _nested_alias = chained
+            else:
+                nested_qualifiers = ()
+        else:
+            nested_qualifiers = ()
 
+        target += "".join(
+            "[]" if size is None else f"[{self.format_array_extent(size)}]"
+            for size in getattr(alias, "array_sizes", None) or []
+        )
+        integer_bindings, duplicate_constants, unresolved_constants = (
+            self.struct_alias_integral_bindings(struct_node, scalar_bindings)
+        )
+        referenced_names = set(re.findall(r"\b[A-Za-z_]\w*\b", target))
+        ambiguous_dependencies = referenced_names & duplicate_constants
+        unresolved_dependencies = referenced_names & unresolved_constants
+        if ambiguous_dependencies or unresolved_dependencies:
+            dependencies = sorted(ambiguous_dependencies | unresolved_dependencies)
+            raise MetalStructAliasResolutionError(
+                self.normalize_qualified_type_name(
+                    getattr(struct_node, "qualified_name", None) or struct_node.name
+                ),
+                member_name,
+                "the alias target has unresolved integral dependencies: "
+                + ", ".join(dependencies),
+                candidate_identities=(str(alias.alias_type),),
+                candidate_locations=(getattr(alias, "source_location", None),),
+                source_location=getattr(alias, "source_location", None),
+            )
+        target = self.replace_alias_template_identifiers(target, integer_bindings)
         previous_context = self.current_type_resolution_context
         self.current_type_resolution_context = alias
         try:
-            return self.materialize_alias_template_type(target, required=True)
+            target = self.materialize_alias_template_type(target, required=True)
+            target = self.resolve_type_alias(target)
         finally:
             self.current_type_resolution_context = previous_context
+        qualifiers = tuple(
+            qualifier
+            for qualifier in self.metal_source_overload_type_qualifiers
+            if qualifier
+            in {
+                *(str(value).lower() for value in nested_qualifiers),
+                *(
+                    str(value).lower()
+                    for value in getattr(alias, "qualifiers", ()) or ()
+                ),
+            }
+        )
+        return target, qualifiers, alias
+
+    def canonical_struct_member_alias_identity(self, target, qualifiers):
+        mapped = self.map_type(target)
+        canonical_type = re.sub(r"\s+", "", str(mapped))
+        return tuple(qualifiers), canonical_type
 
     def resolve_dependent_alias_type(self, owner, member, required):
         resolved_owner = self.materialize_alias_template_type(owner, required=required)
-        match = self.struct_template_for_dependent_owner(resolved_owner)
+        match = self.struct_templates_for_dependent_owner(resolved_owner)
         if match is None:
             return None
-        struct_node, arguments, exact_specialization = match
+        struct_nodes, arguments, exact_specialization = match
         signature = f"{resolved_owner}::{member}"
-        if exact_specialization:
-            scalar_bindings, pack_bindings = {}, {}
-        else:
-            scalar_bindings, pack_bindings = self.bind_alias_template_parameters(
-                struct_node, arguments, signature
+        owner_identities = {
+            self.normalize_qualified_type_name(
+                getattr(struct_node, "qualified_name", None) or struct_node.name
             )
-        return self.resolve_struct_member_alias(
-            struct_node,
-            member,
-            scalar_bindings,
-            pack_bindings,
-            signature,
-        )
+            for struct_node in struct_nodes
+        }
+        if len(owner_identities) != 1:
+            raise self.struct_member_alias_error(
+                resolved_owner,
+                member,
+                "multiple visible declarations have distinct qualified owners",
+                struct_nodes,
+            )
+        qualified_owner = next(iter(owner_identities))
+        alias_candidates = [
+            [
+                alias
+                for alias in getattr(struct_node, "type_aliases", None) or []
+                if getattr(alias, "name", None) == member
+            ]
+            for struct_node in struct_nodes
+        ]
+        if not any(alias_candidates):
+            if not required:
+                return None
+            raise self.struct_member_alias_error(
+                qualified_owner,
+                member,
+                "the owning declaration does not define a concrete alias",
+                struct_nodes,
+            )
+        resolution_key = (qualified_owner, member)
+        if resolution_key in self.struct_member_alias_resolution_stack:
+            cycle = self.struct_member_alias_resolution_stack[
+                self.struct_member_alias_resolution_stack.index(resolution_key) :
+            ] + [resolution_key]
+            raise MetalStructAliasResolutionError(
+                qualified_owner,
+                member,
+                "the struct member-alias chain is recursive",
+                candidate_identities=tuple(
+                    f"{candidate_owner}::{candidate_member}"
+                    for candidate_owner, candidate_member in cycle
+                ),
+                source_location=getattr(
+                    struct_nodes[0], "declaration_source_location", None
+                ),
+            )
+
+        self.struct_member_alias_resolution_stack.append(resolution_key)
+        try:
+            resolved_candidates = []
+            for struct_node in struct_nodes:
+                if exact_specialization:
+                    scalar_bindings, pack_bindings = {}, {}
+                else:
+                    scalar_bindings, pack_bindings = (
+                        self.bind_alias_template_parameters(
+                            struct_node, arguments, signature
+                        )
+                    )
+                candidate = self.struct_member_alias_candidate(
+                    struct_node,
+                    member,
+                    scalar_bindings,
+                    pack_bindings,
+                    signature,
+                )
+                if candidate is None:
+                    raise self.struct_member_alias_error(
+                        qualified_owner,
+                        member,
+                        "a visible declaration does not define exactly one concrete alias",
+                        struct_nodes,
+                    )
+                target, qualifiers, alias = candidate
+                identity = self.canonical_struct_member_alias_identity(
+                    target, qualifiers
+                )
+                resolved_candidates.append((identity, target, alias))
+        finally:
+            self.struct_member_alias_resolution_stack.pop()
+
+        identities = {identity for identity, _target, _alias in resolved_candidates}
+        if len(identities) != 1:
+            aliases = [alias for _identity, _target, alias in resolved_candidates]
+            candidate_identities = tuple(
+                f"{qualified_owner}::{member}="
+                f"{self.canonical_alias_argument(target)}"
+                + (f" [{', '.join(identity[0])}]" if identity[0] else "")
+                for identity, target, _alias in resolved_candidates
+            )
+            raise self.struct_member_alias_error(
+                qualified_owner,
+                member,
+                "visible declarations define conflicting concrete alias targets",
+                struct_nodes,
+                aliases,
+                candidate_identities=candidate_identities,
+            )
+        return resolved_candidates[0][1]
 
     def materialize_alias_template_type(self, metal_type, *, required=False):
         original = str(metal_type or "").strip()
@@ -6627,6 +6912,7 @@ class MetalToCrossGLConverter:
             self.collect_storage_texture_declaration_ids(ast)
         )
         self.struct_member_types = {}
+        self.resolved_struct_member_types = {}
         self.struct_declarations = {}
         self.struct_name_map = {}
         self.ambiguous_struct_names = set()
@@ -6671,7 +6957,9 @@ class MetalToCrossGLConverter:
         self.current_constructor_scope_index = None
 
     def effective_metal_variable_type(self, var):
-        metal_type = getattr(var, "vtype", None)
+        metal_type = self.resolved_struct_member_types.get(
+            id(var), getattr(var, "vtype", None)
+        )
         if not self.is_plain_metal_auto_type(metal_type):
             return metal_type
         inferred_type = self.current_variable_types.get(
