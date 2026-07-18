@@ -48557,6 +48557,36 @@ def test_translate_project_metal_implicit_template_helper_materializes_to_target
     assert validation["success"] is True
 
 
+def test_metal_materialization_reuses_defaulted_zero_argument_helper(tmp_path):
+    source = textwrap.dedent("""
+        template <int WordSize = 8>
+        inline constexpr short get_bytes_per_pack() {
+            return WordSize / 8;
+        }
+
+        [[kernel]] void launch(device uint* out [[buffer(0)]]) {
+            constexpr int explicit_bytes = get_bytes_per_pack<8>();
+            constexpr int default_bytes = get_bytes_per_pack();
+            out[0] = explicit_bytes + default_bytes;
+        }
+        """).strip()
+    source_path = tmp_path / "defaulted_helper.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    materialized = project_pipeline.materialize_metal_source_for_target(
+        source=source,
+        file_path=source_path,
+        target="directx",
+    )
+
+    assert materialized is not None
+    assert materialized.text.count("inline constexpr short get_bytes_per_pack_8()") == 1
+    assert materialized.text.count("get_bytes_per_pack_8()") == 3
+    assert "get_bytes_per_pack();" not in materialized.text
+    assert materialized.metadata["specializationCount"] == 1
+    assert materialized.metadata["unsupported"] == []
+
+
 def test_translate_project_metal_source_instantiation_propagates_plain_helper_bindings_for_opengl(
     tmp_path,
 ):
@@ -50569,6 +50599,108 @@ def test_translate_project_lowers_materialized_pointer_reinterpretation(tmp_path
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("target", "extension"),
+    (
+        pytest.param("directx", "hlsl", id="directx"),
+        pytest.param("opengl", "glsl", id="opengl"),
+    ),
+)
+def test_translate_project_lowers_read_only_local_struct_byte_view(
+    tmp_path, target, extension
+):
+    repo = tmp_path / target
+    repo.mkdir()
+    source_path = repo / "local_struct_byte_view.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct WordBlock {
+                uint32_t words[2];
+            };
+
+            inline uint sum8(const thread uint8_t* bytes) {
+                uint total = 0;
+                if constexpr (4 == 4) {
+                    for (int index = 0; index < 8; ++index) {
+                        total += bytes[index];
+                    }
+                } else {
+                    for (int index = 0; index < 16; ++index) {
+                        total += bytes[index];
+                    }
+                }
+                return total;
+            }
+
+            kernel void local_struct_byte_view(
+                const device uint* input [[buffer(0)]],
+                device uint* output [[buffer(1)]]) {
+                thread WordBlock local =
+                    *((const device WordBlock*)input);
+                output[0] = sum8((const thread uint8_t*)&local);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    expected_path = f"out/{target}/local_struct_byte_view.{extension}"
+    assert artifact["status"] == "translated"
+    assert artifact["path"] == expected_path
+    assert artifact["source"] == source_path.name
+    assert artifact["sourceBackend"] == "metal"
+    assert artifact["provenance"] == {
+        "pipeline": "single-file-translate",
+        "intermediate": "crossgl",
+    }
+    assert artifact["sourceMap"]["source"]["file"] == source_path.name
+    assert artifact["sourceMap"]["generated"]["file"] == expected_path
+    assert artifact["sourceRemap"]["generatedFile"] == expected_path
+
+    generated = (repo / expected_path).read_text(encoding="utf-8")
+    assert "PointerReinterpretNode" not in generated
+    assert "(const device WordBlock*)" not in generated
+    assert "(const thread uint8_t*)" not in generated
+    if target == "directx":
+        first_read = "local.words[0] = input[uint(0)];"
+        second_read = "local.words[1] = input[uint(1)];"
+        byte_view_call = "sum8(local.words, 0)"
+        assert first_read in generated
+        assert second_read in generated
+        assert generated.index(first_read) < generated.index(second_read)
+        assert generated.index(second_read) < generated.index(byte_view_call)
+        assert "bytes[uint(((bytes_base + index)) / 4)]" in generated
+        assert ">> uint((((bytes_base + index)) % 4) * 8)) & 255u" in generated
+        assert "WordBlock*" not in generated
+        HLSLParser(HLSLLexer(generated).tokenize()).parse()
+        assert_directx_compute_validates_if_available(generated, tmp_path)
+    else:
+        first_read = "input_[0]"
+        second_read = "input_[1]"
+        byte_view_call = "sum8(local, 0)"
+        assert "WordBlock(uint[2](input_[0], input_[1]))" in generated
+        assert generated.index(first_read) < generated.index(second_read)
+        assert generated.index(second_read) < generated.index(byte_view_call)
+        assert "bitfieldExtract(bytes.words[" in generated
+        assert ", 8)" in generated
+        assert "WordBlock*" not in generated
+        GLSLParser(GLSLLexer(generated).tokenize(), "compute").parse()
+        assert_compute_glsl_validates_if_available(generated, tmp_path)
+
+
 def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_path):
     from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 
@@ -50641,7 +50773,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
         diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
     }
     assert set(diagnostics) == {"directx", "opengl"}
-    expected_source_types = {"directx": "bfloat16", "opengl": "float"}
+    expected_source_types = {"directx": "bfloat16", "opengl": "bfloat16"}
     for target, diagnostic in diagnostics.items():
         assert diagnostic["code"] == (
             "project.translate.pointer-reinterpret-unsupported"

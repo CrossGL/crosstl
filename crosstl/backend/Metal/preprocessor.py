@@ -557,6 +557,7 @@ class _MetalStructDefinition:
     # available without a second parse.
     data_members: List[_MetalDataMember] = field(default_factory=list)
     constructors: List[_MetalConstructor] = field(default_factory=list)
+    member_function_body_spans: List[Tuple[int, int]] = field(default_factory=list)
     base_clause: str = ""
     aggregate_kind: str = "struct"
     layout_supported: bool = True
@@ -2222,12 +2223,30 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         if not structs:
             return code
+        all_struct_spans = [struct.span for struct in structs]
+        local_owner_spans = [
+            function.body_span
+            for function in self._find_non_template_function_definitions(
+                code,
+                all_struct_spans,
+            )
+        ]
+        local_owner_spans.extend(
+            body_span
+            for struct in structs
+            for body_span in struct.member_function_body_spans
+        )
         # Only structs that actually declare at least one member function (a
         # concrete method OR a template method) need rewriting; everything else
         # stays untouched so method-free structs and existing kernels are
-        # byte-identical.
+        # byte-identical. Function-local methods stay in the aggregate so the
+        # reverse frontend can reject unsupported hoisting with source context;
+        # moving them to file scope would leave a dangling local owner type.
         structs_with_methods = [
-            struct for struct in structs if struct.methods or struct.template_methods
+            struct
+            for struct in structs
+            if (struct.methods or struct.template_methods)
+            and self._containing_span(struct.span[0], local_owner_spans) is None
         ]
         if not structs_with_methods:
             return self._canonicalize_qualified_struct_alias_templates(code, structs)
@@ -2238,7 +2257,6 @@ class MetalPreprocessor(HLSLPreprocessor):
         # struct is only promoted when it is actually CONSTRUCTED in a form we can
         # rewrite (every pointer expression is sourced from a construction
         # argument); otherwise it falls back to the ordinary path unchanged.
-        all_struct_spans = [struct.span for struct in structs]
         promotion_plans: Dict[str, _PointerPromotionPlan] = {}
         for struct in structs_with_methods:
             plan = self._pointer_promotion_plan(struct)
@@ -2504,6 +2522,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 template_methods,
                 ordered_members,
                 constructors,
+                member_function_body_spans,
                 layout_supported,
             ) = self._split_struct_body(
                 name,
@@ -2525,6 +2544,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     data_member_types=data_member_types,
                     data_members=ordered_members,
                     constructors=constructors,
+                    member_function_body_spans=member_function_body_spans,
                     base_clause=stripped_between,
                     aggregate_kind=match.group("aggregate_kind"),
                     layout_supported=layout_supported,
@@ -3613,6 +3633,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         List[_MetalStructMethod],
         List[_MetalDataMember],
         List[_MetalConstructor],
+        List[Tuple[int, int]],
         bool,
     ]:
         # Walk a struct body separating DATA members from METHOD definitions.
@@ -3629,6 +3650,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # scalar-replacement path (declaration order and ctor mapping matter).
         ordered_members: List[_MetalDataMember] = []
         constructors: List[_MetalConstructor] = []
+        member_function_body_spans: List[Tuple[int, int]] = []
         layout_supported = True
         if member_prototype_names is None:
             member_prototype_names = set()
@@ -3673,6 +3695,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 ):
                     method_body_end = self._find_matching_brace(body, method_body_start)
                     if method_body_end is not None:
+                        member_function_body_spans.append(
+                            (
+                                body_offset + method_body_start + 1,
+                                body_offset + method_body_end - 1,
+                            )
+                        )
                         template_method = self._parse_struct_template_method(
                             struct_name,
                             body,
@@ -3748,6 +3776,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                     layout_supported = False
                     break
                 if method is not None:
+                    member_function_body_spans.append(
+                        (
+                            body_offset + brace + 1,
+                            body_offset + brace_end - 1,
+                        )
+                    )
                     method.span = (body_offset + i, body_offset + brace_end)
                     methods.append(method)
                     i = brace_end
@@ -3767,6 +3801,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 # existing struct-method skipping drops it; a brace-initialized
                 # member is recorded as a data member.
                 if self._brace_construct_is_method_definition(body[i:brace]):
+                    member_function_body_spans.append(
+                        (
+                            body_offset + brace + 1,
+                            body_offset + brace_end - 1,
+                        )
+                    )
                     # A constructor is captured (for pointer-member scalar
                     # replacement); other declined constructs (destructor,
                     # conversion/comparison operators) are simply left in place.
@@ -3850,6 +3890,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             template_methods,
             ordered_members,
             constructors,
+            member_function_body_spans,
             layout_supported,
         )
 

@@ -48,7 +48,6 @@ def _synthetic_checkout(module, tmp_path, monkeypatch):
 def _generated_hlsl():
     return """
 RWStructuredBuffer<uint> out_ : register(u0);
-uint16_t native_width_marker;
 
 [numthreads(1, 1, 1)]
 void CSMain(uint3 index_dispatchThreadID : SV_DispatchThreadID) {
@@ -96,7 +95,7 @@ def _translated_payload(module, mlx_root, work_dir, generated=None):
                     "target": "CSMain",
                     "stage": "compute",
                 },
-                "requiredCapabilities": [module.NATIVE_16_BIT_CAPABILITY],
+                "requiredCapabilities": [],
                 "templateMaterialization": {
                     "status": "materialized",
                     "specializationCount": 3,
@@ -312,7 +311,9 @@ def test_quantized_directx_translation_uses_public_project_api(
         lambda payload: payload["artifacts"][0]["entryPoint"].update(
             target="OtherMain"
         ),
-        lambda payload: payload["artifacts"][0].update(requiredCapabilities=[]),
+        lambda payload: payload["artifacts"][0].update(
+            requiredCapabilities=["directx.native-16bit-types"]
+        ),
         lambda payload: payload["artifacts"][0]["templateMaterialization"].update(
             specializationCount=2
         ),
@@ -365,7 +366,7 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
     assert checks == {
         "status": "passed",
         "entryPoint": "CSMain",
-        "native16BitTypes": "required",
+        "native16BitTypes": "not-required",
         "staticAssertions": "absent",
         "minimumPrecisionTypes": "absent",
         "typedResourceStoreNarrowing": {
@@ -378,8 +379,8 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
     }
     assert compiler == {
         "entryPoint": "CSMain",
-        "profile": "cs_6_2",
-        "compilerArguments": ["-enable-16bit-types"],
+        "profile": "cs_6_0",
+        "compilerArguments": [],
         "targetProfiles": ["directx-12"],
         "warningsAsErrors": True,
     }
@@ -389,7 +390,7 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
     ("generated", "message"),
     [
         (_generated_hlsl() + "\nstatic_assert(true);\n", "static_assert"),
-        (_generated_hlsl().replace("uint16_t", "min16uint"), "min16"),
+        (_generated_hlsl() + "\nmin16uint minimum_width_marker;\n", "min16"),
         (
             _generated_hlsl().replace(
                 "uint(((output & 1095216660480ull) >> 32))",
@@ -398,10 +399,10 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
             "narrowed",
         ),
         (_generated_hlsl().replace("CSMain", "OtherMain"), "CSMain"),
-        (_generated_hlsl().replace("uint16_t", "uint"), "DirectX 12"),
+        (_generated_hlsl() + "\nuint16_t native_width_marker;\n", "native 16-bit"),
     ],
 )
-def test_quantized_directx_generated_contract_rejects_unsafe_output(
+def test_quantized_directx_generated_contract_rejects_output_drift(
     tmp_path,
     generated,
     message,
@@ -464,8 +465,7 @@ def test_quantized_directx_fake_dxc_uses_derived_profile_and_flags(
         "C:/tools/dxc.exe",
         "-WX",
         "-T",
-        "cs_6_2",
-        "-enable-16bit-types",
+        "cs_6_0",
         "-E",
         "CSMain",
         str(artifact_path),
@@ -475,7 +475,7 @@ def test_quantized_directx_fake_dxc_uses_derived_profile_and_flags(
     assert result["status"] == "compiled"
     assert result["compiledArtifactCount"] == 1
     assert result["targetProfiles"] == ["directx-12"]
-    assert result["compilerArguments"] == ["-enable-16bit-types"]
+    assert result["compilerArguments"] == []
 
 
 def test_quantized_directx_toolchain_requirement_and_output_fail_closed(

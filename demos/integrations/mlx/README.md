@@ -439,25 +439,30 @@ separate.
 A selected DirectX replay of `quantized.metal` now emits one artifact with zero
 translation diagnostics for `affine_quantize_float_gs_32_b_2`. It materializes
 six reachable specializations and three concrete records while pruning 110,861
-unreachable candidates. The generated HLSL is 5,737 bytes with SHA-256
-`c2737b9d324578209c15899cb9a1dad94697b041c0bcfd0c1276a809d36f8f88`.
+unreachable candidates. The generated HLSL is 5,271 bytes with SHA-256
+`bcc7ba3b8fefe4ebe193f5736036da86a98f02c4f9ef0bb792a5b1f7ffaafc92`.
 This path verifies the completed template-member and owner-dependent `constexpr`
-work tracked by CrossGL/crosstl#1476 and CrossGL/crosstl#1672. Native 16-bit HLSL
-emission under
-[#1799](https://github.com/CrossGL/crosstl/issues/1799) and concrete
-`static_assert` evaluation under
-[#1800](https://github.com/CrossGL/crosstl/issues/1800) are resolved for this
-selected entry. The native-profile helper contract under #1799 is also resolved
-across the pinned bfloat frontier. Contextual narrowing under
+work tracked by CrossGL/crosstl#1476 and CrossGL/crosstl#1672. After unreachable
+materializations are pruned, this selected float specialization contains no live
+native-width 16-bit types, and its report records `requiredCapabilities=[]`.
+Native 16-bit HLSL support under
+[#1799](https://github.com/CrossGL/crosstl/issues/1799) remains resolved and
+validated elsewhere, including the pinned bfloat frontier, but is not required
+by this selected specialization. Concrete `static_assert` evaluation under
+[#1800](https://github.com/CrossGL/crosstl/issues/1800) is resolved for this
+selected entry. Contextual narrowing under
 [#1801](https://github.com/CrossGL/crosstl/issues/1801) remains recorded as
 historical resolved evidence for this selected entry, while the pinned frontier
-destination-conversion contract is resolved. The artifact requires the
-`directx.native-16bit-types` capability and contains no remaining
-`static_assert`. Official DXC validation with profile `cs_6_2`,
+destination-conversion contract is resolved. The artifact contains no remaining
+`static_assert`. Its ordinary type contract needs no native-16-bit profile
+uplift, while the generated wave intrinsics keep the configured project and
+compiler target scoped to `directx-12`. Official DXC validation with profile
+`cs_6_0`, no
 `-enable-16bit-types`, and `-WX` passes. The typed resource store is emitted as
 `out_[uint((out_index + 4))] = uint(((output & 1095216660480ull) >> 32));`.
 The locally generated DXIL was nonempty; its byte size is not treated as a
-cross-version compiler invariant.
+cross-version compiler invariant. This evidence covers translation and compiler
+acceptance only; it does not claim runtime execution or numerical parity.
 
 The adjacent DirectX entry `affine_gather_qmv_fast_float_gs_32_b_2` now
 advances through the logical `static_assert` covered by
@@ -935,7 +940,7 @@ The complete materialized CrossGL intermediate reaches target generation. Strict
 function-body parsing accepts the generic pointer reinterpretation in
 `fp_qmv_wide_impl_bfloat16_t_16_4_2_16`,
 `(vec<bfloat16_t, 4>*)(xv[v] + k0)`, including the generic pointee type. This
-advances CrossGL/crosstl#1814 and removes
+resolves CrossGL/crosstl#1814 and removes
 `project.translate.crossgl-function-body-parse-failed` from both exact project
 runs.
 
@@ -975,8 +980,8 @@ has scalar `expression_type` `float` and intentionally has no matrix
 `result_type`. The multiply-accumulate operation has complete cooperative-matrix
 `result_type` and `expression_type` contracts that preserve the accumulator and
 destination representation. Shared expression result inference therefore
-resolves CrossGL/crosstl#1610 on this branch without claiming that scalar element
-expressions require matrix result types.
+resolves CrossGL/crosstl#1610 for this contract without claiming that scalar
+element expressions require matrix result types.
 
 DirectX and OpenGL now provide an explicit opt-in lane-local cooperative-matrix
 software-lowering foundation for the exact registered 8-by-8, 32-lane,
@@ -989,42 +994,93 @@ configuration. Full software fallback, target policy, runtime execution, and
 numerical parity remain unimplemented. CrossGL/crosstl#1602 and
 CrossGL/crosstl#1820 remain open for that work.
 
-The verified full pinned `fp_quantized.metal` replay enables lane-local
+Exact high-budget `fp_quantized.metal` replays enable lane-local
 cooperative-matrix lowering explicitly through both code-generation factory
 paths, `crosstl.project.pipeline.get_codegen` and
 `crosstl._crosstl.get_codegen`; this option is not yet available through project
-configuration. The replay completed in 765.091 seconds. DirectX and OpenGL each
-materialized 604 function specializations with no unsupported specialization
-records, and neither emitted an artifact. Both targets advanced past
-`qdot_float_16_4.x_thread` and its `unprovable-view-offset` boundary. DirectX
-now selects the concrete branch of the local `steps_per_thread` ternary during
-private-pointer analysis. OpenGL now prepares compile-time globals before that
-analysis. These target contracts resolve CrossGL/crosstl#1826.
+configuration.
 
-The current boundary is private-pointer parameter `qouter_float_2_8_4.w`. Its
-source expression `(thread uint8_t*)&w_local` in
-`mlx/backend/metal/kernels/fp_quantized.h` requires a byte-reinterpreted view
-over local storage, so both targets report `missing-view-backing`. DirectX reports
-`project.translate.directx-private-pointer-unsupported` with missing capability
-`directx.private-pointer-parameter-lowering`; OpenGL reports
-`project.translate.opengl-private-pointer-unsupported` with missing capability
-`opengl.private-pointer-parameter-lowering`. CrossGL/crosstl#1546 tracks the
-required byte-address provenance.
+Three measured intermediate replays document translation progression and are
+not current-boundary claims. In the first replay, DirectX ran for 292.953
+seconds and OpenGL for 286.175 seconds before both reported
+`project.translate.metal-local-type-unresolved` for local type `vec_w`, whose
+extent remained `tn * bytes_per_pack`. In the second replay, DirectX ran for
+286.540 seconds and OpenGL for 283.718 seconds. Both reached extent
+`(2) * bytes_per_pack`, proving that `tn` had resolved to `2`. In the third
+replay, DirectX ran for 418.540 seconds and OpenGL for 364.117 seconds; each
+materialized 606 function specializations before branch-insensitive
+private-pointer analysis reported a false `view-out-of-bounds` result for
+`qouter_float_2_8_4.w`.
 
-This replay confirms that the transitive local `constexpr` chain defining the
-symbolic `values_per_thread`, including its fixed array extents, is materialized.
-The former `missing-fixed-array-extent` and `missing-view-backing` boundaries for
-the `x_thread` partition are also resolved. CrossGL/crosstl#1824 is complete for
-this source-materialization contract. The current `w_local` byte-reinterpretation
-boundary is a distinct use of `missing-view-backing`. The result does not
-establish complete source translation, target artifact validation, runtime
-integration, runtime execution, or numerical parity.
+The implementation sequence establishes reusable contracts for function-local
+struct hoisting, concrete `constexpr` local extents, and defaulted zero-argument
+helper materialization. These contracts are backend-independent materialization
+behavior rather than MLX-specific rewrites. The completed replay demonstrates
+progression through all three contracts for this source specialization.
+CrossGL/crosstl#1567 remains open globally because this source-specific evidence
+does not establish its complete function-local typedef scope.
+
+DirectX and OpenGL branch pruning, together with the project translation
+regression, resolve CrossGL/crosstl#1829. The completed exact replay proves
+progression past the earlier false `qouter_float_2_8_4.w` range result.
+
+In the completed replay, DirectX ran for 429.507 seconds, materialized 606
+function specializations with no unsupported specializations, and reported
+`project.translate.directx-workgroup-pointer-unsupported`. The missing
+capability is `directx.workgroup-pointer-lowering`; function
+`BlockMMA_float_float_16_32_32_1_2_false_true_36_36__mma`, parameter `As`, stops
+with reason `dynamic-control-flow-reassignment` and message `DirectX cannot
+preserve workgroup pointer reassignment for 'As' across nested control flow`.
+CrossGL/crosstl#1518 covers the required HLSL resource and `groupshared` alias
+representation, reassignment and nested-alias semantics, and structured
+rejection.
+
+OpenGL ran for 417.522 seconds, materialized the same 606 function
+specializations with no unsupported specializations, and reported
+`project.translate.opengl-workgroup-pointer-unsupported`. The missing capability
+is `opengl.workgroup-pointer-lowering`; parameter `dst_` stops with reason
+`bare-pointer-expression` and message `OpenGL cannot emit a workgroup pointer as
+a first-class value: dst_`. This target boundary spans two existing contracts:
+CrossGL/crosstl#1544 covers pointer-bearing aggregate members and constructors,
+including `QuantizedBlockLoader`, while CrossGL/crosstl#1671 covers concrete
+workgroup backing provenance through helper parameters. It is not classified as
+a shared DirectX/OpenGL boundary.
+
+Each target report contains one failed artifact/provenance record, zero
+translated artifacts, and one error; no target artifact was emitted. Native
+validation was not attempted because there is no artifact. MLX host runtime
+integration and execution were not attempted, and numerical parity was not
+evaluated. CrossGL/crosstl#1546 remains open for the broader byte-address
+provenance contract across pointer reinterpretation, but it is not the current
+exact boundary. Earlier replays also established progression past
+`qdot_float_16_4.x_thread` and its `unprovable-view-offset` boundary under
+CrossGL/crosstl#1826, as well as the transitive local `constexpr`
+materialization contract tracked by CrossGL/crosstl#1824.
 
 A shared reduced CrossGL fixture exercises the resolved partition contract with
-the required readback `[100, 101, 102, 103, 200, 201, 202, 203]`. Native execution
-is wired into Windows Direct3D and Linux OpenGL CI. Those native checks were not
-executed during this local replay, so this evidence does not claim observed CI
-execution, an MLX runtime port, or MLX numerical parity.
+the required readback `[100, 101, 102, 103, 200, 201, 202, 203]`.
+[GitHub Actions run 29641172600](https://github.com/CrossGL/crosstl/actions/runs/29641172600)
+produced this exact readback on `windows-latest` through Direct3D and on
+`ubuntu-latest` through OpenGL. The passing steps were
+`Prove Direct3D private-pointer partition writeback` and
+`Prove OpenGL private-pointer partition writeback`, respectively.
+
+An independent Metal fixture, `private_pointer_word_view.metal`, initializes a
+local struct with two 32-bit words, reads its eight bytes through a const
+thread-local byte view, and computes the order-sensitive checksum
+`sum(byte[index] * (index + 1))`. Its required readback is `[204]`. The Metal
+source compiles locally as Metal 3.2 with Apple metal `32023.918`.
+[GitHub Actions run 29649620337](https://github.com/CrossGL/crosstl/actions/runs/29649620337)
+produced the exact `[204]` readback on `windows-latest` through Direct3D and on
+`ubuntu-latest` through OpenGL. The passing steps were
+`Prove Direct3D local-struct byte-view native readback` and
+`Prove OpenGL local-struct byte-view native readback`, respectively. Both tests
+required their native runtime and reported zero mismatches with zero absolute
+and relative tolerance.
+
+These reduced fixture-level proofs do not establish complete MLX artifact
+translation, full MLX host runtime integration, full MLX test-suite execution,
+or numerical parity for MLX workloads.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.

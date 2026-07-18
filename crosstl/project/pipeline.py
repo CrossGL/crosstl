@@ -12739,11 +12739,13 @@ def _materialize_implicit_template_function_calls(
     preprocessor: Any,
     materialized: str,
     source_contexts: Sequence[_SourceInstantiationTemplateContext] = (),
+    known_materializations: Mapping[tuple[str, tuple[str, ...]], str] | None = None,
     unit: ProjectTranslationUnit | None = None,
     target: str = "",
     work_limit: int | None = None,
     work_limit_source: str | None = None,
 ) -> _ImplicitTemplateMaterialization:
+    known_materializations = known_materializations or {}
     templates = preprocessor._find_template_functions(materialized)
     templates_by_name: dict[str, Any] = {}
     overloaded_template_names: set[str] = set()
@@ -12848,10 +12850,24 @@ def _materialize_implicit_template_function_calls(
             function_name,
             list(key[1]),
         )
+        materialized_name = known_materializations.get(key, materialized_name)
         implicit_replacements.append((span[0], span[1], materialized_name))
         if key in seen_implicit_specializations:
             continue
         seen_implicit_specializations.add(key)
+        parameter_declarations = _metal_function_parameter_declarations(
+            preprocessor,
+            _metal_template_header(template),
+        )
+        signature_key = tuple(
+            _normalize_metal_type_text(type_text)
+            for type_text, _name, _variadic in parameter_declarations
+        )
+        implicit_materialized_names[(key[0], tuple(key[1]), signature_key)] = (
+            materialized_name
+        )
+        if key in known_materializations:
+            continue
         materialized_source = preprocessor._materialize_template_function_with_name(
             template,
             arguments,
@@ -12861,17 +12877,6 @@ def _materialize_implicit_template_function_calls(
         if materialized_source:
             implicit_materializations.append(
                 (function_name, tuple(key[1]), materialized_source)
-            )
-            parameter_declarations = _metal_function_parameter_declarations(
-                preprocessor,
-                _metal_template_header(template),
-            )
-            signature_key = tuple(
-                _normalize_metal_type_text(type_text)
-                for type_text, _name, _variadic in parameter_declarations
-            )
-            implicit_materialized_names[(key[0], tuple(key[1]), signature_key)] = (
-                materialized_name
             )
             parameters = _template_parameter_values_from_arguments(
                 preprocessor,
@@ -15282,8 +15287,6 @@ def _infer_plain_template_helper_arguments(
         preprocessor,
         header,
     )
-    if not parameter_declarations:
-        return None
     if not _metal_template_call_arity_matches(
         parameter_declarations,
         len(call_arguments),
@@ -19133,6 +19136,10 @@ def _project_template_materialization_for_artifact(
             preprocessor=preprocessor,
             materialized=materialized,
             source_contexts=source_instantiation_contexts,
+            known_materializations={
+                **source_instantiation_materialized_names,
+                **call_site_materialized_names,
+            },
             unit=unit,
             target=target,
             work_limit=materialization_work_limit,

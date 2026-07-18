@@ -325,7 +325,6 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .resource_arrays import (
-    collect_private_pointer_array_size_hints,
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
@@ -7628,7 +7627,8 @@ class GLSLCodeGen:
                             for parameter in clone_private_parameters
                         )
                         for variant in source_variants
-                    }
+                    },
+                    key=self.glsl_private_pointer_variant_sort_key,
                 )
             )
         self.function_private_pointer_array_size_hints[target_name] = (
@@ -11533,9 +11533,10 @@ class GLSLCodeGen:
             not in {"StructuredBuffer", "RWStructuredBuffer"}
         ):
             return None
-        element_type = self.structured_buffer_element_type(resource_type)
-        if element_type is None:
+        source_element_type = self.structured_buffer_source_element_type(resource_type)
+        if source_element_type is None:
             return None
+        element_type = self.structured_buffer_element_type(resource_type)
         access = self.structured_buffer_effective_access(resource_type, node)
         if access is None:
             access = "read_write"
@@ -11546,7 +11547,7 @@ class GLSLCodeGen:
             "expression": root_name,
             "offset": 0,
             "element_type": self.map_type(element_type),
-            "source_element_type": element_type,
+            "source_element_type": source_element_type,
             "type": resource_type,
             "access": access,
             "specializable": True,
@@ -13296,6 +13297,14 @@ class GLSLCodeGen:
                 )
                 return code
             if initial_value is not None:
+                storage_aggregate = (
+                    self.glsl_storage_struct_reinterpret_materialization(
+                        initial_value,
+                        var_type,
+                    )
+                )
+                if storage_aggregate is not None:
+                    return f"{indent_str}{declaration} = {storage_aggregate};\n"
                 dynamic_init = (
                     self.generate_glsl_dynamic_resource_call_assignment_statement(
                         initial_value,
@@ -14140,6 +14149,7 @@ class GLSLCodeGen:
             if not name:
                 continue
             access = self.structured_buffer_effective_access(param_type, parameter)
+            source_element_type = self.structured_buffer_source_element_type(param_type)
             aliases[name] = {
                 "kind": "storage-pointer",
                 "root": name,
@@ -14147,6 +14157,7 @@ class GLSLCodeGen:
                 "element_type": self.map_type(
                     self.structured_buffer_element_type(param_type)
                 ),
+                "source_element_type": source_element_type,
                 "access": access or "read_write",
             }
         return aliases
@@ -14686,6 +14697,375 @@ class GLSLCodeGen:
             },
         }
 
+    def glsl_storage_struct_reinterpret_node(self, expression):
+        if not (
+            isinstance(expression, UnaryOpNode)
+            and self.map_operator(expression.op) == "*"
+            and isinstance(expression.operand, PointerReinterpretNode)
+        ):
+            return None
+        return expression.operand
+
+    def glsl_expression_references_storage_pointer(self, expression, aliases):
+        for node in self.walk_ast(expression):
+            if not isinstance(node, (IdentifierNode, VariableNode)):
+                continue
+            binding = aliases.get(getattr(node, "name", None))
+            if binding is not None and binding.get("kind") == "storage-pointer":
+                return True
+        return False
+
+    def glsl_storage_struct_reinterpret_error(
+        self,
+        expression,
+        *,
+        source_type,
+        target_type,
+        reason,
+        detail,
+        access="read",
+        alignment=4,
+    ):
+        raise PointerReinterpretationError(
+            "OpenGL cannot preserve a storage-buffer aggregate reinterpretation "
+            f"from '{source_type or 'unknown'}' to "
+            f"'{target_type or 'unknown'}': {detail}",
+            source_type=source_type,
+            target_type=target_type,
+            address_space="storage",
+            alignment=alignment,
+            access=access,
+            target_backend="opengl",
+            reason=reason,
+            source_location=getattr(expression, "source_location", None),
+        )
+
+    def glsl_storage_struct_word_array_layout(
+        self,
+        target_type,
+        expression,
+        source_type,
+    ):
+        mapped_target_type = self.map_type(target_type)
+        struct = self.glsl_struct_node(mapped_target_type)
+        if struct is None:
+            return None
+        members = [
+            member
+            for member in getattr(struct, "members", []) or []
+            if not self.glsl_static_struct_member(member)
+        ]
+        if (
+            len(members) != 1
+            or getattr(struct, "generic_params", None)
+            or getattr(struct, "inheritance", None)
+            or getattr(struct, "attributes", None)
+            or (members and getattr(members[0], "attributes", None))
+            or (members and getattr(members[0], "resource_qualifiers", None))
+        ):
+            self.glsl_storage_struct_reinterpret_error(
+                expression,
+                source_type=source_type,
+                target_type=target_type,
+                reason="unsupported-storage-aggregate-layout",
+                detail=(
+                    "only a padding-free struct with one homogeneous fixed "
+                    "word-array member is supported"
+                ),
+            )
+        member = members[0]
+        member_type = getattr(member, "member_type", None)
+        if not isinstance(member_type, ArrayType):
+            self.glsl_storage_struct_reinterpret_error(
+                expression,
+                source_type=source_type,
+                target_type=target_type,
+                reason="unsupported-storage-aggregate-layout",
+                detail="the destination struct member is not a fixed scalar array",
+            )
+        extent = self.literal_int_value(
+            member_type.size,
+            self.glsl_active_literal_int_constants(),
+        )
+        if not isinstance(extent, int) or isinstance(extent, bool) or extent <= 0:
+            self.glsl_storage_struct_reinterpret_error(
+                expression,
+                source_type=source_type,
+                target_type=target_type,
+                reason="storage-aggregate-layout-unresolved",
+                detail="the destination word-array extent is not a fixed positive integer",
+            )
+        member_element_type = self.glsl_normalized_source_type(member_type.element_type)
+        member_layout = scalar_storage_layout(member_element_type)
+        if member_layout is None or member_layout.bit_width != 32:
+            self.glsl_storage_struct_reinterpret_error(
+                expression,
+                source_type=source_type,
+                target_type=target_type,
+                reason="unsupported-storage-aggregate-layout",
+                detail="the destination array element is not a 32-bit scalar word",
+            )
+        return {
+            "mapped_type": mapped_target_type,
+            "member_type": self.map_type(member_type),
+            "member_layout": member_layout,
+            "extent": extent,
+        }
+
+    def glsl_storage_struct_reinterpret_contract(
+        self,
+        expression,
+        destination_type=None,
+    ):
+        reinterpretation = self.glsl_storage_struct_reinterpret_node(expression)
+        if reinterpretation is None:
+            return None
+        pointer_type = getattr(reinterpretation, "target_type", None)
+        target_type_node = getattr(pointer_type, "pointee_type", None)
+        target_type = self.glsl_normalized_source_type(target_type_node)
+        if not target_type or scalar_storage_layout(target_type) is not None:
+            return None
+
+        aliases = self.glsl_storage_pointer_aliases()
+        source_expression = reinterpretation.expression
+        binding = self.glsl_storage_pointer_binding(source_expression, aliases)
+        references_storage = self.glsl_expression_references_storage_pointer(
+            source_expression,
+            aliases,
+        )
+        address_space = str(getattr(pointer_type, "address_space", None) or "").lower()
+        storage_address_spaces = {"device", "constant", "storage", "global"}
+        private_address_spaces = {"thread", "private", "threadgroup", "workgroup"}
+        if binding is None and not (
+            references_storage or address_space in storage_address_spaces
+        ):
+            return None
+
+        source_type = (
+            binding.get("source_element_type") if binding is not None else None
+        )
+        if source_type is None and binding is not None:
+            source_type = binding.get("element_type")
+        source_type = self.glsl_normalized_source_type(source_type)
+        if binding is None:
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="storage-aggregate-backing-unresolved",
+                detail="the source pointer has no single proven storage-buffer backing",
+            )
+        if address_space in private_address_spaces:
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="storage-aggregate-address-space-mismatch",
+                detail=(
+                    f"address space '{address_space}' does not describe the "
+                    "resolved storage-buffer backing"
+                ),
+            )
+        if binding.get("pointer_reinterpretation") is not None or str(
+            binding.get("byte_offset", "0")
+        ) not in {"0", "0u"}:
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="unsupported-storage-aggregate-source-layout",
+                detail="the source pointer is already a reinterpreted byte view",
+            )
+
+        source_layout = scalar_storage_layout(source_type)
+        layout = self.glsl_storage_struct_word_array_layout(
+            target_type,
+            reinterpretation,
+            source_type,
+        )
+        if layout is None:
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="unsupported-storage-aggregate-layout",
+                detail="the destination is not a concrete struct",
+            )
+        if source_layout is None or source_layout.bit_width != 32:
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="unsupported-storage-aggregate-source-layout",
+                detail="the storage-buffer backing element is not a 32-bit scalar word",
+                alignment=layout["member_layout"].byte_width,
+            )
+
+        normalized_destination = self.glsl_normalized_source_type(destination_type)
+        if normalized_destination is not None and self.map_type(
+            normalized_destination
+        ) != self.map_type(target_type):
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="storage-aggregate-destination-mismatch",
+                detail=(
+                    f"the destination has type '{normalized_destination}', not "
+                    f"'{target_type}'"
+                ),
+                alignment=layout["member_layout"].byte_width,
+            )
+        if not image_access_satisfies_requirement("read", binding.get("access")):
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="storage-aggregate-source-not-readable",
+                detail="the storage-buffer backing is not readable",
+                alignment=layout["member_layout"].byte_width,
+            )
+
+        offset = binding.get("offset", 0)
+        if offset is None:
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="storage-aggregate-offset-unresolved",
+                detail="the source element offset cannot be proven",
+                alignment=layout["member_layout"].byte_width,
+            )
+        if self.glsl_private_pointer_expression_has_side_effects(offset):
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="storage-aggregate-offset-side-effecting",
+                detail="the source element offset has side effects",
+                alignment=layout["member_layout"].byte_width,
+            )
+        literal_offset = self.literal_int_value(
+            offset,
+            self.glsl_active_literal_int_constants(),
+        )
+        if literal_offset is not None and literal_offset < 0:
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="storage-aggregate-offset-out-of-range",
+                detail="the source element offset is negative",
+                alignment=layout["member_layout"].byte_width,
+            )
+        rendered_offset = self.glsl_workgroup_pointer_offset_expression(binding)
+        if not rendered_offset:
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="storage-aggregate-offset-unresolved",
+                detail="the source element offset cannot be rendered",
+                alignment=layout["member_layout"].byte_width,
+            )
+        return {
+            **layout,
+            "binding": binding,
+            "source_layout": source_layout,
+            "source_type": source_type,
+            "target_type": target_type,
+            "offset": rendered_offset,
+            "reinterpretation": reinterpretation,
+        }
+
+    def glsl_storage_word_conversion(
+        self,
+        source_value,
+        source_layout,
+        target_layout,
+    ):
+        if source_layout.kind == "floating":
+            source_bits = f"floatBitsToUint({source_value})"
+        elif source_layout.signed:
+            source_bits = f"uint({source_value})"
+        else:
+            source_bits = source_value
+        if target_layout.kind == "floating":
+            return f"uintBitsToFloat({source_bits})"
+        if target_layout.signed:
+            return f"int({source_bits})"
+        return source_bits
+
+    def glsl_storage_struct_reinterpret_materialization(
+        self,
+        expression,
+        destination_type=None,
+    ):
+        contract = self.glsl_storage_struct_reinterpret_contract(
+            expression,
+            destination_type,
+        )
+        if contract is None:
+            return None
+        root = contract["binding"]["root"]
+        offset = contract["offset"]
+        values = []
+        for index in range(contract["extent"]):
+            if offset in {"0", "0u"}:
+                source_index = str(index)
+            elif index == 0:
+                source_index = f"int({offset})"
+            else:
+                source_index = f"(int({offset}) + {index})"
+            source_value = f"{root}[{source_index}]"
+            values.append(
+                self.glsl_storage_word_conversion(
+                    source_value,
+                    contract["source_layout"],
+                    contract["member_layout"],
+                )
+            )
+        array_value = f"{contract['member_type']}({', '.join(values)})"
+        return f"{contract['mapped_type']}({array_value})"
+
+    def glsl_storage_struct_reinterpret_mutation(self, expression):
+        candidates = [expression]
+        for node in self.walk_ast(expression):
+            if node is not expression:
+                candidates.append(node)
+        for candidate in candidates:
+            reinterpretation = self.glsl_storage_struct_reinterpret_node(candidate)
+            if reinterpretation is None:
+                continue
+            pointer_type = getattr(reinterpretation, "target_type", None)
+            target_type = self.glsl_normalized_source_type(
+                getattr(pointer_type, "pointee_type", None)
+            )
+            if (
+                not target_type
+                or self.glsl_struct_node(self.map_type(target_type)) is None
+            ):
+                continue
+            aliases = self.glsl_storage_pointer_aliases()
+            binding = self.glsl_storage_pointer_binding(
+                reinterpretation.expression,
+                aliases,
+            )
+            if binding is None:
+                continue
+            source_type = self.glsl_normalized_source_type(
+                binding.get("source_element_type") or binding.get("element_type")
+            )
+            self.glsl_storage_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason="storage-aggregate-write-unsupported",
+                detail="aggregate storage reinterpretation is read-only",
+                access="write",
+            )
+        return None
+
     def glsl_storage_pointer_aliases(self, aliases=None):
         return {
             **getattr(self, "glsl_global_storage_pointer_aliases", {}),
@@ -15036,6 +15416,7 @@ class GLSLCodeGen:
         )
 
     def validate_glsl_storage_pointer_mutation_target(self, expression):
+        self.glsl_storage_struct_reinterpret_mutation(expression)
         binding = self.glsl_storage_pointer_mutation_binding(
             expression, self.glsl_storage_pointer_aliases()
         )
@@ -20449,6 +20830,29 @@ complex64_t crossgl_complex64_mod_assign(
         left_node = getattr(node, "target", getattr(node, "left", None))
         right_node = getattr(node, "value", getattr(node, "right", None))
         op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
+        self.glsl_storage_struct_reinterpret_mutation(left_node)
+        destination_type = self.glsl_source_expression_type(left_node)
+        storage_aggregate = self.glsl_storage_struct_reinterpret_materialization(
+            right_node,
+            destination_type,
+        )
+        if storage_aggregate is not None:
+            if op != "=":
+                contract = self.glsl_storage_struct_reinterpret_contract(
+                    right_node,
+                    destination_type,
+                )
+                self.glsl_storage_struct_reinterpret_error(
+                    contract["reinterpretation"],
+                    source_type=contract["source_type"],
+                    target_type=contract["target_type"],
+                    reason="storage-aggregate-assignment-operator-unsupported",
+                    detail=f"assignment operator '{op}' is not supported",
+                    alignment=contract["member_layout"].byte_width,
+                )
+            left = self.generate_glsl_buffer_block_mutation_target(left_node)
+            return f"{left} = {storage_aggregate}"
+        self.validate_glsl_private_pointer_byte_view_mutation(left_node)
         self.validate_glsl_storage_pointer_mutation_target(left_node)
         self.validate_glsl_buffer_block_assignment_target(left_node, op)
         expected_type = self.glsl_tessellation_factor_assignment_expected_type(
@@ -20459,7 +20863,7 @@ complex64_t crossgl_complex64_mod_assign(
                 left_node, right_node
             )
         else:
-            expected_type = self.glsl_source_expression_type(left_node)
+            expected_type = destination_type
         left = self.generate_glsl_buffer_block_mutation_target(left_node)
         binary_operator = self.COMPOUND_ASSIGNMENT_BINARY_OPERATORS.get(op)
         if (
@@ -21158,6 +21562,24 @@ complex64_t crossgl_complex64_mod_assign(
         """Render a CrossGL AST expression into GLSL expression syntax."""
         if expr is None:
             return ""
+        if isinstance(expr, PointerReinterpretNode):
+            target_type = self.type_name_string(
+                getattr(getattr(expr, "target_type", None), "pointee_type", None)
+            )
+            target_layout = scalar_storage_layout(target_type)
+            raise PointerReinterpretationError(
+                "OpenGL cannot emit a pointer reinterpretation as a first-class "
+                "GLSL expression",
+                target_type=target_type,
+                address_space=str(
+                    getattr(getattr(expr, "target_type", None), "address_space", None)
+                    or "unknown"
+                ),
+                alignment=target_layout.byte_width if target_layout else None,
+                target_backend="opengl",
+                reason="bare-pointer-reinterpretation",
+                source_location=getattr(expr, "source_location", None),
+            )
         if isinstance(expr, CooperativeMatrixOpNode):
             if self.cooperative_matrix_software_lowering:
                 return self.generate_glsl_cooperative_matrix_operation(expr)
@@ -21388,6 +21810,7 @@ complex64_t crossgl_complex64_mod_assign(
                 "POST_INCREMENT",
                 "POST_DECREMENT",
             }:
+                self.validate_glsl_private_pointer_byte_view_mutation(expr.operand)
                 self.validate_glsl_storage_pointer_mutation_target(expr.operand)
                 self.validate_glsl_buffer_block_member_access(
                     expr.operand, "read_write"
@@ -28182,26 +28605,7 @@ complex64_t crossgl_complex64_mod_assign(
         required_spans = {}
         for function_key, parameters in pointer_parameters.items():
             function = functions_by_key[function_key]
-            direct_hints = collect_private_pointer_array_size_hints(
-                functions=[function],
-                walk_nodes=self.walk_ast,
-                expression_name=self.expression_name,
-                literal_int_value=self.literal_int_value,
-                visible_literal_int_constants=self.visible_literal_int_constants,
-                function_call_name=self.function_call_name,
-                initial_literal_int_constants=self.initial_literal_int_constants,
-                strict_fixed_local_array_sizes=False,
-                propagate_argument_sizes_to_callee=False,
-                validate_fixed_argument_sizes=False,
-            )
-            function_hints = direct_hints.get(getattr(function, "name", None), {})
-            spans = {}
-            for parameter in parameters:
-                raw_size = function_hints.get(parameter.name, "")
-                try:
-                    spans[parameter.name] = int(raw_size) if raw_size else 0
-                except (TypeError, ValueError):
-                    spans[parameter.name] = 0
+            spans = {parameter.name: 0 for parameter in parameters}
             self.glsl_collect_private_pointer_static_direct_spans(
                 function,
                 function_key,
@@ -28243,6 +28647,7 @@ complex64_t crossgl_complex64_mod_assign(
                         "local",
                         "parameter",
                         "scalar",
+                        "byte_view",
                     }:
                         self.glsl_private_pointer_backing_error(
                             call, parameter_name, binding
@@ -28418,7 +28823,9 @@ complex64_t crossgl_complex64_mod_assign(
                             callee_variant = []
                             for parameter in pointer_parameters[call["callee"]]:
                                 binding = call["bindings"][parameter.name]
-                                if binding["root_kind"] == "local":
+                                if binding["root_kind"] == "byte_view":
+                                    extent = binding["byte_view"]
+                                elif binding["root_kind"] == "local":
                                     extent = binding["extent"]
                                 elif binding["root_kind"] == "scalar":
                                     extent = 0
@@ -28434,7 +28841,7 @@ complex64_t crossgl_complex64_mod_assign(
                                     call,
                                     parameter.name,
                                     binding,
-                                    extent,
+                                    self.glsl_private_pointer_variant_extent(extent),
                                 )
                                 callee_variant.append(extent)
                             callee_variant = tuple(callee_variant)
@@ -28455,19 +28862,236 @@ complex64_t crossgl_complex64_mod_assign(
         propagate_variants()
 
         self.function_private_pointer_backing_variants = {
-            function_key: tuple(sorted(function_variants))
+            function_key: tuple(
+                sorted(
+                    function_variants,
+                    key=self.glsl_private_pointer_variant_sort_key,
+                )
+            )
             for function_key, function_variants in variants.items()
         }
         return {
             function_key: {
                 parameter.name: str(
-                    self.function_private_pointer_backing_variants[function_key][0][
-                        index
-                    ]
+                    self.glsl_private_pointer_variant_extent(
+                        self.function_private_pointer_backing_variants[function_key][0][
+                            index
+                        ]
+                    )
                 )
                 for index, parameter in enumerate(parameters)
             }
             for function_key, parameters in pointer_parameters.items()
+        }
+
+    @staticmethod
+    def glsl_private_pointer_byte_view_variant(value):
+        return (
+            isinstance(value, tuple)
+            and len(value) == 8
+            and value[0] == "private-word-array-view"
+        )
+
+    def glsl_private_pointer_variant_extent(self, value):
+        if self.glsl_private_pointer_byte_view_variant(value):
+            return value[4]
+        return value
+
+    def glsl_private_pointer_variant_sort_key(self, variant):
+        return tuple(
+            (
+                (1, repr(shape))
+                if self.glsl_private_pointer_byte_view_variant(shape)
+                else (0, int(shape))
+            )
+            for shape in variant
+        )
+
+    def glsl_private_pointer_byte_view_error(
+        self,
+        expression,
+        source_type,
+        target_type,
+        reason,
+        detail,
+        *,
+        access="read",
+    ):
+        target_layout = scalar_storage_layout(target_type)
+        raise PointerReinterpretationError(
+            "OpenGL cannot preserve a private pointer reinterpretation from "
+            f"'{source_type or 'unknown'}' to '{target_type or 'unknown'}': {detail}",
+            source_type=source_type,
+            target_type=target_type,
+            address_space="thread",
+            alignment=target_layout.byte_width if target_layout else None,
+            access=access,
+            target_backend="opengl",
+            reason=reason,
+            source_location=getattr(expression, "source_location", None),
+        )
+
+    def glsl_private_pointer_struct_word_array_layout(
+        self,
+        source_type_node,
+        constants,
+        expression,
+        target_type,
+    ):
+        source_type = self.glsl_normalized_source_type(source_type_node)
+        struct = self.glsl_struct_node(self.map_type(source_type))
+        if struct is None:
+            self.glsl_private_pointer_byte_view_error(
+                expression,
+                source_type,
+                target_type,
+                "unsupported-private-byte-backing",
+                "the backing value is not a concrete struct",
+            )
+        members = [
+            member
+            for member in getattr(struct, "members", []) or []
+            if not self.glsl_static_struct_member(member)
+        ]
+        if (
+            len(members) != 1
+            or getattr(struct, "inheritance", None)
+            or getattr(struct, "attributes", None)
+            or (members and getattr(members[0], "attributes", None))
+        ):
+            self.glsl_private_pointer_byte_view_error(
+                expression,
+                source_type,
+                target_type,
+                "unsupported-private-byte-layout",
+                "only a padding-free struct with one homogeneous word-array "
+                "member is supported",
+            )
+        member = members[0]
+        member_type = getattr(member, "member_type", None)
+        if not isinstance(member_type, ArrayType):
+            self.glsl_private_pointer_byte_view_error(
+                expression,
+                source_type,
+                target_type,
+                "unsupported-private-byte-layout",
+                "the struct member is not a fixed scalar array",
+            )
+        extent = self.literal_int_value(member_type.size, constants)
+        if not isinstance(extent, int) or isinstance(extent, bool) or extent <= 0:
+            self.glsl_private_pointer_byte_view_error(
+                expression,
+                source_type,
+                target_type,
+                "private-byte-layout-unresolved",
+                "the word-array extent is not a fixed positive integer",
+            )
+        source_element_type = self.glsl_normalized_source_type(member_type.element_type)
+        source_layout = scalar_storage_layout(source_element_type)
+        if source_layout is None or source_layout.bit_width != 32:
+            self.glsl_private_pointer_byte_view_error(
+                expression,
+                source_type,
+                target_type,
+                "unsupported-private-byte-layout",
+                "the array element is not a 32-bit scalar word",
+            )
+        return (
+            source_type,
+            self.map_type(source_type_node),
+            self.glsl_struct_member_name(source_type, member.name),
+            extent,
+            source_layout,
+        )
+
+    def glsl_private_pointer_reinterpret_binding(
+        self,
+        expression,
+        binding,
+        constants,
+    ):
+        pointer_type = getattr(expression, "target_type", None)
+        target_type_node = getattr(pointer_type, "pointee_type", None)
+        target_type = self.strip_metal_parameter_indirection(
+            self.type_name_string(target_type_node)
+        )
+        target_layout = scalar_storage_layout(target_type)
+        address_space = str(getattr(pointer_type, "address_space", None) or "").lower()
+        source_type_node = binding.get("source_type")
+        source_type = self.glsl_normalized_source_type(source_type_node)
+        if address_space not in {"", "thread", "private"}:
+            self.glsl_private_pointer_byte_view_error(
+                expression,
+                source_type,
+                target_type,
+                "unsupported-private-byte-address-space",
+                f"address space '{address_space}' is not private storage",
+            )
+        if (
+            target_layout is None
+            or target_layout.bit_width not in {8, 16, 32}
+            or (target_layout.kind == "floating" and target_layout.bit_width != 32)
+            or isinstance(target_type_node, (PointerType, ArrayType))
+        ):
+            self.glsl_private_pointer_byte_view_error(
+                expression,
+                source_type,
+                target_type,
+                "unsupported-private-byte-view",
+                "the destination is not a supported 8-, 16-, or 32-bit scalar view",
+            )
+        if binding.get("root_kind") != "scalar" or binding.get("offset") not in {
+            0,
+            "0",
+            "0u",
+        }:
+            self.glsl_private_pointer_byte_view_error(
+                expression,
+                source_type,
+                target_type,
+                "unsupported-private-byte-backing",
+                "the view does not start at one local struct value",
+            )
+        (
+            source_type,
+            mapped_source_type,
+            member_name,
+            word_count,
+            source_layout,
+        ) = self.glsl_private_pointer_struct_word_array_layout(
+            source_type_node,
+            constants,
+            expression,
+            target_type,
+        )
+        source_bytes = word_count * source_layout.byte_width
+        if source_bytes % target_layout.byte_width != 0:
+            self.glsl_private_pointer_byte_view_error(
+                expression,
+                source_type,
+                target_type,
+                "unsupported-private-byte-alignment",
+                "the source extent is not aligned to the destination element width",
+            )
+        view_extent = source_bytes // target_layout.byte_width
+        variant = (
+            "private-word-array-view",
+            source_type,
+            mapped_source_type,
+            member_name,
+            view_extent,
+            word_count,
+            source_layout.name,
+            target_layout.name,
+        )
+        return {
+            **binding,
+            "root_kind": "byte_view",
+            "extent": view_extent,
+            "offset": binding.get("offset", 0),
+            "offset_interval": (0, 0),
+            "element_type": self.map_type(target_type),
+            "byte_view": variant,
         }
 
     def glsl_private_pointer_parameter_element_type(self, parameter, function_name):
@@ -28547,6 +29171,7 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         return {
             "element_type": self.map_type(node_type),
+            "source_type": node_type,
             "source_location": getattr(node, "source_location", None),
         }
 
@@ -28590,6 +29215,7 @@ complex64_t crossgl_complex64_mod_assign(
                     "offset_interval": (0, 0),
                     "side_effecting": False,
                     "element_type": info["element_type"],
+                    "source_type": info["source_type"],
                 }
 
         def shadow_binding(node):
@@ -28617,6 +29243,7 @@ complex64_t crossgl_complex64_mod_assign(
                     "offset_interval": (0, 0),
                     "side_effecting": False,
                     "element_type": scalar_info["element_type"],
+                    "source_type": scalar_info["source_type"],
                 }
             return name, {
                 "root_kind": None,
@@ -28807,11 +29434,23 @@ complex64_t crossgl_complex64_mod_assign(
                     visit(argument, active_bindings, active_intervals)
                 return
             if isinstance(value, IfNode):
+                condition_node = getattr(value, "condition", None)
+                condition = self.glsl_private_pointer_condition_value(
+                    condition_node, active_intervals, constants
+                )
                 visit(
-                    getattr(value, "condition", None),
+                    condition_node,
                     active_bindings,
                     active_intervals,
                 )
+                if condition is not None:
+                    selected_branch = (
+                        getattr(value, "then_branch", None)
+                        if condition
+                        else getattr(value, "else_branch", None)
+                    )
+                    visit(selected_branch, dict(active_bindings), active_intervals)
+                    return
                 then_intervals = dict(active_intervals)
                 else_intervals = dict(active_intervals)
                 visit(
@@ -29558,6 +30197,9 @@ complex64_t crossgl_complex64_mod_assign(
                 return
             if isinstance(value, IfNode):
                 condition = getattr(value, "condition", None)
+                condition_value = self.glsl_private_pointer_condition_value(
+                    condition, active_intervals, constants
+                )
                 visit(
                     condition,
                     active_forms,
@@ -29567,6 +30209,26 @@ complex64_t crossgl_complex64_mod_assign(
                     active_predicates,
                     active_pointer_roots,
                 )
+                if condition_value is not None:
+                    selected_branch = (
+                        getattr(value, "then_branch", None)
+                        if condition_value
+                        else getattr(value, "else_branch", None)
+                    )
+                    visit(
+                        selected_branch,
+                        active_forms,
+                        active_value_keys,
+                        active_intervals,
+                        active_loops,
+                        active_predicates,
+                        active_pointer_roots,
+                    )
+                    for name in modified_names(selected_branch):
+                        active_forms.pop(name, None)
+                        active_intervals.pop(name, None)
+                        active_value_keys[name] = ("unknown", id(value), name)
+                    return
                 condition_key = self.glsl_private_pointer_contract_expression_key(
                     condition, active_value_keys, constants
                 )
@@ -29833,6 +30495,40 @@ complex64_t crossgl_complex64_mod_assign(
             if key not in {"parent", "annotations", "array", "index", "args", "name"}
         )
 
+    def glsl_private_pointer_condition_value(self, expression, intervals, constants):
+        if self.glsl_private_pointer_expression_has_side_effects(expression):
+            return None
+
+        value = self.literal_int_value(expression, constants)
+        if value is not None:
+            return value != 0
+
+        # Bounds intervals use unbounded arithmetic and cannot prove branch
+        # outcomes across source-width overflow.
+        if isinstance(expression, UnaryOpNode) and expression.op == "!":
+            operand = self.glsl_private_pointer_condition_value(
+                expression.operand, intervals, constants
+            )
+            return None if operand is None else not operand
+
+        if isinstance(expression, BinaryOpNode):
+            operator = expression.op
+            if operator in {"&&", "and", "||", "or"}:
+                left = self.glsl_private_pointer_condition_value(
+                    expression.left, intervals, constants
+                )
+                if operator in {"&&", "and"} and left is False:
+                    return False
+                if operator in {"||", "or"} and left is True:
+                    return True
+                right = self.glsl_private_pointer_condition_value(
+                    expression.right, intervals, constants
+                )
+                if left is None or right is None:
+                    return None
+                return left and right if operator in {"&&", "and"} else left or right
+        return None
+
     def glsl_private_pointer_static_binding(
         self,
         expression,
@@ -29842,6 +30538,23 @@ complex64_t crossgl_complex64_mod_assign(
         lexical_bindings=None,
         intervals=None,
     ):
+        if isinstance(expression, PointerReinterpretNode):
+            binding = self.glsl_private_pointer_static_binding(
+                expression.expression,
+                parameter_element_types,
+                local_arrays,
+                constants,
+                lexical_bindings,
+                intervals,
+            )
+            if binding is None or binding.get("root_kind") is None:
+                return None
+            return self.glsl_private_pointer_reinterpret_binding(
+                expression,
+                binding,
+                constants,
+            )
+
         if isinstance(expression, (str, IdentifierNode, VariableNode)):
             name = (
                 expression
@@ -30389,8 +31102,30 @@ complex64_t crossgl_complex64_mod_assign(
                 return
             if isinstance(value, BlockNode):
                 block_bindings = dict(active_bindings)
-                for statement in getattr(value, "statements", []) or []:
-                    visit(statement, active_intervals, block_bindings)
+                block_intervals = dict(active_intervals)
+                statements = list(getattr(value, "statements", []) or [])
+                # Bindings identify mutable names; intervals also contain constants.
+                outer_binding_names = set(active_bindings)
+                propagated_intervals = {
+                    name: active_intervals.get(name) for name in outer_binding_names
+                }
+                shadowed_names = set()
+                for statement in statements:
+                    declared_name = (
+                        getattr(statement, "name", None)
+                        if isinstance(statement, (VariableNode, ArrayNode))
+                        else None
+                    )
+                    visit(statement, block_intervals, block_bindings)
+                    if declared_name:
+                        shadowed_names.add(declared_name)
+                    for name in outer_binding_names - shadowed_names:
+                        propagated_intervals[name] = block_intervals.get(name)
+                for name, interval in propagated_intervals.items():
+                    if interval is not None:
+                        active_intervals[name] = interval
+                    else:
+                        active_intervals.pop(name, None)
                 return
             if isinstance(value, (VariableNode, ArrayNode)):
                 initial_value = getattr(value, "initial_value", None)
@@ -30502,11 +31237,23 @@ complex64_t crossgl_complex64_mod_assign(
                 visit(value.pointer_expr, active_intervals, active_bindings)
                 return
             if isinstance(value, IfNode):
+                condition_node = getattr(value, "condition", None)
+                condition = self.glsl_private_pointer_condition_value(
+                    condition_node, active_intervals, constants
+                )
                 visit(
-                    getattr(value, "condition", None),
+                    condition_node,
                     active_intervals,
                     active_bindings,
                 )
+                if condition is not None:
+                    selected_branch = (
+                        getattr(value, "then_branch", None)
+                        if condition
+                        else getattr(value, "else_branch", None)
+                    )
+                    visit(selected_branch, active_intervals, dict(active_bindings))
+                    return
                 then_intervals = dict(active_intervals)
                 else_intervals = dict(active_intervals)
                 visit(
@@ -30865,6 +31612,16 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_private_pointer_view_binding(self, expression):
         function_name = self.current_glsl_private_pointer_function_name
         local_arrays = self.function_private_pointer_local_arrays.get(function_name, {})
+        if isinstance(expression, PointerReinterpretNode):
+            binding = self.glsl_private_pointer_view_binding(expression.expression)
+            if binding is None:
+                return None
+            return self.glsl_private_pointer_reinterpret_binding(
+                expression,
+                binding,
+                self.glsl_active_literal_int_constants(),
+            )
+
         if isinstance(expression, (str, IdentifierNode, VariableNode)):
             raw_name = (
                 expression
@@ -30882,6 +31639,17 @@ complex64_t crossgl_complex64_mod_assign(
                     "root_kind": "local",
                 }
             if raw_name in self.current_glsl_private_pointer_base_names:
+                variant = self.current_glsl_private_pointer_variant.get(raw_name)
+                if self.glsl_private_pointer_byte_view_variant(variant):
+                    return {
+                        "backing": self.generate_glsl_identifier_expression(raw_name),
+                        "offset": self.current_glsl_private_pointer_base_names[
+                            raw_name
+                        ],
+                        "root_kind": "byte_view_parameter",
+                        "byte_view": variant,
+                        "element_type": variant[7],
+                    }
                 if active_source_type and not str(active_source_type).rstrip().endswith(
                     "*"
                 ):
@@ -30931,6 +31699,7 @@ complex64_t crossgl_complex64_mod_assign(
                         "backing": self.generate_glsl_identifier_expression(raw_name),
                         "offset": "0",
                         "root_kind": "scalar",
+                        "source_type": source_type,
                     }
             if not isinstance(operand, ArrayAccessNode):
                 return None
@@ -30966,6 +31735,74 @@ complex64_t crossgl_complex64_mod_assign(
         )
         return binding
 
+    def glsl_private_pointer_byte_view_read_expression(
+        self,
+        binding,
+        index_expression,
+    ):
+        variant = binding.get("byte_view")
+        if not self.glsl_private_pointer_byte_view_variant(variant):
+            return None
+        if self.glsl_private_pointer_expression_has_side_effects(index_expression):
+            display_name = self.glsl_private_pointer_display_name(
+                self.current_glsl_private_pointer_function_name
+            )
+            raise OpenGLPrivatePointerParameterError(
+                "OpenGL cannot lower a side-effecting private byte-view index in "
+                f"'{display_name}'",
+                function_name=display_name,
+                reason="side-effecting-byte-view-index",
+                source_location=getattr(index_expression, "source_location", None),
+            )
+        rendered_index = (
+            str(index_expression)
+            if isinstance(index_expression, (int, float))
+            else self.generate_expression(index_expression)
+        )
+        element_index = self.glsl_private_pointer_offset_sum(
+            binding.get("offset", "0"),
+            f"int({rendered_index})",
+        )
+        reinterpret_binding = {
+            "root": f"{binding['backing']}.{variant[3]}",
+            "byte_offset": "0",
+            "pointer_reinterpretation": {
+                "source_layout": scalar_storage_layout(variant[6]),
+                "target_layout": scalar_storage_layout(variant[7]),
+            },
+        }
+        return self.glsl_pointer_reinterpret_read_expression(
+            reinterpret_binding,
+            element_index,
+        )
+
+    def validate_glsl_private_pointer_byte_view_mutation(self, expression):
+        if isinstance(expression, ArrayAccessNode):
+            binding = self.glsl_private_pointer_view_binding(expression.array)
+        elif (
+            isinstance(expression, UnaryOpNode)
+            and self.map_operator(expression.op) == "*"
+        ):
+            binding = self.glsl_private_pointer_view_binding(expression.operand)
+        else:
+            binding = None
+        variant = binding.get("byte_view") if binding else None
+        if not self.glsl_private_pointer_byte_view_variant(variant):
+            return
+        target_layout = scalar_storage_layout(variant[7])
+        raise PointerReinterpretationError(
+            "OpenGL private pointer reinterpretation is read-only for local "
+            "struct word-array backing",
+            source_type=variant[1],
+            target_type=variant[7],
+            address_space="thread",
+            alignment=target_layout.byte_width,
+            access="write",
+            target_backend="opengl",
+            reason="private-byte-view-write-unsupported",
+            source_location=getattr(expression, "source_location", None),
+        )
+
     def generate_glsl_private_pointer_view_access(
         self,
         pointer_expression,
@@ -30974,6 +31811,12 @@ complex64_t crossgl_complex64_mod_assign(
         access_expression=None,
     ):
         binding = self.glsl_private_pointer_view_binding(pointer_expression)
+        byte_view_read = self.glsl_private_pointer_byte_view_read_expression(
+            binding or {},
+            index_expression,
+        )
+        if byte_view_read is not None:
+            return byte_view_read
         if binding is None or binding.get("root_kind") not in {
             "parameter",
             "scalar_parameter",
@@ -32793,6 +33636,8 @@ complex64_t crossgl_complex64_mod_assign(
                 reason="unsupported-pointee-type",
                 source_location=getattr(parameter, "source_location", None),
             )
+        if self.glsl_private_pointer_byte_view_variant(size):
+            return size[2]
         mapped_type = self.map_type(pointee_type)
         if size in {0, "0"}:
             return mapped_type

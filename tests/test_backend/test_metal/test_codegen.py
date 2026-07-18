@@ -20,6 +20,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalCallableLoweringError,
     MetalConstructorContractError,
     MetalCooperativeMatrixFragmentLoweringError,
+    MetalFunctionLocalTypeResolutionError,
     MetalIndexedComponentTypeResolutionError,
     MetalOutOfLineCallOperatorLoweringError,
     MetalSizeofResolutionError,
@@ -5878,6 +5879,475 @@ def test_codegen_isolates_function_local_typedefs_between_siblings():
     assert "int converted = int(value);" in crossgl
     assert "typedef" not in crossgl
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_hoists_function_local_typedef_struct_for_project_targets(tmp_path):
+    crossgl = convert("""
+        kernel void copy_words(
+            const device uint* input [[buffer(0)]],
+            device uint* output [[buffer(1)]]) {
+            constexpr int word_count = 1 + 1;
+            using Word = uint32_t;
+            typedef struct {
+                Word values[word_count];
+            } WordBlock;
+            thread WordBlock local =
+                *((const device WordBlock*)input);
+            output[0] = local.values[0];
+        }
+        """)
+
+    canonical = "MetalLocal_copy_words_WordBlock"
+    assert f"struct {canonical} {{" in crossgl
+    assert "uint[2] values;" in crossgl
+    assert f"thread {canonical} local" in crossgl
+    assert f"({canonical}*)input" in crossgl
+    assert "local.values[0]" in crossgl
+    assert "WordBlock" not in crossgl.replace(canonical, "")
+    assert "Word values" not in crossgl
+
+    shader = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(shader)
+    glsl = GLSLCodeGen().generate(shader)
+    assert f"struct {canonical}" in hlsl
+    assert f"struct {canonical}" in glsl
+    assert "uint values[2];" in hlsl
+    assert "uint values[2];" in glsl
+    assert "local.values[0]" in hlsl
+    assert "local.values[0]" in glsl
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+    assert_opengl_compute_validates_if_available(glsl, tmp_path, "local-typedef-struct")
+
+
+def test_codegen_hoists_named_local_struct_with_qualified_pointer_cast():
+    crossgl = convert("""
+        kernel void copy_words(
+            const device uint* input [[buffer(0)]],
+            device uint* output [[buffer(1)]]) {
+            constexpr int word_count = 2;
+            struct WordBlock {
+                uint values[word_count];
+            };
+            thread WordBlock local =
+                *reinterpret_cast<const device WordBlock*>(input);
+            output[0] = local.values[0];
+        }
+        """)
+
+    canonical = "MetalLocal_copy_words_WordBlock"
+    assert f"struct {canonical} {{" in crossgl
+    assert "uint[2] values;" in crossgl
+    assert f"thread {canonical} local = (*({canonical}*)input);" in crossgl
+    assert "const device WordBlock" not in crossgl
+    strict_ast = CrossGLParser(
+        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
+    ).parse()
+    assert strict_ast is not None
+
+
+def test_codegen_resolves_alias_chain_to_named_local_struct():
+    crossgl = convert("""
+        uint read_word() {
+            struct WordBlock {
+                uint layout;
+            };
+            using BlockAlias = WordBlock;
+            typedef struct WordBlock ElaboratedAlias;
+            thread BlockAlias direct;
+            thread ElaboratedAlias elaborated;
+            return direct.layout + elaborated.layout;
+        }
+        """)
+
+    canonical = "MetalLocal_read_word_WordBlock"
+    assert f"struct {canonical}" in crossgl
+    assert "uint layout_;" in crossgl
+    assert f"thread {canonical} direct" in crossgl
+    assert f"thread {canonical} elaborated" in crossgl
+    assert "return direct.layout_ + elaborated.layout_;" in crossgl
+    assert "BlockAlias" not in crossgl
+    assert "ElaboratedAlias" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_colliding_local_aggregate_member_names():
+    crossgl = convert("""
+        uint read_word() {
+            struct Names {
+                uint layout;
+                uint layout_;
+            };
+            thread Names names;
+            names.layout = 3;
+            names.layout_ = 7;
+            return names.layout + names.layout_;
+        }
+        """)
+
+    assert "uint layout_;" in crossgl
+    assert "uint layout__2;" in crossgl
+    assert "names.layout_ = 3;" in crossgl
+    assert "names.layout__2 = 7;" in crossgl
+    assert "return names.layout_ + names.layout__2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_colliding_module_aggregate_member_names():
+    crossgl = convert("""
+        struct Names {
+            uint layout;
+            uint layout_;
+        };
+
+        uint read_word(thread Names& names) {
+            names.layout = 3;
+            names.layout_ = 7;
+            return names.layout + names.layout_;
+        }
+        """)
+
+    assert "uint layout_;" in crossgl
+    assert "uint layout__2;" in crossgl
+    assert "names.layout_ = 3;" in crossgl
+    assert "names.layout__2 = 7;" in crossgl
+    assert "return names.layout_ + names.layout__2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_colliding_members_through_nested_access():
+    crossgl = convert("""
+        struct Names {
+            uint layout;
+            uint layout_;
+        };
+
+        struct Wrapper {
+            Names names;
+        };
+
+        uint read_word(thread Wrapper& wrapper) {
+            wrapper.names.layout = 3;
+            wrapper.names.layout_ = 7;
+            return wrapper.names.layout + wrapper.names.layout_;
+        }
+        """)
+
+    assert "wrapper.names.layout_ = 3;" in crossgl
+    assert "wrapper.names.layout__2 = 7;" in crossgl
+    assert "return wrapper.names.layout_ + wrapper.names.layout__2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_colliding_members_in_constructor_factory():
+    crossgl = convert("""
+        struct Names {
+            uint layout;
+            uint layout_;
+
+            Names(uint first, uint second)
+                : layout(first), layout_(second) {}
+        };
+
+        uint read_word() {
+            thread Names names(3, 7);
+            return names.layout + names.layout_;
+        }
+        """)
+
+    assert "crosstl_ctor_value.layout_ = uint(first);" in crossgl
+    assert "crosstl_ctor_value.layout__2 = uint(second);" in crossgl
+    assert "return names.layout_ + names.layout__2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_colliding_members_in_designated_initializer():
+    crossgl = convert("""
+        struct Names {
+            uint layout;
+            uint layout_;
+        };
+
+        uint read_word() {
+            thread Names names = {.layout = 3, .layout_ = 7};
+            return names.layout + names.layout_;
+        }
+        """)
+
+    assert "Names{layout_: 3, layout__2: 7}" in crossgl
+    assert "return names.layout_ + names.layout__2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_materializes_local_typedef_struct_per_value_specialization():
+    crossgl = convert("""
+        template <int Width>
+        [[kernel]] void make_block(device uint* output [[buffer(0)]]) {
+            constexpr int word_count = Width + 1;
+            typedef struct {
+                uint words[word_count];
+            } Block;
+            thread Block local;
+            output[0] = local.words[0];
+        }
+
+        template [[host_name("make_block_2")]] [[kernel]]
+        decltype(make_block<2>) make_block<2>;
+        template [[host_name("make_block_4")]] [[kernel]]
+        decltype(make_block<4>) make_block<4>;
+        """)
+
+    assert "struct MetalLocal_make_block_2_Block" in crossgl
+    assert "struct MetalLocal_make_block_4_Block" in crossgl
+    assert "uint[3] words;" in crossgl
+    assert "uint[5] words;" in crossgl
+    assert "thread MetalLocal_make_block_2_Block local" in crossgl
+    assert "thread MetalLocal_make_block_4_Block local" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_folds_transitive_constexpr_local_struct_extent():
+    crossgl = convert("""
+        template <int WordSize = 8, int Bits = 4>
+        constexpr short get_pack_factor() {
+            return WordSize / Bits;
+        }
+
+        template <int WordSize = 8>
+        constexpr short get_bytes_per_pack() {
+            return WordSize / 8;
+        }
+
+        [[kernel]] void make_block_float_16_4() {
+            constexpr int pack_factor = get_pack_factor<32, 4>();
+            constexpr int bytes_per_pack = get_bytes_per_pack();
+            constexpr int width = 16 / pack_factor;
+            using Word = uint32_t;
+            typedef struct {
+                Word values[width * bytes_per_pack];
+            } Block;
+            thread Block local;
+        }
+        """)
+
+    assert "struct MetalLocal_make_block_float_16_4_Block" in crossgl
+    assert "uint[2] values;" in crossgl
+    assert "thread MetalLocal_make_block_float_16_4_Block local" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_prefers_constexpr_non_template_zero_argument_overload_for_extent():
+    crossgl = convert("""
+        template <int Width = 2>
+        constexpr int block_width() {
+            return Width;
+        }
+
+        constexpr int block_width() {
+            return 3;
+        }
+
+        uint read_word() {
+            constexpr int width = block_width();
+            typedef struct {
+                uint values[width];
+            } Block;
+            thread Block local;
+            return local.values[0];
+        }
+        """)
+
+    assert "struct MetalLocal_read_word_Block" in crossgl
+    assert "uint[3] values;" in crossgl
+    assert "const int width = 3;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_isolates_same_named_local_structs_between_sibling_functions():
+    crossgl = convert("""
+        uint first() {
+            typedef struct { uint values[2]; } Block;
+            thread Block local;
+            return local.values[0];
+        }
+
+        float second() {
+            typedef struct { float values[3]; } Block;
+            thread Block local;
+            return local.values[0];
+        }
+        """)
+
+    assert "struct MetalLocal_first_Block" in crossgl
+    assert "uint[2] values;" in crossgl
+    assert "struct MetalLocal_second_Block" in crossgl
+    assert "float[3] values;" in crossgl
+    assert "thread MetalLocal_first_Block local" in crossgl
+    assert "thread MetalLocal_second_Block local" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_binds_named_local_struct_tag_and_typedef_alias():
+    crossgl = convert("""
+        uint read_word() {
+            typedef struct WordTag {
+                uint value;
+            } WordAlias;
+            thread WordTag tagged;
+            thread WordAlias aliased;
+            return tagged.value + aliased.value;
+        }
+        """)
+
+    canonical = "MetalLocal_read_word_WordAlias"
+    assert f"struct {canonical}" in crossgl
+    assert f"thread {canonical} tagged" in crossgl
+    assert f"thread {canonical} aliased" in crossgl
+    assert "WordTag" not in crossgl
+    assert "WordAlias" not in crossgl.replace(canonical, "")
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_restores_shadowed_local_struct_after_nested_block():
+    crossgl = convert("""
+        uint select_word() {
+            typedef struct { uint values[2]; } Block;
+            thread Block outer;
+            {
+                typedef struct { float values[3]; } Block;
+                thread Block inner;
+                inner.values[0] = 1.0f;
+            }
+            thread Block restored;
+            return outer.values[0] + restored.values[1];
+        }
+        """)
+
+    outer = "MetalLocal_select_word_Block"
+    inner = "MetalLocal_select_word_Block_2"
+    assert f"struct {outer}" in crossgl
+    assert f"struct {inner}" in crossgl
+    assert f"thread {outer} outer" in crossgl
+    assert f"thread {inner} inner" in crossgl
+    assert f"thread {outer} restored" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_rejects_unresolved_function_local_struct_dependency():
+    with pytest.raises(MetalFunctionLocalTypeResolutionError) as exc_info:
+        convert("""
+            template <typename T>
+            void prepare() {
+                using Element = T;
+                typedef struct {
+                    Element value;
+                } LocalValue;
+                thread LocalValue local;
+            }
+            """)
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "prepare"
+    assert diagnostic.type_name == "LocalValue"
+    assert diagnostic.unresolved_dependencies == ("Element",)
+    assert diagnostic.source_location is not None
+
+
+def test_codegen_rejects_unresolved_function_local_struct_extent():
+    with pytest.raises(MetalFunctionLocalTypeResolutionError) as exc_info:
+        convert("""
+            template <int Width>
+            void prepare() {
+                typedef struct {
+                    uint values[Width + 1];
+                } LocalValue;
+                thread LocalValue local;
+            }
+            """)
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "prepare"
+    assert diagnostic.type_name == "LocalValue"
+    assert diagnostic.unresolved_dependencies == ("Width",)
+    assert diagnostic.source_location is not None
+
+
+@pytest.mark.parametrize(
+    ("declaration", "reason"),
+    [
+        (
+            "typedef union { uint bits; float value; } LocalValue;",
+            "union storage semantics",
+        ),
+        (
+            "class LocalValue { uint value; };",
+            "class storage semantics",
+        ),
+        (
+            "struct LocalValue : BaseValue { uint value; };",
+            "base classes",
+        ),
+        (
+            "struct LocalValue { using Word = uint; Word value; };",
+            "aggregate-scoped type aliases",
+        ),
+        (
+            "struct LocalValue { LocalValue() {} uint value; };",
+            "constructors or call operators",
+        ),
+        (
+            "struct LocalValue { uint operator()() { return 0; } uint value; };",
+            "constructors or call operators",
+        ),
+        (
+            "typedef struct { uint value = 7; } LocalValue;",
+            "default initializer",
+        ),
+        (
+            "typedef struct alignas(16) { uint value; } LocalValue;",
+            "alignment or attributes",
+        ),
+        (
+            "typedef struct { volatile uint value; } LocalValue;",
+            "unsupported qualifiers",
+        ),
+        (
+            "typedef struct { alignas(16) uint value; } LocalValue;",
+            "member 'value' has alignment or attributes",
+        ),
+        (
+            "typedef struct { uint value; } LocalValue[2];",
+            "typedef declarator changes",
+        ),
+        (
+            "typedef struct { uint value; } *LocalValue;",
+            "typedef declarator changes",
+        ),
+        (
+            "struct LocalValue { uint value; } local;",
+            "trailing object declaration",
+        ),
+        (
+            "struct LocalValue {};",
+            "empty aggregates",
+        ),
+    ],
+)
+def test_codegen_rejects_local_aggregate_semantics_lost_by_hoisting(
+    declaration, reason
+):
+    with pytest.raises(MetalFunctionLocalTypeResolutionError) as exc_info:
+        convert(f"""
+            uint read_word() {{
+                {declaration}
+                return 0;
+            }}
+            """)
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "read_word"
+    assert diagnostic.type_name == "LocalValue"
+    assert reason in diagnostic.reason
+    assert diagnostic.source_location is not None
 
 
 def test_codegen_switch_typedef_scope_spans_cases():

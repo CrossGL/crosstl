@@ -18,6 +18,7 @@ from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
     dxc_compiler_arguments_for_source,
     dxc_profile_for_source,
+    hlsl_requires_native_16bit_types,
 )
 
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
@@ -325,12 +326,6 @@ def _translated_artifact(
         },
         "selected quantized entry-point identity was not preserved",
     )
-    capabilities = artifact.get("requiredCapabilities")
-    _require(
-        isinstance(capabilities, list) and NATIVE_16_BIT_CAPABILITY in capabilities,
-        "quantized DirectX artifact must require native 16-bit types",
-    )
-
     materialization = artifact.get("templateMaterialization")
     specializations = (
         materialization.get("specializations")
@@ -383,6 +378,16 @@ def _translated_artifact(
         and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size,
         "generated HLSL identity does not match the project report",
     )
+    generated = artifact_path.read_text(encoding="utf-8")
+    expected_capabilities = (
+        [NATIVE_16_BIT_CAPABILITY]
+        if hlsl_requires_native_16bit_types(generated)
+        else []
+    )
+    _require(
+        artifact.get("requiredCapabilities") == expected_capabilities,
+        "DirectX artifact capabilities do not match the generated HLSL",
+    )
     return artifact, artifact_path
 
 
@@ -409,22 +414,25 @@ def _validate_generated_hlsl(
         "the 64-bit expression stored in out_ must be explicitly narrowed to uint",
     )
 
-    target_profiles = directx_target_profiles_for_source(generated)
+    compatible_target_profiles = directx_target_profiles_for_source(generated)
     profile = dxc_profile_for_source(DIRECTX_BASE_SHADER_PROFILE, generated)
     compiler_arguments = dxc_compiler_arguments_for_source(generated)
     _require(
-        target_profiles == (DIRECTX_TARGET_PROFILE,),
-        "generated native 16-bit HLSL must be restricted to DirectX 12",
+        not hlsl_requires_native_16bit_types(generated),
+        "pinned quantized HLSL must not require native 16-bit types",
     )
     _require(
-        profile == "cs_6_2" and compiler_arguments == ("-enable-16bit-types",),
-        "generated native 16-bit HLSL must require DXC cs_6_2 and "
-        "-enable-16bit-types",
+        DIRECTX_TARGET_PROFILE in compatible_target_profiles,
+        "generated quantized HLSL must remain compatible with DirectX 12",
+    )
+    _require(
+        profile == DIRECTX_BASE_SHADER_PROFILE and compiler_arguments == (),
+        "generated quantized HLSL must compile without native 16-bit options",
     )
     checks = {
         "status": "passed",
         "entryPoint": "CSMain",
-        "native16BitTypes": "required",
+        "native16BitTypes": "not-required",
         "staticAssertions": "absent",
         "minimumPrecisionTypes": "absent",
         "typedResourceStoreNarrowing": {
@@ -439,7 +447,7 @@ def _validate_generated_hlsl(
         "entryPoint": "CSMain",
         "profile": profile,
         "compilerArguments": list(compiler_arguments),
-        "targetProfiles": list(target_profiles),
+        "targetProfiles": [DIRECTX_TARGET_PROFILE],
         "warningsAsErrors": True,
     }
     return checks, compiler_contract

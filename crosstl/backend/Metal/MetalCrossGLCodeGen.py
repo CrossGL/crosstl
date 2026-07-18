@@ -463,6 +463,37 @@ class MetalStructAliasResolutionError(ValueError):
         )
 
 
+class MetalFunctionLocalTypeResolutionError(ValueError):
+    """Raised when a function-local aggregate cannot be made concrete."""
+
+    project_diagnostic_code = "project.translate.metal-local-type-unresolved"
+    missing_capabilities = ("metal.function-local-type-materialization",)
+
+    def __init__(
+        self,
+        function_name,
+        type_name,
+        reason,
+        *,
+        source_location=None,
+        unresolved_dependencies=(),
+    ):
+        self.function_name = function_name
+        self.type_name = type_name
+        self.reason = reason
+        self.source_location = source_location
+        self.unresolved_dependencies = tuple(unresolved_dependencies)
+        dependency_text = (
+            f" ({', '.join(self.unresolved_dependencies)})"
+            if self.unresolved_dependencies
+            else ""
+        )
+        super().__init__(
+            "Cannot materialize function-local Metal type "
+            f"'{type_name}' in '{function_name}': {reason}{dependency_text}"
+        )
+
+
 class MetalCallableLoweringError(ValueError):
     """Raised when a Metal callback cannot be lowered without changing semantics."""
 
@@ -1351,6 +1382,7 @@ class MetalToCrossGLConverter:
         self.global_sampler_names = set()
         self.suppress_structured_buffer_index_lowering = False
         self.struct_member_types = {}
+        self.struct_member_name_maps = {}
         self.resolved_struct_member_types = {}
         self.struct_declarations = {}
         self.struct_name_map = {}
@@ -1364,6 +1396,10 @@ class MetalToCrossGLConverter:
         self.current_struct_static_constant_owner = None
         self.struct_template_parameters = {}
         self.local_struct_type_aliases = {}
+        self.local_integral_constant_bindings = {}
+        self.local_aggregate_declarations = []
+        self.local_aggregate_declaration_keys = {}
+        self.local_aggregate_reserved_names = set()
         self.integral_constant_bindings = []
         self.template_value_bindings = []
         self.template_type_bindings = []
@@ -2495,6 +2531,9 @@ class MetalToCrossGLConverter:
         cooperative_matrix_fragment_support_marker = (
             "    // __crossgl_metal_cooperative_matrix_fragment_support__\n"
         )
+        local_aggregate_support_marker = (
+            "    // __crossgl_metal_function_local_aggregates__\n"
+        )
         self.small_vector_index_types = {}
         self.small_vector_index_operations = set()
         self.small_vector_resource_index_operations = {}
@@ -2538,6 +2577,11 @@ class MetalToCrossGLConverter:
         # emitted as typedefs.
         self.local_type_alias_names = set()
         self.local_struct_type_aliases = {}
+        self.local_integral_constant_bindings = {}
+        self.local_aggregate_declarations = []
+        self.local_aggregate_declaration_keys = {}
+        self.local_aggregate_reserved_names = set()
+        self.struct_member_name_maps = {}
         functions = getattr(ast, "functions", []) or []
         self.prepare_texture_usage(ast)
         self.prepare_out_of_line_call_operator_bindings(functions)
@@ -2609,6 +2653,8 @@ class MetalToCrossGLConverter:
             for alias in typedefs
             if isinstance(alias, TypeAliasNode) and getattr(alias, "name", None)
         )
+        self.local_aggregate_reserved_names.update(self.struct_name_map.values())
+        self.local_aggregate_reserved_names.update(self.wide_vector_reserved_names)
         enums = getattr(ast, "enums", []) or []
         for enum in enums:
             if isinstance(enum, EnumNode):
@@ -2707,6 +2753,15 @@ class MetalToCrossGLConverter:
                         member,
                         owner=self.map_struct_name(struct_node.name),
                     )
+                    if isinstance(member, VariableNode) and getattr(
+                        member, "name", None
+                    ):
+                        owner_name = self.map_struct_name(struct_node.name)
+                        self.struct_member_name_maps.setdefault(owner_name, {})[
+                            member.name
+                        ] = self.identifier_maps[-1].get(
+                            member.name, self.sanitize_identifier(member.name)
+                        )
                     if is_union and isinstance(member, VariableNode):
                         member_size, member_alignment = union_layout["members"].get(
                             id(member), (0, 0)
@@ -2719,6 +2774,7 @@ class MetalToCrossGLConverter:
                 code += "    }\n\n"
                 self.current_type_resolution_context = previous_type_resolution_context
 
+        code += local_aggregate_support_marker
         code += small_vector_index_support_marker
         code += cooperative_matrix_fragment_support_marker
 
@@ -2900,6 +2956,11 @@ class MetalToCrossGLConverter:
         code = code.replace(
             cooperative_matrix_fragment_support_marker,
             self.generate_cooperative_matrix_fragment_support_code(indent=1),
+            1,
+        )
+        code = code.replace(
+            local_aggregate_support_marker,
+            self.generate_local_aggregate_declarations(indent=1),
             1,
         )
         code = self.propagate_cooperative_matrix_fragment_type_contracts(code)
@@ -5932,6 +5993,7 @@ class MetalToCrossGLConverter:
         call_arguments,
         explicit_template_arguments=None,
         function_index=None,
+        prefer_constexpr_non_template=False,
     ):
         functions = (
             self.value_template_functions if function_index is None else function_index
@@ -5983,13 +6045,19 @@ class MetalToCrossGLConverter:
             return matching[0] if matching[0] in value_candidates else None
 
         # A non-template exact match wins over a same-signature function
-        # template in C++. Leave that call on the ordinary overload.
+        # template in C++. Ordinary call materialization leaves that overload
+        # unchanged; constexpr evaluation can select it directly.
         non_template_matches = [
             function
             for function in matching
             if not self.value_template_parameter_names(function)
         ]
         if len(non_template_matches) == 1:
+            if (
+                prefer_constexpr_non_template
+                and non_template_matches[0] in value_candidates
+            ):
+                return non_template_matches[0]
             return None
 
         ambiguous = matching or overloads
@@ -6036,6 +6104,16 @@ class MetalToCrossGLConverter:
             for name, candidates in self.value_template_functions.items()
             if any(self.function_is_constexpr(function) for function in candidates)
         }
+        for function in functions:
+            if (
+                isinstance(function, FunctionNode)
+                and getattr(function, "name", None)
+                and not getattr(function, "template_parameters", None)
+                and self.function_is_constexpr(function)
+            ):
+                self.constexpr_value_template_functions.setdefault(
+                    function.name, []
+                ).append(function)
         self.constexpr_helper_values = {}
         self.constexpr_helper_resolution_stack = []
         self.default_value_template_bindings = {}
@@ -6123,8 +6201,12 @@ class MetalToCrossGLConverter:
         expression,
         *,
         required,
+        allow_concrete_without_bindings=False,
     ):
-        if not self.current_function_materialization_bindings:
+        if (
+            not self.current_function_materialization_bindings
+            and not allow_concrete_without_bindings
+        ):
             return False
         self.materialized_constexpr_expression_contexts.append(
             {
@@ -6171,6 +6253,7 @@ class MetalToCrossGLConverter:
                 getattr(call, "args", []) or [],
                 explicit_template_arguments=explicit_arguments,
                 function_index=self.constexpr_value_template_functions,
+                prefer_constexpr_non_template=True,
             )
             if function is None:
                 return None
@@ -6185,7 +6268,6 @@ class MetalToCrossGLConverter:
             if (
                 materialization_context is not None
                 and not materialization_context["required"]
-                and error.argument_kind in {"call", "constexpr_body"}
             ):
                 return None
             if materialization_context is None or getattr(
@@ -7335,6 +7417,10 @@ class MetalToCrossGLConverter:
         self.current_struct_static_constant_owner = None
         self.struct_template_parameters = {}
         self.local_struct_type_aliases = {}
+        self.local_integral_constant_bindings = {}
+        self.local_aggregate_declarations = []
+        self.local_aggregate_declaration_keys = {}
+        self.local_aggregate_reserved_names = set()
         self.integral_constant_bindings = []
         self.template_value_bindings = []
         self.template_type_bindings = []
@@ -7840,6 +7926,10 @@ class MetalToCrossGLConverter:
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
+        previous_local_integral_constant_bindings = (
+            self.local_integral_constant_bindings
+        )
+        self.local_integral_constant_bindings = {}
         previous_metal_enum_arithmetic_types = self.metal_enum_arithmetic_types
         self.metal_enum_arithmetic_types = dict(previous_metal_enum_arithmetic_types)
         previous_metal_enum_member_types = self.metal_enum_member_types
@@ -7984,6 +8074,9 @@ class MetalToCrossGLConverter:
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
+            self.local_integral_constant_bindings = (
+                previous_local_integral_constant_bindings
+            )
             self.metal_enum_arithmetic_types = previous_metal_enum_arithmetic_types
             self.metal_enum_member_types = previous_metal_enum_member_types
             self.current_storage_texture_names = previous_storage_texture_names
@@ -8421,7 +8514,12 @@ class MetalToCrossGLConverter:
                 self.register_local_type_alias(stmt)
                 code = code[: len(code) - 4 * indent]
                 continue
+            if isinstance(stmt, StructNode):
+                self.register_local_aggregate(stmt)
+                code = code[: len(code) - 4 * indent]
+                continue
             if isinstance(stmt, VariableNode):
+                self.local_integral_constant_bindings.pop(stmt.name, None)
                 self.current_variable_types[stmt.name] = (
                     self.metal_declaration_expression_type(stmt)
                 )
@@ -8454,6 +8552,7 @@ class MetalToCrossGLConverter:
                 if isinstance(declaration, VariableNode) and getattr(
                     declaration, "vtype", None
                 ):
+                    self.local_integral_constant_bindings.pop(declaration.name, None)
                     inferred_type = self.inferred_metal_declaration_type(
                         declaration, stmt.right
                     )
@@ -8601,6 +8700,9 @@ class MetalToCrossGLConverter:
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
+        previous_local_integral_constant_bindings = dict(
+            self.local_integral_constant_bindings
+        )
         self.template_binding_shadow_scopes.append(set())
         try:
             return self.generate_function_body(body, indent, is_main)
@@ -8610,6 +8712,9 @@ class MetalToCrossGLConverter:
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
+            self.local_integral_constant_bindings = (
+                previous_local_integral_constant_bindings
+            )
 
     def generate_callback_statement(self, call, indent, is_main=False):
         helper = str(call.name).rsplit("::", 1)[-1]
@@ -8695,6 +8800,9 @@ class MetalToCrossGLConverter:
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
+        previous_local_integral_constant_bindings = dict(
+            self.local_integral_constant_bindings
+        )
         previous_storage_texture_names = self.current_storage_texture_names
         previous_structured_buffer_names = self.current_structured_buffer_names
         self.current_variable_types = dict(previous_variable_types)
@@ -8714,6 +8822,9 @@ class MetalToCrossGLConverter:
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
+            self.local_integral_constant_bindings = (
+                previous_local_integral_constant_bindings
+            )
             self.current_storage_texture_names = previous_storage_texture_names
             self.current_structured_buffer_names = previous_structured_buffer_names
 
@@ -8738,6 +8849,365 @@ class MetalToCrossGLConverter:
         if value is None:
             return None
         return "true" if value else "false"
+
+    def local_aggregate_error(
+        self,
+        struct_node,
+        reason,
+        *,
+        source_location=None,
+        unresolved_dependencies=(),
+    ):
+        return MetalFunctionLocalTypeResolutionError(
+            self.current_function_specialization
+            or self.current_function_name
+            or "<unknown>",
+            getattr(struct_node, "name", None)
+            or getattr(struct_node, "typedef_tag", None)
+            or "<anonymous>",
+            reason,
+            source_location=(
+                source_location
+                or getattr(struct_node, "declaration_source_location", None)
+                or getattr(struct_node, "source_location", None)
+            ),
+            unresolved_dependencies=unresolved_dependencies,
+        )
+
+    def validate_local_aggregate_shape(self, struct_node):
+        aggregate_kind = getattr(struct_node, "aggregate_kind", None) or "struct"
+        if aggregate_kind != "struct":
+            raise self.local_aggregate_error(
+                struct_node,
+                f"{aggregate_kind} storage semantics cannot be represented by "
+                "struct hoisting",
+            )
+        if getattr(struct_node, "base_types", None):
+            raise self.local_aggregate_error(
+                struct_node,
+                "base classes cannot be represented by aggregate hoisting",
+            )
+        if getattr(struct_node, "alignas", None) or getattr(
+            struct_node, "attributes", None
+        ):
+            raise self.local_aggregate_error(
+                struct_node,
+                "aggregate alignment or attributes would be lost during hoisting",
+            )
+        if getattr(struct_node, "type_aliases", None):
+            raise self.local_aggregate_error(
+                struct_node,
+                "aggregate-scoped type aliases are not materialized",
+            )
+        if getattr(struct_node, "constructors", None) or getattr(
+            struct_node, "call_operator_declarations", None
+        ):
+            raise self.local_aggregate_error(
+                struct_node,
+                "constructors or call operators cannot be represented by aggregate "
+                "hoisting",
+            )
+        if getattr(struct_node, "trailing_declarations", None):
+            raise self.local_aggregate_error(
+                struct_node,
+                "a trailing object declaration cannot be separated from its local "
+                "type",
+            )
+        if getattr(struct_node, "typedef_array_sizes", None) or getattr(
+            struct_node, "typedef_declarator_type_suffix", ""
+        ):
+            raise self.local_aggregate_error(
+                struct_node,
+                "the typedef declarator changes the aggregate type",
+            )
+        if not (getattr(struct_node, "members", None) or []):
+            raise self.local_aggregate_error(
+                struct_node,
+                "empty aggregates have target-dependent size and layout",
+            )
+
+    def reserve_local_aggregate_name(self, source_name):
+        function_name = self.sanitize_identifier(
+            self.current_function_specialization
+            or self.current_function_name
+            or "Function"
+        )
+        type_name = self.sanitize_identifier(source_name or "Aggregate")
+        base = f"MetalLocal_{function_name}_{type_name}"
+        candidate = base
+        suffix = 2
+        while candidate in self.local_aggregate_reserved_names:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        self.local_aggregate_reserved_names.add(candidate)
+        return candidate
+
+    def local_aggregate_alias_names(self, struct_node):
+        names = []
+        for name in (
+            getattr(struct_node, "name", None),
+            getattr(struct_node, "typedef_tag", None),
+        ):
+            if name and name not in names:
+                names.append(name)
+        tag_name = getattr(struct_node, "typedef_tag", None)
+        if tag_name:
+            names.append(f"struct {tag_name}")
+        elif not getattr(struct_node, "is_typedef_aggregate", False):
+            source_name = getattr(struct_node, "name", None)
+            if source_name:
+                names.append(f"struct {source_name}")
+        return names
+
+    def bind_local_aggregate_aliases(self, struct_node, canonical_name):
+        for name in self.local_aggregate_alias_names(struct_node):
+            self.type_aliases[name] = canonical_name
+            self.type_alias_qualifiers[name] = []
+            self.local_type_alias_names.add(name)
+            self.local_struct_type_aliases[name] = canonical_name
+
+    def local_aggregate_type_dependencies(self, metal_type, mapped_type):
+        function_parameters = {
+            name
+            for kind, name in (
+                getattr(self.current_function, "template_parameters", None) or []
+            )
+            if name and kind in {"typename", "class", "value"}
+        }
+        identifiers = set(
+            re.findall(r"\b[A-Za-z_]\w*\b", f"{metal_type} {mapped_type}")
+        )
+        dependencies = identifiers & function_parameters
+        dependencies.update(
+            name
+            for name in identifiers
+            if name in self.local_struct_type_aliases
+            and name not in self.local_type_alias_names
+        )
+        return tuple(sorted(dependencies))
+
+    def local_aggregate_mapped_type_is_concrete(self, metal_type, mapped_type):
+        mapped_type = str(mapped_type or "").strip()
+        if not mapped_type or any(token in mapped_type for token in ("*", "&")):
+            return False
+        if mapped_type in self.crossgl_typedef_source_types():
+            return True
+        if mapped_type in self.struct_name_map.values():
+            return True
+        if mapped_type in {
+            declaration["name"] for declaration in self.local_aggregate_declarations
+        }:
+            return True
+        if mapped_type in {
+            info["type_name"] for info in self.wide_vector_types.values()
+        }:
+            return True
+        if re.fullmatch(
+            r"(?:[biu]?vec[2-4]|dvec[2-4]|f16vec[2-4]|"
+            r"mat[2-4](?:x[2-4])?|dmat[2-4](?:x[2-4])?)",
+            mapped_type,
+        ):
+            return True
+        base_name, arguments = self.generic_type_parts(mapped_type)
+        if base_name in {"vector", "matrix", "vec"} and arguments:
+            return all(
+                argument.strip().isdigit()
+                or self.local_aggregate_mapped_type_is_concrete(argument, argument)
+                for argument in arguments
+            )
+        normalized_source = self.normalized_metal_type(metal_type)
+        return normalized_source in self.struct_name_map
+
+    def resolve_local_aggregate_member_type(self, struct_node, member):
+        source_type = str(getattr(member, "vtype", None) or "").strip()
+        if not source_type:
+            raise self.local_aggregate_error(
+                struct_node,
+                f"member '{getattr(member, 'name', '<unnamed>')}' has no type",
+                source_location=getattr(member, "source_location", None),
+            )
+        source_type = self.substitute_template_type_text(source_type)
+        source_type = self.resolve_local_type_aliases(source_type)
+        source_type = self.resolve_type_alias(source_type)
+        mapped_type = self.map_type(source_type)
+        if not self.local_aggregate_mapped_type_is_concrete(source_type, mapped_type):
+            dependencies = self.local_aggregate_type_dependencies(
+                source_type, mapped_type
+            )
+            raise self.local_aggregate_error(
+                struct_node,
+                f"member '{member.name}' has an unresolved or unsupported type "
+                f"'{source_type}'",
+                source_location=getattr(member, "source_location", None),
+                unresolved_dependencies=dependencies,
+            )
+        return source_type, mapped_type
+
+    def substitute_local_integral_constant_text(self, text):
+        result = str(text)
+        for _iteration in range(len(self.local_integral_constant_bindings) + 1):
+            previous = result
+            for name in sorted(
+                self.local_integral_constant_bindings,
+                key=lambda value: (-len(value), value),
+            ):
+                result = re.sub(
+                    rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])",
+                    f"({self.local_integral_constant_bindings[name]})",
+                    result,
+                )
+            if result == previous:
+                break
+        return result
+
+    def resolve_local_aggregate_extent(self, struct_node, member, extent):
+        if extent is None:
+            raise self.local_aggregate_error(
+                struct_node,
+                f"member '{member.name}' has an unsized array extent",
+                source_location=getattr(member, "source_location", None),
+            )
+        rendered = self.format_array_extent(extent)
+        rendered = self.substitute_local_integral_constant_text(rendered)
+        value = self.evaluate_value_template_constant_expression(rendered)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            dependencies = tuple(sorted(set(re.findall(r"\b[A-Za-z_]\w*\b", rendered))))
+            raise self.local_aggregate_error(
+                struct_node,
+                f"member '{member.name}' array extent '{rendered}' is not a "
+                "positive integral constant",
+                source_location=getattr(member, "source_location", None),
+                unresolved_dependencies=dependencies,
+            )
+        return str(value)
+
+    def register_local_integral_constant(self, declaration, rendered_value):
+        name = getattr(declaration, "name", None)
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(declaration, "qualifiers", None) or []
+        }
+        if (
+            not name
+            or "constexpr" not in qualifiers
+            or not self.is_integral_constexpr_type(getattr(declaration, "vtype", None))
+        ):
+            return
+        rendered_value = self.substitute_local_integral_constant_text(rendered_value)
+        value = self.evaluate_value_template_constant_expression(rendered_value)
+        if isinstance(value, int) and not isinstance(value, bool):
+            self.local_integral_constant_bindings[name] = str(value)
+
+    def register_local_aggregate(self, struct_node):
+        specialization = (
+            self.current_function_specialization
+            or self.current_function_name
+            or "<unknown>"
+        )
+        key = (id(struct_node), specialization)
+        canonical_name = self.local_aggregate_declaration_keys.get(key)
+        if canonical_name is not None:
+            self.bind_local_aggregate_aliases(struct_node, canonical_name)
+            return canonical_name
+
+        self.validate_local_aggregate_shape(struct_node)
+        canonical_name = self.reserve_local_aggregate_name(
+            getattr(struct_node, "name", None)
+            or getattr(struct_node, "typedef_tag", None)
+        )
+        self.bind_local_aggregate_aliases(struct_node, canonical_name)
+        rendered_members = []
+        member_types = {}
+        member_names = {}
+        used_member_names = set()
+        for member in getattr(struct_node, "members", None) or []:
+            if not isinstance(member, VariableNode) or not getattr(
+                member, "name", None
+            ):
+                raise self.local_aggregate_error(
+                    struct_node,
+                    "only concrete data members can be hoisted",
+                    source_location=getattr(member, "source_location", None),
+                )
+            if getattr(member, "default_value", None) is not None:
+                raise self.local_aggregate_error(
+                    struct_node,
+                    f"member '{member.name}' has a default initializer",
+                    source_location=getattr(member, "source_location", None),
+                )
+            if getattr(member, "qualifiers", None):
+                qualifiers = ", ".join(
+                    str(qualifier) for qualifier in member.qualifiers
+                )
+                raise self.local_aggregate_error(
+                    struct_node,
+                    f"member '{member.name}' has unsupported qualifiers "
+                    f"'{qualifiers}'",
+                    source_location=getattr(member, "source_location", None),
+                )
+            if getattr(member, "alignas", None) or getattr(member, "attributes", None):
+                raise self.local_aggregate_error(
+                    struct_node,
+                    f"member '{member.name}' has alignment or attributes that "
+                    "would be lost during hoisting",
+                    source_location=getattr(member, "source_location", None),
+                )
+            source_type, mapped_type = self.resolve_local_aggregate_member_type(
+                struct_node, member
+            )
+            extents = [
+                self.resolve_local_aggregate_extent(struct_node, member, extent)
+                for extent in getattr(member, "array_sizes", None) or []
+            ]
+            suffix = "".join(f"[{extent}]" for extent in extents)
+            member_name_base = self.sanitize_identifier(member.name)
+            member_name = member_name_base
+            suffix_index = 2
+            while member_name in used_member_names:
+                member_name = f"{member_name_base}_{suffix_index}"
+                suffix_index += 1
+            used_member_names.add(member_name)
+            rendered_members.append(f"{mapped_type}{suffix} {member_name};")
+            member_types[member.name] = f"{source_type}{suffix}"
+            member_names[member.name] = member_name
+
+        self.local_aggregate_declaration_keys[key] = canonical_name
+        self.local_aggregate_declarations.append(
+            {
+                "name": canonical_name,
+                "members": tuple(rendered_members),
+                "source_location": getattr(
+                    struct_node, "declaration_source_location", None
+                ),
+            }
+        )
+        self.struct_member_types[canonical_name] = member_types
+        self.struct_member_name_maps[canonical_name] = member_names
+        return canonical_name
+
+    def render_struct_member_identifier(self, object_expression, member):
+        try:
+            owner = self.expression_mapped_type(object_expression)
+        except (TypeError, ValueError):
+            owner = None
+        owner = str(owner or "").strip()
+        while owner.endswith(("*", "&")):
+            owner = owner[:-1].rstrip()
+        mapped_name = self.struct_member_name_maps.get(owner, {}).get(member)
+        return mapped_name or self.sanitize_identifier(member)
+
+    def generate_local_aggregate_declarations(self, indent=0):
+        if not self.local_aggregate_declarations:
+            return ""
+        pad = "    " * indent
+        member_pad = "    " * (indent + 1)
+        code = f"{pad}// Materialized function-local structs\n"
+        for declaration in self.local_aggregate_declarations:
+            code += f"{pad}struct {declaration['name']} {{\n"
+            for member in declaration["members"]:
+                code += f"{member_pad}{member}\n"
+            code += f"{pad}}}\n\n"
+        return code
 
     def register_local_type_alias(self, alias):
         """Register a function-body alias for subsequent lexical uses."""
@@ -8774,10 +9244,13 @@ class MetalToCrossGLConverter:
         # Unresolved user-template aliases remain untouched until their template
         # arguments have been materialized by the Metal frontend.
         mapped_alias_type = self.map_type(alias_type)
+        local_aggregate_type_names = {
+            declaration["name"] for declaration in self.local_aggregate_declarations
+        }
         concrete_struct_alias = (
             alias_type in self.struct_name_map
             and mapped_alias_type in self.struct_name_map.values()
-        )
+        ) or mapped_alias_type in local_aggregate_type_names
         if (
             getattr(alias, "qualifiers", None)
             or getattr(alias, "array_sizes", None)
@@ -9047,7 +9520,8 @@ class MetalToCrossGLConverter:
             self.is_supported_constexpr_local_declaration(node)
             and self.push_materialized_constexpr_expression_context(
                 node.right,
-                required=True,
+                required=bool(self.current_function_materialization_bindings),
+                allow_concrete_without_bindings=True,
             )
         )
         initializer_type = None
@@ -9138,6 +9612,12 @@ class MetalToCrossGLConverter:
                 lhs_info, binary_operator, right_kind
             )
             return f"{helper_name}({lhs}, {rhs})"
+        if (
+            op == "="
+            and isinstance(node.left, VariableNode)
+            and getattr(node.left, "vtype", None)
+        ):
+            self.register_local_integral_constant(node.left, rhs)
         return f"{lhs} {op} {rhs}"
 
     def generate_initializer_value(
@@ -9269,9 +9749,14 @@ class MetalToCrossGLConverter:
             )
         mapped_type = self.map_type(expected_type) if expected_type else None
         member_types = {}
+        member_names = {}
         if expected_type:
+            resolved_type = self.resolve_type_alias(expected_type)
             member_types = self.struct_member_types.get(
-                self.normalized_metal_type(expected_type), {}
+                self.normalized_metal_type(resolved_type), {}
+            )
+            member_names = self.struct_member_name_maps.get(
+                self.map_type(resolved_type), {}
             )
 
         named_elements = []
@@ -9279,7 +9764,12 @@ class MetalToCrossGLConverter:
         for element in node.elements:
             if isinstance(element, DesignatedInitializerNode):
                 named_elements.append(
-                    self.generate_designated_initializer(element, is_main, member_types)
+                    self.generate_designated_initializer(
+                        element,
+                        is_main,
+                        member_types,
+                        member_names,
+                    )
                 )
             else:
                 positional_elements.append(
@@ -9297,14 +9787,24 @@ class MetalToCrossGLConverter:
             return f"{mapped_type}({', '.join(elements)})"
         return "{" + ", ".join(elements) + "}"
 
-    def generate_designated_initializer(self, node, is_main=False, member_types=None):
+    def generate_designated_initializer(
+        self,
+        node,
+        is_main=False,
+        member_types=None,
+        member_names=None,
+    ):
         member_types = member_types or {}
+        member_names = member_names or {}
         if len(node.designators) == 1 and node.designators[0][0] == "field":
             field_name = node.designators[0][1]
             value = self.generate_initializer_value(
                 node.value, is_main, member_types.get(field_name)
             )
-            return f"{field_name}: {value}"
+            emitted_name = member_names.get(
+                field_name, self.sanitize_identifier(field_name)
+            )
+            return f"{emitted_name}: {value}"
 
         designators = []
         for designator in node.designators:
@@ -9318,7 +9818,10 @@ class MetalToCrossGLConverter:
             if kind == "index":
                 designators.append(f"[{self.generate_expression(target, is_main)}]")
             else:
-                designators.append(f".{target}")
+                emitted_name = member_names.get(
+                    target, self.sanitize_identifier(target)
+                )
+                designators.append(f".{emitted_name}")
         value = self.generate_initializer_value(node.value, is_main)
         return f"{''.join(designators)} = {value}"
 
@@ -9595,7 +10098,7 @@ class MetalToCrossGLConverter:
                         operation="member-access",
                     )
                 return f"{obj}.lanes[{lane}]"
-            return f"{obj}.{expr.member}"
+            return f"{obj}.{self.render_struct_member_identifier(expr.object, expr.member)}"
         elif isinstance(expr, ArrayAccessNode):
             cooperative_matrix_element = self.metal_cooperative_matrix_element_access(
                 expr
@@ -15520,6 +16023,9 @@ class MetalToCrossGLConverter:
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
+        previous_local_integral_constant_bindings = dict(
+            self.local_integral_constant_bindings
+        )
         expression = self.generate_expression(node.expression, is_main)
         code = f"switch ({expression}) {{\n"
         try:
@@ -15545,6 +16051,9 @@ class MetalToCrossGLConverter:
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
+            self.local_integral_constant_bindings = (
+                previous_local_integral_constant_bindings
+            )
 
     def switch_case_has_explicit_terminator(self, statements):
         if not statements:
