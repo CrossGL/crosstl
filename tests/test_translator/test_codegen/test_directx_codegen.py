@@ -42514,6 +42514,104 @@ def test_hlsl_metal_private_struct_scalar_views_preserve_aligned_offsets(tmp_pat
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_metal_private_vec_w_vector_byte_view(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef struct {
+        uint4 wi;
+    } vec_w;
+
+    inline uint read_byte(const thread uint8_t* values, int index) {
+        return values[index];
+    }
+
+    kernel void local_vec_w_byte_view(
+        device uint* output [[buffer(0)]]) {
+        thread vec_w w_local;
+        w_local.wi = uint4(67305985u, 134678021u, 202050057u, 269422093u);
+        output[0] = read_byte((const thread uint8_t*)&w_local, 0);
+        output[1] = read_byte((const thread uint8_t*)&w_local, 15);
+    }
+    """
+    shader_path = tmp_path / "local_vec_w_byte_view.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "uint read_byte(in uint4 values, int values_base, int index)" in generated
+    assert "read_byte(w_local.wi, 0, 0)" in generated
+    assert "read_byte(w_local.wi, 0, 15)" in generated
+    assert "values[uint(((values_base + index)) / 4)]" in generated
+    assert "PointerReinterpretNode" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_private_aggregate_byte_view_preserves_word_bits(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct PackedWords {
+        uint4 unsigned_words;
+        int2 signed_words;
+        float floating_word;
+        uint tail;
+        uint array_words[4];
+    };
+
+    inline uint read_byte(const thread uint8_t* values, int index) {
+        return values[index];
+    }
+
+    kernel void local_aggregate_byte_view(
+        device uint* output [[buffer(0)]]) {
+        thread PackedWords local;
+        local.unsigned_words = uint4(67305985u, 134678021u, 202050057u, 269422093u);
+        local.signed_words = int2(-1, -2);
+        local.floating_word = 1.0f;
+        local.tail = 336794129u;
+        local.array_words[0] = 404166165u;
+        local.array_words[1] = 471538201u;
+        local.array_words[2] = 538910237u;
+        local.array_words[3] = 606282273u;
+        output[0] = read_byte((const thread uint8_t*)&local, 0);
+        output[1] = read_byte((const thread uint8_t*)&local, 16);
+        output[2] = read_byte((const thread uint8_t*)&local, 24);
+        output[3] = read_byte((const thread uint8_t*)&local, 28);
+        output[4] = read_byte((const thread uint8_t*)&local, 32);
+    }
+    """
+    shader_path = tmp_path / "local_aggregate_byte_view.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "uint __crossgl_private_word_PackedWords_" in generated
+    assert "(in PackedWords value, uint word_index)" in generated
+    assert "value.unsigned_words[uint(word_index)]" in generated
+    assert "asuint(value.signed_words" in generated
+    assert "asuint(value.floating_word)" in generated
+    assert "value.array_words[uint((word_index - 8u))]" in generated
+    assert "read_byte(in PackedWords values, int values_base, int index)" in generated
+    assert "read_byte(local, 0, 32)" in generated
+    assert "PointerReinterpretNode" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_metal_storage_struct_view_materializes_fixed_words_and_offset(tmp_path):
     shader = """
     #include <metal_stdlib>
@@ -42588,6 +42686,44 @@ def test_hlsl_metal_storage_struct_copy_composes_with_private_byte_view(tmp_path
     assert "local.words[1] = input[uint(1)];" in generated
     assert "first_byte(local.words, 0)" in generated
     assert "missing-private-view-backing" not in generated
+    assert "PointerReinterpretNode" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_storage_vec_w_copy_composes_with_private_byte_view(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef struct {
+        uint wi[2];
+    } vec_w;
+
+    inline uint first_byte(const thread uint8_t* values) {
+        return values[0];
+    }
+
+    kernel void storage_vec_w_private_view(
+        const device uint* input [[buffer(0)]],
+        device uint* output [[buffer(1)]]) {
+        thread vec_w local = *((const device vec_w*)input);
+        output[0] = first_byte((const thread uint8_t*)&local);
+    }
+    """
+    shader_path = tmp_path / "storage_vec_w_private_view.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "local.wi[0] = input[uint(0)];" in generated
+    assert "local.wi[1] = input[uint(1)];" in generated
+    assert "first_byte(local.wi, 0)" in generated
     assert "PointerReinterpretNode" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)
@@ -42841,8 +42977,22 @@ def test_hlsl_metal_storage_struct_view_rejects_write(tmp_path):
             "uint tag; uint2 words[2];",
             "inline uint inspect(const thread uint8_t* values) { return values[0]; }",
             "output[0] = inspect((const thread uint8_t*)&block);",
-            "heterogeneous-private-view-layout",
-            id="padded-heterogeneous-layout",
+            "padded-private-view-layout",
+            id="alignment-padding",
+        ),
+        pytest.param(
+            "uint3 words;",
+            "inline uint inspect(const thread uint8_t* values) { return values[0]; }",
+            "output[0] = inspect((const thread uint8_t*)&block);",
+            "padded-private-view-layout",
+            id="vector-padding",
+        ),
+        pytest.param(
+            "ushort words[2];",
+            "inline uint inspect(const thread uint8_t* values) { return values[0]; }",
+            "output[0] = inspect((const thread uint8_t*)&block);",
+            "unsupported-private-view-source-layout",
+            id="unsupported-source-width",
         ),
         pytest.param(
             "uint words[];",

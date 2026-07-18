@@ -52,6 +52,7 @@ from ..ast import (
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    VectorType,
     WaveOpNode,
     WhileNode,
 )
@@ -4165,6 +4166,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_explicit_bitcast_helpers()
         code += self.generate_hlsl_union_storage_helpers()
         code += self.generate_hlsl_fixed_array_return_helpers()
+        code += self.generate_hlsl_private_pointer_word_view_helpers()
         code += function_declarations_code
         code += functions_code
 
@@ -11754,6 +11756,153 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             source_location=getattr(expression, "source_location", None),
         )
 
+    def hlsl_private_pointer_word_component_layout(self, value_type):
+        if isinstance(value_type, ArrayType):
+            extent = self.literal_int_value(
+                getattr(value_type, "size", None), self.literal_int_constants
+            )
+            if extent is None or extent <= 0:
+                return None, (
+                    "dynamic-private-view-extent",
+                    "a backing array extent is not a positive constant",
+                )
+            element, failure = self.hlsl_private_pointer_word_component_layout(
+                value_type.element_type
+            )
+            if failure is not None:
+                return None, failure
+            if element["kind"] not in {"scalar", "vector"}:
+                return None, (
+                    "unsupported-private-view-source-layout",
+                    "nested backing arrays do not have a proven word layout",
+                )
+            return {
+                **element,
+                "kind": f"array_{element['kind']}",
+                "array_extent": extent,
+                "word_extent": extent * element["word_extent"],
+                "size_bytes": extent * element["size_bytes"],
+            }, None
+
+        type_name = self.type_name_string(value_type)
+        scalar_layout = scalar_storage_layout(type_name)
+        if (
+            scalar_layout is not None
+            and scalar_layout.bit_width == 32
+            and self.map_type(type_name) in {"float", "int", "uint"}
+        ):
+            return {
+                "kind": "scalar",
+                "layout": scalar_layout,
+                "mapped_type": self.map_type(type_name),
+                "word_extent": 1,
+                "size_bytes": 4,
+                "alignment": 4,
+            }, None
+
+        if isinstance(value_type, VectorType):
+            vector_width = self.literal_int_value(
+                getattr(value_type, "size", None), self.literal_int_constants
+            )
+            element_name = self.type_name_string(value_type.element_type)
+            component_layout = scalar_storage_layout(element_name)
+            mapped_vector = self.map_type(type_name)
+        else:
+            mapped_vector = self.map_type(type_name)
+            vector_match = re.fullmatch(r"(float|int|uint)([234])", mapped_vector or "")
+            if vector_match is None:
+                return None, (
+                    "unsupported-private-view-source-layout",
+                    "backing members must contain 32-bit scalar words",
+                )
+            vector_width = int(vector_match.group(2))
+            component_layout = scalar_storage_layout(vector_match.group(1))
+
+        if (
+            component_layout is None
+            or component_layout.bit_width != 32
+            or vector_width not in {2, 3, 4}
+        ):
+            return None, (
+                "unsupported-private-view-source-layout",
+                "backing vectors must contain 32-bit scalar words",
+            )
+        if vector_width == 3:
+            return None, (
+                "padded-private-view-layout",
+                "three-component vectors have an implicit fourth-word footprint",
+            )
+        return {
+            "kind": "vector",
+            "layout": component_layout,
+            "mapped_type": mapped_vector,
+            "vector_width": vector_width,
+            "word_extent": vector_width,
+            "size_bytes": vector_width * 4,
+            "alignment": vector_width * 4,
+        }, None
+
+    def hlsl_private_pointer_word_view_backing(self, layout, backing_name):
+        backing = self.hlsl_identifier_name(backing_name)
+        if layout["backing_kind"] in {"array_member", "vector_member"}:
+            backing += f".{self.hlsl_identifier_name(layout['member'])}"
+        return backing
+
+    def hlsl_private_pointer_word_segment_expression(
+        self, value_name, segment, word_index
+    ):
+        value = value_name
+        if segment.get("member"):
+            value += f".{self.hlsl_identifier_name(segment['member'])}"
+        kind = segment["kind"]
+        if kind == "scalar":
+            return value
+        if kind in {"array_scalar", "vector"}:
+            return f"{value}[uint({word_index})]"
+        if kind == "array_vector":
+            width = segment["vector_width"]
+            return (
+                f"{value}[uint(({word_index}) / {width}u)]"
+                f"[uint(({word_index}) % {width}u)]"
+            )
+        return None
+
+    def hlsl_private_pointer_word_bits_expression(self, expression, layout):
+        if layout.kind == "floating" or layout.signed:
+            return f"asuint({expression})"
+        return expression
+
+    def generate_hlsl_private_pointer_word_view_helpers(self):
+        layouts = {
+            layout["helper_name"]: layout
+            for layout in self.hlsl_private_pointer_word_views.values()
+            if layout.get("backing_kind") == "aggregate"
+        }
+        code = ""
+        for helper_name, layout in sorted(layouts.items()):
+            code += (
+                f"uint {helper_name}(in {layout['parameter_type']} value, "
+                "uint word_index) {\n"
+            )
+            for segment in layout["segments"]:
+                start = segment["word_offset"]
+                end = start + segment["word_extent"]
+                relative_index = (
+                    "word_index" if start == 0 else f"(word_index - {start}u)"
+                )
+                value = self.hlsl_private_pointer_word_segment_expression(
+                    "value", segment, relative_index
+                )
+                bits = self.hlsl_private_pointer_word_bits_expression(
+                    value, segment["layout"]
+                )
+                code += f"    if (word_index < {end}u) {{\n"
+                code += f"        return {bits};\n"
+                code += "    }\n"
+            code += "    return 0u;\n"
+            code += "}\n\n"
+        return code
+
     def hlsl_private_pointer_word_view_layout(self, expression, source_type):
         source_name = self.type_name_string(source_type)
         pointer_type = getattr(expression, "target_type", None)
@@ -11790,6 +11939,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
         struct_node = self.structs_by_name.get(source_name)
+        direct_component, direct_failure = (
+            self.hlsl_private_pointer_word_component_layout(source_type)
+            if struct_node is None
+            else (None, None)
+        )
+        if struct_node is None and direct_component is None:
+            reason, detail = direct_failure or (
+                "heterogeneous-private-view-layout",
+                "the backing type has no fixed aggregate or vector word layout",
+            )
+            reject(reason, detail)
         if struct_node is not None and (
             getattr(struct_node, "attributes", None)
             or getattr(struct_node, "inheritance", None)
@@ -11808,60 +11968,125 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if struct_node is not None
             else []
         )
-        if len(members) != 1:
+        if struct_node is not None and not members:
             reject(
                 "heterogeneous-private-view-layout",
-                (
-                    "the backing must be a struct with exactly one fixed-array "
-                    "instance member"
-                ),
-            )
-        member = members[0]
-        if getattr(member, "attributes", None):
-            reject(
-                "unsupported-private-view-aggregate-layout",
-                "the backing array member has noncanonical layout metadata",
-            )
-        member_type = getattr(member, "member_type", None)
-        if not isinstance(member_type, ArrayType):
-            reject(
-                "heterogeneous-private-view-layout",
-                "the sole backing member is not a fixed scalar array",
-            )
-        extent = self.literal_int_value(
-            getattr(member_type, "size", None), self.literal_int_constants
-        )
-        if extent is None or extent <= 0:
-            reject(
-                "dynamic-private-view-extent",
-                "the backing word-array extent is not a positive constant",
-            )
-        source_element_name = self.type_name_string(member_type.element_type)
-        source_layout = scalar_storage_layout(source_element_name)
-        if (
-            source_layout is None
-            or source_layout.bit_width != 32
-            or self.map_type(source_element_name) not in {"float", "int", "uint"}
-        ):
-            reject(
-                "unsupported-private-view-source-layout",
-                "the backing array must contain homogeneous 32-bit scalars",
+                "the backing struct has no instance words",
             )
 
-        variant = (
-            "word_view",
-            source_layout.name,
-            target_layout.name,
-            extent,
+        segments = []
+        byte_extent = 0
+        maximum_alignment = 4
+        if direct_component is not None:
+            segments.append({**direct_component, "member": None, "word_offset": 0})
+            byte_extent = direct_component["size_bytes"]
+            maximum_alignment = direct_component["alignment"]
+        else:
+            for member in members:
+                if getattr(member, "attributes", None):
+                    reject(
+                        "unsupported-private-view-aggregate-layout",
+                        "a backing member has noncanonical layout metadata",
+                    )
+                component, failure = self.hlsl_private_pointer_word_component_layout(
+                    getattr(member, "member_type", None)
+                )
+                if component is None:
+                    reason, detail = failure
+                    reject(reason, detail)
+                alignment = component["alignment"]
+                aligned_offset = (byte_extent + alignment - 1) // alignment * alignment
+                if aligned_offset != byte_extent:
+                    reject(
+                        "padded-private-view-layout",
+                        f"member '{member.name}' requires implicit alignment padding",
+                    )
+                segments.append(
+                    {
+                        **component,
+                        "member": member.name,
+                        "word_offset": byte_extent // 4,
+                    }
+                )
+                byte_extent += component["size_bytes"]
+                maximum_alignment = max(maximum_alignment, alignment)
+
+        padded_extent = (
+            (byte_extent + maximum_alignment - 1)
+            // maximum_alignment
+            * maximum_alignment
         )
+        if padded_extent != byte_extent:
+            reject(
+                "padded-private-view-layout",
+                "the backing aggregate has implicit trailing padding",
+            )
+        word_extent = byte_extent // 4
+
+        sole_segment = segments[0] if len(segments) == 1 else None
+        if sole_segment is not None and sole_segment["kind"] == "array_scalar":
+            backing_kind = "array_member" if struct_node is not None else "array"
+            source_layout = sole_segment["layout"]
+            parameter_type = f"{self.map_type(source_layout.name)}[{word_extent}]"
+            member_name = sole_segment.get("member")
+            variant = (
+                "word_view",
+                source_layout.name,
+                target_layout.name,
+                word_extent,
+            )
+        elif sole_segment is not None and sole_segment["kind"] == "vector":
+            backing_kind = "vector_member" if struct_node is not None else "vector"
+            source_layout = sole_segment["layout"]
+            parameter_type = sole_segment["mapped_type"]
+            member_name = sole_segment.get("member")
+            variant = (
+                "word_view_vector",
+                parameter_type,
+                source_layout.name,
+                target_layout.name,
+                word_extent,
+            )
+        else:
+            backing_kind = "aggregate"
+            source_layout = scalar_storage_layout("uint")
+            parameter_type = self.map_type(source_name)
+            member_name = None
+            segment_signature = tuple(
+                (
+                    segment.get("member"),
+                    segment["kind"],
+                    segment["layout"].name,
+                    segment["word_extent"],
+                    segment.get("array_extent"),
+                    segment.get("vector_width"),
+                )
+                for segment in segments
+            )
+            variant = (
+                "word_view_aggregate",
+                parameter_type,
+                target_layout.name,
+                segment_signature,
+            )
+        helper_name = None
+        if backing_kind == "aggregate":
+            digest = sha1(repr(variant).encode("utf-8")).hexdigest()[:10]
+            helper_name = self.hlsl_sanitized_identifier(
+                f"__crossgl_private_word_{source_name}_{digest}"
+            )
         layout = {
             "variant": variant,
             "source_type": source_name,
             "source_layout": source_layout,
             "target_layout": target_layout,
-            "member": member.name,
-            "word_extent": extent,
-            "target_extent": extent * 4 // target_layout.byte_width,
+            "member": member_name,
+            "segments": segments,
+            "backing_kind": backing_kind,
+            "parameter_type": parameter_type,
+            "helper_name": helper_name,
+            "word_extent": word_extent,
+            "target_extent": word_extent * 4 // target_layout.byte_width,
         }
         self.hlsl_private_pointer_word_views.setdefault(variant, layout)
         self.hlsl_private_pointer_reinterpret_word_views[id(expression)] = layout
@@ -11907,8 +12132,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     detail="the reinterpretation has no direct local struct backing",
                 )
             return {
-                "backing": (
-                    f"{self.hlsl_identifier_name(backing_name)}.{layout['member']}"
+                "backing": self.hlsl_private_pointer_word_view_backing(
+                    layout, backing_name
                 ),
                 "offset": "0",
                 "root_kind": "local_word_view",
@@ -12031,6 +12256,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "pointer_reinterpretation": {
                         "source_layout": layout["source_layout"],
                         "target_layout": layout["target_layout"],
+                        "private_word_view": layout,
                     },
                 },
                 effective_index,
@@ -13845,11 +14071,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             byte_index = f"({byte_offset} + {element_bytes})"
 
         source_index = f"uint(({byte_index}) / {source_layout.byte_width})"
-        source_value = f"{binding['root']}[{source_index}]"
-        if source_layout.kind == "floating" or source_layout.signed:
-            source_bits = f"asuint({source_value})"
+        private_word_view = reinterpretation.get("private_word_view")
+        if (
+            private_word_view is not None
+            and private_word_view.get("backing_kind") == "aggregate"
+        ):
+            source_bits = (
+                f"{private_word_view['helper_name']}"
+                f"({binding['root']}, {source_index})"
+            )
         else:
-            source_bits = source_value
+            source_value = f"{binding['root']}[{source_index}]"
+            if source_layout.kind == "floating" or source_layout.signed:
+                source_bits = f"asuint({source_value})"
+            else:
+                source_bits = source_value
 
         if target_layout.bit_width == 32:
             if target_layout.kind == "floating":
@@ -37435,10 +37671,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         word_view = self.hlsl_private_pointer_word_view_for_variant(size)
         if word_view is not None:
-            return (
-                f"{self.map_type(word_view['source_layout'].name)}"
-                f"[{word_view['word_extent']}]"
-            )
+            return word_view["parameter_type"]
         if parameter_name in self.function_private_pointer_scalar_parameters.get(
             function_name, set()
         ):
