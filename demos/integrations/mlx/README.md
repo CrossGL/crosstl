@@ -940,7 +940,7 @@ The complete materialized CrossGL intermediate reaches target generation. Strict
 function-body parsing accepts the generic pointer reinterpretation in
 `fp_qmv_wide_impl_bfloat16_t_16_4_2_16`,
 `(vec<bfloat16_t, 4>*)(xv[v] + k0)`, including the generic pointee type. This
-advances CrossGL/crosstl#1814 and removes
+resolves CrossGL/crosstl#1814 and removes
 `project.translate.crossgl-function-body-parse-failed` from both exact project
 runs.
 

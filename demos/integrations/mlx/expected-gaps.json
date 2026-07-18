@@ -1047,7 +1047,7 @@
       },
       "statically-unreachable-private-pointer-branch-pruning": {
         "issue": "https://github.com/CrossGL/crosstl/issues/1829",
-        "status": "resolved-on-branch-pending-merge",
+        "status": "resolved",
         "directx_commit": "3386410857e6ed42e4e0e89488b1011858cb38a4",
         "opengl_commit": "88241864b7f79d00c53f979ad5faf60e1c7fa114",
         "project_regression_commit": "7b1779a22c49cf445384f02d50c2116d426f43fc"
@@ -1130,7 +1130,7 @@
         "function": "qouter_float_2_8_4",
         "parameter": "w",
         "previous_reason": "view-out-of-bounds",
-        "resolved_on_branch_by": "https://github.com/CrossGL/crosstl/issues/1829",
+        "resolved_by": "https://github.com/CrossGL/crosstl/issues/1829",
         "project_regression_commit": "7b1779a22c49cf445384f02d50c2116d426f43fc"
       }
     },
@@ -1407,12 +1407,14 @@
     "resolved_issues": [
       "https://github.com/CrossGL/crosstl/issues/1807",
       "https://github.com/CrossGL/crosstl/issues/1811",
+      "https://github.com/CrossGL/crosstl/issues/1814",
       "https://github.com/CrossGL/crosstl/issues/1815",
       "https://github.com/CrossGL/crosstl/issues/1816",
       "https://github.com/CrossGL/crosstl/issues/1610",
       "https://github.com/CrossGL/crosstl/issues/1823",
       "https://github.com/CrossGL/crosstl/issues/1824",
-      "https://github.com/CrossGL/crosstl/issues/1826"
+      "https://github.com/CrossGL/crosstl/issues/1826",
+      "https://github.com/CrossGL/crosstl/issues/1829"
     ],
     "advanced_issue_contracts": [
       "https://github.com/CrossGL/crosstl/issues/1479",
@@ -1424,11 +1426,7 @@
       "https://github.com/CrossGL/crosstl/issues/1810",
       "https://github.com/CrossGL/crosstl/issues/1812",
       "https://github.com/CrossGL/crosstl/issues/1813",
-      "https://github.com/CrossGL/crosstl/issues/1814",
       "https://github.com/CrossGL/crosstl/issues/1820"
-    ],
-    "branch_resolved_issues": [
-      "https://github.com/CrossGL/crosstl/issues/1829"
     ],
     "remaining_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1518",
@@ -2081,7 +2079,6 @@
     "https://github.com/CrossGL/crosstl/issues/1810",
     "https://github.com/CrossGL/crosstl/issues/1812",
     "https://github.com/CrossGL/crosstl/issues/1813",
-    "https://github.com/CrossGL/crosstl/issues/1814",
     "https://github.com/CrossGL/crosstl/issues/1540",
     "https://github.com/CrossGL/crosstl/issues/1541",
     "https://github.com/CrossGL/crosstl/issues/1542",
@@ -2100,16 +2097,17 @@
     "https://github.com/CrossGL/crosstl/issues/1574",
     "https://github.com/CrossGL/crosstl/issues/1602",
     "https://github.com/CrossGL/crosstl/issues/1820",
-    "https://github.com/CrossGL/crosstl/issues/1829",
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1829",
     "https://github.com/CrossGL/crosstl/issues/1826",
     "https://github.com/CrossGL/crosstl/issues/1824",
     "https://github.com/CrossGL/crosstl/issues/1823",
     "https://github.com/CrossGL/crosstl/issues/1610",
     "https://github.com/CrossGL/crosstl/issues/1816",
     "https://github.com/CrossGL/crosstl/issues/1815",
+    "https://github.com/CrossGL/crosstl/issues/1814",
     "https://github.com/CrossGL/crosstl/issues/1811",
     "https://github.com/CrossGL/crosstl/issues/1807",
     "https://github.com/CrossGL/crosstl/issues/1799",

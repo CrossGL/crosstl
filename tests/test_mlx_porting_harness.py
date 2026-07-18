@@ -2694,7 +2694,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             },
             "statically-unreachable-private-pointer-branch-pruning": {
                 "issue": branch_analysis_issue,
-                "status": "resolved-on-branch-pending-merge",
+                "status": "resolved",
                 "directx_commit": "3386410857e6ed42e4e0e89488b1011858cb38a4",
                 "opengl_commit": "88241864b7f79d00c53f979ad5faf60e1c7fa114",
                 "project_regression_commit": "7b1779a22c49cf445384f02d50c2116d426f43fc",
@@ -2784,7 +2784,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
                 "function": "qouter_float_2_8_4",
                 "parameter": "w",
                 "previous_reason": "view-out-of-bounds",
-                "resolved_on_branch_by": branch_analysis_issue,
+                "resolved_by": branch_analysis_issue,
                 "project_regression_commit": "7b1779a22c49cf445384f02d50c2116d426f43fc",
             },
         },
@@ -3077,12 +3077,14 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
         "resolved_issues": [
             resolved_issue,
             indexed_alias_issue,
+            pointer_cast_issue,
             whole_fragment_issue,
             fragment_contract_issue,
             operation_result_type_issue,
             opengl_analyzer_issue,
             source_materialization_issue,
             partition_view_issue,
+            branch_analysis_issue,
         ],
         "advanced_issue_contracts": [
             issue,
@@ -3094,10 +3096,8 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             constructor_issue,
             const_member_issue,
             member_array_issue,
-            pointer_cast_issue,
             coordinate_mapping_issue,
         ],
-        "branch_resolved_issues": [branch_analysis_issue],
         "remaining_blocked_by": [
             directx_workgroup_issue,
             opengl_aggregate_issue,
@@ -3127,7 +3127,8 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert constructor_issue in expected_gaps["tracked_issues"]
     assert const_member_issue in expected_gaps["tracked_issues"]
     assert member_array_issue in expected_gaps["tracked_issues"]
-    assert pointer_cast_issue in expected_gaps["tracked_issues"]
+    assert pointer_cast_issue in expected_gaps["resolved_issues"]
+    assert pointer_cast_issue not in expected_gaps["tracked_issues"]
     assert cooperative_matrix_issue in expected_gaps["tracked_issues"]
     assert coordinate_mapping_issue in expected_gaps["tracked_issues"]
     assert partition_view_issue in expected_gaps["resolved_issues"]
@@ -3137,8 +3138,8 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert directx_workgroup_issue in expected_gaps["tracked_issues"]
     assert opengl_aggregate_issue in expected_gaps["tracked_issues"]
     assert opengl_workgroup_issue in expected_gaps["tracked_issues"]
-    assert branch_analysis_issue in expected_gaps["tracked_issues"]
-    assert branch_analysis_issue not in expected_gaps["resolved_issues"]
+    assert branch_analysis_issue in expected_gaps["resolved_issues"]
+    assert branch_analysis_issue not in expected_gaps["tracked_issues"]
     assert source_materialization_issue not in expected_gaps["tracked_issues"]
     assert operation_result_type_issue in expected_gaps["resolved_issues"]
     assert operation_result_type_issue not in expected_gaps["tracked_issues"]
@@ -3146,9 +3147,10 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert opengl_analyzer_issue not in expected_gaps["tracked_issues"]
     assert source_materialization_issue in expected_gaps["resolved_issues"]
     assert partition_view_issue in status["resolved_issues"]
+    assert pointer_cast_issue in status["resolved_issues"]
+    assert branch_analysis_issue in status["resolved_issues"]
     assert local_typedef_issue in status["advanced_issue_contracts"]
     assert local_typedef_issue not in status["resolved_issues"]
-    assert status["branch_resolved_issues"] == [branch_analysis_issue]
     assert status["remaining_blocked_by"] == [
         directx_workgroup_issue,
         opengl_aggregate_issue,
@@ -3210,7 +3212,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "CrossGL/crosstl#1811" in readme
     assert "CrossGL/crosstl#1812" in readme
     assert "CrossGL/crosstl#1813" in readme
-    assert "CrossGL/crosstl#1814" in readme
+    assert "resolves CrossGL/crosstl#1814" in " ".join(readme.split())
     assert "CrossGL/crosstl#1815" in readme
     assert "CrossGL/crosstl#1816" in readme
     assert "CrossGL/crosstl#1602" in readme
