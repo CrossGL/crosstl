@@ -37,17 +37,17 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "77", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "76", "0", "2", "1", "0", "0"
-   "WebGL / GLSL ES", "42", "0", "23", "14", "0", "0"
-   "WebGPU / WGSL", "46", "0", "21", "12", "0", "0"
-   "Metal", "70", "0", "4", "5", "0", "0"
-   "Vulkan SPIR-V", "72", "0", "2", "5", "0", "0"
-   "CUDA", "66", "0", "8", "5", "0", "0"
-   "HIP", "66", "0", "8", "5", "0", "0"
-   "Mojo", "68", "0", "6", "5", "0", "0"
-   "Rust", "69", "0", "5", "5", "0", "0"
-   "Slang", "70", "0", "4", "5", "0", "0"
+   "DirectX / HLSL", "78", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "77", "0", "2", "1", "0", "0"
+   "WebGL / GLSL ES", "42", "0", "23", "14", "1", "0"
+   "WebGPU / WGSL", "46", "0", "21", "12", "1", "0"
+   "Metal", "70", "0", "4", "5", "1", "0"
+   "Vulkan SPIR-V", "72", "0", "2", "5", "1", "0"
+   "CUDA", "66", "0", "8", "5", "1", "0"
+   "HIP", "66", "0", "8", "5", "1", "0"
+   "Mojo", "68", "0", "6", "5", "1", "0"
+   "Rust", "69", "0", "5", "5", "1", "0"
+   "Slang", "70", "0", "4", "5", "1", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -58,13 +58,14 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "77", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "76", "0", "2", "1", "0", "0"
-   "Metal", "70", "0", "4", "5", "0", "0"
+   "DirectX / HLSL", "78", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "77", "0", "2", "1", "0", "0"
+   "Metal", "70", "0", "4", "5", "1", "0"
 
-.. rubric:: DirectX/OpenGL/Metal actionable backlog
+.. csv-table:: DirectX/OpenGL/Metal actionable backlog
+   :header: "Backend", "Category", "Feature", "Status", "Notes"
 
-No actionable backlog rows.
+   "Metal", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal."
 
 Project Porting Focus
 ---------------------
@@ -75,21 +76,30 @@ inspection, diagnostics, validation, and corpus-coverage rows.
 .. csv-table:: Project-porting status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "34", "0", "1", "0", "0", "0"
-   "OpenGL / GLSL", "33", "0", "1", "1", "0", "0"
-   "WebGL / GLSL ES", "29", "0", "1", "5", "0", "0"
-   "WebGPU / WGSL", "29", "0", "1", "5", "0", "0"
-   "Metal", "29", "0", "1", "5", "0", "0"
-   "Vulkan SPIR-V", "29", "0", "1", "5", "0", "0"
-   "CUDA", "29", "0", "1", "5", "0", "0"
-   "HIP", "29", "0", "1", "5", "0", "0"
-   "Mojo", "29", "0", "1", "5", "0", "0"
-   "Rust", "29", "0", "1", "5", "0", "0"
-   "Slang", "29", "0", "1", "5", "0", "0"
+   "DirectX / HLSL", "35", "0", "1", "0", "0", "0"
+   "OpenGL / GLSL", "34", "0", "1", "1", "0", "0"
+   "WebGL / GLSL ES", "29", "0", "1", "5", "1", "0"
+   "WebGPU / WGSL", "29", "0", "1", "5", "1", "0"
+   "Metal", "29", "0", "1", "5", "1", "0"
+   "Vulkan SPIR-V", "29", "0", "1", "5", "1", "0"
+   "CUDA", "29", "0", "1", "5", "1", "0"
+   "HIP", "29", "0", "1", "5", "1", "0"
+   "Mojo", "29", "0", "1", "5", "1", "0"
+   "Rust", "29", "0", "1", "5", "1", "0"
+   "Slang", "29", "0", "1", "5", "1", "0"
 
-.. rubric:: Project-porting actionable backlog
+.. csv-table:: Project-porting actionable backlog
+   :header: "Backend", "Feature", "Status", "Current gap", "Next scope"
 
-No actionable backlog rows.
+   "WebGL / GLSL ES", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WebGL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WebGL.", ""
+   "WebGPU / WGSL", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WGSL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WGSL.", ""
+   "Metal", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal.", ""
+   "Vulkan SPIR-V", "Shared native allocation views", "unsupported", "The backend-neutral runtime planner preserves and validates allocation views, but the built-in Vulkan reference driver currently prepares one buffer per binding and does not consume allocation IDs or bounded ranges. Plan serialization alone is not evidence of Vulkan physical allocation reuse.", ""
+   "CUDA", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in CUDA runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for CUDA.", ""
+   "HIP", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in HIP runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for HIP.", ""
+   "Mojo", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Mojo runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Mojo.", ""
+   "Rust", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Rust runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Rust.", ""
+   "Slang", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang.", ""
 
 Feature Matrix
 --------------
@@ -197,6 +207,7 @@ Each category below uses the status codes from the legend.
    "Runtime adapter plan", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime loader manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Exact scalar physical resource layouts", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
+   "Shared native allocation views", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"
    "Native loader ABI descriptors", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Native loader dispatch request", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
    "Runtime test manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
@@ -225,9 +236,18 @@ the matrix counts, but are closed-loop behavior rather than synced
 implementation backlog work. Unknown rows need an audit before
 implementation work can be scoped accurately.
 
-.. rubric:: Actionable backlog rows
+.. csv-table:: Actionable backlog rows
+   :header: "Backend", "Category", "Feature", "Status", "Current gap", "Next scope", "Notes"
 
-No actionable backlog rows.
+   "WebGL / GLSL ES", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WebGL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WebGL.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WebGL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WebGL."
+   "WebGPU / WGSL", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WGSL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WGSL.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in WGSL runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for WGSL."
+   "Metal", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal."
+   "Vulkan SPIR-V", "project", "Shared native allocation views", "unsupported", "The backend-neutral runtime planner preserves and validates allocation views, but the built-in Vulkan reference driver currently prepares one buffer per binding and does not consume allocation IDs or bounded ranges. Plan serialization alone is not evidence of Vulkan physical allocation reuse.", "", "The backend-neutral runtime planner preserves and validates allocation views, but the built-in Vulkan reference driver currently prepares one buffer per binding and does not consume allocation IDs or bounded ranges. Plan serialization alone is not evidence of Vulkan physical allocation reuse."
+   "CUDA", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in CUDA runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for CUDA.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in CUDA runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for CUDA."
+   "HIP", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in HIP runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for HIP.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in HIP runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for HIP."
+   "Mojo", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Mojo runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Mojo.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Mojo runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Mojo."
+   "Rust", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Rust runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Rust.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Rust runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Rust."
+   "Slang", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang."
 
 Documentation Sources
 ---------------------
