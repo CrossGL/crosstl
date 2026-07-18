@@ -1069,6 +1069,378 @@ def test_opengl_cooperative_matrix_operation_reports_structured_error():
     assert "fragment_mapping_provenance=source_coordinate_helper" in str(error)
 
 
+def opengl_software_cooperative_matrix_type(**overrides):
+    arguments = {
+        "element_type": PrimitiveType("float"),
+        "rows": 8,
+        "cols": 8,
+        "scope": "subgroup",
+        "use": "unspecified",
+        "layout": "unspecified",
+        "fragment_layout": "metal_thread_elements",
+        "subgroup_size": 32,
+        "elements_per_lane": 2,
+        "fragment_provenance": "metal_thread_elements_reference_view",
+        "fragment_mapping": "tile_4x4_row_pair",
+        "fragment_mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
+    }
+    arguments.update(overrides)
+    return CooperativeMatrixType(**arguments)
+
+
+def test_opengl_cooperative_matrix_software_lowering_is_strictly_opt_in():
+    matrix_type = opengl_software_cooperative_matrix_type()
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        GLSLCodeGen().map_type(matrix_type)
+
+    assert exc_info.value.reason == "unsupported-type"
+    with pytest.raises(TypeError, match="must be a boolean"):
+        GLSLCodeGen(cooperative_matrix_software_lowering="enabled")
+
+
+def test_opengl_cooperative_matrix_software_lowering_accepts_exact_mapping():
+    matrix_type = opengl_software_cooperative_matrix_type()
+    generator = GLSLCodeGen(cooperative_matrix_software_lowering=True)
+
+    mapped_type = generator.map_type(matrix_type)
+
+    contract = generator.glsl_cooperative_matrix_fragment_contracts[mapped_type]
+    assert contract["matrix_type"] is matrix_type
+    assert contract["component_type"] == "float"
+    assert contract["mapped_component_type"] == "float"
+    assert contract["rows"] == 8
+    assert contract["columns"] == 8
+    assert contract["fragment_layout"] == "metal_thread_elements"
+    assert contract["subgroup_size"] == 32
+    assert contract["elements_per_lane"] == 2
+    assert contract["fragment_provenance"] == "metal_thread_elements_reference_view"
+    assert contract["fragment_mapping"] == "tile_4x4_row_pair"
+    assert contract["fragment_mapping_provenance"] == (
+        "mlx_steel_BaseMMAFrag_get_coord"
+    )
+    mapping = contract["fragment_mapping_contract"]
+    assert mapping.name == "tile_4x4_row_pair"
+    assert mapping.coordinate(0, 0) == (0, 0)
+    assert mapping.coordinate(0, 1) == (0, 1)
+
+
+def test_opengl_cooperative_matrix_software_lowering_emits_lane_local_glsl(
+    tmp_path,
+):
+    source = """
+    shader CooperativeMatrixSoftwareOpenGL {
+        compute {
+            void main() {
+                CooperativeMatrix<
+                    float, 8, 8, subgroup, unspecified, unspecified,
+                    metal_thread_elements, 32, 2,
+                    metal_thread_elements_reference_view,
+                    tile_4x4_row_pair,
+                    mlx_steel_BaseMMAFrag_get_coord
+                > left;
+                CooperativeMatrix<
+                    float, 8, 8, subgroup, unspecified, unspecified,
+                    metal_thread_elements, 32, 2,
+                    metal_thread_elements_reference_view,
+                    tile_4x4_row_pair,
+                    mlx_steel_BaseMMAFrag_get_coord
+                > right;
+                cooperative_matrix_element(left, 0) = 1.0;
+                cooperative_matrix_element(left, 1) = 2.0;
+                cooperative_matrix_element(right, 0) = 3.0;
+                cooperative_matrix_element(right, 1) = 4.0;
+                CooperativeMatrix<
+                    float, 8, 8, subgroup, unspecified, unspecified,
+                    metal_thread_elements, 32, 2,
+                    metal_thread_elements_reference_view,
+                    tile_4x4_row_pair,
+                    mlx_steel_BaseMMAFrag_get_coord
+                > sum = cooperative_matrix_add(left, right);
+                CooperativeMatrix<
+                    float, 8, 8, subgroup, unspecified, unspecified,
+                    metal_thread_elements, 32, 2,
+                    metal_thread_elements_reference_view,
+                    tile_4x4_row_pair,
+                    mlx_steel_BaseMMAFrag_get_coord
+                > difference = cooperative_matrix_subtract(sum, right);
+                CooperativeMatrix<
+                    float, 8, 8, subgroup, unspecified, unspecified,
+                    metal_thread_elements, 32, 2,
+                    metal_thread_elements_reference_view,
+                    tile_4x4_row_pair,
+                    mlx_steel_BaseMMAFrag_get_coord
+                > product = cooperative_matrix_elementwise_multiply(
+                    difference, right
+                );
+                CooperativeMatrix<
+                    float, 8, 8, subgroup, unspecified, unspecified,
+                    metal_thread_elements, 32, 2,
+                    metal_thread_elements_reference_view,
+                    tile_4x4_row_pair,
+                    mlx_steel_BaseMMAFrag_get_coord
+                > negated = cooperative_matrix_negate(product);
+                float lane_value = cooperative_matrix_element(negated, 1);
+            }
+        }
+    }
+    """
+    generator = GLSLCodeGen(cooperative_matrix_software_lowering=True)
+
+    generated = generator.generate(crosstl.translator.parse(source))
+
+    assert len(generator.glsl_cooperative_matrix_fragment_contracts) == 1
+    contract = next(iter(generator.glsl_cooperative_matrix_fragment_contracts.values()))
+    type_name = contract["type_name"]
+    assert f"struct {type_name} {{\n    float elements[2];\n}};" in generated
+    assert set(contract["helpers"]) == {
+        "elementwise_add",
+        "elementwise_subtract",
+        "elementwise_multiply",
+        "negate",
+    }
+    support_start = generated.index(f"struct {type_name}")
+    helper_starts = [
+        generated.index(f"{type_name} {helper_name}(")
+        for helper_name in contract["helpers"].values()
+    ]
+    assert generated.startswith("#version")
+    assert support_start < min(helper_starts)
+    assert max(helper_starts) < generated.index("void main()")
+    assert "result.elements[0] = left.elements[0] + right.elements[0];" in generated
+    assert "result.elements[1] = left.elements[1] - right.elements[1];" in generated
+    assert "result.elements[0] = left.elements[0] * right.elements[0];" in generated
+    assert "result.elements[1] = -value.elements[1];" in generated
+    assert "left.elements[0] = 1.0;" in generated
+    assert "float lane_value = negated.elements[1];" in generated
+    assert "mat8" not in generated
+    for intrinsic in (
+        "cooperative_matrix_element(",
+        "cooperative_matrix_add(",
+        "cooperative_matrix_subtract(",
+        "cooperative_matrix_elementwise_multiply(",
+        "cooperative_matrix_negate(",
+    ):
+        assert intrinsic not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "cooperative_matrix_software_lowering",
+    )
+
+
+@pytest.mark.parametrize(
+    ("matrix_type", "reason"),
+    [
+        (
+            opengl_software_cooperative_matrix_type(
+                fragment_mapping=None,
+                fragment_mapping_provenance=None,
+            ),
+            "missing-fragment-contract",
+        ),
+        (
+            opengl_software_cooperative_matrix_type(rows=NamedType("ROWS")),
+            "symbolic-fragment-contract",
+        ),
+        (
+            opengl_software_cooperative_matrix_type(
+                fragment_mapping="unknown_lane_mapping"
+            ),
+            "unregistered-fragment-mapping",
+        ),
+        (
+            opengl_software_cooperative_matrix_type(scope="workgroup"),
+            "incompatible-fragment-contract",
+        ),
+        (
+            opengl_software_cooperative_matrix_type(scope=""),
+            "missing-fragment-contract",
+        ),
+        (
+            opengl_software_cooperative_matrix_type(
+                element_type=VectorType(PrimitiveType("float"), 2)
+            ),
+            "unsupported-component-type",
+        ),
+        (
+            opengl_software_cooperative_matrix_type(element_type=PrimitiveType("half")),
+            "unsupported-component-type",
+        ),
+    ],
+)
+def test_opengl_cooperative_matrix_software_lowering_rejects_invalid_contracts(
+    matrix_type, reason
+):
+    generator = GLSLCodeGen(cooperative_matrix_software_lowering=True)
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        generator.map_type(matrix_type)
+
+    error = exc_info.value
+    assert error.operation == "type"
+    assert error.reason == reason
+    assert error.matrix_type is matrix_type
+
+
+def test_opengl_cooperative_matrix_software_lowering_rejects_incompatible_operands():
+    result_type = opengl_software_cooperative_matrix_type()
+    incompatible_type = opengl_software_cooperative_matrix_type(
+        fragment_provenance="different_reference_view"
+    )
+    operation = CooperativeMatrixOpNode(
+        "elementwise_add",
+        [
+            IdentifierNode("left", expression_type=result_type),
+            IdentifierNode("right", expression_type=incompatible_type),
+        ],
+        result_type=result_type,
+    )
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        GLSLCodeGen(cooperative_matrix_software_lowering=True).generate_expression(
+            operation
+        )
+
+    error = exc_info.value
+    assert error.operation == "elementwise_add"
+    assert error.reason == "incompatible-fragment-contract"
+    assert error.matrix_type is result_type
+
+
+def test_opengl_cooperative_matrix_element_rejects_incompatible_result_type():
+    matrix_type = opengl_software_cooperative_matrix_type()
+    operation = CooperativeMatrixOpNode(
+        "element",
+        [
+            IdentifierNode("matrix", expression_type=matrix_type),
+            LiteralNode(0, PrimitiveType("int")),
+        ],
+        expression_type=PrimitiveType("int"),
+    )
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        GLSLCodeGen(cooperative_matrix_software_lowering=True).generate_expression(
+            operation
+        )
+
+    error = exc_info.value
+    assert error.operation == "element"
+    assert error.reason == "incompatible-result-contract"
+    assert error.matrix_type is matrix_type
+
+
+def test_opengl_cooperative_matrix_rejects_scalar_expression_result_type():
+    matrix_type = opengl_software_cooperative_matrix_type()
+    operation = CooperativeMatrixOpNode(
+        "negate",
+        [IdentifierNode("matrix", expression_type=matrix_type)],
+        expression_type=PrimitiveType("float"),
+    )
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        GLSLCodeGen(cooperative_matrix_software_lowering=True).generate_expression(
+            operation
+        )
+
+    error = exc_info.value
+    assert error.operation == "negate"
+    assert error.reason == "incompatible-result-contract"
+    assert "non-cooperative expression result type 'float'" in str(error)
+
+
+def test_opengl_cooperative_matrix_rejects_contextual_contract_mismatch():
+    matrix_type = opengl_software_cooperative_matrix_type()
+    contextual_type = opengl_software_cooperative_matrix_type(
+        fragment_provenance="different_reference_view"
+    )
+    operation = CooperativeMatrixOpNode(
+        "negate",
+        [IdentifierNode("matrix", expression_type=matrix_type)],
+        result_type=matrix_type,
+    )
+    generator = GLSLCodeGen(cooperative_matrix_software_lowering=True)
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        generator.generate_expression_with_expected(operation, contextual_type)
+
+    error = exc_info.value
+    assert error.operation == "negate"
+    assert error.reason == "incompatible-result-contract"
+    assert "incompatible declared result contracts" in str(error)
+
+
+def test_opengl_cooperative_matrix_software_lowering_resets_generation_state():
+    matrix_type = """
+        CooperativeMatrix<
+            float, 8, 8, subgroup, unspecified, unspecified,
+            metal_thread_elements, 32, 2,
+            metal_thread_elements_reference_view,
+            tile_4x4_row_pair,
+            mlx_steel_BaseMMAFrag_get_coord
+        >
+    """
+    source = f"""
+    shader CooperativeMatrixRepeatGeneration {{
+        compute {{
+            void main() {{
+                {matrix_type} value;
+                {matrix_type} negated = cooperative_matrix_negate(value);
+            }}
+        }}
+    }}
+    """
+    plain_source = """
+    shader PlainRepeatGeneration {
+        compute {
+            void main() {
+                float value = 1.0;
+            }
+        }
+    }
+    """
+    generator = GLSLCodeGen(cooperative_matrix_software_lowering=True)
+    ast = crosstl.translator.parse(source)
+
+    first = generator.generate(ast)
+    second = generator.generate(ast)
+
+    assert second == first
+    assert first.count("struct crossgl_cooperative_matrix_fragment_") == 1
+    assert first.count("_negate(") == 2
+
+    plain = generator.generate(crosstl.translator.parse(plain_source))
+
+    assert "crossgl_cooperative_matrix_fragment_" not in plain
+    assert generator.glsl_cooperative_matrix_fragment_contracts == {}
+    assert generator.required_glsl_cooperative_matrix_helpers == set()
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["load", "store", "multiply", "multiply_accumulate"],
+)
+def test_opengl_cooperative_matrix_software_lowering_keeps_non_lane_operations_closed(
+    operation,
+):
+    matrix_type = opengl_software_cooperative_matrix_type()
+    matrix = IdentifierNode("matrix", expression_type=matrix_type)
+    node = CooperativeMatrixOpNode(
+        operation,
+        [matrix],
+        result_type=matrix_type,
+    )
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        GLSLCodeGen(cooperative_matrix_software_lowering=True).generate_expression(node)
+
+    error = exc_info.value
+    assert error.operation == operation
+    assert error.reason == "non-lane-local-operation"
+    assert error.matrix_type is matrix_type
+    assert error.details["fragmentMapping"] == "tile_4x4_row_pair"
+
+
 def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value):
     return (
         "/* "
@@ -6209,6 +6581,29 @@ def test_glsl_private_pointer_view_rejects_unprovable_offset(offset, reason):
         GLSLCodeGen().generate(crosstl.translator.parse(code))
 
     assert excinfo.value.reason == reason
+
+
+def test_glsl_private_pointer_view_rejects_unresolved_address_base():
+    code = """
+    shader UnresolvedPrivatePointerBase {
+        void fill(thread float* values) {
+            values[0] = 1.0;
+        }
+
+        void dispatch() {
+            float backing[2][3];
+            fill(&backing[1][0]);
+        }
+    }
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match="private pointer view 'fill.values' has no concrete fixed backing array",
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "missing-view-backing"
 
 
 def test_glsl_private_pointer_view_rejects_incompatible_element_type():
