@@ -77,6 +77,7 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from .array_utils import (
+    _UnsignedLiteralInt,
     collect_literal_int_constants,
     collect_struct_member_types,
     evaluate_literal_int_expression,
@@ -1940,6 +1941,7 @@ class HLSLCodeGen:
         self.function_private_pointer_backing_variants = {}
         self.function_private_pointer_local_array_extents = {}
         self.function_private_pointer_local_backing_types = {}
+        self.current_hlsl_private_pointer_condition_interval_names = set()
         self.function_private_pointer_view_calls = {}
         self.function_private_pointer_base_names = {}
         self.function_private_pointer_full_span_parameters = {}
@@ -2830,6 +2832,7 @@ class HLSLCodeGen:
         self.function_private_pointer_backing_variants = {}
         self.function_private_pointer_local_array_extents = {}
         self.function_private_pointer_local_backing_types = {}
+        self.current_hlsl_private_pointer_condition_interval_names = set()
         self.function_private_pointer_view_calls = {}
         self.function_private_pointer_base_names = {}
         self.function_private_pointer_full_span_parameters = {}
@@ -29675,13 +29678,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_private_pointer_local_backing_types(self, function):
         local_types = {}
+        ambiguous = set()
         for node in self.walk_ast(getattr(function, "body", [])):
             if not isinstance(node, (VariableNode, ArrayNode)):
                 continue
             name = getattr(node, "name", None)
             node_type = getattr(node, "var_type", getattr(node, "vtype", None))
-            if name and node_type is not None:
-                local_types[name] = node_type
+            if not name or node_type is None or name in ambiguous:
+                continue
+            existing = local_types.get(name)
+            if existing is not None and self.type_name_string(
+                existing
+            ) != self.type_name_string(node_type):
+                local_types.pop(name, None)
+                ambiguous.add(name)
+                continue
+            local_types[name] = node_type
         return local_types
 
     def hlsl_private_pointer_expression_has_side_effects(self, expression):
@@ -29714,6 +29726,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if key not in {"parent", "annotations", "array", "index", "args", "name"}
         )
 
+    def hlsl_private_pointer_condition_uses_unsafe_intervals(
+        self, expression, intervals, constants
+    ):
+        safe_names = self.current_hlsl_private_pointer_condition_interval_names
+        for node in self.walk_ast(expression):
+            value = self.literal_int_value(node, constants)
+            if isinstance(value, _UnsignedLiteralInt):
+                return True
+            if isinstance(node, (IdentifierNode, VariableNode)):
+                name = getattr(node, "name", None)
+                if name in intervals and name not in safe_names:
+                    return True
+        return False
+
     def hlsl_private_pointer_condition_value(self, expression, intervals, constants):
         if self.hlsl_private_pointer_expression_has_side_effects(expression):
             return None
@@ -29721,6 +29747,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         value = self.literal_int_value(expression, constants)
         if value is not None:
             return value != 0
+        if self.hlsl_private_pointer_condition_uses_unsafe_intervals(
+            expression, intervals, constants
+        ):
+            return None
 
         if isinstance(expression, UnaryOpNode) and expression.op == "!":
             operand = self.hlsl_private_pointer_condition_value(
@@ -30063,6 +30093,55 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             function_name, {}
         )
         constants = self.initial_literal_int_constants(function)
+        signed_interval_types = {
+            "int",
+            "int16_t",
+            "int64_t",
+            "min12int",
+            "min16int",
+        }
+        condition_interval_names = set()
+        unsafe_condition_names = {
+            getattr(parameter, "name", None)
+            for parameter in getattr(function, "parameters", []) or []
+        }
+        for node in self.walk_ast(getattr(function, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }
+            if getattr(node, "is_mutable", True) and not qualifiers.intersection(
+                {"const", "constant", "constexpr"}
+            ):
+                condition_interval_names.discard(name)
+                unsafe_condition_names.add(name)
+                continue
+            type_info = self.hlsl_integer_arithmetic_type_info(
+                getattr(node, "var_type", getattr(node, "vtype", None))
+            )
+            if (
+                type_info is not None
+                and type_info["width"] == 1
+                and type_info["base_type"] in signed_interval_types
+                and name not in unsafe_condition_names
+            ):
+                condition_interval_names.add(name)
+            else:
+                condition_interval_names.discard(name)
+                unsafe_condition_names.add(name)
+        condition_interval_names.update(
+            name
+            for name, value in constants.items()
+            if not isinstance(value, _UnsignedLiteralInt)
+            and name not in unsafe_condition_names
+        )
+        condition_interval_names.discard(None)
+        self.current_hlsl_private_pointer_condition_interval_names = (
+            condition_interval_names
+        )
         intervals = {}
         for name, value in constants.items():
             literal = self.literal_int_value(value, constants)
@@ -30116,8 +30195,34 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     visit(item, active_intervals)
                 return
             if isinstance(value, BlockNode):
-                for statement in getattr(value, "statements", []) or []:
-                    visit(statement, active_intervals)
+                block_intervals = dict(active_intervals)
+                statements = list(getattr(value, "statements", []) or [])
+                outer_names = set(active_intervals)
+                missing = object()
+                shadowed_outer_intervals = {}
+                for statement in statements:
+                    declared_name = (
+                        getattr(statement, "name", None)
+                        if isinstance(statement, (VariableNode, ArrayNode))
+                        else None
+                    )
+                    if (
+                        declared_name in outer_names
+                        and declared_name not in shadowed_outer_intervals
+                    ):
+                        shadowed_outer_intervals[declared_name] = block_intervals.get(
+                            declared_name, missing
+                        )
+                        block_intervals.pop(declared_name, None)
+                    visit(statement, block_intervals)
+                for name in outer_names:
+                    interval = shadowed_outer_intervals.get(
+                        name, block_intervals.get(name, missing)
+                    )
+                    if interval is not missing:
+                        active_intervals[name] = interval
+                    else:
+                        active_intervals.pop(name, None)
                 return
             if isinstance(value, VariableNode):
                 initial_value = getattr(value, "initial_value", None)
@@ -30309,6 +30414,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 visit(child, active_intervals)
 
         visit(getattr(function, "body", []), intervals)
+        self.current_hlsl_private_pointer_condition_interval_names = set()
 
     def hlsl_private_pointer_binding_interval(
         self, call, parameter_name, binding, required_span=None

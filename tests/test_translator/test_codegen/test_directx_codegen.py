@@ -43046,6 +43046,51 @@ def test_hlsl_metal_private_struct_scalar_view_rejects_unsupported_contract(
     assert diagnostic.address_space == "thread"
 
 
+def test_hlsl_metal_private_struct_view_rejects_conflicting_shadowed_backings(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct SmallWords {
+        uint words[2];
+    };
+
+    struct LargeWords {
+        uint words[4];
+    };
+
+    inline uint read_byte(const thread uint8_t* values, int index) {
+        return values[index];
+    }
+
+    kernel void shadowed_word_view(device uint* output [[buffer(0)]]) {
+        thread SmallWords local;
+        output[0] = read_byte((const thread uint8_t*)&local, 7);
+        {
+            thread LargeWords local;
+            output[1] = read_byte((const thread uint8_t*)&local, 15);
+        }
+    }
+    """
+    shader_path = tmp_path / "shadowed_word_view.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXPrivatePointerParameterError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "read_byte"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.reason == "missing-fixed-array-extent"
+
+
 def test_hlsl_private_pointer_view_overloads_exact_and_offset_backings(tmp_path):
     shader = """
     shader PrivatePointerViewOverloads {
@@ -43331,6 +43376,73 @@ def test_hlsl_private_pointer_if_keeps_unknown_branches():
         "float read_selected(inout float values[8], int values_base, bool read_first)"
         in generated
     )
+
+
+def test_hlsl_private_pointer_if_keeps_unsigned_wraparound_branches():
+    shader = """
+    shader UnsignedPrivatePointerBranch {
+        float read_selected(thread float* values) {
+            uint selector = 4294967295u;
+            selector += 1u;
+            if (selector == 0u) {
+                return values[7];
+            } else {
+                return values[0];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float read_selected(inout float values[8], int values_base)" in generated
+    assert "return values[(values_base + 7)];" in generated
+    assert "return values[(values_base + 0)];" in generated
+
+
+def test_hlsl_private_pointer_if_preserves_shadowed_outer_interval():
+    shader = """
+    shader ScopedPrivatePointerBranch {
+        float read_selected(thread float* values) {
+            int selector = 0;
+            {
+                int selector = 1;
+            }
+            if (selector == 0) {
+                return values[7];
+            } else {
+                return values[0];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float read_selected(inout float values[8], int values_base)" in generated
+
+
+def test_hlsl_private_pointer_if_preserves_assignment_before_shadowing():
+    shader = """
+    shader ScopedPrivatePointerAssignment {
+        float read_selected(thread float* values) {
+            int selector = 0;
+            {
+                selector = 1;
+                int selector = 0;
+            }
+            if (selector == 1) {
+                return values[7];
+            } else {
+                return values[0];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float read_selected(inout float values[8], int values_base)" in generated
 
 
 def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes(tmp_path):
