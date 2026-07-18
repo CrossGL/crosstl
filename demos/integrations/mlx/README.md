@@ -569,7 +569,7 @@ unsupported records. Its project configuration and report must retain the exact
 an execution blocker. The required diagnostic is
 `project.translate.opengl-workgroup-pointer-unsupported` with capability
 `opengl.workgroup-pointer-lowering`; it must retain function
-`GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run`, parameter and backing `tgp_memory`,
+`GEMVKernel_bfloat16_t_1_8_1_32_1_4_false__run`, parameter and backing `tgp_memory`,
 offset `0`, and reason `unprovable-view-access`. The concrete index derivation is
 `sgN = simd_gid % 8`, `simdM = simd_gid / 8`, `bm = simdM`, and
 `tgp_results = tgp_memory + sgN * 2 + bm`. Under the source-required 32-lane
@@ -911,17 +911,25 @@ specializations with no unsupported template records. This advances the current
 frontier through the applicable CrossGL/crosstl#1479 and CrossGL/crosstl#1490
 contracts; both issues retain broader project-materialization scope.
 
-The targets now fail closed at distinct later contracts. DirectX reports
-`project.translate.specialization-value-required` for `align_M` (ID 200),
-`align_N` (ID 201), and `align_K` (ID 202), all Boolean Metal function
-constants. CrossGL/crosstl#1538 tracks concrete DirectX variants and preserved
-specialization provenance. OpenGL reports
-`project.translate.metal-static-constant-unresolved` for
-`BaseMMAFrag_float_8_8::kFragRows` because multiple visible concrete owner
-declarations match the qualified reference; CrossGL/crosstl#1491 tracks
-unambiguous qualified static-constant resolution. Neither run emits a target
-artifact.
-This evidence does not claim runtime integration or numerical parity.
+Source-scoped project configuration now supplies concrete `true` values for
+`align_M` (ID 200), `align_N` (ID 201), and `align_K` (ID 202) only to
+`fp_quantized.metal`. Both target records preserve `project-source-pattern`
+provenance. This advances the source-scoped configuration contract in
+CrossGL/crosstl#1809 and the concrete function-constant contract in
+CrossGL/crosstl#1538 without applying these identifiers to unrelated sources.
+
+Both targets also advance through equivalent duplicate definitions of
+`BaseMMAFrag_float_8_8::kFragRows` and through construction of
+`QuantizedBlockLoader_float_32_32_36_1_64_16_4`. These paths exercise the
+qualified static-constant contract in CrossGL/crosstl#1491 and the constructor
+address-space provenance contract in CrossGL/crosstl#1810. DirectX and OpenGL
+then fail closed with
+`project.translate.metal-indexed-component-type-unresolved` while indexing
+`BaseMMAFrag_float_8_8::frag_type` at `k`. The concrete alias denotes a
+two-component float vector, but equivalent duplicate alias owners are not yet
+resolved for component typing; CrossGL/crosstl#1811 tracks that contract.
+Neither run emits a target artifact. This evidence does not claim runtime
+integration or numerical parity.
 
 The previously recorded pinned Vulkan replays confirmed that both affected
 kernels advanced past this contract without producing a full artifact.
