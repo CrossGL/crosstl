@@ -2976,6 +2976,122 @@ def test_preprocessor_materializes_nested_struct_from_local_conditional_constant
     assert "Tile<T, half_rows, columns>" not in output
 
 
+def test_preprocessor_propagates_constexpr_helper_results_to_local_array_and_call():
+    code = """
+    template <short PackBits, short Bits>
+    constexpr short get_pack_factor() {
+        return PackBits / Bits;
+    }
+
+    template <typename T, int Count>
+    void load_vector(const device T* source, thread T* values) {
+        for (int index = 0; index < Count; ++index) {
+            values[index] = source[index];
+        }
+    }
+
+    template <typename T, int Bits>
+    [[kernel]] void dispatch(
+        const device T* source [[buffer(0)]],
+        device T* output [[buffer(1)]]) {
+        constexpr int packs_per_thread = 2;
+        constexpr int pack_factor = get_pack_factor<32, Bits>();
+        constexpr int values_per_thread = pack_factor * packs_per_thread;
+        thread T values[values_per_thread];
+        load_vector<T, values_per_thread>(source, values);
+        output[0] = values[0];
+    }
+
+    instantiate_kernel("dispatch_float_4", dispatch, float, 4)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert re.search(r"thread\s+float\s+values\s*\[\s*16\s*\]\s*;", output)
+    assert "load_vector_float_16(source, values)" in output
+    assert "void load_vector_float_16(" in output
+    assert re.search(r"index\s*<\s*16", output)
+    assert "load_vector_float_values_per_thread" not in output
+    assert not re.search(r"values\s*\[\s*values_per_thread\s*\]", output)
+
+
+@pytest.mark.parametrize(
+    "function_body",
+    [
+        pytest.param(
+            """
+            constexpr int values_per_thread = get_pack_factor<32, 4>() * 2;
+            {
+                int values_per_thread = runtime_count;
+                consume_count<values_per_thread>(output);
+            }
+            """,
+            id="shadowed-by-mutable-local",
+        ),
+        pytest.param(
+            """
+            constexpr int values_per_thread = values_per_thread * 2;
+            consume_count<values_per_thread>(output);
+            """,
+            id="self-reference",
+        ),
+        pytest.param(
+            """
+            constexpr int values_per_thread = pack_factor * 2;
+            constexpr int pack_factor = get_pack_factor<32, 4>();
+            consume_count<values_per_thread>(output);
+            """,
+            id="forward-reference",
+        ),
+        pytest.param(
+            """
+            constexpr int values_per_thread = unsupported_pack_factor<4>() * 2;
+            consume_count<values_per_thread>(output);
+            """,
+            id="unsupported-helper-body",
+        ),
+    ],
+)
+def test_preprocessor_rejects_unproven_constexpr_local_template_arguments(
+    function_body,
+):
+    code = (
+        """
+        template <int PackBits, int Bits>
+        constexpr int get_pack_factor() {
+            return PackBits / Bits;
+        }
+
+        template <int Bits>
+        constexpr int unsupported_pack_factor() {
+            int factor = 32 / Bits;
+            return factor;
+        }
+
+        template <int Count>
+        void consume_count(device int* output) {
+            output[0] = Count;
+        }
+
+        kernel void unresolved_count(
+            device int* output [[buffer(0)]],
+            int runtime_count [[threads_per_grid]]) {
+        """
+        + function_body
+        + """
+        }
+        """
+    )
+
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        MetalPreprocessor().preprocess(code)
+
+    error = exc_info.value
+    assert error.requested_signature == "consume_count<values_per_thread>"
+    assert error.unresolved_local_constants == ("values_per_thread",)
+    assert error.source_location is not None
+
+
 @pytest.mark.parametrize(
     ("function_source", "constant_name", "expected_line"),
     [
