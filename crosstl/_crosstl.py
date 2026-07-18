@@ -2284,6 +2284,65 @@ def _run_runtime_loader_manifest(args):
     return 0 if payload["success"] else 1
 
 
+def _load_native_loader_manifest(path):
+    from .project import NativeLoaderABIError
+
+    manifest_path = Path(path)
+    try:
+        text = manifest_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise NativeLoaderABIError(
+            "manifest-read-failed",
+            f"Could not read runtime loader manifest: {exc}",
+            details={"source": str(manifest_path)},
+        ) from exc
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise NativeLoaderABIError(
+            "manifest-json-invalid",
+            f"Runtime loader manifest is not valid JSON: {exc}",
+            details={"source": str(manifest_path)},
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise NativeLoaderABIError(
+            "manifest-invalid",
+            "Runtime loader manifest must be a JSON object.",
+            details={"source": str(manifest_path)},
+        )
+    return payload
+
+
+def _run_native_loader_abi(args):
+    from .project import (
+        NativeLoaderABIError,
+        build_native_loader_abi_descriptor,
+        generate_native_loader_declarations,
+    )
+
+    try:
+        manifest = _load_native_loader_manifest(args.loader_manifest)
+        descriptor = build_native_loader_abi_descriptor(
+            manifest,
+            load_unit_id=args.load_unit,
+        )
+        declarations = (
+            generate_native_loader_declarations(descriptor)
+            if args.declarations_output
+            else None
+        )
+    except NativeLoaderABIError as exc:
+        _write_json_payload(exc.to_json(), args.output)
+        return 1
+
+    if declarations is not None:
+        declarations_path = Path(args.declarations_output)
+        declarations_path.parent.mkdir(parents=True, exist_ok=True)
+        declarations_path.write_text(declarations, encoding="utf-8")
+    _write_json_payload(descriptor, args.output)
+    return 0
+
+
 def _format_runtime_variant_registry(payload):
     lines = ["Runtime variant registry"]
     for header_line in (
@@ -7109,6 +7168,26 @@ def _build_parser():
     )
     runtime_loader_parser.set_defaults(func=_run_runtime_loader_manifest)
 
+    native_loader_abi_parser = subparsers.add_parser(
+        "native-loader-abi",
+        help="Build a native loader ABI descriptor from a runtime loader manifest",
+    )
+    native_loader_abi_parser.add_argument(
+        "loader_manifest", help="Runtime loader manifest JSON"
+    )
+    native_loader_abi_parser.add_argument(
+        "--load-unit",
+        help="Load unit ID to select when the manifest does not contain exactly one unit",
+    )
+    native_loader_abi_parser.add_argument(
+        "--declarations-output",
+        help="Write deterministic C declarations for the selected load unit",
+    )
+    native_loader_abi_parser.add_argument(
+        "--output", "-o", help="Write native loader ABI descriptor; use '-' for stdout"
+    )
+    native_loader_abi_parser.set_defaults(func=_run_native_loader_abi)
+
     runtime_variant_registry_parser = subparsers.add_parser(
         "runtime-variant-registry",
         help="Build an exact runtime variant registry from a package or loader manifest",
@@ -7344,6 +7423,7 @@ def _use_legacy_cli(argv):
         "plan-runtime-adapters",
         "materialize-runtime-adapters",
         "runtime-loader-manifest",
+        "native-loader-abi",
         "runtime-variant-registry",
         "scaffold-host-loaders",
         "inspect-host-loader-scaffolds",
