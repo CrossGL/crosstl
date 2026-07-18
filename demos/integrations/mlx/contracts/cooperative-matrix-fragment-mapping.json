@@ -80,28 +80,88 @@
     "cooperativeMatrixType": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view, tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>",
     "materializedSpecializationCount": 588,
     "unsupportedSpecializationCount": 0,
+    "sourceContracts": {
+      "cooperativeMatrixTypeCount": 16,
+      "completeTwelveFieldContractCount": 16
+    },
+    "operationContracts": {
+      "operationCount": 8,
+      "element": {
+        "count": 7,
+        "expressionType": "float",
+        "matrixResultTypeCount": 0,
+        "matrixResultTypeRequired": false
+      },
+      "multiplyAccumulate": {
+        "count": 1,
+        "expressionType": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view, tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>",
+        "resultType": "CooperativeMatrix<float, 8, 8, subgroup, unspecified, unspecified, metal_thread_elements, 32, 2, metal_thread_elements_reference_view, tile_4x4_row_pair, mlx_steel_BaseMMAFrag_get_coord>",
+        "completeTwelveFieldContractCount": 1,
+        "preservesAccumulatorRepresentation": true
+      },
+      "resolvedIssue": "https://github.com/CrossGL/crosstl/issues/1610"
+    },
+    "softwareLowering": {
+      "status": "lane-local-foundation",
+      "mode": "explicit-opt-in",
+      "targets": [
+        "directx",
+        "opengl"
+      ],
+      "supportedOperations": [
+        "type-representation",
+        "element",
+        "negate",
+        "elementwise-add",
+        "elementwise-subtract",
+        "elementwise-multiply"
+      ],
+      "failClosedOperations": [
+        "load",
+        "store",
+        "multiply",
+        "multiply-accumulate"
+      ],
+      "defaultEnabled": false,
+      "projectConfigurationWired": false
+    },
     "targets": {
       "directx": {
-        "boundaryDiagnostic": "project.translate.directx-cooperative-matrix-unsupported",
-        "missingCapability": "directx.cooperative-matrix-lowering",
+        "boundaryDiagnostic": "project.translate.directx-private-pointer-unsupported",
+        "missingCapability": "directx.private-pointer-parameter-lowering",
+        "reason": "missing-fixed-array-extent",
+        "function": "qdot_float_values_per_thread_4",
+        "parameter": "x_thread",
         "artifactEmitted": false
       },
       "opengl": {
-        "boundaryDiagnostic": "project.translate.opengl-cooperative-matrix-unsupported",
-        "missingCapability": "opengl.cooperative-matrix-lowering",
+        "boundaryDiagnostic": "project.translate.opengl-private-pointer-unsupported",
+        "missingCapability": "opengl.private-pointer-parameter-lowering",
+        "reason": "missing-view-backing",
+        "function": "load_vector_float_float_values_per_thread",
+        "parameter": "x_thread",
         "artifactEmitted": false
       }
     }
   },
   "scope": {
     "sourceCoordinateMappingVerified": true,
+    "expressionResultInferenceImplemented": true,
+    "laneLocalSoftwareLoweringFoundationImplemented": true,
     "targetPolicyImplemented": false,
-    "softwareFallbackImplemented": false,
+    "fullSoftwareFallbackImplemented": false,
+    "defaultTargetBehavior": "fail-closed",
+    "projectConfigurationWired": false,
     "runtimeIntegrationIncluded": false,
     "numericalParityVerified": false,
+    "resolvedIssues": [
+      "https://github.com/CrossGL/crosstl/issues/1610",
+      "https://github.com/CrossGL/crosstl/issues/1823"
+    ],
     "trackedIssues": [
       "https://github.com/CrossGL/crosstl/issues/1602",
-      "https://github.com/CrossGL/crosstl/issues/1820"
+      "https://github.com/CrossGL/crosstl/issues/1820",
+      "https://github.com/CrossGL/crosstl/issues/1824"
     ]
   }
 }
