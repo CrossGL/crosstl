@@ -2978,6 +2978,9 @@ def test_preprocessor_materializes_nested_struct_from_local_conditional_constant
 
 def test_preprocessor_propagates_constexpr_helper_results_to_local_array_and_call():
     code = """
+    constexpr int word_bits = 32;
+    constexpr int quad_width = 4;
+
     template <short PackBits, short Bits>
     constexpr short get_pack_factor() {
         return PackBits / Bits;
@@ -2994,8 +2997,8 @@ def test_preprocessor_propagates_constexpr_helper_results_to_local_array_and_cal
     [[kernel]] void dispatch(
         const device T* source [[buffer(0)]],
         device T* output [[buffer(1)]]) {
-        constexpr int packs_per_thread = 2;
-        constexpr int pack_factor = get_pack_factor<32, Bits>();
+        constexpr int packs_per_thread = quad_width / 2;
+        constexpr int pack_factor = get_pack_factor<word_bits, Bits>();
         constexpr int values_per_thread = pack_factor * packs_per_thread;
         thread T values[values_per_thread];
         load_vector<T, values_per_thread>(source, values);
@@ -3013,6 +3016,24 @@ def test_preprocessor_propagates_constexpr_helper_results_to_local_array_and_cal
     assert re.search(r"index\s*<\s*16", output)
     assert "load_vector_float_values_per_thread" not in output
     assert not re.search(r"values\s*\[\s*values_per_thread\s*\]", output)
+
+
+def test_preprocessor_does_not_treat_file_scope_type_alias_as_local_constant():
+    code = """
+    typedef int bfloat16_t;
+
+    template <typename T>
+    void consume_type() {}
+
+    void dispatch() {
+        consume_type<bfloat16_t>();
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "void consume_type_bfloat16_t()" in output
+    assert "consume_type_bfloat16_t();" in output
 
 
 @pytest.mark.parametrize(

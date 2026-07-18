@@ -15823,6 +15823,9 @@ def test_metal_project_materialization_propagates_local_constexpr_extents(
         #include <metal_stdlib>
         using namespace metal;
 
+        constexpr int word_bits = 32;
+        constexpr int quad_width = 4;
+
         template <int WordBits, int Bits>
         constexpr int get_pack_factor() {
             return WordBits / Bits;
@@ -15839,8 +15842,8 @@ def test_metal_project_materialization_propagates_local_constexpr_extents(
         [[kernel]] void dispatch(
             const device T* source [[buffer(0)]],
             device T* output [[buffer(1)]]) {
-            constexpr int packs_per_thread = 2;
-            constexpr int pack_factor = get_pack_factor<32, Bits>();
+            constexpr int packs_per_thread = quad_width / 2;
+            constexpr int pack_factor = get_pack_factor<word_bits, Bits>();
             constexpr int values_per_thread = pack_factor * packs_per_thread;
             thread T values[values_per_thread];
             load_vector<T, values_per_thread>(source, values);

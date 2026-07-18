@@ -3106,10 +3106,21 @@ class MetalPreprocessor(HLSLPreprocessor):
         type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
         constexpr_functions: Optional[Dict[str, List[_MetalConstexprFunction]]] = None,
         constexpr_position_offset: int = 0,
+        include_file_scope: bool = False,
     ) -> Dict[str, List[_MetalIntegralConstantBinding]]:
-        raw_declarations: List[Tuple[int, str, _MetalDataMember]] = []
+        raw_declarations: List[Tuple[int, str, _MetalDataMember, bool]] = []
         seen_declarations: Set[Tuple[int, str]] = set()
-        for owner_start, owner_end in sorted(owner_spans):
+        lexical_scopes = self._find_lexical_brace_scopes(code)
+        selected_owner_spans = sorted(owner_spans)
+        scan_spans = (
+            [(0, len(code))] if include_file_scope else selected_owner_spans
+        )
+        file_scopes = {(0, len(code))}
+        if include_file_scope:
+            file_scopes.update(
+                (start, end) for start, end, _name in self._find_namespace_spans(code)
+            )
+        for owner_start, owner_end in scan_spans:
             owner_text = code[owner_start:owner_end]
             search_start = 0
             for statement in self._iter_simple_declarations(owner_text):
@@ -3126,6 +3137,20 @@ class MetalPreprocessor(HLSLPreprocessor):
                     + len(statement)
                     - len(statement.lstrip())
                 )
+                file_scope_only = False
+                if include_file_scope:
+                    declaration_scope = self._innermost_lexical_scope(
+                        lexical_scopes,
+                        declaration_position,
+                        len(code),
+                    )
+                    selected_owner = self._containing_span(
+                        declaration_position,
+                        selected_owner_spans,
+                    )
+                    if selected_owner is None and declaration_scope not in file_scopes:
+                        continue
+                    file_scope_only = selected_owner is None
                 name = self._declared_local_name(stripped)
                 if name is None:
                     continue
@@ -3136,12 +3161,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if declaration_key in seen_declarations:
                     continue
                 seen_declarations.add(declaration_key)
-                raw_declarations.append((declaration_position, name, member))
+                raw_declarations.append(
+                    (declaration_position, name, member, file_scope_only)
+                )
 
         if not raw_declarations:
             return {}
         bindings: Dict[str, List[_MetalIntegralConstantBinding]] = {}
-        lexical_scopes = self._find_lexical_brace_scopes(code)
         ignored_type_tokens = {
             "const",
             "constant",
@@ -3153,7 +3179,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             "threadgroup",
             "volatile",
         }
-        for declaration_position, name, member in sorted(raw_declarations):
+        for declaration_position, name, member, file_scope_only in sorted(
+            raw_declarations
+        ):
             scope_start, scope_end = self._innermost_lexical_scope(
                 lexical_scopes, declaration_position, len(code)
             )
@@ -3162,7 +3190,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             value_type_tokens = [
                 token for token in type_tokens if token not in ignored_type_tokens
             ]
-            if (
+            is_constexpr_integral = (
                 member.default is not None
                 and "constexpr" in type_tokens
                 and len(value_type_tokens) == 1
@@ -3170,7 +3198,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 and not member.array_suffix
                 and "*" not in member.type_text
                 and "&" not in member.type_text
-            ):
+            )
+            if file_scope_only and not is_constexpr_integral:
+                continue
+            if is_constexpr_integral:
                 visible_constants = self._local_integral_constants_at(
                     bindings, declaration_position
                 )
@@ -3234,6 +3265,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             owner_spans,
             type_aliases,
             constexpr_functions,
+            include_file_scope=True,
         )
         replacements: List[Tuple[int, int, str]] = []
         for owner_start, owner_end in sorted(owner_spans):
@@ -7271,6 +7303,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             local_constant_owner_spans,
             local_constant_type_aliases,
             self._active_static_constexpr_functions,
+            include_file_scope=True,
         )
         struct_type_aliases = self._collect_struct_type_aliases(
             code,
@@ -15485,6 +15518,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             local_binding_owner_spans,
             local_type_aliases,
             constexpr_functions,
+            include_file_scope=True,
         )
         resolved_calls: List[Tuple[str, List[str], Tuple[int, int]]] = []
         for function_name, template_arguments, span in calls:
@@ -15634,6 +15668,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             local_binding_owner_spans,
             local_type_aliases,
             constexpr_functions,
+            include_file_scope=True,
         )
 
         instantiations: List[Tuple[str, List[str], Tuple[int, int]]] = []
