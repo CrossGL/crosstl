@@ -8723,6 +8723,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 return self.hlsl_record_generated_statement_int_constants(stmt, code)
             if initial_value is not None:
+                storage_struct_init = self.generate_hlsl_storage_struct_view_copy(
+                    stmt_name,
+                    vtype,
+                    initial_value,
+                    indent,
+                    declaration=declaration,
+                )
+                if storage_struct_init is not None:
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, storage_struct_init
+                    )
                 aggregate_init = (
                     self.generate_hlsl_aggregate_conditional_initialization(
                         initial_value,
@@ -8823,6 +8834,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"{indent_str}{element_type}[{size}] {stmt_name};\n"
 
         elif isinstance(stmt, AssignmentNode):
+            self.hlsl_storage_struct_view_write_error(
+                getattr(stmt, "target", getattr(stmt, "left", None))
+            )
             aggregate_assignment = (
                 self.generate_hlsl_aggregate_conditional_assignment_statement(
                     stmt, indent
@@ -8975,6 +8989,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if tail_return is not None:
                     return tail_return
                 if isinstance(getattr(stmt, "expression", None), AssignmentNode):
+                    self.hlsl_storage_struct_view_write_error(
+                        getattr(
+                            stmt.expression,
+                            "target",
+                            getattr(stmt.expression, "left", None),
+                        )
+                    )
                     aggregate_assignment = (
                         self.generate_hlsl_aggregate_conditional_assignment_statement(
                             stmt.expression, indent
@@ -13084,6 +13105,402 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             },
         }
 
+    def hlsl_storage_struct_view_error(
+        self,
+        expression,
+        *,
+        source_type,
+        target_type,
+        reason,
+        detail,
+        binding=None,
+        access="read",
+    ):
+        pointer_type = getattr(expression, "target_type", None)
+        address_space = (
+            getattr(pointer_type, "address_space", None)
+            or (binding or {}).get("address_space")
+            or "storage"
+        )
+        raise PointerReinterpretationError(
+            "DirectX cannot preserve a storage aggregate view from "
+            f"'{source_type}' to '{target_type}': {detail}",
+            source_type=source_type,
+            target_type=target_type,
+            address_space=address_space,
+            alignment=4,
+            access=access,
+            target_backend="directx",
+            reason=reason,
+            source_location=getattr(expression, "source_location", None),
+        )
+
+    def hlsl_storage_struct_view_offset_is_provable(self, expression):
+        if isinstance(expression, (str, IdentifierNode, VariableNode)):
+            return True
+        if isinstance(expression, PointerReinterpretNode):
+            return self.hlsl_storage_struct_view_offset_is_provable(
+                expression.expression
+            )
+        if not isinstance(expression, BinaryOpNode) or expression.op not in {"+", "-"}:
+            return False
+
+        left_binding = self.hlsl_resource_pointer_binding(expression.left)
+        right_binding = self.hlsl_resource_pointer_binding(expression.right)
+        if left_binding is not None and right_binding is None:
+            pointer_expression = expression.left
+            delta_expression = expression.right
+        elif (
+            expression.op == "+" and right_binding is not None and left_binding is None
+        ):
+            pointer_expression = expression.right
+            delta_expression = expression.left
+        else:
+            return False
+
+        delta_value = self.literal_int_value(
+            delta_expression, self.current_hlsl_visible_int_constants
+        )
+        if delta_value is None:
+            delta_type = self.hlsl_integer_arithmetic_type_info(
+                self.expression_result_type(delta_expression)
+            )
+            if delta_type is None or delta_type["width"] != 1:
+                return False
+        return self.hlsl_storage_struct_view_offset_is_provable(pointer_expression)
+
+    def hlsl_storage_struct_view_layout(self, expression, binding):
+        pointer_type = getattr(expression, "target_type", None)
+        target_type = getattr(pointer_type, "pointee_type", None)
+        target_name = self.type_name_string(target_type)
+        struct_node = self.structs_by_name.get(target_name)
+        if struct_node is None:
+            return None
+
+        address_space = str(
+            getattr(pointer_type, "address_space", None)
+            or binding.get("address_space")
+            or "storage"
+        ).lower()
+        if address_space not in {"device", "global", "storage"}:
+            return None
+
+        source_name = (
+            binding.get("view_element_type")
+            or binding.get("element_type")
+            or binding.get("source_element_type")
+            or "unknown"
+        )
+        reinterpretation = binding.get("pointer_reinterpretation")
+        source_layout = (
+            reinterpretation.get("target_layout")
+            if reinterpretation is not None
+            else scalar_storage_layout(source_name)
+        )
+
+        def reject(reason, detail, *, source_type=source_name):
+            self.hlsl_storage_struct_view_error(
+                expression,
+                source_type=self.type_name_string(source_type),
+                target_type=target_name,
+                reason=reason,
+                detail=detail,
+                binding=binding,
+                access=binding.get("access", "read"),
+            )
+
+        if binding.get("access") == "write":
+            reject(
+                "storage-view-read-unsupported",
+                "the backing pointer does not provide readable storage",
+            )
+        if (
+            source_layout is None
+            or source_layout.bit_width != 32
+            or self.map_type(source_layout.name) not in {"float", "int", "uint"}
+        ):
+            reject(
+                "unsupported-storage-view-source-layout",
+                "the backing pointer must expose homogeneous 32-bit scalar words",
+            )
+        if (
+            getattr(struct_node, "attributes", None)
+            or getattr(struct_node, "inheritance", None)
+            or self.hlsl_union_layout_for_type(target_type) is not None
+        ):
+            reject(
+                "unsupported-storage-view-aggregate-layout",
+                "the target struct has noncanonical layout metadata",
+            )
+        members = [
+            member
+            for member in getattr(struct_node, "members", []) or []
+            if not self.hlsl_static_struct_member(member)
+        ]
+        if len(members) != 1:
+            reject(
+                "heterogeneous-storage-view-layout",
+                "the target must have exactly one fixed scalar-array member",
+            )
+        member = members[0]
+        if getattr(member, "attributes", None):
+            reject(
+                "unsupported-storage-view-aggregate-layout",
+                "the target array member has noncanonical layout metadata",
+            )
+        member_type = getattr(member, "member_type", None)
+        if not isinstance(member_type, ArrayType):
+            reject(
+                "heterogeneous-storage-view-layout",
+                "the sole target member is not a fixed scalar array",
+            )
+        extent = self.literal_int_value(
+            getattr(member_type, "size", None), self.literal_int_constants
+        )
+        if extent is None or extent <= 0:
+            reject(
+                "dynamic-storage-view-extent",
+                "the target word-array extent is not a positive constant",
+            )
+        target_element_name = self.type_name_string(member_type.element_type)
+        target_layout = scalar_storage_layout(target_element_name)
+        if (
+            target_layout is None
+            or target_layout.bit_width != 32
+            or self.map_type(target_element_name) not in {"float", "int", "uint"}
+        ):
+            reject(
+                "unsupported-storage-view-target-layout",
+                "the target array must contain homogeneous 32-bit scalar words",
+            )
+        return {
+            "source_layout": source_layout,
+            "target_layout": target_layout,
+            "target_type": target_name,
+            "member": member.name,
+            "extent": extent,
+        }
+
+    def hlsl_storage_struct_view_has_resource_source(self, expression):
+        if isinstance(expression, (str, IdentifierNode, VariableNode)):
+            return self.hlsl_resource_pointer_binding(expression) is not None
+        if isinstance(expression, PointerReinterpretNode):
+            return self.hlsl_storage_struct_view_has_resource_source(
+                expression.expression
+            )
+        if isinstance(expression, BinaryOpNode):
+            return self.hlsl_storage_struct_view_has_resource_source(
+                expression.left
+            ) or self.hlsl_storage_struct_view_has_resource_source(expression.right)
+        if isinstance(expression, TernaryOpNode):
+            return self.hlsl_storage_struct_view_has_resource_source(
+                expression.true_expr
+            ) or self.hlsl_storage_struct_view_has_resource_source(
+                expression.false_expr
+            )
+        return False
+
+    def hlsl_storage_struct_view_parts(self, expression):
+        if not (
+            isinstance(expression, UnaryOpNode)
+            and expression.op == "*"
+            and not getattr(expression, "is_postfix", False)
+            and isinstance(expression.operand, PointerReinterpretNode)
+        ):
+            return None
+        reinterpret = expression.operand
+        pointer_type = getattr(reinterpret, "target_type", None)
+        target_type = getattr(pointer_type, "pointee_type", None)
+        target_name = self.type_name_string(target_type)
+        if target_name not in self.structs_by_name:
+            return None
+        address_space = str(
+            getattr(pointer_type, "address_space", None) or "storage"
+        ).lower()
+        if address_space in {"thread", "private", "function"}:
+            return None
+        if address_space not in {"device", "global", "storage"}:
+            self.hlsl_storage_struct_view_error(
+                reinterpret,
+                source_type=self.type_name_string(
+                    self.expression_result_type(reinterpret.expression)
+                )
+                or "unknown",
+                target_type=target_name,
+                reason="unsupported-storage-view-address-space",
+                detail=f"address space '{address_space}' is not typed storage",
+            )
+        if self.hlsl_private_pointer_expression_has_side_effects(
+            reinterpret.expression
+        ):
+            self.hlsl_storage_struct_view_error(
+                reinterpret,
+                source_type=self.type_name_string(
+                    self.expression_result_type(reinterpret.expression)
+                )
+                or "unknown",
+                target_type=target_name,
+                reason="side-effecting-storage-view-offset",
+                detail="the source pointer or offset has side effects",
+            )
+        binding = self.hlsl_resource_pointer_binding(reinterpret.expression)
+        if binding is None or not binding.get("root"):
+            has_resource_source = self.hlsl_storage_struct_view_has_resource_source(
+                reinterpret.expression
+            )
+            self.hlsl_storage_struct_view_error(
+                reinterpret,
+                source_type=self.type_name_string(
+                    self.expression_result_type(reinterpret.expression)
+                )
+                or "unknown",
+                target_type=target_name,
+                reason=(
+                    "unprovable-storage-view-offset"
+                    if has_resource_source
+                    else "missing-storage-view-backing"
+                ),
+                detail=(
+                    "the source pointer cannot be reduced to one typed backing and "
+                    "element offset"
+                    if has_resource_source
+                    else "the source has no typed storage-buffer backing object"
+                ),
+            )
+        if binding.get("offset") is None or not (
+            self.hlsl_storage_struct_view_offset_is_provable(reinterpret.expression)
+        ):
+            self.hlsl_storage_struct_view_error(
+                reinterpret,
+                source_type=(
+                    binding.get("view_element_type")
+                    or binding.get("element_type")
+                    or binding.get("source_element_type")
+                    or "unknown"
+                ),
+                target_type=target_name,
+                reason="unprovable-storage-view-offset",
+                detail=(
+                    "the source element offset cannot be proven from typed pointer "
+                    "arithmetic"
+                ),
+                binding=binding,
+            )
+        layout = self.hlsl_storage_struct_view_layout(reinterpret, binding)
+        return reinterpret, binding, layout
+
+    def hlsl_storage_struct_view_word_expression(
+        self, pointer_expression, index, source_layout, target_layout
+    ):
+        source_value = self.generate_hlsl_resource_pointer_access(
+            pointer_expression, index
+        )
+        if source_value is None:
+            return None
+        if source_layout.name == target_layout.name:
+            return source_value
+        source_bits = (
+            f"asuint({source_value})"
+            if source_layout.kind == "floating" or source_layout.signed
+            else source_value
+        )
+        if target_layout.kind == "floating":
+            return f"asfloat({source_bits})"
+        if target_layout.signed:
+            return f"asint({source_bits})"
+        return source_bits
+
+    def generate_hlsl_storage_struct_view_copy(
+        self,
+        target_name,
+        target_type,
+        expression,
+        indent,
+        *,
+        declaration=None,
+    ):
+        parts = self.hlsl_storage_struct_view_parts(expression)
+        if parts is None:
+            return None
+        reinterpret, _binding, layout = parts
+        expected_type = self.type_name_string(target_type)
+        if expected_type != layout["target_type"]:
+            self.hlsl_storage_struct_view_error(
+                reinterpret,
+                source_type=layout["source_layout"].name,
+                target_type=layout["target_type"],
+                reason="storage-view-target-mismatch",
+                detail=f"the dereferenced value cannot initialize '{expected_type}'",
+            )
+        indent_str = "    " * indent
+        statements = []
+        if declaration is not None:
+            statements.append(f"{indent_str}{declaration};")
+        for index in range(layout["extent"]):
+            value = self.hlsl_storage_struct_view_word_expression(
+                reinterpret.expression,
+                index,
+                layout["source_layout"],
+                layout["target_layout"],
+            )
+            statements.append(
+                f"{indent_str}{target_name}.{layout['member']}[{index}] = {value};"
+            )
+        return "\n".join(statements) + "\n"
+
+    def hlsl_storage_struct_view_write_error(self, target):
+        found = None
+
+        def visit(expression):
+            nonlocal found
+            if found is not None or expression is None:
+                return
+            if isinstance(expression, PointerReinterpretNode):
+                target_type = getattr(expression.target_type, "pointee_type", None)
+                address_space = str(
+                    getattr(expression.target_type, "address_space", None) or "storage"
+                ).lower()
+                if self.type_name_string(
+                    target_type
+                ) in self.structs_by_name and address_space in {
+                    "device",
+                    "global",
+                    "storage",
+                }:
+                    found = expression
+                    return
+            if not hasattr(expression, "__dict__"):
+                return
+            for key, child in vars(expression).items():
+                if key in {"parent", "annotations", "name", "args"}:
+                    continue
+                if isinstance(child, (list, tuple)):
+                    for item in child:
+                        visit(item)
+                else:
+                    visit(child)
+
+        visit(target)
+        if found is None:
+            return
+        target_name = self.type_name_string(
+            getattr(found.target_type, "pointee_type", None)
+        )
+        self.hlsl_storage_struct_view_error(
+            found,
+            source_type=self.type_name_string(
+                self.expression_result_type(found.expression)
+            )
+            or "unknown",
+            target_type=target_name,
+            reason="storage-view-write-unsupported",
+            detail=(
+                "writes through a reinterpreted typed-storage aggregate are "
+                "unsupported"
+            ),
+            access="write",
+        )
+
     def hlsl_const_auto_resource_pointer_pointee_type(self, node, vtype, binding):
         if not isinstance(vtype, PointerType):
             return None
@@ -13593,7 +14010,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             op = getattr(node, "operator", "=")
 
         self.hlsl_private_pointer_word_view_write_error(target)
+        self.hlsl_storage_struct_view_write_error(target)
         target_type = self.hlsl_assignment_target_type(target)
+        target_name = (
+            target
+            if isinstance(target, str)
+            else (
+                getattr(target, "name", None)
+                if isinstance(target, (IdentifierNode, VariableNode))
+                else None
+            )
+        )
+        if target_name is not None and op == "=":
+            storage_struct_assignment = self.generate_hlsl_storage_struct_view_copy(
+                self.hlsl_identifier_name(target_name),
+                target_type,
+                value,
+                0,
+            )
+            if storage_struct_assignment is not None:
+                return storage_struct_assignment.rstrip()
         boolean_compound_assignment = self.generate_hlsl_boolean_compound_assignment(
             node,
             target,
@@ -29224,6 +29660,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     ):
         local_types = local_types or {}
         if isinstance(expression, PointerReinterpretNode):
+            address_space = str(
+                getattr(expression.target_type, "address_space", None) or ""
+            ).lower()
+            if address_space and address_space not in {
+                "thread",
+                "private",
+                "function",
+            }:
+                return None
             operand = getattr(expression, "expression", None)
             backing = getattr(operand, "operand", None)
             backing_name = getattr(backing, "name", None)
@@ -29233,15 +29678,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or operand.op != "&"
                 or source_type is None
             ):
-                self.hlsl_private_pointer_word_view_error(
-                    expression,
-                    source_type=self.type_name_string(source_type) or "unknown",
-                    target_type=self.type_name_string(
-                        getattr(expression.target_type, "pointee_type", None)
-                    ),
-                    reason="missing-private-view-backing",
-                    detail="the source must be the address of a typed local struct",
-                )
+                return None
             layout = self.hlsl_private_pointer_word_view_layout(expression, source_type)
             return {
                 "root_kind": "local_word_view",

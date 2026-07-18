@@ -42514,6 +42514,319 @@ def test_hlsl_metal_private_struct_scalar_views_preserve_aligned_offsets(tmp_pat
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_metal_storage_struct_view_materializes_fixed_words_and_offset(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct WordBlock {
+        uint words[2];
+    };
+
+    kernel void storage_struct_view(
+        const device uint* input [[buffer(0)]],
+        device uint* output [[buffer(1)]]) {
+        thread WordBlock base = *((const device WordBlock*)input);
+        thread WordBlock offset;
+        offset = *((const device WordBlock*)(input + 3));
+        output[0] = base.words[0];
+        output[1] = offset.words[1];
+    }
+    """
+    shader_path = tmp_path / "storage_struct_view.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "base.words[0] = input[uint(0)];" in generated
+    assert "base.words[1] = input[uint(1)];" in generated
+    assert "offset.words[0] = input[uint(3)];" in generated
+    assert "offset.words[1] = input[uint((3 + 1))];" in generated
+    assert "WordBlock*" not in generated
+    assert "PointerReinterpretNode" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_storage_struct_copy_composes_with_private_byte_view(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct WordBlock {
+        uint words[2];
+    };
+
+    inline uint first_byte(const thread uint8_t* bytes) {
+        return bytes[0];
+    }
+
+    kernel void storage_then_private_view(
+        const device uint* input [[buffer(0)]],
+        device uint* output [[buffer(1)]]) {
+        thread WordBlock local;
+        local = *((const device WordBlock*)input);
+        output[0] = first_byte((const thread uint8_t*)&local);
+    }
+    """
+    shader_path = tmp_path / "storage_then_private_view.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "local.words[0] = input[uint(0)];" in generated
+    assert "local.words[1] = input[uint(1)];" in generated
+    assert "first_byte(local.words, 0)" in generated
+    assert "missing-private-view-backing" not in generated
+    assert "PointerReinterpretNode" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_storage_struct_view_preserves_typed_alias_offset(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct WordBlock {
+        uint32_t words[2];
+    };
+
+    kernel void typed_storage_alias(
+        const device uint8_t* packed [[buffer(0)]],
+        device uint* output [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        const device uint32_t* words = (const device uint32_t*)packed;
+        words += gid * 2;
+        thread WordBlock local;
+        local = *((device WordBlock*)words);
+        output[0] = local.words[0] + local.words[1];
+    }
+    """
+    shader_path = tmp_path / "typed_storage_alias.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "words_offset += int64_t((gid * 2));" in generated
+    assert "local.words[0] = packed[uint(((words_offset * 4)) / 4)];" in generated
+    assert "local.words[1] = packed[uint((((words_offset + 1) * 4)) / 4)];" in generated
+    assert "local.words[0] = packed[uint(0)]" not in generated
+    assert "PointerReinterpretNode" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("source_type", "word_type", "expected_load"),
+    [
+        pytest.param("int", "uint", "asuint(input[uint(0)])", id="signed-source"),
+        pytest.param("float", "uint", "asuint(input[uint(0)])", id="floating-source"),
+        pytest.param("uint", "int", "asint(input[uint(0)])", id="signed-target"),
+        pytest.param("uint", "float", "asfloat(input[uint(0)])", id="floating-target"),
+    ],
+)
+def test_hlsl_metal_storage_struct_view_preserves_word_bits(
+    tmp_path, source_type, word_type, expected_load
+):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct WordBlock {{
+        {word_type} words[2];
+    }};
+
+    kernel void storage_struct_bits(
+        const device {source_type}* input [[buffer(0)]],
+        device {word_type}* output [[buffer(1)]]) {{
+        thread WordBlock local = *((const device WordBlock*)input);
+        output[0] = local.words[0];
+    }}
+    """
+    shader_path = tmp_path / f"storage_struct_bits_{source_type}_{word_type}.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert f"local.words[0] = {expected_load};" in generated
+    assert "PointerReinterpretNode" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("source_type", "struct_body", "reason"),
+    [
+        pytest.param(
+            "uint",
+            "uint tag; uint words[2];",
+            "heterogeneous-storage-view-layout",
+            id="heterogeneous",
+        ),
+        pytest.param(
+            "uint",
+            "uint words[];",
+            "dynamic-storage-view-extent",
+            id="dynamic-extent",
+        ),
+        pytest.param(
+            "uint",
+            "uint2 words[2];",
+            "unsupported-storage-view-target-layout",
+            id="vector-words",
+        ),
+        pytest.param(
+            "ulong",
+            "uint words[2];",
+            "unsupported-storage-view-source-layout",
+            id="wide-source",
+        ),
+    ],
+)
+def test_hlsl_metal_storage_struct_view_rejects_unsupported_layouts(
+    tmp_path, source_type, struct_body, reason
+):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct WordBlock {{
+        {struct_body}
+    }};
+
+    kernel void rejected_storage_struct_view(
+        const device {source_type}* input [[buffer(0)]],
+        device uint* output [[buffer(1)]]) {{
+        thread WordBlock local = *((const device WordBlock*)input);
+        output[0] = 0;
+    }}
+    """
+    shader_path = tmp_path / f"rejected_storage_struct_view_{reason}.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(PointerReinterpretationError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = excinfo.value
+    assert diagnostic.reason == reason
+    assert diagnostic.target_type == "WordBlock"
+    assert diagnostic.address_space == "storage"
+
+
+@pytest.mark.parametrize(
+    ("source_expression", "reason"),
+    [
+        pytest.param(
+            "input + index++",
+            "side-effecting-storage-view-offset",
+            id="side-effecting",
+        ),
+        pytest.param(
+            "choose ? input + 1 : input + 2",
+            "unprovable-storage-view-offset",
+            id="conditional-offset",
+        ),
+    ],
+)
+def test_hlsl_metal_storage_struct_view_rejects_unstable_offsets(
+    tmp_path, source_expression, reason
+):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct WordBlock {{
+        uint words[2];
+    }};
+
+    kernel void rejected_storage_offset(
+        const device uint* input [[buffer(0)]],
+        device uint* output [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {{
+        bool choose = index != 0;
+        thread WordBlock local =
+            *((const device WordBlock*)({source_expression}));
+        output[0] = local.words[0];
+    }}
+    """
+    shader_path = tmp_path / f"rejected_storage_offset_{reason}.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(PointerReinterpretationError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = excinfo.value
+    assert diagnostic.reason == reason
+    assert diagnostic.address_space == "storage"
+    assert diagnostic.access == "read"
+
+
+def test_hlsl_metal_storage_struct_view_rejects_write(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct WordBlock {
+        uint words[2];
+    };
+
+    kernel void rejected_storage_write(
+        device uint* output [[buffer(0)]]) {
+        thread WordBlock local;
+        local.words[0] = 1;
+        local.words[1] = 2;
+        *((device WordBlock*)output) = local;
+    }
+    """
+    shader_path = tmp_path / "rejected_storage_write.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(PointerReinterpretationError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = excinfo.value
+    assert diagnostic.reason == "storage-view-write-unsupported"
+    assert diagnostic.target_type == "WordBlock"
+    assert diagnostic.address_space == "storage"
+    assert diagnostic.access == "write"
+
+
 @pytest.mark.parametrize(
     ("struct_body", "helper", "call", "reason"),
     [
