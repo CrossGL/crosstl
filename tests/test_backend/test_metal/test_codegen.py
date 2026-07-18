@@ -11431,6 +11431,88 @@ def test_metal_cooperative_matrix_fragment_mapping_emits_configured_metadata():
     ) in crossgl
 
 
+def cooperative_matrix_fragment_contract_propagation_source():
+    return """
+    float preserve_fragment_matrix(float value) {
+      return value;
+    }
+
+    metal::simdgroup_matrix<float, 8, 8> preserve_fragment_matrix(
+        thread metal::simdgroup_matrix<float, 8, 8>& matrix) {
+      matrix.thread_elements()[0] = matrix.thread_elements()[1];
+      return matrix;
+    }
+
+    kernel void propagate_fragment_contract(
+        device float2* fragments [[buffer(0)]]) {
+      metal::simdgroup_matrix<float, 8, 8> left;
+      metal::simdgroup_matrix<float, 8, 8> right;
+      metal::simdgroup_matrix<float, 8, 8> accumulator;
+      reinterpret_cast<thread float2&>(left.thread_elements()) = fragments[0];
+      fragments[1] = reinterpret_cast<const thread float2&>(
+          left.thread_elements());
+      right.thread_elements()[0] = left.thread_elements()[1];
+      metal::simdgroup_matrix<float, 8, 8> prior =
+          preserve_fragment_matrix(accumulator);
+      simdgroup_multiply_accumulate(accumulator, left, right, prior);
+    }
+    """
+
+
+def generate_cooperative_matrix_fragment_contract_propagation(converter):
+    source = cooperative_matrix_fragment_contract_propagation_source()
+    return converter.generate(parse_code(tokenize_code(source)))
+
+
+def assert_cooperative_matrix_fragment_contract(crossgl, expected_type):
+    emitted_types = re.findall(
+        r"CooperativeMatrix<float,8,8,[^>]+>",
+        crossgl,
+    )
+
+    assert emitted_types
+    assert set(emitted_types) == {expected_type}
+    assert (
+        "CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified>" not in crossgl
+    )
+    assert "cooperative_matrix_element(matrix, 0)" in crossgl
+    assert "cooperative_matrix_element(matrix, 1)" in crossgl
+    assert (
+        "cooperative_matrix_multiply_accumulate(accumulator, left, right, prior);"
+        in crossgl
+    )
+
+
+def test_metal_cooperative_matrix_fragment_contract_propagates_configured_mapping():
+    converter = MetalToCrossGLConverter(
+        cooperative_matrix_fragment_mapping="tile_4x4_row_pair",
+        cooperative_matrix_fragment_mapping_provenance="source_coordinate_helper",
+    )
+
+    crossgl = generate_cooperative_matrix_fragment_contract_propagation(converter)
+
+    assert_cooperative_matrix_fragment_contract(
+        crossgl,
+        "CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified,"
+        "metal_thread_elements,32,2,metal_thread_elements_reference_view,"
+        "tile_4x4_row_pair,source_coordinate_helper>",
+    )
+
+
+def test_metal_cooperative_matrix_fragment_contract_propagates_without_mapping():
+    crossgl = generate_cooperative_matrix_fragment_contract_propagation(
+        MetalToCrossGLConverter()
+    )
+
+    assert_cooperative_matrix_fragment_contract(
+        crossgl,
+        "CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified,"
+        "metal_thread_elements,32,2,metal_thread_elements_reference_view>",
+    )
+    assert "tile_4x4_row_pair" not in crossgl
+    assert "source_coordinate_helper" not in crossgl
+
+
 @pytest.mark.parametrize(
     ("mapping", "provenance"),
     [

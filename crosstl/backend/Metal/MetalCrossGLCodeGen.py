@@ -1407,6 +1407,7 @@ class MetalToCrossGLConverter:
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
+        self.cooperative_matrix_fragment_type_replacements = {}
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
         self.texture_method_functions = {
@@ -2506,6 +2507,7 @@ class MetalToCrossGLConverter:
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
+        self.cooperative_matrix_fragment_type_replacements = {}
         self.alias_template_declarations = {}
         self.alias_template_plain_declarations = {}
         self.alias_template_cache = {}
@@ -2900,6 +2902,7 @@ class MetalToCrossGLConverter:
             self.generate_cooperative_matrix_fragment_support_code(indent=1),
             1,
         )
+        code = self.propagate_cooperative_matrix_fragment_type_contracts(code)
         return code
 
     def generate_top_level_function(
@@ -12025,6 +12028,28 @@ class MetalToCrossGLConverter:
             fragment_contract.pop()
         return f"CooperativeMatrix<{','.join([*mapped_args, *fragment_contract])}>"
 
+    def register_cooperative_matrix_fragment_type_contract(
+        self, metal_type, complete_type
+    ):
+        legacy_type = self.map_metal_cooperative_matrix_type(metal_type)
+        if legacy_type is None:
+            return None
+        previous_type = self.cooperative_matrix_fragment_type_replacements.get(
+            legacy_type
+        )
+        if previous_type is not None and previous_type != complete_type:
+            return previous_type
+        self.cooperative_matrix_fragment_type_replacements[legacy_type] = complete_type
+        return None
+
+    def propagate_cooperative_matrix_fragment_type_contracts(self, code):
+        replacements = self.cooperative_matrix_fragment_type_replacements
+        if not replacements:
+            return code
+        legacy_types = sorted(replacements, key=lambda value: (-len(value), value))
+        pattern = re.compile("|".join(re.escape(value) for value in legacy_types))
+        return pattern.sub(lambda match: replacements[match.group(0)], code)
+
     def is_metal_cooperative_matrix_expression(self, expression):
         return (
             self.metal_cooperative_matrix_type_parts(
@@ -12283,6 +12308,16 @@ class MetalToCrossGLConverter:
         )
         if mapped_matrix_type is None:
             reject("the matrix type cannot retain its inferred fragment contract")
+        conflicting_mapped_type = (
+            self.register_cooperative_matrix_fragment_type_contract(
+                matrix_type, mapped_matrix_type
+            )
+        )
+        if conflicting_mapped_type is not None:
+            reject(
+                "the same matrix specialization has conflicting generated "
+                "whole-fragment type contracts"
+            )
         mapped_fragment_type = self.map_type(fragment_value_type)
         return {
             "matrix_expression": matrix_expression,

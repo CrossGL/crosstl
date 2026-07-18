@@ -2433,6 +2433,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     whole_fragment_issue = "https://github.com/CrossGL/crosstl/issues/1815"
     fragment_contract_issue = "https://github.com/CrossGL/crosstl/issues/1816"
     cooperative_matrix_issue = "https://github.com/CrossGL/crosstl/issues/1602"
+    operation_result_type_issue = "https://github.com/CrossGL/crosstl/issues/1610"
     coordinate_mapping_issue = "https://github.com/CrossGL/crosstl/issues/1820"
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1807"
 
@@ -2532,6 +2533,31 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             "numerical_parity_verified": False,
             "tracked_by": coordinate_mapping_issue,
         },
+        "cooperative_matrix_contract_flow": {
+            "status": "verified-contract-propagation",
+            "ast_node_type": "CooperativeMatrixType",
+            "ast_node_count": 16,
+            "contract_field_count": 12,
+            "complete_contract_node_count_before": 2,
+            "complete_contract_node_count_after": 16,
+            "fragment_contract": {
+                "layout": "metal_thread_elements",
+                "subgroup_size": 32,
+                "elements_per_lane": 2,
+                "provenance": "metal_thread_elements_reference_view",
+                "mapping": "tile_4x4_row_pair",
+                "mapping_provenance": "mlx_steel_BaseMMAFrag_get_coord",
+            },
+        },
+        "cooperative_matrix_operation_result_types": {
+            "status": "unresolved",
+            "ast_node_type": "CooperativeMatrixOpNode",
+            "ast_node_count": 8,
+            "operation_counts": {"element": 7, "multiply_accumulate": 1},
+            "result_type_set_count": 0,
+            "result_type_unset_count": 8,
+            "tracked_by": operation_result_type_issue,
+        },
         "current_boundaries": {
             "directx": {
                 "diagnostic_code": (
@@ -2609,8 +2635,13 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             pointer_cast_issue,
             coordinate_mapping_issue,
         ],
-        "remaining_blocked_by": [cooperative_matrix_issue],
+        "remaining_blocked_by": [
+            cooperative_matrix_issue,
+            operation_result_type_issue,
+        ],
+        "source_translation_claimed": False,
         "runtime_integration_included": False,
+        "runtime_execution_verified": False,
         "numerical_parity_claimed": False,
         "runtime_parity_claimed": False,
     }
@@ -2632,6 +2663,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert member_array_issue in expected_gaps["tracked_issues"]
     assert pointer_cast_issue in expected_gaps["tracked_issues"]
     assert cooperative_matrix_issue in expected_gaps["tracked_issues"]
+    assert operation_result_type_issue in expected_gaps["tracked_issues"]
     assert coordinate_mapping_issue in expected_gaps["tracked_issues"]
 
     readme = MLX_README_PATH.read_text(encoding="utf-8")
@@ -2663,6 +2695,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     assert "CrossGL/crosstl#1815" in readme
     assert "CrossGL/crosstl#1816" in readme
     assert "CrossGL/crosstl#1602" in readme
+    assert "CrossGL/crosstl#1610" in readme
     assert "CrossGL/crosstl#1820" in readme
     assert "ordered `cooperative_matrix_element` operations" in " ".join(readme.split())
     assert "`metal_thread_elements` layout" in " ".join(readme.split())
@@ -2672,11 +2705,17 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
     )
     assert "`tile_4x4_row_pair` mapping" in " ".join(readme.split())
     assert "`mlx_steel_BaseMMAFrag_get_coord` provenance" in " ".join(readme.split())
-    assert "compile with the native Xcode Metal compiler" in " ".join(readme.split())
-    assert "Neither run emits a target artifact" in " ".join(readme.split())
-    assert "does not claim runtime integration or numerical parity" in " ".join(
+    assert "16 `CooperativeMatrixType` nodes" in " ".join(readme.split())
+    assert "two nodes carried the complete 12-field contract" in " ".join(
         readme.split()
     )
+    assert "all 16 carry the `metal_thread_elements` layout" in " ".join(readme.split())
+    assert "eight `CooperativeMatrixOpNode` operations" in " ".join(readme.split())
+    assert "All eight still have an unset `result_type`" in " ".join(readme.split())
+    assert "compile with the native Xcode Metal compiler" in " ".join(readme.split())
+    assert "Neither run emits a target artifact" in " ".join(readme.split())
+    assert "do not establish successful source translation" in " ".join(readme.split())
+    assert "runtime execution, or numerical parity" in " ".join(readme.split())
 
 
 def test_arange_reference_runtime_resolves_fixture_resource_aliases():
