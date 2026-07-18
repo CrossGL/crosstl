@@ -2284,6 +2284,191 @@ def _run_runtime_loader_manifest(args):
     return 0 if payload["success"] else 1
 
 
+def _load_native_loader_manifest(path):
+    from .project import NativeLoaderABIError
+
+    manifest_path = Path(path)
+    try:
+        text = manifest_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise NativeLoaderABIError(
+            "manifest-read-failed",
+            "Could not read runtime loader manifest as UTF-8 text.",
+            path="$.loaderManifest",
+            details={"source": str(manifest_path)},
+        ) from exc
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise NativeLoaderABIError(
+            "manifest-json-invalid",
+            f"Runtime loader manifest is not valid JSON: {exc}",
+            details={"source": str(manifest_path)},
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise NativeLoaderABIError(
+            "manifest-invalid",
+            "Runtime loader manifest must be a JSON object.",
+            details={"source": str(manifest_path)},
+        )
+    return payload
+
+
+def _native_loader_abi_resolved_output(path, *, option, diagnostic_path):
+    from .project import NativeLoaderABIError
+
+    try:
+        return Path(path).resolve(strict=False)
+    except (OSError, RuntimeError, UnicodeError) as exc:
+        raise NativeLoaderABIError(
+            f"{option}-path-resolve-failed",
+            f"Could not resolve the {option.replace('-', ' ')} path.",
+            path=diagnostic_path,
+            details={"destination": str(path)},
+        ) from exc
+
+
+def _validate_native_loader_abi_output_paths(output, declarations_output):
+    from .project import NativeLoaderABIError
+
+    if not output or _is_stdout_output(output) or not declarations_output:
+        return
+    resolved_output = _native_loader_abi_resolved_output(
+        output,
+        option="output",
+        diagnostic_path="$.output",
+    )
+    resolved_declarations = _native_loader_abi_resolved_output(
+        declarations_output,
+        option="declarations-output",
+        diagnostic_path="$.declarationsOutput",
+    )
+    if os.path.normcase(str(resolved_output)) == os.path.normcase(
+        str(resolved_declarations)
+    ):
+        raise NativeLoaderABIError(
+            "output-path-conflict",
+            "Descriptor and declaration outputs must resolve to different paths.",
+            path="$.declarationsOutput",
+            details={
+                "output": str(output),
+                "declarationsOutput": str(declarations_output),
+                "resolvedPath": str(resolved_output),
+            },
+        )
+
+
+def _write_native_loader_abi_json(payload, output):
+    from .project import NativeLoaderABIError
+
+    try:
+        _write_json_payload(payload, output)
+    except (OSError, UnicodeError) as exc:
+        destination = str(output) if output else STDOUT_OUTPUT_PATH
+        raise NativeLoaderABIError(
+            "output-write-failed",
+            "Could not write the native loader ABI descriptor as UTF-8 JSON.",
+            path="$.output",
+            details={"destination": destination},
+        ) from exc
+
+
+def _emit_native_loader_abi_error(error, output=None):
+    from .project import NativeLoaderABIError
+
+    try:
+        _write_native_loader_abi_json(error.to_json(), output)
+    except NativeLoaderABIError as write_error:
+        if output and not _is_stdout_output(output):
+            try:
+                _write_native_loader_abi_json(write_error.to_json(), None)
+            except NativeLoaderABIError:
+                pass
+
+
+def _write_native_loader_declarations(declarations, output):
+    from .project import NativeLoaderABIError
+
+    declarations_path = Path(output)
+    try:
+        declarations_path.parent.mkdir(parents=True, exist_ok=True)
+        declarations_path.write_text(declarations, encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise NativeLoaderABIError(
+            "declarations-write-failed",
+            "Could not write native loader declarations as UTF-8 text.",
+            path="$.declarationsOutput",
+            details={"destination": str(declarations_path)},
+        ) from exc
+
+
+def _run_native_loader_abi(args):
+    from .project import (
+        NativeLoaderABIError,
+        build_native_loader_abi_descriptor,
+        generate_native_loader_declarations,
+    )
+
+    try:
+        _validate_native_loader_abi_output_paths(
+            args.output,
+            args.declarations_output,
+        )
+    except NativeLoaderABIError as exc:
+        _emit_native_loader_abi_error(exc)
+        return 1
+
+    try:
+        manifest = _load_native_loader_manifest(args.loader_manifest)
+        descriptor = build_native_loader_abi_descriptor(
+            manifest,
+            load_unit_id=args.load_unit,
+        )
+        declarations = (
+            generate_native_loader_declarations(descriptor)
+            if args.declarations_output
+            else None
+        )
+    except NativeLoaderABIError as exc:
+        _emit_native_loader_abi_error(exc, args.output)
+        return 1
+
+    if declarations is not None:
+        try:
+            _write_native_loader_declarations(
+                declarations,
+                args.declarations_output,
+            )
+        except NativeLoaderABIError as exc:
+            _emit_native_loader_abi_error(exc, args.output)
+            return 1
+    try:
+        _write_native_loader_abi_json(descriptor, args.output)
+    except NativeLoaderABIError as exc:
+        _emit_native_loader_abi_error(exc)
+        return 1
+    return 0
+
+
+def _run_native_loader_abi_package(args):
+    from .project import NativeLoaderABIError, build_native_loader_abi_package
+
+    try:
+        package = build_native_loader_abi_package(
+            args.loader_manifest,
+            args.output_dir,
+        )
+    except NativeLoaderABIError as exc:
+        _emit_native_loader_abi_error(exc)
+        return 1
+    try:
+        _write_native_loader_abi_json(package, None)
+    except NativeLoaderABIError as exc:
+        _emit_native_loader_abi_error(exc)
+        return 1
+    return 0
+
+
 def _format_runtime_variant_registry(payload):
     lines = ["Runtime variant registry"]
     for header_line in (
@@ -7109,6 +7294,38 @@ def _build_parser():
     )
     runtime_loader_parser.set_defaults(func=_run_runtime_loader_manifest)
 
+    native_loader_abi_parser = subparsers.add_parser(
+        "native-loader-abi",
+        help="Build a native loader ABI descriptor from a runtime loader manifest",
+    )
+    native_loader_abi_parser.add_argument(
+        "loader_manifest", help="Runtime loader manifest JSON"
+    )
+    native_loader_abi_parser.add_argument(
+        "--load-unit",
+        help="Load unit ID to select when the manifest does not contain exactly one unit",
+    )
+    native_loader_abi_parser.add_argument(
+        "--declarations-output",
+        help="Write deterministic C declarations for the selected load unit",
+    )
+    native_loader_abi_parser.add_argument(
+        "--output", "-o", help="Write native loader ABI descriptor; use '-' for stdout"
+    )
+    native_loader_abi_parser.set_defaults(func=_run_native_loader_abi)
+
+    native_loader_abi_package_parser = subparsers.add_parser(
+        "native-loader-abi-package",
+        help="Build a native loader ABI package from a runtime loader manifest",
+    )
+    native_loader_abi_package_parser.add_argument(
+        "loader_manifest", help="Runtime loader manifest JSON"
+    )
+    native_loader_abi_package_parser.add_argument(
+        "output_dir", help="Directory where native loader ABI files are written"
+    )
+    native_loader_abi_package_parser.set_defaults(func=_run_native_loader_abi_package)
+
     runtime_variant_registry_parser = subparsers.add_parser(
         "runtime-variant-registry",
         help="Build an exact runtime variant registry from a package or loader manifest",
@@ -7344,6 +7561,8 @@ def _use_legacy_cli(argv):
         "plan-runtime-adapters",
         "materialize-runtime-adapters",
         "runtime-loader-manifest",
+        "native-loader-abi",
+        "native-loader-abi-package",
         "runtime-variant-registry",
         "scaffold-host-loaders",
         "inspect-host-loader-scaffolds",

@@ -37,6 +37,19 @@ from .host_reflection import (
     ReflectionDiagnostic,
     reflect_target_host_interface,
 )
+from .native_loader_abi import (
+    NATIVE_LOADER_ABI_KIND,
+    NATIVE_LOADER_ABI_VERSION,
+    NativeLoaderABIError,
+    build_native_loader_abi_descriptor,
+    generate_native_loader_declarations,
+)
+from .native_loader_abi_package import (
+    NATIVE_LOADER_ABI_PACKAGE_KIND,
+    NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
+    NATIVE_LOADER_ABI_PACKAGE_VERSION,
+    build_native_loader_abi_package,
+)
 from .native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
@@ -154,6 +167,11 @@ __all__ = [
     "DISPATCH_CONTRACT_KIND",
     "DISPATCH_CONTRACT_SCHEMA_VERSION",
     "MAX_DISPATCH_VARIANTS",
+    "NATIVE_LOADER_ABI_KIND",
+    "NATIVE_LOADER_ABI_PACKAGE_KIND",
+    "NATIVE_LOADER_ABI_PACKAGE_MANIFEST",
+    "NATIVE_LOADER_ABI_PACKAGE_VERSION",
+    "NATIVE_LOADER_ABI_VERSION",
     "DispatchArtifactJob",
     "DispatchArtifactPlan",
     "DispatchArtifactPlanError",
@@ -189,6 +207,7 @@ __all__ = [
     "NativeRuntimeDispatchRequest",
     "NativeRuntimeParityAdapter",
     "NativeRuntimeValidationCommand",
+    "NativeLoaderABIError",
     "OpenGLRuntimeParityAdapter",
     "OpenGLComputeRuntime",
     "RuntimeAdapter",
@@ -233,6 +252,8 @@ __all__ = [
     "PROJECT_TEST_RUNNER_REPORT_KIND",
     "build_runtime_artifact_manifest",
     "build_runtime_binding_manifest",
+    "build_native_loader_abi_descriptor",
+    "build_native_loader_abi_package",
     "build_runtime_test_manifest",
     "build_runtime_host_loader_scaffolds",
     "build_runtime_host_integration_handoff",
@@ -247,6 +268,7 @@ __all__ = [
     "evaluate_dispatch_contract",
     "execute_runtime_host_integration",
     "execute_project_test_runner_plan",
+    "generate_native_loader_declarations",
     "inspect_runtime_host_integration_handoff",
     "inspect_runtime_host_loader_scaffolds",
     "inspect_runtime_package",
