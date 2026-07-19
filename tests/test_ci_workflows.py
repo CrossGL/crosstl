@@ -334,10 +334,7 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     assert "python -m pip install -e . pytest-xdist" in job
     assert "CC: ${{ matrix.cc }}" in job
     assert "CXX: ${{ matrix.cxx }}" in job
-    assert (
-        "uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756"
-        in job
-    )
+    assert "uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756" in job
     assert "Compile and test generated C11 and C++17 loader artifacts" in job
     assert "python -m pytest -q -n auto" in job
     assert "tests/test_translator/test_native_loader_abi.py" in job
