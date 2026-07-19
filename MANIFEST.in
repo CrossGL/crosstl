@@ -1,5 +1,8 @@
 include README.md
 include LICENSE
+include CHANGELOG.md
+include CITATION.cff
+include .zenodo.json
 graft crosstl
 graft examples
 graft support
