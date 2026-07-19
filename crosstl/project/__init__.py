@@ -121,6 +121,12 @@ from .runtime_graph import (
     runtime_execution_request_to_graph,
     validate_runtime_execution_graph,
 )
+from .runtime_graph_execution import (
+    RUNTIME_GRAPH_EXECUTION_RESULT_KIND,
+    RuntimeGraphExecutionError,
+    RuntimeGraphExecutionResult,
+    execute_runtime_graph,
+)
 from .runtime_verification import (
     DirectXRuntimeParityAdapter,
     NativeRuntimeBufferBinding,
@@ -227,6 +233,7 @@ __all__ = [
     "RUNTIME_EXECUTION_GRAPH_KIND",
     "RUNTIME_EXECUTION_GRAPH_SCHEMA_VERSION",
     "RUNTIME_EXECUTION_GRAPH_VALIDATION_KIND",
+    "RUNTIME_GRAPH_EXECUTION_RESULT_KIND",
     "RUNTIME_VARIANT_LOOKUP_KIND",
     "RUNTIME_VARIANT_REGISTRY_KIND",
     "REFLECTION_AMBIGUOUS_BINDING",
@@ -282,6 +289,8 @@ __all__ = [
     "RuntimeGraphDispatch",
     "RuntimeGraphDispatchGeometry",
     "RuntimeGraphError",
+    "RuntimeGraphExecutionError",
+    "RuntimeGraphExecutionResult",
     "RuntimeGraphFill",
     "RuntimeGraphNode",
     "RuntimeGraphPhysicalLayout",
@@ -324,6 +333,7 @@ __all__ = [
     "encode_runtime_variant_key",
     "evaluate_dispatch_contract",
     "execute_runtime_host_integration",
+    "execute_runtime_graph",
     "execute_project_test_runner_plan",
     "generate_native_loader_declarations",
     "inspect_runtime_host_integration_handoff",
