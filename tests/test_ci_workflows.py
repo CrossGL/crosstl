@@ -48,6 +48,16 @@ def _workflow_texts():
     }
 
 
+def _workflow_job_section(workflow, job_id):
+    match = re.search(
+        rf"^  {re.escape(job_id)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+        workflow,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, f"workflow job {job_id!r} is missing"
+    return match.group(0)
+
+
 def _local_action_text(name):
     path = ACTIONS_DIR / name / "action.yml"
     return path.read_text(encoding="utf-8")
@@ -2407,6 +2417,62 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "mlx/backend/metal/kernels/ternary.metal" in harness
     assert "arange-opengl" in harness
     assert "metalIncludesFiltered" in harness
+
+
+def test_mlx_platform_runtime_workflow_preserves_pinned_checkout():
+    workflow = _workflow_texts().get("mlx-platform-runtime.yml", "")
+    mlx_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+
+    assert workflow, "mlx-platform-runtime.yml must exist"
+    assert f'MLX_COMMIT: "{mlx_commit}"' in workflow
+    assert workflow.count("checkout --detach FETCH_HEAD") == 2
+    assert workflow.count('rev-parse HEAD)" = "$MLX_COMMIT"') == 2
+    assert workflow.count("sparse-checkout set mlx/backend/metal/kernels") == 2
+    assert workflow.count("CROSTL_MLX_SOURCE_ROOT: mlx-upstream") == 2
+    assert '"tests/test_ci_workflows.py"' in workflow
+    assert '"tests/test_tools/test_ci_workflows.py"' not in workflow
+    assert "continue-on-error" not in workflow
+
+
+def test_mlx_platform_runtime_wires_directx_graph_device_proof():
+    workflow = _workflow_texts().get("mlx-platform-runtime.yml", "")
+    directx = _workflow_job_section(workflow, "directx-dispatch-sequence")
+    node_id = (
+        "tests/test_translator/test_runtime_graph_device.py::"
+        "test_directx_dispatch_sequence_executes_shared_temporary_on_device"
+    )
+
+    assert "runs-on: windows-latest" in directx
+    assert "Install DirectX Shader Compiler" in directx
+    assert "Get-FileHash -Path $archive -Algorithm SHA256" in directx
+    assert "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4" in (
+        directx
+    )
+    assert 'python -m pip install -e ".[directx-runtime]" pytest-xdist' in directx
+    assert 'CROSTL_RUN_DIRECTX_DISPATCH_SEQUENCE_DEVICE_TEST: "1"' in directx
+    assert node_id in directx
+    assert "python -m pytest -q -n auto" in directx
+    assert "-k" not in directx
+
+
+def test_mlx_platform_runtime_wires_opengl_graph_device_proof():
+    workflow = _workflow_texts().get("mlx-platform-runtime.yml", "")
+    opengl = _workflow_job_section(workflow, "opengl-dispatch-sequence")
+    node_id = (
+        "tests/test_translator/test_runtime_graph_device.py::"
+        "test_opengl_dispatch_sequence_executes_shared_temporary_on_device"
+    )
+
+    assert "runs-on: ubuntu-latest" in opengl
+    assert "moderngl==5.12.0" in opengl
+    assert "glslangValidator --version" in opengl
+    assert 'CROSTL_RUN_OPENGL_DISPATCH_SEQUENCE_DEVICE_TEST: "1"' in opengl
+    assert "EGL_PLATFORM: surfaceless" in opengl
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl
+    assert "PYOPENGL_PLATFORM: egl" in opengl
+    assert node_id in opengl
+    assert "python -m pytest -q -n auto" in opengl
+    assert "-k" not in opengl
 
 
 def test_mlx_project_porting_workflow_runs_quantized_directx_proof_on_windows():

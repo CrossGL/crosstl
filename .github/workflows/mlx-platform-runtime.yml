@@ -1,0 +1,162 @@
+name: MLX Platform Runtime
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-platform-runtime.yml"
+      - "crosstl/project/**"
+      - "setup.py"
+      - "tests/test_ci_workflows.py"
+      - "tests/test_translator/test_runtime_graph_device.py"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/mlx-platform-runtime.yml"
+      - "crosstl/project/**"
+      - "setup.py"
+      - "tests/test_ci_workflows.py"
+      - "tests/test_translator/test_runtime_graph_device.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mlx-platform-runtime-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  directx-dispatch-sequence:
+    name: Direct3D ordered dispatch sequence
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout CrossTL
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install DirectX Shader Compiler
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $dxcUri -OutFile $archive
+              break
+            } catch {
+              if ($attempt -eq 5) {
+                throw
+              }
+              Write-Warning "DXC download failed on attempt $attempt; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          $archiveSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveSha256 -ne $dxcSha256) {
+            throw "DXC archive checksum mismatch: expected $dxcSha256, got $archiveSha256."
+          }
+          Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
+          $dxc = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxc.exe |
+            Where-Object { $_.FullName -match "\\bin\\x64\\dxc.exe$" } |
+            Select-Object -First 1
+          if ($null -eq $dxc) {
+            throw "dxc.exe not found in release archive."
+          }
+          $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Direct3D runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[directx-runtime]" pytest-xdist
+
+      - name: Checkout pinned MLX Metal source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf mlx-upstream
+          git init mlx-upstream
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream config advice.detachedHead false
+          git -C mlx-upstream sparse-checkout init --cone
+          git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
+          git -C mlx-upstream fetch --depth=1 --filter=blob:none origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          test "$(git -C mlx-upstream rev-parse HEAD)" = "$MLX_COMMIT"
+          test -z "$(git -C mlx-upstream status --porcelain=v1 --untracked-files=all)"
+
+      - name: Prove Direct3D ordered dispatch sequence
+        env:
+          CROSTL_RUN_DIRECTX_DISPATCH_SEQUENCE_DEVICE_TEST: "1"
+          CROSTL_MLX_SOURCE_ROOT: mlx-upstream
+        run: >-
+          dxc --version &&
+          python -m pytest -q -n auto
+          tests/test_translator/test_runtime_graph_device.py::test_directx_dispatch_sequence_executes_shared_temporary_on_device
+
+  opengl-dispatch-sequence:
+    name: OpenGL ordered dispatch sequence
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout CrossTL
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install OpenGL runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0
+          python -m pip install --upgrade pip
+          python -m pip install -e . moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist
+          glslangValidator --version
+
+      - name: Checkout pinned MLX Metal source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf mlx-upstream
+          git init mlx-upstream
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream config advice.detachedHead false
+          git -C mlx-upstream sparse-checkout init --cone
+          git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
+          git -C mlx-upstream fetch --depth=1 --filter=blob:none origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          test "$(git -C mlx-upstream rev-parse HEAD)" = "$MLX_COMMIT"
+          test -z "$(git -C mlx-upstream status --porcelain=v1 --untracked-files=all)"
+
+      - name: Prove OpenGL ordered dispatch sequence
+        env:
+          CROSTL_RUN_OPENGL_DISPATCH_SEQUENCE_DEVICE_TEST: "1"
+          CROSTL_MLX_SOURCE_ROOT: mlx-upstream
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_runtime_graph_device.py::test_opengl_dispatch_sequence_executes_shared_temporary_on_device
