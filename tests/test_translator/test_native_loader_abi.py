@@ -16,6 +16,7 @@ from crosstl.project.native_loader_abi import (
     NativeLoaderABIError,
     build_native_loader_abi_descriptor,
     generate_native_loader_declarations,
+    generate_native_loader_execution_abi,
 )
 from crosstl.project.pipeline import (
     REPORT_SCHEMA_VERSION,
@@ -184,9 +185,12 @@ def test_native_loader_abi_output_is_deterministic_from_loader_manifest():
     second = build_native_loader_abi_descriptor(_loader_manifest(reordered_unit))
     first_header = generate_native_loader_declarations(first)
     second_header = generate_native_loader_declarations(second)
+    first_execution_abi = generate_native_loader_execution_abi(first)
+    second_execution_abi = generate_native_loader_execution_abi(second)
 
     assert first == second
     assert first_header == second_header
+    assert first_execution_abi == second_execution_abi
     assert first["kind"] == NATIVE_LOADER_ABI_KIND
     assert first["abiVersion"] == NATIVE_LOADER_ABI_VERSION
     assert first["artifact"] == {
@@ -222,6 +226,14 @@ def test_native_loader_abi_output_is_deterministic_from_loader_manifest():
     assert f'"{"1" * 64}"' in first_header
     assert r"\"packagePath\":\"source-remaps/copy.source-remap.json\"" in first_header
     assert first_header.endswith("\n")
+    assert first_execution_abi.startswith(first_header)
+    assert "typedef struct CrossTLNativeLoaderAdapter" in first_execution_abi
+    assert "CROSSTL_NATIVE_LOADER_CODE_TARGET_MISMATCH = 3" in first_execution_abi
+    assert "CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_ARTIFACT = 11" in first_execution_abi
+    assert "malloc(" not in first_execution_abi
+    assert "calloc(" not in first_execution_abi
+    assert "realloc(" not in first_execution_abi
+    assert "free(" not in first_execution_abi
 
 
 def test_directx_and_opengl_descriptors_share_one_host_binding_contract():
@@ -296,6 +308,37 @@ def _native_compiler(language):
     return None
 
 
+def _native_compile_command(
+    compiler, language, source_path, output_path, *, link=False
+):
+    executable_names = {
+        Path(part).name.lower() for part in compiler if not part.startswith("-")
+    }
+    msvc_style = bool(executable_names & {"cl", "cl.exe", "clang-cl", "clang-cl.exe"})
+    if msvc_style:
+        standard = "/std:c11" if language == "c" else "/std:c++17"
+        command = compiler + ["/nologo", standard, "/W4", "/WX"]
+        if not link:
+            command.append("/c")
+        command.append(str(source_path))
+        command.append(f"/Fe{output_path}" if link else f"/Fo{output_path}")
+        return command
+    standard = "-std=c11" if language == "c" else "-std=c++17"
+    command = compiler + [
+        standard,
+        "-pedantic-errors",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        str(source_path),
+        "-o",
+        str(output_path),
+    ]
+    if not link:
+        command.insert(-3, "-c")
+    return command
+
+
 @pytest.mark.parametrize("language", ("c", "c++"), ids=("c11", "cxx17"))
 def test_generated_source_identity_fields_compile(tmp_path, language):
     compiler = _native_compiler(language)
@@ -330,36 +373,9 @@ def test_generated_source_identity_fields_compile(tmp_path, language):
         encoding="utf-8",
     )
 
-    executable_names = {
-        Path(part).name.lower() for part in compiler if not part.startswith("-")
-    }
-    msvc_style = bool(executable_names & {"cl", "cl.exe", "clang-cl", "clang-cl.exe"})
-    if msvc_style:
-        object_path = tmp_path / "source_identity.obj"
-        standard = "/std:c11" if language == "c" else "/std:c++17"
-        command = compiler + [
-            "/nologo",
-            standard,
-            "/W4",
-            "/WX",
-            "/c",
-            str(source_path),
-            f"/Fo{object_path}",
-        ]
-    else:
-        object_path = tmp_path / "source_identity.o"
-        standard = "-std=c11" if language == "c" else "-std=c++17"
-        command = compiler + [
-            standard,
-            "-pedantic-errors",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-c",
-            str(source_path),
-            "-o",
-            str(object_path),
-        ]
+    object_suffix = ".obj" if os.name == "nt" else ".o"
+    object_path = tmp_path / f"source_identity{object_suffix}"
+    command = _native_compile_command(compiler, language, source_path, object_path)
 
     result = subprocess.run(
         command,
@@ -370,6 +386,400 @@ def test_generated_source_identity_fields_compile(tmp_path, language):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert object_path.is_file()
+
+
+@pytest.mark.parametrize("language", ("c", "c++"), ids=("c11", "cxx17"))
+def test_generated_execution_abi_compiles(tmp_path, language):
+    compiler = _native_compiler(language)
+    if compiler is None:
+        pytest.skip(f"No native {language} compiler is available")
+
+    execution_abi = generate_native_loader_execution_abi(
+        build_native_loader_abi_descriptor(_load_unit())
+    )
+    symbol_match = re.search(
+        r"static inline CrossTLNativeLoaderExecutionResult\s+"
+        r"([A-Za-z_]\w*_execute)\(",
+        execution_abi,
+    )
+    assert symbol_match is not None
+    execute_symbol = symbol_match.group(1)
+    header_path = tmp_path / "native_loader_execution.h"
+    header_path.write_text(execution_abi, encoding="utf-8")
+    suffix = ".c" if language == "c" else ".cpp"
+    source_path = tmp_path / f"execution_abi{suffix}"
+    source_path.write_text(
+        textwrap.dedent(f"""
+            #include "native_loader_execution.h"
+
+            int main(void) {{
+                CrossTLNativeLoaderExecutionResult result =
+                    {execute_symbol}(NULL, NULL);
+                return result.error.code ==
+                    CROSSTL_NATIVE_LOADER_CODE_INVALID_ARGUMENT ? 0 : 1;
+            }}
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    object_suffix = ".obj" if os.name == "nt" else ".o"
+    object_path = tmp_path / f"execution_abi{object_suffix}"
+    command = _native_compile_command(compiler, language, source_path, object_path)
+
+    result = subprocess.run(
+        command,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert object_path.is_file()
+
+
+def test_generated_execution_abi_runs_fake_adapter_and_cleans_up(tmp_path):
+    compiler = _native_compiler("c")
+    if compiler is None:
+        pytest.skip("No native C compiler is available")
+
+    execution_abi = generate_native_loader_execution_abi(
+        build_native_loader_abi_descriptor(_load_unit())
+    )
+    symbol_match = re.search(
+        r"static inline CrossTLNativeLoaderExecutionResult\s+"
+        r"([A-Za-z_]\w*_execute)\(",
+        execution_abi,
+    )
+    assert symbol_match is not None
+    execute_symbol = symbol_match.group(1)
+    header_path = tmp_path / "native_loader_execution.h"
+    header_path.write_text(execution_abi, encoding="utf-8")
+    source_path = tmp_path / "fake_adapter.c"
+    source_path.write_text(
+        textwrap.dedent(f"""
+            #include "native_loader_execution.h"
+
+            typedef struct FakeContext {{
+                int events[32];
+                size_t event_count;
+                int fail_binding;
+                int fail_release;
+                int artifact;
+                int pipeline;
+                int resources[2];
+            }} FakeContext;
+
+            static void record_event(FakeContext *context, int event) {{
+                context->events[context->event_count++] = event;
+            }}
+
+            static int32_t fake_load_artifact(
+                void *opaque,
+                const CrossTLNativeLoaderUnitDescriptor *unit,
+                void **artifact_out) {{
+                FakeContext *context = (FakeContext *)opaque;
+                record_event(context, 10);
+                if (unit == NULL || artifact_out == NULL ||
+                    !crosstl_native_loader_strings_equal(unit->target, "directx")) {{
+                    return 11;
+                }}
+                *artifact_out = &context->artifact;
+                return 0;
+            }}
+
+            static int32_t fake_unload_artifact(void *opaque, void *artifact) {{
+                FakeContext *context = (FakeContext *)opaque;
+                record_event(context, 100);
+                return artifact == &context->artifact ? 0 : 12;
+            }}
+
+            static int32_t fake_create_pipeline(
+                void *opaque,
+                void *artifact,
+                const CrossTLNativeLoaderUnitDescriptor *unit,
+                void **pipeline_out) {{
+                FakeContext *context = (FakeContext *)opaque;
+                record_event(context, 20);
+                if (artifact != &context->artifact || unit == NULL ||
+                    pipeline_out == NULL) {{
+                    return 21;
+                }}
+                *pipeline_out = &context->pipeline;
+                return 0;
+            }}
+
+            static int32_t fake_destroy_pipeline(void *opaque, void *pipeline) {{
+                FakeContext *context = (FakeContext *)opaque;
+                record_event(context, 90);
+                return pipeline == &context->pipeline ? 0 : 22;
+            }}
+
+            static int32_t fake_apply_specialization(
+                void *opaque,
+                void *pipeline,
+                const CrossTLNativeLoaderSpecializationDescriptor *descriptor,
+                const CrossTLNativeLoaderSpecializationRequest *request) {{
+                FakeContext *context = (FakeContext *)opaque;
+                record_event(context, 30 + (int)descriptor->id);
+                if (pipeline != &context->pipeline || descriptor->has_id != 1u ||
+                    descriptor->id != 3u || request->payload_size_bytes != 4u) {{
+                    return 31;
+                }}
+                return 0;
+            }}
+
+            static int32_t fake_bind_resource(
+                void *opaque,
+                void *pipeline,
+                const CrossTLNativeLoaderBindingDescriptor *descriptor,
+                const CrossTLNativeLoaderBindingRequest *request,
+                void **resource_out) {{
+                FakeContext *context = (FakeContext *)opaque;
+                size_t index = descriptor->binding_index;
+                record_event(context, 40 + (int)index);
+                if (pipeline != &context->pipeline || index >= 2u ||
+                    request->payload == NULL || resource_out == NULL) {{
+                    return 41;
+                }}
+                *resource_out = &context->resources[index];
+                if ((int)index == context->fail_binding) {{
+                    return 73;
+                }}
+                return 0;
+            }}
+
+            static int32_t fake_release_resource(
+                void *opaque,
+                void *resource,
+                const CrossTLNativeLoaderBindingDescriptor *descriptor) {{
+                FakeContext *context = (FakeContext *)opaque;
+                size_t index = descriptor->binding_index;
+                record_event(context, 80 + (int)index);
+                if (index >= 2u || resource != &context->resources[index]) {{
+                    return 81;
+                }}
+                return (int)index == context->fail_release ? 91 : 0;
+            }}
+
+            static int32_t fake_dispatch(
+                void *opaque,
+                void *pipeline,
+                const CrossTLNativeLoaderDispatchGeometry *geometry) {{
+                FakeContext *context = (FakeContext *)opaque;
+                record_event(context, 50);
+                if (pipeline != &context->pipeline ||
+                    geometry->workgroup_count[0] != 1u ||
+                    geometry->workgroup_size[0] != 64u) {{
+                    return 51;
+                }}
+                return 0;
+            }}
+
+            static int32_t fake_synchronize(void *opaque, void *pipeline) {{
+                FakeContext *context = (FakeContext *)opaque;
+                record_event(context, 60);
+                return pipeline == &context->pipeline ? 0 : 61;
+            }}
+
+            static int32_t fake_readback(
+                void *opaque,
+                void *resource,
+                const CrossTLNativeLoaderBindingDescriptor *descriptor,
+                const CrossTLNativeLoaderBindingRequest *request) {{
+                FakeContext *context = (FakeContext *)opaque;
+                size_t index = descriptor->binding_index;
+                record_event(context, 70 + (int)index);
+                if (index != 1u || resource != &context->resources[index] ||
+                    request->payload_size_bytes < sizeof(float)) {{
+                    return 71;
+                }}
+                *((float *)request->payload) = 50.0f;
+                return 0;
+            }}
+
+            static int check_events(
+                const FakeContext *context,
+                const int *expected,
+                size_t expected_count) {{
+                size_t index;
+                if (context->event_count != expected_count) {{
+                    return 0;
+                }}
+                for (index = 0u; index < expected_count; ++index) {{
+                    if (context->events[index] != expected[index]) {{
+                        return 0;
+                    }}
+                }}
+                return 1;
+            }}
+
+            int main(void) {{
+                float input_values[4] = {{0.0f, 1.0f, 7.0f, 42.0f}};
+                float output_values[1] = {{0.0f}};
+                uint32_t vector_width = 4u;
+                CrossTLNativeLoaderBindingRequest bindings[2] = {{
+                    {{
+                        "input_values", "buffer", "float[]", "srv", 0u, 0u,
+                        CROSSTL_NATIVE_LOADER_ACCESS_READ,
+                        input_values, sizeof(input_values)
+                    }},
+                    {{
+                        "output_values", "buffer", "float[]", "uav", 0u, 1u,
+                        CROSSTL_NATIVE_LOADER_ACCESS_WRITE,
+                        output_values, sizeof(output_values)
+                    }}
+                }};
+                CrossTLNativeLoaderSpecializationRequest specializations[1] = {{
+                    {{
+                        1u, 3u, "vector_width", "uint32",
+                        &vector_width, sizeof(vector_width)
+                    }}
+                }};
+                CrossTLNativeLoaderExecutionRequest request = {{
+                    CROSSTL_NATIVE_LOADER_ABI_VERSION,
+                    "directx",
+                    2u,
+                    bindings,
+                    1u,
+                    specializations,
+                    {{{{1u, 1u, 1u}}, {{64u, 1u, 1u}}}}
+                }};
+                FakeContext context = {{{{0}}, 0u, -1, -1, 0, 0, {{0, 0}}}};
+                CrossTLNativeLoaderAdapter adapter = {{
+                    CROSSTL_NATIVE_LOADER_ABI_VERSION,
+                    "directx",
+                    &context,
+                    fake_load_artifact,
+                    fake_unload_artifact,
+                    fake_create_pipeline,
+                    fake_destroy_pipeline,
+                    fake_apply_specialization,
+                    fake_bind_resource,
+                    fake_release_resource,
+                    fake_dispatch,
+                    fake_synchronize,
+                    fake_readback
+                }};
+                CrossTLNativeLoaderExecutionResult result;
+                const int success_events[] = {{
+                    10, 20, 33, 40, 41, 50, 60, 71, 81, 80, 90, 100
+                }};
+                const int failure_events[] = {{
+                    10, 20, 33, 40, 41, 81, 80, 90, 100
+                }};
+
+                request.abi_version = 2u;
+                result = {execute_symbol}(&request, &adapter);
+                if (result.error.code !=
+                        CROSSTL_NATIVE_LOADER_CODE_ABI_VERSION_MISMATCH ||
+                    context.event_count != 0u) {{
+                    return 1;
+                }}
+                request.abi_version = CROSSTL_NATIVE_LOADER_ABI_VERSION;
+                request.target = "opengl";
+                result = {execute_symbol}(&request, &adapter);
+                if (result.error.code != CROSSTL_NATIVE_LOADER_CODE_TARGET_MISMATCH ||
+                    context.event_count != 0u) {{
+                    return 2;
+                }}
+                request.target = "directx";
+                bindings[0].access = CROSSTL_NATIVE_LOADER_ACCESS_WRITE;
+                result = {execute_symbol}(&request, &adapter);
+                if (result.error.code !=
+                        CROSSTL_NATIVE_LOADER_CODE_BINDING_ACCESS_MISMATCH ||
+                    result.error.binding_index != 0u || context.event_count != 0u) {{
+                    return 3;
+                }}
+                bindings[0].access = CROSSTL_NATIVE_LOADER_ACCESS_READ;
+                specializations[0].type_name = "int32";
+                result = {execute_symbol}(&request, &adapter);
+                if (result.error.code !=
+                        CROSSTL_NATIVE_LOADER_CODE_SPECIALIZATION_TYPE_MISMATCH ||
+                    result.error.specialization_index != 0u ||
+                    context.event_count != 0u) {{
+                    return 4;
+                }}
+                specializations[0].type_name = "uint32";
+                request.dispatch.workgroup_size[0] = 32u;
+                result = {execute_symbol}(&request, &adapter);
+                if (result.error.code !=
+                        CROSSTL_NATIVE_LOADER_CODE_WORKGROUP_SIZE_MISMATCH ||
+                    context.event_count != 0u) {{
+                    return 5;
+                }}
+                request.dispatch.workgroup_size[0] = 64u;
+
+                result = {execute_symbol}(&request, &adapter);
+                if (!result.succeeded ||
+                    result.error.code != CROSSTL_NATIVE_LOADER_CODE_OK ||
+                    result.cleanup_error.code != CROSSTL_NATIVE_LOADER_CODE_OK ||
+                    output_values[0] != 50.0f ||
+                    !check_events(
+                        &context, success_events,
+                        sizeof(success_events) / sizeof(success_events[0]))) {{
+                    return 6;
+                }}
+
+                context.event_count = 0u;
+                context.fail_binding = 1;
+                output_values[0] = 0.0f;
+                result = {execute_symbol}(&request, &adapter);
+                if (result.succeeded ||
+                    result.error.phase != CROSSTL_NATIVE_LOADER_PHASE_BIND_RESOURCE ||
+                    result.error.code != CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE ||
+                    result.error.binding_index != 1u ||
+                    result.error.adapter_status != 73 ||
+                    result.cleanup_error.code != CROSSTL_NATIVE_LOADER_CODE_OK ||
+                    output_values[0] != 0.0f ||
+                    !check_events(
+                        &context, failure_events,
+                        sizeof(failure_events) / sizeof(failure_events[0]))) {{
+                    return 7;
+                }}
+
+                context.event_count = 0u;
+                context.fail_binding = -1;
+                context.fail_release = 1;
+                result = {execute_symbol}(&request, &adapter);
+                if (result.succeeded ||
+                    result.error.phase !=
+                        CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_RESOURCE ||
+                    result.error.binding_index != 1u ||
+                    result.error.adapter_status != 91 ||
+                    result.cleanup_error.code !=
+                        CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE ||
+                    !check_events(
+                        &context, success_events,
+                        sizeof(success_events) / sizeof(success_events[0]))) {{
+                    return 8;
+                }}
+                return 0;
+            }}
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    executable_name = "fake_adapter.exe" if os.name == "nt" else "fake_adapter"
+    executable_path = tmp_path / executable_name
+    command = _native_compile_command(
+        compiler, "c", source_path, executable_path, link=True
+    )
+    compile_result = subprocess.run(
+        command,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
+    assert executable_path.is_file()
+
+    run_result = subprocess.run(
+        [str(executable_path)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run_result.returncode == 0, run_result.stdout + run_result.stderr
 
 
 @pytest.mark.parametrize(
