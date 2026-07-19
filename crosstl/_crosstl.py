@@ -2328,32 +2328,77 @@ def _native_loader_abi_resolved_output(path, *, option, diagnostic_path):
         ) from exc
 
 
-def _validate_native_loader_abi_output_paths(output, declarations_output):
+def _validate_native_loader_abi_output_paths(
+    output,
+    declarations_output,
+    execution_output,
+):
     from .project import NativeLoaderABIError
 
-    if not output or _is_stdout_output(output) or not declarations_output:
-        return
-    resolved_output = _native_loader_abi_resolved_output(
-        output,
-        option="output",
-        diagnostic_path="$.output",
+    output_paths = (
+        ("output", output, "$.output", "output"),
+        (
+            "declarations-output",
+            declarations_output,
+            "$.declarationsOutput",
+            "declarationsOutput",
+        ),
+        (
+            "execution-output",
+            execution_output,
+            "$.executionOutput",
+            "executionOutput",
+        ),
     )
-    resolved_declarations = _native_loader_abi_resolved_output(
-        declarations_output,
-        option="declarations-output",
-        diagnostic_path="$.declarationsOutput",
+    resolved_paths = {}
+    raw_paths = {}
+    detail_keys = {}
+    for option, value, diagnostic_path, detail_key in output_paths:
+        if not value or (option == "output" and _is_stdout_output(value)):
+            continue
+        resolved_paths[option] = _native_loader_abi_resolved_output(
+            value,
+            option=option,
+            diagnostic_path=diagnostic_path,
+        )
+        raw_paths[option] = value
+        detail_keys[option] = detail_key
+
+    conflicts = (
+        (
+            "output",
+            "declarations-output",
+            "Descriptor and declaration outputs must resolve to different paths.",
+            "$.declarationsOutput",
+        ),
+        (
+            "output",
+            "execution-output",
+            "Descriptor and execution outputs must resolve to different paths.",
+            "$.executionOutput",
+        ),
+        (
+            "declarations-output",
+            "execution-output",
+            "Declaration and execution outputs must resolve to different paths.",
+            "$.executionOutput",
+        ),
     )
-    if os.path.normcase(str(resolved_output)) == os.path.normcase(
-        str(resolved_declarations)
-    ):
+    for first, second, message, diagnostic_path in conflicts:
+        if first not in resolved_paths or second not in resolved_paths:
+            continue
+        first_path = resolved_paths[first]
+        second_path = resolved_paths[second]
+        if os.path.normcase(str(first_path)) != os.path.normcase(str(second_path)):
+            continue
         raise NativeLoaderABIError(
             "output-path-conflict",
-            "Descriptor and declaration outputs must resolve to different paths.",
-            path="$.declarationsOutput",
+            message,
+            path=diagnostic_path,
             details={
-                "output": str(output),
-                "declarationsOutput": str(declarations_output),
-                "resolvedPath": str(resolved_output),
+                detail_keys[first]: str(raw_paths[first]),
+                detail_keys[second]: str(raw_paths[second]),
+                "resolvedPath": str(first_path),
             },
         )
 
@@ -2402,17 +2447,35 @@ def _write_native_loader_declarations(declarations, output):
         ) from exc
 
 
+def _write_native_loader_execution_abi(execution_abi, output):
+    from .project import NativeLoaderABIError
+
+    execution_path = Path(output)
+    try:
+        execution_path.parent.mkdir(parents=True, exist_ok=True)
+        execution_path.write_text(execution_abi, encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise NativeLoaderABIError(
+            "execution-write-failed",
+            "Could not write native loader execution ABI as UTF-8 text.",
+            path="$.executionOutput",
+            details={"destination": str(execution_path)},
+        ) from exc
+
+
 def _run_native_loader_abi(args):
     from .project import (
         NativeLoaderABIError,
         build_native_loader_abi_descriptor,
         generate_native_loader_declarations,
+        generate_native_loader_execution_abi,
     )
 
     try:
         _validate_native_loader_abi_output_paths(
             args.output,
             args.declarations_output,
+            args.execution_output,
         )
     except NativeLoaderABIError as exc:
         _emit_native_loader_abi_error(exc)
@@ -2429,6 +2492,11 @@ def _run_native_loader_abi(args):
             if args.declarations_output
             else None
         )
+        execution_abi = (
+            generate_native_loader_execution_abi(descriptor)
+            if args.execution_output
+            else None
+        )
     except NativeLoaderABIError as exc:
         _emit_native_loader_abi_error(exc, args.output)
         return 1
@@ -2438,6 +2506,15 @@ def _run_native_loader_abi(args):
             _write_native_loader_declarations(
                 declarations,
                 args.declarations_output,
+            )
+        except NativeLoaderABIError as exc:
+            _emit_native_loader_abi_error(exc, args.output)
+            return 1
+    if execution_abi is not None:
+        try:
+            _write_native_loader_execution_abi(
+                execution_abi,
+                args.execution_output,
             )
         except NativeLoaderABIError as exc:
             _emit_native_loader_abi_error(exc, args.output)
@@ -7308,6 +7385,10 @@ def _build_parser():
     native_loader_abi_parser.add_argument(
         "--declarations-output",
         help="Write deterministic C declarations for the selected load unit",
+    )
+    native_loader_abi_parser.add_argument(
+        "--execution-output",
+        help="Write a deterministic standalone C execution ABI for the selected load unit",
     )
     native_loader_abi_parser.add_argument(
         "--output", "-o", help="Write native loader ABI descriptor; use '-' for stdout"

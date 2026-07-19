@@ -1070,7 +1070,8 @@ one ready load unit:
      crosstl-runtime-package/runtime-loader-manifest.json \
      --load-unit copy:directx \
      --output copy.directx.abi.json \
-     --declarations-output copy.directx.abi.h
+     --declarations-output copy.directx.abi.h \
+     --execution-output copy.directx.native-loader-execution.h
 
 ``native-loader-abi`` selects exactly one ready load unit. ``--load-unit`` is
 optional only when the input manifest contains one unit. The command emits a
@@ -1086,7 +1087,34 @@ descriptor. The header contains a guarded, versioned ABI type contract and
 immutable unit and binding descriptor data. The declarations compile as C11
 and C++17 and can be included for more than one load unit without redefining
 the shared ABI types. They describe what downstream host integration must
-load and bind; they are not a generated runtime implementation.
+load and bind; they do not execute the unit.
+
+``--execution-output`` writes a deterministic, allocation-free C11/C++17
+execution wrapper for the selected unit. The header includes the declaration
+contract and adds request, adapter-callback, result, and structured-error
+types plus a unit-specific ``*_execute`` function. Before consulting the
+adapter, that function validates the ABI version, target, exact binding
+identity and coordinates, access modes, specialization identities and types,
+payload presence, and dispatch geometry.
+
+After validation, the wrapper loads the artifact, applies specialization
+values to that artifact, creates the pipeline, binds resources in descriptor
+order, dispatches, synchronizes, and reads back writable resources. It then
+releases resources in reverse binding order, destroys the pipeline, and
+unloads the artifact on both success and failure paths. The wrapper uses
+fixed-size stack storage derived from the descriptor and performs no heap
+allocation.
+
+The caller owns the execution request, binding and specialization payloads,
+readback destinations, and adapter context for the duration of the call. The
+adapter owns each native artifact, pipeline, and resource handle that its
+callbacks return; the wrapper passes those handles to the corresponding
+unload, destroy, and release callbacks. A nonzero callback return value is
+preserved as ``adapter_status`` with the failing phase and binding or
+specialization index. ``error`` records the primary execution failure, while
+``cleanup_error`` records the first cleanup failure without replacing an
+earlier primary failure. A cleanup failure becomes the primary error only
+when all preceding execution phases succeeded.
 
 Build descriptors and declarations for every ready unit in one operation:
 
@@ -1097,8 +1125,11 @@ Build descriptors and declarations for every ready unit in one operation:
      crosstl-native-loader-abi
 
 ``native-loader-abi-package`` validates every unit before writing output. It
-emits target-scoped descriptor and header files plus
+emits target-scoped descriptor, declaration, and execution header files plus
 ``native-loader-abi-package.json`` and prints that package manifest as JSON.
+Each packaged unit records ``executionABIPath`` and ``executionABIHash``;
+the generated-file inventory identifies the header as
+``native-loader-execution-abi``.
 
 The same operations are available through the public project API:
 
@@ -1111,6 +1142,7 @@ The same operations are available through the public project API:
        build_native_loader_abi_descriptor,
        build_native_loader_abi_package,
        generate_native_loader_declarations,
+       generate_native_loader_execution_abi,
    )
 
    descriptor = build_native_loader_abi_descriptor(
@@ -1118,6 +1150,7 @@ The same operations are available through the public project API:
        load_unit_id="copy:directx",
    )
    declarations = generate_native_loader_declarations(descriptor)
+   execution_abi = generate_native_loader_execution_abi(descriptor)
 
    package = build_native_loader_abi_package(
        "crosstl-runtime-package/runtime-loader-manifest.json",
@@ -1127,19 +1160,24 @@ The same operations are available through the public project API:
 ``build_native_loader_abi_descriptor`` validates and normalizes one loader
 unit before returning deterministic JSON-compatible metadata.
 ``generate_native_loader_declarations`` validates that descriptor before
-rendering the C representation. ``build_native_loader_abi_package`` validates
-all load units before writing output, then emits one descriptor and header per
-unit under target-scoped paths plus a deterministic package manifest. The
-manifest records content hashes, source loader-manifest identity, generated
-paths, target and unit counts, and uses the exported
+rendering the C representation. ``generate_native_loader_execution_abi``
+validates the same descriptor before rendering the executable callback
+wrapper. ``build_native_loader_abi_package`` validates all load units before
+writing output, then emits one descriptor, declaration header, and execution
+header per unit under target-scoped paths plus a deterministic package
+manifest. The manifest records content hashes, source loader-manifest
+identity, generated paths, target and unit counts, and uses the exported
 ``NATIVE_LOADER_ABI_PACKAGE_KIND``, ``NATIVE_LOADER_ABI_PACKAGE_VERSION``, and
 ``NATIVE_LOADER_ABI_PACKAGE_MANIFEST`` constants for its kind, schema version,
 and file name. A blocked, incomplete, or duplicate unit prevents package
 publication rather than producing a partially described package.
 
-These APIs and the CLI produce ABI metadata and C declarations only. They do
-not instantiate Direct3D or OpenGL runtime objects, dispatch device work,
-rewrite host code, or prove parity for the MLX test suite.
+These APIs and the CLI publish a target-neutral execution contract, not
+target-specific C adapters. The generated wrapper cannot instantiate
+Direct3D, OpenGL, or other runtime objects unless the caller supplies an
+adapter that implements those operations. Host application rewriting, full
+MLX runtime integration, and MLX test-suite parity are not provided or
+claimed.
 
 For a complete DirectX or OpenGL compute descriptor, the public project API can
 construct and preflight the backend-neutral runtime request consumed by the

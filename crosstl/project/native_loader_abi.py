@@ -271,6 +271,800 @@ def generate_native_loader_declarations(descriptor: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def generate_native_loader_execution_abi(descriptor: Mapping[str, Any]) -> str:
+    """Render a deterministic, allocation-free C execution wrapper for one unit."""
+
+    normalized = _validate_descriptor(descriptor)
+    symbol = _descriptor_symbol(normalized)
+    guard = f"{symbol.upper()}_EXECUTION_H"
+    bindings = normalized["bindings"]
+    specializations = _execution_specialization_descriptors(
+        normalized["specializationConstants"]
+    )
+    workgroup_size = _execution_workgroup_size(
+        normalized["entryPoint"]["executionConfig"]
+    )
+    storage_count = max(1, len(bindings))
+    writable_binding_indexes = [
+        index
+        for index, binding in enumerate(bindings)
+        if binding.get("access") in {"write", "read_write"}
+    ]
+
+    lines = [
+        generate_native_loader_declarations(normalized).rstrip("\n"),
+        "",
+        f"#ifndef {guard}",
+        f"#define {guard}",
+        "",
+        "#ifdef __cplusplus",
+        'extern "C" {',
+        "#endif",
+        "",
+    ]
+    lines.extend(_native_loader_execution_type_declarations())
+    lines.extend(
+        [
+            "",
+            f"static const CrossTLNativeLoaderSpecializationDescriptor {symbol}_specializations[{max(1, len(specializations))}] = {{",
+        ]
+    )
+    if specializations:
+        for constant in specializations:
+            lines.append(
+                "    {"
+                f"{1 if constant['hasId'] else 0}u, "
+                f"{constant['id']}u, "
+                f"{_c_nullable_string(constant['name'])}, "
+                f"{_c_string(constant['type'])}"
+                "},"
+            )
+    else:
+        lines.append("    {0u, 0u, NULL, NULL},")
+    lines.extend(
+        [
+            "};",
+            "",
+            "static inline CrossTLNativeLoaderExecutionResult",
+            f"{symbol}_execute(",
+            "    const CrossTLNativeLoaderExecutionRequest *request,",
+            "    const CrossTLNativeLoaderAdapter *adapter) {",
+            "    CrossTLNativeLoaderExecutionResult result =",
+            "        crosstl_native_loader_execution_success();",
+            "    void *artifact = NULL;",
+            "    void *pipeline = NULL;",
+            f"    void *resources[{storage_count}] = {{NULL}};",
+            "    size_t index = 0u;",
+            "    int32_t status = 0;",
+            "",
+            "    if (request == NULL || adapter == NULL) {",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "            CROSSTL_NATIVE_LOADER_CODE_INVALID_ARGUMENT,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+            "    if (request->abi_version != CROSSTL_NATIVE_LOADER_ABI_VERSION ||",
+            "        adapter->abi_version != CROSSTL_NATIVE_LOADER_ABI_VERSION) {",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "            CROSSTL_NATIVE_LOADER_CODE_ABI_VERSION_MISMATCH,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+            f"    if (!crosstl_native_loader_strings_equal(request->target, {_c_string(normalized['target'])}) ||",
+            f"        !crosstl_native_loader_strings_equal(adapter->target, {_c_string(normalized['target'])})) {{",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "            CROSSTL_NATIVE_LOADER_CODE_TARGET_MISMATCH,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+            f"    if (request->binding_count != {len(bindings)}u) {{",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "            CROSSTL_NATIVE_LOADER_CODE_BINDING_COUNT_MISMATCH,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+        ]
+    )
+    if bindings:
+        lines.extend(
+            [
+                "    if (request->bindings == NULL) {",
+                "        return crosstl_native_loader_execution_failure(",
+                "            CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+                "            CROSSTL_NATIVE_LOADER_CODE_INVALID_ARGUMENT, 0u,",
+                "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+                "    }",
+            ]
+        )
+    lines.extend(
+        [
+            "    for (index = 0u; index < request->binding_count; ++index) {",
+            "        const CrossTLNativeLoaderBindingDescriptor *expected =",
+            f"            &{symbol}.bindings[index];",
+            "        const CrossTLNativeLoaderBindingRequest *actual =",
+            "            &request->bindings[index];",
+            "        if (!crosstl_native_loader_strings_equal(actual->name, expected->name) ||",
+            "            !crosstl_native_loader_strings_equal(actual->resource_kind, expected->resource_kind) ||",
+            "            !crosstl_native_loader_strings_equal(actual->type_name, expected->type_name) ||",
+            "            !crosstl_native_loader_strings_equal(actual->binding_namespace, expected->binding_namespace)) {",
+            "            return crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "                CROSSTL_NATIVE_LOADER_CODE_BINDING_IDENTITY_MISMATCH,",
+            "                index, CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "        }",
+            "        if (actual->set_index != expected->set_index ||",
+            "            actual->binding_index != expected->binding_index) {",
+            "            return crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "                CROSSTL_NATIVE_LOADER_CODE_BINDING_COORDINATE_MISMATCH,",
+            "                index, CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "        }",
+            "        if (actual->access != expected->access) {",
+            "            return crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "                CROSSTL_NATIVE_LOADER_CODE_BINDING_ACCESS_MISMATCH,",
+            "                index, CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "        }",
+            "        if (actual->payload == NULL || actual->payload_size_bytes == 0u) {",
+            "            return crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "                CROSSTL_NATIVE_LOADER_CODE_BINDING_PAYLOAD_MISSING,",
+            "                index, CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "        }",
+            "    }",
+            f"    if (request->specialization_count != {len(specializations)}u) {{",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "            CROSSTL_NATIVE_LOADER_CODE_SPECIALIZATION_COUNT_MISMATCH,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+        ]
+    )
+    if specializations:
+        lines.extend(
+            [
+                "    if (request->specializations == NULL) {",
+                "        return crosstl_native_loader_execution_failure(",
+                "            CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+                "            CROSSTL_NATIVE_LOADER_CODE_INVALID_ARGUMENT,",
+                "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0u, 0);",
+                "    }",
+            ]
+        )
+    lines.extend(
+        [
+            "    for (index = 0u; index < request->specialization_count; ++index) {",
+            "        const CrossTLNativeLoaderSpecializationDescriptor *expected =",
+            f"            &{symbol}_specializations[index];",
+            "        const CrossTLNativeLoaderSpecializationRequest *actual =",
+            "            &request->specializations[index];",
+            "        if (actual->has_id != expected->has_id ||",
+            "            actual->id != expected->id ||",
+            "            !crosstl_native_loader_strings_equal(actual->name, expected->name)) {",
+            "            return crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "                CROSSTL_NATIVE_LOADER_CODE_SPECIALIZATION_IDENTITY_MISMATCH,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, index, 0);",
+            "        }",
+            "        if (!crosstl_native_loader_strings_equal(actual->type_name, expected->type_name)) {",
+            "            return crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "                CROSSTL_NATIVE_LOADER_CODE_SPECIALIZATION_TYPE_MISMATCH,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, index, 0);",
+            "        }",
+            "        if (actual->payload == NULL || actual->payload_size_bytes == 0u) {",
+            "            return crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "                CROSSTL_NATIVE_LOADER_CODE_SPECIALIZATION_PAYLOAD_MISSING,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, index, 0);",
+            "        }",
+            "    }",
+            "    for (index = 0u; index < 3u; ++index) {",
+            "        if (request->dispatch.workgroup_count[index] == 0u ||",
+            "            request->dispatch.workgroup_size[index] == 0u) {",
+            "            return crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+            "                CROSSTL_NATIVE_LOADER_CODE_DISPATCH_GEOMETRY_INVALID,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "        }",
+            "    }",
+        ]
+    )
+    if workgroup_size:
+        for index, dimension in enumerate(workgroup_size):
+            lines.extend(
+                [
+                    f"    if (request->dispatch.workgroup_size[{index}] != {dimension}u) {{",
+                    "        return crosstl_native_loader_execution_failure(",
+                    "            CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST,",
+                    "            CROSSTL_NATIVE_LOADER_CODE_WORKGROUP_SIZE_MISMATCH,",
+                    "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+                    "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+                    "    }",
+                ]
+            )
+    lines.extend(
+        [
+            "    if (adapter->load_artifact == NULL) {",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_LOAD_ARTIFACT,",
+            "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+            "    if (adapter->unload_artifact == NULL) {",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_ARTIFACT,",
+            "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+            "    if (adapter->create_pipeline == NULL) {",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_CREATE_PIPELINE,",
+            "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+            "    if (adapter->destroy_pipeline == NULL) {",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_PIPELINE,",
+            "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+        ]
+    )
+    if specializations:
+        lines.extend(
+            [
+                "    if (adapter->apply_specialization == NULL) {",
+                "        return crosstl_native_loader_execution_failure(",
+                "            CROSSTL_NATIVE_LOADER_PHASE_APPLY_SPECIALIZATION,",
+                "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING,",
+                "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0u, 0);",
+                "    }",
+            ]
+        )
+    if bindings:
+        lines.extend(
+            [
+                "    if (adapter->bind_resource == NULL) {",
+                "        return crosstl_native_loader_execution_failure(",
+                "            CROSSTL_NATIVE_LOADER_PHASE_BIND_RESOURCE,",
+                "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING, 0u,",
+                "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+                "    }",
+                "    if (adapter->release_resource == NULL) {",
+                "        return crosstl_native_loader_execution_failure(",
+                "            CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_RESOURCE,",
+                "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING, 0u,",
+                "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+                "    }",
+            ]
+        )
+    lines.extend(
+        [
+            "    if (adapter->dispatch == NULL) {",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_DISPATCH,",
+            "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+            "    if (adapter->synchronize == NULL) {",
+            "        return crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_SYNCHRONIZE,",
+            "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "    }",
+        ]
+    )
+    if writable_binding_indexes:
+        lines.extend(
+            [
+                "    if (adapter->readback == NULL) {",
+                "        return crosstl_native_loader_execution_failure(",
+                "            CROSSTL_NATIVE_LOADER_PHASE_READBACK,",
+                "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING,",
+                f"            {writable_binding_indexes[0]}u,",
+                "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+                "    }",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "    status = adapter->load_artifact(",
+            f"        adapter->context, &{symbol}, &artifact);",
+            "    if (status != 0) {",
+            "        result = crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_LOAD_ARTIFACT,",
+            "            CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, status);",
+            "        goto cleanup;",
+            "    }",
+            "    if (artifact == NULL) {",
+            "        result = crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_LOAD_ARTIFACT,",
+            "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_OUTPUT_MISSING,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "        goto cleanup;",
+            "    }",
+            "    for (index = 0u; index < request->specialization_count; ++index) {",
+            "        status = adapter->apply_specialization(",
+            "            adapter->context, artifact,",
+            f"            &{symbol}_specializations[index],",
+            "            &request->specializations[index]);",
+            "        if (status != 0) {",
+            "            result = crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_APPLY_SPECIALIZATION,",
+            "                CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, index, status);",
+            "            goto cleanup;",
+            "        }",
+            "    }",
+            "    status = adapter->create_pipeline(",
+            f"        adapter->context, artifact, &{symbol}, &pipeline);",
+            "    if (status != 0) {",
+            "        result = crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_CREATE_PIPELINE,",
+            "            CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, status);",
+            "        goto cleanup;",
+            "    }",
+            "    if (pipeline == NULL) {",
+            "        result = crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_CREATE_PIPELINE,",
+            "            CROSSTL_NATIVE_LOADER_CODE_CALLBACK_OUTPUT_MISSING,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "        goto cleanup;",
+            "    }",
+            "    for (index = 0u; index < request->binding_count; ++index) {",
+            "        status = adapter->bind_resource(",
+            "            adapter->context, pipeline,",
+            f"            &{symbol}.bindings[index], &request->bindings[index],",
+            "            &resources[index]);",
+            "        if (status != 0) {",
+            "            result = crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_BIND_RESOURCE,",
+            "                CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE, index,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, status);",
+            "            goto cleanup;",
+            "        }",
+            "        if (resources[index] == NULL) {",
+            "            result = crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_BIND_RESOURCE,",
+            "                CROSSTL_NATIVE_LOADER_CODE_CALLBACK_OUTPUT_MISSING, index,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
+            "            goto cleanup;",
+            "        }",
+            "    }",
+            "    status = adapter->dispatch(adapter->context, pipeline, &request->dispatch);",
+            "    if (status != 0) {",
+            "        result = crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_DISPATCH,",
+            "            CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, status);",
+            "        goto cleanup;",
+            "    }",
+            "    status = adapter->synchronize(adapter->context, pipeline);",
+            "    if (status != 0) {",
+            "        result = crosstl_native_loader_execution_failure(",
+            "            CROSSTL_NATIVE_LOADER_PHASE_SYNCHRONIZE,",
+            "            CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
+            "            CROSSTL_NATIVE_LOADER_NO_INDEX, status);",
+            "        goto cleanup;",
+            "    }",
+            "    for (index = 0u; index < request->binding_count; ++index) {",
+            f"        if ({symbol}.bindings[index].access != CROSSTL_NATIVE_LOADER_ACCESS_WRITE &&",
+            f"            {symbol}.bindings[index].access != CROSSTL_NATIVE_LOADER_ACCESS_READ_WRITE) {{",
+            "            continue;",
+            "        }",
+            "        status = adapter->readback(",
+            "            adapter->context, resources[index],",
+            f"            &{symbol}.bindings[index], &request->bindings[index]);",
+            "        if (status != 0) {",
+            "            result = crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_READBACK,",
+            "                CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE, index,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, status);",
+            "            goto cleanup;",
+            "        }",
+            "    }",
+            "",
+            "cleanup:",
+            "    for (index = request->binding_count; index > 0u; --index) {",
+            "        size_t binding_index = index - 1u;",
+            "        if (resources[binding_index] == NULL) {",
+            "            continue;",
+            "        }",
+            "        status = adapter->release_resource(",
+            "            adapter->context, resources[binding_index],",
+            f"            &{symbol}.bindings[binding_index]);",
+            "        resources[binding_index] = NULL;",
+            "        if (status != 0) {",
+            "            crosstl_native_loader_record_cleanup_error(",
+            "                &result, CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_RESOURCE,",
+            "                binding_index, status);",
+            "        }",
+            "    }",
+            "    if (pipeline != NULL) {",
+            "        status = adapter->destroy_pipeline(adapter->context, pipeline);",
+            "        pipeline = NULL;",
+            "        if (status != 0) {",
+            "            crosstl_native_loader_record_cleanup_error(",
+            "                &result, CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_PIPELINE,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, status);",
+            "        }",
+            "    }",
+            "    if (artifact != NULL) {",
+            "        status = adapter->unload_artifact(adapter->context, artifact);",
+            "        artifact = NULL;",
+            "        if (status != 0) {",
+            "            crosstl_native_loader_record_cleanup_error(",
+            "                &result, CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_ARTIFACT,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, status);",
+            "        }",
+            "    }",
+            "    return result;",
+            "}",
+            "",
+            "#ifdef __cplusplus",
+            "}",
+            "#endif",
+            "",
+            f"#endif /* {guard} */",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _native_loader_execution_type_declarations() -> list[str]:
+    return """#ifndef CROSSTL_NATIVE_LOADER_EXECUTION_ABI_V1_TYPES
+#define CROSSTL_NATIVE_LOADER_EXECUTION_ABI_V1_TYPES
+
+#define CROSSTL_NATIVE_LOADER_NO_INDEX ((size_t)-1)
+
+typedef enum CrossTLNativeLoaderExecutionPhase {
+    CROSSTL_NATIVE_LOADER_PHASE_NONE = 0,
+    CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST = 1,
+    CROSSTL_NATIVE_LOADER_PHASE_LOAD_ARTIFACT = 2,
+    CROSSTL_NATIVE_LOADER_PHASE_APPLY_SPECIALIZATION = 3,
+    CROSSTL_NATIVE_LOADER_PHASE_CREATE_PIPELINE = 4,
+    CROSSTL_NATIVE_LOADER_PHASE_BIND_RESOURCE = 5,
+    CROSSTL_NATIVE_LOADER_PHASE_DISPATCH = 6,
+    CROSSTL_NATIVE_LOADER_PHASE_SYNCHRONIZE = 7,
+    CROSSTL_NATIVE_LOADER_PHASE_READBACK = 8,
+    CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_RESOURCE = 9,
+    CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_PIPELINE = 10,
+    CROSSTL_NATIVE_LOADER_PHASE_CLEANUP_ARTIFACT = 11
+} CrossTLNativeLoaderExecutionPhase;
+
+typedef enum CrossTLNativeLoaderExecutionCode {
+    CROSSTL_NATIVE_LOADER_CODE_OK = 0,
+    CROSSTL_NATIVE_LOADER_CODE_INVALID_ARGUMENT = 1,
+    CROSSTL_NATIVE_LOADER_CODE_ABI_VERSION_MISMATCH = 2,
+    CROSSTL_NATIVE_LOADER_CODE_TARGET_MISMATCH = 3,
+    CROSSTL_NATIVE_LOADER_CODE_CALLBACK_MISSING = 4,
+    CROSSTL_NATIVE_LOADER_CODE_BINDING_COUNT_MISMATCH = 5,
+    CROSSTL_NATIVE_LOADER_CODE_BINDING_IDENTITY_MISMATCH = 6,
+    CROSSTL_NATIVE_LOADER_CODE_BINDING_COORDINATE_MISMATCH = 7,
+    CROSSTL_NATIVE_LOADER_CODE_BINDING_ACCESS_MISMATCH = 8,
+    CROSSTL_NATIVE_LOADER_CODE_BINDING_PAYLOAD_MISSING = 9,
+    CROSSTL_NATIVE_LOADER_CODE_SPECIALIZATION_COUNT_MISMATCH = 10,
+    CROSSTL_NATIVE_LOADER_CODE_SPECIALIZATION_IDENTITY_MISMATCH = 11,
+    CROSSTL_NATIVE_LOADER_CODE_SPECIALIZATION_TYPE_MISMATCH = 12,
+    CROSSTL_NATIVE_LOADER_CODE_SPECIALIZATION_PAYLOAD_MISSING = 13,
+    CROSSTL_NATIVE_LOADER_CODE_DISPATCH_GEOMETRY_INVALID = 14,
+    CROSSTL_NATIVE_LOADER_CODE_WORKGROUP_SIZE_MISMATCH = 15,
+    CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE = 16,
+    CROSSTL_NATIVE_LOADER_CODE_CALLBACK_OUTPUT_MISSING = 17
+} CrossTLNativeLoaderExecutionCode;
+
+typedef struct CrossTLNativeLoaderBindingRequest {
+    const char *name;
+    const char *resource_kind;
+    const char *type_name;
+    const char *binding_namespace;
+    uint32_t set_index;
+    uint32_t binding_index;
+    CrossTLNativeLoaderAccess access;
+    void *payload;
+    size_t payload_size_bytes;
+} CrossTLNativeLoaderBindingRequest;
+
+typedef struct CrossTLNativeLoaderSpecializationDescriptor {
+    uint32_t has_id;
+    uint32_t id;
+    const char *name;
+    const char *type_name;
+} CrossTLNativeLoaderSpecializationDescriptor;
+
+typedef struct CrossTLNativeLoaderSpecializationRequest {
+    uint32_t has_id;
+    uint32_t id;
+    const char *name;
+    const char *type_name;
+    const void *payload;
+    size_t payload_size_bytes;
+} CrossTLNativeLoaderSpecializationRequest;
+
+typedef struct CrossTLNativeLoaderDispatchGeometry {
+    uint32_t workgroup_count[3];
+    uint32_t workgroup_size[3];
+} CrossTLNativeLoaderDispatchGeometry;
+
+typedef struct CrossTLNativeLoaderExecutionError {
+    CrossTLNativeLoaderExecutionPhase phase;
+    CrossTLNativeLoaderExecutionCode code;
+    size_t binding_index;
+    size_t specialization_index;
+    int32_t adapter_status;
+} CrossTLNativeLoaderExecutionError;
+
+typedef struct CrossTLNativeLoaderExecutionRequest {
+    uint32_t abi_version;
+    const char *target;
+    size_t binding_count;
+    const CrossTLNativeLoaderBindingRequest *bindings;
+    size_t specialization_count;
+    const CrossTLNativeLoaderSpecializationRequest *specializations;
+    CrossTLNativeLoaderDispatchGeometry dispatch;
+} CrossTLNativeLoaderExecutionRequest;
+
+typedef struct CrossTLNativeLoaderExecutionResult {
+    uint32_t abi_version;
+    int32_t succeeded;
+    CrossTLNativeLoaderExecutionError error;
+    CrossTLNativeLoaderExecutionError cleanup_error;
+} CrossTLNativeLoaderExecutionResult;
+
+typedef struct CrossTLNativeLoaderAdapter {
+    uint32_t abi_version;
+    const char *target;
+    void *context;
+    int32_t (*load_artifact)(
+        void *context,
+        const CrossTLNativeLoaderUnitDescriptor *unit,
+        void **artifact_out);
+    int32_t (*unload_artifact)(void *context, void *artifact);
+    int32_t (*create_pipeline)(
+        void *context,
+        void *artifact,
+        const CrossTLNativeLoaderUnitDescriptor *unit,
+        void **pipeline_out);
+    int32_t (*destroy_pipeline)(void *context, void *pipeline);
+    int32_t (*apply_specialization)(
+        void *context,
+        void *artifact,
+        const CrossTLNativeLoaderSpecializationDescriptor *descriptor,
+        const CrossTLNativeLoaderSpecializationRequest *request);
+    int32_t (*bind_resource)(
+        void *context,
+        void *pipeline,
+        const CrossTLNativeLoaderBindingDescriptor *descriptor,
+        const CrossTLNativeLoaderBindingRequest *request,
+        void **resource_out);
+    int32_t (*release_resource)(
+        void *context,
+        void *resource,
+        const CrossTLNativeLoaderBindingDescriptor *descriptor);
+    int32_t (*dispatch)(
+        void *context,
+        void *pipeline,
+        const CrossTLNativeLoaderDispatchGeometry *geometry);
+    int32_t (*synchronize)(void *context, void *pipeline);
+    int32_t (*readback)(
+        void *context,
+        void *resource,
+        const CrossTLNativeLoaderBindingDescriptor *descriptor,
+        const CrossTLNativeLoaderBindingRequest *request);
+} CrossTLNativeLoaderAdapter;
+
+static inline int crosstl_native_loader_strings_equal(
+    const char *left, const char *right) {
+    if (left == NULL || right == NULL) {
+        return left == right;
+    }
+    while (*left != '\\0' && *right != '\\0' && *left == *right) {
+        ++left;
+        ++right;
+    }
+    return *left == *right;
+}
+
+static inline CrossTLNativeLoaderExecutionError
+crosstl_native_loader_execution_error(
+    CrossTLNativeLoaderExecutionPhase phase,
+    CrossTLNativeLoaderExecutionCode code,
+    size_t binding_index,
+    size_t specialization_index,
+    int32_t adapter_status) {
+    CrossTLNativeLoaderExecutionError error;
+    error.phase = phase;
+    error.code = code;
+    error.binding_index = binding_index;
+    error.specialization_index = specialization_index;
+    error.adapter_status = adapter_status;
+    return error;
+}
+
+static inline CrossTLNativeLoaderExecutionResult
+crosstl_native_loader_execution_success(void) {
+    CrossTLNativeLoaderExecutionResult result;
+    result.abi_version = CROSSTL_NATIVE_LOADER_ABI_VERSION;
+    result.succeeded = 1;
+    result.error = crosstl_native_loader_execution_error(
+        CROSSTL_NATIVE_LOADER_PHASE_NONE,
+        CROSSTL_NATIVE_LOADER_CODE_OK,
+        CROSSTL_NATIVE_LOADER_NO_INDEX,
+        CROSSTL_NATIVE_LOADER_NO_INDEX,
+        0);
+    result.cleanup_error = result.error;
+    return result;
+}
+
+static inline CrossTLNativeLoaderExecutionResult
+crosstl_native_loader_execution_failure(
+    CrossTLNativeLoaderExecutionPhase phase,
+    CrossTLNativeLoaderExecutionCode code,
+    size_t binding_index,
+    size_t specialization_index,
+    int32_t adapter_status) {
+    CrossTLNativeLoaderExecutionResult result =
+        crosstl_native_loader_execution_success();
+    result.succeeded = 0;
+    result.error = crosstl_native_loader_execution_error(
+        phase, code, binding_index, specialization_index, adapter_status);
+    return result;
+}
+
+static inline void crosstl_native_loader_record_cleanup_error(
+    CrossTLNativeLoaderExecutionResult *result,
+    CrossTLNativeLoaderExecutionPhase phase,
+    size_t binding_index,
+    int32_t adapter_status) {
+    CrossTLNativeLoaderExecutionError cleanup_error =
+        crosstl_native_loader_execution_error(
+            phase,
+            CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE,
+            binding_index,
+            CROSSTL_NATIVE_LOADER_NO_INDEX,
+            adapter_status);
+    if (result->cleanup_error.code == CROSSTL_NATIVE_LOADER_CODE_OK) {
+        result->cleanup_error = cleanup_error;
+    }
+    if (result->error.code == CROSSTL_NATIVE_LOADER_CODE_OK) {
+        result->succeeded = 0;
+        result->error = cleanup_error;
+    }
+}
+
+#endif /* CROSSTL_NATIVE_LOADER_EXECUTION_ABI_V1_TYPES */""".splitlines()
+
+
+def _execution_specialization_descriptors(
+    values: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    result = []
+    for index, constant in enumerate(values):
+        path = f"$.specializationConstants[{index}]"
+        constant_id = constant.get("id", constant.get("constantId"))
+        name = constant.get("name")
+        if constant_id is None and not isinstance(name, str):
+            raise NativeLoaderABIError(
+                "execution-specialization-identity-invalid",
+                "Executable specialization constants require an id or name.",
+                path=path,
+            )
+        if constant_id is not None:
+            constant_id = _coordinate(constant_id, path=f"{path}.id")
+        if name is not None:
+            name = _required_string(name, path=f"{path}.name")
+        type_name = _required_string(constant.get("dtype"), path=f"{path}.dtype")
+        result.append(
+            {
+                "hasId": constant_id is not None,
+                "id": constant_id or 0,
+                "name": name,
+                "type": type_name,
+            }
+        )
+    return result
+
+
+def _execution_workgroup_size(
+    value: Mapping[str, Any],
+) -> tuple[int, int, int] | None:
+    candidates: list[tuple[str, tuple[int, int, int]]] = []
+    for key in (
+        "workgroupSize",
+        "workgroup_size",
+        "numthreads",
+        "localSize",
+        "local_size",
+    ):
+        if key in value and value[key] is not None:
+            candidates.append(
+                (
+                    key,
+                    _execution_dimensions(
+                        value[key], path=f"$.entryPoint.executionConfig.{key}"
+                    ),
+                )
+            )
+    component_keys = ("local_size_x", "local_size_y", "local_size_z")
+    if any(key in value for key in component_keys):
+        candidates.append(
+            (
+                "local_size_x/y/z",
+                _execution_dimensions(
+                    [value.get(key, 1) for key in component_keys],
+                    path="$.entryPoint.executionConfig.local_size_x/y/z",
+                ),
+            )
+        )
+    if not candidates:
+        return None
+    first_name, first = candidates[0]
+    for candidate_name, candidate in candidates[1:]:
+        if candidate != first:
+            raise NativeLoaderABIError(
+                "execution-workgroup-size-ambiguous",
+                "Executable workgroup-size declarations must agree.",
+                path="$.entryPoint.executionConfig",
+                details={
+                    "firstField": first_name,
+                    "firstValue": list(first),
+                    "conflictingField": candidate_name,
+                    "conflictingValue": list(candidate),
+                },
+            )
+    return first
+
+
+def _execution_dimensions(value: Any, *, path: str) -> tuple[int, int, int]:
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes, bytearray))
+        or not 1 <= len(value) <= 3
+    ):
+        raise NativeLoaderABIError(
+            "execution-workgroup-size-invalid",
+            "Executable workgroup size must have one to three dimensions.",
+            path=path,
+        )
+    dimensions = []
+    for index, dimension in enumerate(value):
+        if (
+            not isinstance(dimension, int)
+            or isinstance(dimension, bool)
+            or not 1 <= dimension <= _UINT32_MAX
+        ):
+            raise NativeLoaderABIError(
+                "execution-workgroup-size-invalid",
+                "Executable workgroup dimensions must be positive uint32 values.",
+                path=f"{path}[{index}]",
+            )
+        dimensions.append(dimension)
+    return tuple((dimensions + [1, 1])[:3])
+
+
 def _pipeline_loader_contract() -> tuple[int, str, frozenset[str]]:
     # Import lazily so pipeline.py can call this module without an import cycle.
     from .pipeline import (  # pylint: disable=import-outside-toplevel

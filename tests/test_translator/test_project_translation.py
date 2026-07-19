@@ -684,6 +684,7 @@ def test_project_package_exposes_public_api_surface():
         "execute_runtime_host_integration",
         "execute_project_test_runner_plan",
         "generate_native_loader_declarations",
+        "generate_native_loader_execution_abi",
         "inspect_runtime_host_integration_handoff",
         "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_graph_package",

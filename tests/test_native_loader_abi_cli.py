@@ -102,6 +102,7 @@ def test_project_exports_native_loader_abi_contract():
     assert issubclass(project_api.NativeLoaderABIError, ValueError)
     assert callable(project_api.build_native_loader_abi_descriptor)
     assert callable(project_api.generate_native_loader_declarations)
+    assert callable(project_api.generate_native_loader_execution_abi)
 
 
 def test_native_loader_abi_cli_emits_json_descriptor(tmp_path, capsys):
@@ -138,6 +139,41 @@ def test_native_loader_abi_cli_writes_deterministic_declarations(tmp_path, capsy
     assert '"opengl"' in declarations
 
 
+def test_native_loader_abi_cli_writes_deterministic_execution_abi(tmp_path, capsys):
+    manifest_path = _write_manifest(tmp_path, _load_unit("directx"))
+    first_path = tmp_path / "first" / "copy_directx_execution.h"
+    second_path = tmp_path / "second" / "copy_directx_execution.h"
+
+    first_result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--execution-output",
+            str(first_path),
+        ]
+    )
+    first_descriptor = json.loads(capsys.readouterr().out)
+    second_result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--execution-output",
+            str(second_path),
+        ]
+    )
+    second_descriptor = json.loads(capsys.readouterr().out)
+
+    assert first_result == second_result == 0
+    assert first_descriptor == second_descriptor
+    first_execution_abi = first_path.read_text(encoding="utf-8")
+    assert first_execution_abi == second_path.read_text(encoding="utf-8")
+    assert first_execution_abi == project_api.generate_native_loader_execution_abi(
+        first_descriptor
+    )
+    assert "CrossTLNativeLoaderExecutionRequest" in first_execution_abi
+    assert "CrossTLNativeLoaderExecutionResult" in first_execution_abi
+
+
 def test_native_loader_abi_cli_selects_one_multi_unit_entry(tmp_path, capsys):
     manifest_path = _write_manifest(
         tmp_path,
@@ -164,8 +200,19 @@ def test_native_loader_abi_cli_reports_blocked_unit_as_json(tmp_path, capsys):
     unit = copy.deepcopy(_load_unit("directx"))
     unit["blockers"] = [{"kind": "resolve-host-interface-metadata"}]
     manifest_path = _write_manifest(tmp_path, unit)
+    declarations_path = tmp_path / "copy.h"
+    execution_path = tmp_path / "copy_execution.h"
 
-    result = main(["native-loader-abi", str(manifest_path)])
+    result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--declarations-output",
+            str(declarations_path),
+            "--execution-output",
+            str(execution_path),
+        ]
+    )
 
     assert result == 1
     payload = json.loads(capsys.readouterr().out)
@@ -178,6 +225,8 @@ def test_native_loader_abi_cli_reports_blocked_unit_as_json(tmp_path, capsys):
         "path": "$.blockers",
         "severity": "error",
     }
+    assert not declarations_path.exists()
+    assert not execution_path.exists()
 
 
 def test_native_loader_abi_cli_rejects_resolved_output_path_collision(tmp_path, capsys):
@@ -212,6 +261,74 @@ def test_native_loader_abi_cli_rejects_resolved_output_path_collision(tmp_path, 
         "severity": "error",
     }
     assert not output_path.exists()
+
+
+def test_native_loader_abi_cli_rejects_descriptor_execution_path_collision(
+    tmp_path, capsys
+):
+    manifest_path = _write_manifest(tmp_path, _load_unit())
+    output_path = tmp_path / "generated" / "descriptor.json"
+    execution_path = output_path.parent / "nested" / ".." / output_path.name
+
+    result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--output",
+            str(output_path),
+            "--execution-output",
+            str(execution_path),
+        ]
+    )
+
+    assert result == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "code": "project.native-loader-abi.output-path-conflict",
+        "details": {
+            "executionOutput": str(execution_path),
+            "output": str(output_path),
+            "resolvedPath": str(output_path.resolve()),
+        },
+        "message": "Descriptor and execution outputs must resolve to different paths.",
+        "path": "$.executionOutput",
+        "severity": "error",
+    }
+    assert not output_path.exists()
+
+
+def test_native_loader_abi_cli_rejects_declaration_execution_path_collision(
+    tmp_path, capsys
+):
+    manifest_path = _write_manifest(tmp_path, _load_unit())
+    declarations_path = tmp_path / "generated" / "copy.h"
+    execution_path = declarations_path.parent / "nested" / ".." / declarations_path.name
+
+    result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--declarations-output",
+            str(declarations_path),
+            "--execution-output",
+            str(execution_path),
+        ]
+    )
+
+    assert result == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "code": "project.native-loader-abi.output-path-conflict",
+        "details": {
+            "declarationsOutput": str(declarations_path),
+            "executionOutput": str(execution_path),
+            "resolvedPath": str(declarations_path.resolve()),
+        },
+        "message": "Declaration and execution outputs must resolve to different paths.",
+        "path": "$.executionOutput",
+        "severity": "error",
+    }
+    assert not declarations_path.exists()
 
 
 def test_native_loader_abi_cli_reports_manifest_filesystem_failure(tmp_path, capsys):
@@ -329,6 +446,55 @@ def test_native_loader_abi_cli_reports_declaration_unicode_failure(
     assert captured.err == ""
 
 
+def test_native_loader_abi_cli_reports_execution_filesystem_failure(tmp_path, capsys):
+    manifest_path = _write_manifest(tmp_path, _load_unit())
+    blocked_parent = tmp_path / "not-a-directory"
+    blocked_parent.write_text("file", encoding="utf-8")
+    execution_path = blocked_parent / "copy_execution.h"
+
+    result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--execution-output",
+            str(execution_path),
+        ]
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["code"] == "project.native-loader-abi.execution-write-failed"
+    assert payload["path"] == "$.executionOutput"
+    assert payload["details"] == {"destination": str(execution_path)}
+    assert captured.err == ""
+
+
+def test_native_loader_abi_cli_reports_execution_unicode_failure(
+    tmp_path, capsys, monkeypatch
+):
+    manifest_path = _write_manifest(tmp_path, _load_unit())
+    execution_path = tmp_path / "copy_execution.h"
+    _fail_path_write_with_unicode(monkeypatch, execution_path)
+
+    result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--execution-output",
+            str(execution_path),
+        ]
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["code"] == "project.native-loader-abi.execution-write-failed"
+    assert payload["path"] == "$.executionOutput"
+    assert payload["details"] == {"destination": str(execution_path)}
+    assert captured.err == ""
+
+
 def test_native_loader_abi_package_cli_writes_deterministic_package(tmp_path, capsys):
     manifest_path = _write_manifest(
         tmp_path,
@@ -352,7 +518,7 @@ def test_native_loader_abi_package_cli_writes_deterministic_package(tmp_path, ca
     assert first["kind"] == project_api.NATIVE_LOADER_ABI_PACKAGE_KIND
     assert first["success"] is True
     assert first["summary"] == {
-        "generatedFileCount": 5,
+        "generatedFileCount": 7,
         "targetCount": 2,
         "unitCount": 2,
     }
