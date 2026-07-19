@@ -43,6 +43,7 @@ from .native_loader_abi import (
     NativeLoaderABIError,
     build_native_loader_abi_descriptor,
     generate_native_loader_declarations,
+    generate_native_loader_execution_abi,
 )
 from .native_loader_abi_package import (
     NATIVE_LOADER_ABI_PACKAGE_KIND,
@@ -348,6 +349,7 @@ __all__ = [
     "execute_runtime_graph",
     "execute_project_test_runner_plan",
     "generate_native_loader_declarations",
+    "generate_native_loader_execution_abi",
     "inspect_runtime_host_integration_handoff",
     "inspect_runtime_host_loader_scaffolds",
     "inspect_runtime_package",
