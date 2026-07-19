@@ -787,6 +787,11 @@ def validate_runtime_execution_graph(
         )
 
     accesses = _collect_resource_accesses(graph, resource_by_id, extents)
+    _validate_resource_role_accesses(
+        accesses,
+        resources=resource_by_id,
+        emit=emit,
+    )
     _validate_unordered_accesses(
         graph,
         accesses=accesses,
@@ -795,6 +800,13 @@ def validate_runtime_execution_graph(
         emit=emit,
     )
     _validate_barriers(
+        graph,
+        accesses=accesses,
+        resources=resource_by_id,
+        ancestors=ancestors,
+        emit=emit,
+    )
+    _validate_required_barriers(
         graph,
         accesses=accesses,
         resources=resource_by_id,
@@ -1943,10 +1955,26 @@ def _validate_unordered_accesses(graph, *, accesses, resources, ancestors, emit)
             )
 
 
-def _validate_barriers(graph, *, accesses, resources, ancestors, emit):
-    accesses_by_resource: dict[str, list[_ResourceAccess]] = {}
+def _validate_resource_role_accesses(accesses, *, resources, emit):
     for access in accesses:
-        accesses_by_resource.setdefault(access.resource_id, []).append(access)
+        resource = resources[access.resource_id]
+        components = _access_components(access.mode)
+        incompatible = (
+            resource.role == "external-input" and "write" in components
+        ) or (resource.role == "external-output" and "read" in components)
+        if not incompatible:
+            continue
+        emit(
+            "resource-role-access-incompatible",
+            f"Resource role {resource.role!r} is incompatible with {access.mode} access.",
+            path=access.path,
+            node_id=access.node_id,
+            resource_id=access.resource_id,
+            details={"role": resource.role, "access": access.mode},
+        )
+
+
+def _validate_barriers(graph, *, accesses, resources, ancestors, emit):
     for index, node in enumerate(graph.nodes):
         if node.kind != "barrier" or node.barrier is None:
             continue
@@ -1966,7 +1994,11 @@ def _validate_barriers(graph, *, accesses, resources, ancestors, emit):
         for resource_id in barrier.resources:
             if resource_id not in resources:
                 continue
-            candidates = accesses_by_resource.get(resource_id, [])
+            candidates = [
+                access
+                for access in accesses
+                if _access_overlaps_resource(access, resource_id, resources)
+            ]
             prior = [
                 access
                 for access in candidates
@@ -1996,6 +2028,72 @@ def _validate_barriers(graph, *, accesses, resources, ancestors, emit):
                     node_id=node.node_id,
                     resource_id=resource_id,
                 )
+
+
+def _validate_required_barriers(graph, *, accesses, resources, ancestors, emit):
+    barriers = [
+        node
+        for node in graph.nodes
+        if node.kind == "barrier" and node.barrier is not None
+    ]
+    emitted: set[tuple[str, str, str, str]] = set()
+    for producer in accesses:
+        if "write" not in _access_components(producer.mode):
+            continue
+        for consumer in accesses:
+            if producer.node_id == consumer.node_id:
+                continue
+            if producer.node_id not in ancestors.get(consumer.node_id, set()):
+                continue
+            if not _accesses_conflict(producer, consumer, resources):
+                continue
+            if any(
+                _barrier_orders_accesses(
+                    barrier,
+                    producer,
+                    consumer,
+                    ancestors=ancestors,
+                )
+                for barrier in barriers
+            ):
+                continue
+            key = (
+                producer.node_id,
+                consumer.node_id,
+                producer.resource_id,
+                consumer.resource_id,
+            )
+            if key in emitted:
+                continue
+            emitted.add(key)
+            emit(
+                "barrier-missing",
+                "A dependency-ordered write hazard requires an explicit visibility barrier.",
+                path=consumer.path,
+                node_id=consumer.node_id,
+                resource_id=consumer.resource_id,
+                details={
+                    "producerNode": producer.node_id,
+                    "consumerNode": consumer.node_id,
+                    "producerResource": producer.resource_id,
+                    "consumerResource": consumer.resource_id,
+                },
+            )
+
+
+def _barrier_orders_accesses(barrier_node, producer, consumer, *, ancestors):
+    barrier = barrier_node.barrier
+    assert barrier is not None
+    if producer.node_id not in ancestors.get(barrier_node.node_id, set()):
+        return False
+    if barrier_node.node_id not in ancestors.get(consumer.node_id, set()):
+        return False
+    required_resources = {producer.resource_id, consumer.resource_id}
+    if not required_resources <= set(barrier.resources):
+        return False
+    return _declared_access_matches(barrier.before_access, producer.mode) and (
+        _declared_access_matches(barrier.after_access, consumer.mode)
+    )
 
 
 def _validate_temporary_lifetimes(
@@ -2120,6 +2218,27 @@ def _accesses_conflict(left, right, resources):
         right.byte_length,
     )
     return _spans_overlap(left_span, right_span)
+
+
+def _access_overlaps_resource(access, resource_id, resources):
+    access_resource = resources[access.resource_id]
+    barrier_resource = resources[resource_id]
+    access_allocation = access_resource.allocation_id or (
+        f"resource:{access.resource_id}"
+    )
+    barrier_allocation = barrier_resource.allocation_id or f"resource:{resource_id}"
+    if access_allocation != barrier_allocation:
+        return False
+    return _spans_overlap(
+        (
+            access_resource.physical_layout.byte_offset + access.byte_offset,
+            access.byte_length,
+        ),
+        (
+            barrier_resource.physical_layout.byte_offset,
+            barrier_resource.physical_layout.byte_length,
+        ),
+    )
 
 
 def _copy_ranges_overlap(source, destination, copy):

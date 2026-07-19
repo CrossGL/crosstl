@@ -189,9 +189,19 @@ def test_fill_then_copy_provides_a_valid_temporary_lifetime():
                 },
             },
             {
+                "id": "scratch-visible",
+                "kind": "barrier",
+                "dependsOn": ["clear"],
+                "barrier": {
+                    "resources": ["scratch"],
+                    "beforeAccess": "write",
+                    "afterAccess": "read",
+                },
+            },
+            {
                 "id": "copy-out",
                 "kind": "copy",
-                "dependsOn": ["clear"],
+                "dependsOn": ["scratch-visible"],
                 "copy": {
                     "source": "scratch",
                     "destination": "output",
@@ -311,6 +321,74 @@ def test_conflicting_alias_accesses_require_an_explicit_dependency():
 
     assert "project.runtime-graph.resource-access-unordered" in _codes(unordered)
     assert ordered.valid
+
+
+def test_dependency_ordered_write_hazards_require_an_explicit_barrier():
+    resources = [
+        _resource("working", "external-input-output"),
+        _resource("output", "external-output"),
+    ]
+    nodes = [
+        _dispatch("write", {"working": ("working", "write")}),
+        _dispatch(
+            "read",
+            {"working": ("working", "read"), "output": ("output", "write")},
+            depends_on=("write",),
+        ),
+    ]
+
+    result = parse_runtime_execution_graph(_graph(resources, nodes)).validate()
+    diagnostic = next(
+        item for item in result if item.code == "project.runtime-graph.barrier-missing"
+    )
+
+    assert diagnostic.node_id == "read"
+    assert diagnostic.resource_id == "working"
+    assert diagnostic.details["producerNode"] == "write"
+
+
+def test_barrier_orders_overlapping_views_of_a_shared_allocation():
+    resources = [
+        _resource("producer-view", "external-output", allocation_id="working-set"),
+        _resource("consumer-view", "external-input", allocation_id="working-set"),
+    ]
+    nodes = [
+        _dispatch("write", {"output": ("producer-view", "write")}),
+        {
+            "id": "visible",
+            "kind": "barrier",
+            "dependsOn": ["write"],
+            "barrier": {
+                "resources": ["producer-view", "consumer-view"],
+                "beforeAccess": "write",
+                "afterAccess": "read",
+            },
+        },
+        _dispatch(
+            "read",
+            {"input": ("consumer-view", "read")},
+            depends_on=("visible",),
+        ),
+    ]
+
+    result = parse_runtime_execution_graph(_graph(resources, nodes)).validate()
+
+    assert result.valid
+
+
+@pytest.mark.parametrize(
+    ("role", "access"),
+    [("external-input", "write"), ("external-output", "read")],
+)
+def test_resource_roles_reject_incompatible_access(role, access):
+    payload = _graph(
+        [_resource("value", role)],
+        [_dispatch("launch", {"value": ("value", access)})],
+    )
+
+    assert "project.runtime-graph.resource-role-access-incompatible" in _codes(
+        parse_runtime_execution_graph(payload).validate()
+    )
 
 
 def test_independent_non_conflicting_nodes_may_remain_unordered():
