@@ -14,6 +14,7 @@ from .native_loader_abi import (
     NativeLoaderABIError,
     build_native_loader_abi_descriptor,
     generate_native_loader_declarations,
+    generate_native_loader_execution_abi,
 )
 
 NATIVE_LOADER_ABI_PACKAGE_KIND = "crosstl-native-loader-abi-package"
@@ -27,11 +28,11 @@ def build_native_loader_abi_package(
     loader_manifest_path: str | os.PathLike[str],
     output_dir: str | os.PathLike[str],
 ) -> dict[str, Any]:
-    """Write descriptors and C declarations for every ready loader unit.
+    """Write descriptors and C execution interfaces for every ready loader unit.
 
-    All descriptors and declarations are built before any output is written. A
-    blocked, incomplete, or duplicate load unit therefore prevents publication
-    of a package manifest.
+    All descriptors, declarations, and execution interfaces are built before
+    any output is written. A blocked, incomplete, or duplicate load unit
+    therefore prevents publication of a package manifest.
     """
 
     manifest_path = _filesystem_path(
@@ -55,19 +56,35 @@ def build_native_loader_abi_package(
     unit_ids = _load_unit_ids(manifest)
 
     generated_units: list[dict[str, Any]] = []
-    generated_contents: list[tuple[str, str]] = []
+    generated_contents: list[tuple[str, str, str]] = []
     for unit_id in unit_ids:
         descriptor = build_native_loader_abi_descriptor(
             manifest,
             load_unit_id=unit_id,
         )
         declarations = generate_native_loader_declarations(descriptor)
+        execution_abi = generate_native_loader_execution_abi(descriptor)
         descriptor_text = _json_text(descriptor)
-        descriptor_path, declarations_path = _unit_output_paths(descriptor)
+        descriptor_path, declarations_path, execution_abi_path = _unit_output_paths(
+            descriptor
+        )
         generated_contents.extend(
             (
-                (descriptor_path, descriptor_text),
-                (declarations_path, declarations),
+                (
+                    descriptor_path,
+                    descriptor_text,
+                    "native-loader-abi-descriptor",
+                ),
+                (
+                    declarations_path,
+                    declarations,
+                    "native-loader-c-declarations",
+                ),
+                (
+                    execution_abi_path,
+                    execution_abi,
+                    "native-loader-execution-abi",
+                ),
             )
         )
         generated_units.append(
@@ -81,6 +98,8 @@ def build_native_loader_abi_package(
                 "descriptorHash": _content_hash(descriptor_text.encode("utf-8")),
                 "declarationsPath": declarations_path,
                 "declarationsHash": _content_hash(declarations.encode("utf-8")),
+                "executionABIPath": execution_abi_path,
+                "executionABIHash": _content_hash(execution_abi.encode("utf-8")),
             }
         )
 
@@ -107,18 +126,14 @@ def build_native_loader_abi_package(
             *[
                 {
                     "path": path,
-                    "kind": (
-                        "native-loader-abi-descriptor"
-                        if path.endswith(".json")
-                        else "native-loader-c-declarations"
-                    ),
+                    "kind": kind,
                 }
-                for path, _content in generated_contents
+                for path, _content, kind in generated_contents
             ],
         ],
     }
 
-    for relative_path, content in generated_contents:
+    for relative_path, content, _kind in generated_contents:
         _write_output(package_root, relative_path, content)
     _write_output(package_root, NATIVE_LOADER_ABI_PACKAGE_MANIFEST, _json_text(package))
     return package
@@ -190,11 +205,16 @@ def _load_unit_ids(manifest: Mapping[str, Any]) -> list[str]:
     return sorted(unit_ids)
 
 
-def _unit_output_paths(descriptor: Mapping[str, Any]) -> tuple[str, str]:
+def _unit_output_paths(descriptor: Mapping[str, Any]) -> tuple[str, str, str]:
     target = _path_component(str(descriptor["target"]), fallback="target")
     unit = _path_component(str(descriptor["unitId"]), fallback="load-unit")
-    base = f"targets/{target}/{unit}.native-loader-abi"
-    return f"{base}.json", f"{base}.h"
+    directory = f"targets/{target}"
+    declarations_base = f"{directory}/{unit}.native-loader-abi"
+    return (
+        f"{declarations_base}.json",
+        f"{declarations_base}.h",
+        f"{directory}/{unit}.native-loader-execution.h",
+    )
 
 
 def _path_component(value: str, *, fallback: str) -> str:

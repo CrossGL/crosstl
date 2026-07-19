@@ -26,6 +26,7 @@ from crosstl.project import (
 from crosstl.project.native_loader_abi import (
     build_native_loader_abi_descriptor,
     generate_native_loader_declarations,
+    generate_native_loader_execution_abi,
 )
 
 REDUCED_METAL_COMPUTE = textwrap.dedent("""
@@ -97,6 +98,10 @@ def reduced_runtime_package(tmp_path_factory):
         target: generate_native_loader_declarations(descriptor)
         for target, descriptor in descriptors.items()
     }
+    execution_headers = {
+        target: generate_native_loader_execution_abi(descriptor)
+        for target, descriptor in descriptors.items()
+    }
     return {
         "source_path": source_path,
         "package_dir": package_dir,
@@ -105,6 +110,7 @@ def reduced_runtime_package(tmp_path_factory):
         "units": units,
         "descriptors": descriptors,
         "headers": headers,
+        "execution_headers": execution_headers,
     }
 
 
@@ -338,7 +344,7 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
     assert first["summary"] == {
         "unitCount": 2,
         "targetCount": 2,
-        "generatedFileCount": 5,
+        "generatedFileCount": 7,
     }
     assert len(first["generatedFiles"]) == first["summary"]["generatedFileCount"]
     assert first["generatedFiles"][0] == {
@@ -360,12 +366,18 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
         target = unit["target"]
         descriptor_path = first_root / unit["descriptorPath"]
         declarations_path = first_root / unit["declarationsPath"]
+        execution_abi_path = first_root / unit["executionABIPath"]
         descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
         assert descriptor == reduced_runtime_package["descriptors"][target]
         assert (
             declarations_path.read_text(encoding="utf-8")
             == reduced_runtime_package["headers"][target]
         )
+        assert (
+            execution_abi_path.read_text(encoding="utf-8")
+            == reduced_runtime_package["execution_headers"][target]
+        )
+        assert unit["executionABIPath"].endswith(".native-loader-execution.h")
         assert unit["descriptorHash"] == {
             "algorithm": "sha256",
             "value": _sha256(descriptor_path),
@@ -374,6 +386,24 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
             "algorithm": "sha256",
             "value": _sha256(declarations_path),
         }
+        assert unit["executionABIHash"] == {
+            "algorithm": "sha256",
+            "value": _sha256(execution_abi_path),
+        }
+
+    generated_file_kinds = {
+        generated["path"]: generated["kind"] for generated in first["generatedFiles"]
+    }
+    for unit in first["units"]:
+        assert generated_file_kinds[unit["descriptorPath"]] == (
+            "native-loader-abi-descriptor"
+        )
+        assert generated_file_kinds[unit["declarationsPath"]] == (
+            "native-loader-c-declarations"
+        )
+        assert generated_file_kinds[unit["executionABIPath"]] == (
+            "native-loader-execution-abi"
+        )
 
 
 def test_runtime_loader_abi_package_rejects_blocked_units_before_writing(
@@ -431,3 +461,100 @@ def test_packaged_runtime_loader_headers_compile(
     }
 
     _compile_headers(tmp_path, language, headers)
+
+
+def _compile_packaged_execution_headers(language, package_root, package):
+    compiler = _compiler_command(language)
+    if compiler is None:
+        pytest.skip(f"No native {language} compiler is available")
+
+    units = {unit["target"]: unit for unit in package["units"]}
+    assert set(units) == {"directx", "opengl"}
+    symbols = {}
+    for target, unit in units.items():
+        execution_abi_path = package_root / unit["executionABIPath"]
+        execution_abi = execution_abi_path.read_text(encoding="utf-8")
+        match = re.search(
+            r"static inline CrossTLNativeLoaderExecutionResult\s+"
+            r"([A-Za-z_]\w*_execute)\(",
+            execution_abi,
+        )
+        assert match is not None
+        symbols[target] = match.group(1)
+    assert len(set(symbols.values())) == len(symbols)
+
+    suffix = ".c" if language == "c" else ".cpp"
+    source_path = package_root / f"execution_contract{suffix}"
+    source_path.write_text(
+        textwrap.dedent(f"""
+            #include "{units['directx']['executionABIPath']}"
+            #include "{units['opengl']['executionABIPath']}"
+
+            int main(void) {{
+                CrossTLNativeLoaderExecutionResult directx_result =
+                    {symbols['directx']}(NULL, NULL);
+                CrossTLNativeLoaderExecutionResult opengl_result =
+                    {symbols['opengl']}(NULL, NULL);
+                return directx_result.error.code ==
+                           CROSSTL_NATIVE_LOADER_CODE_INVALID_ARGUMENT &&
+                       opengl_result.error.code ==
+                           CROSSTL_NATIVE_LOADER_CODE_INVALID_ARGUMENT
+                    ? 0 : 1;
+            }}
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    executable_names = {
+        Path(part).name.lower() for part in compiler if not part.startswith("-")
+    }
+    msvc_style = bool(executable_names & {"cl", "cl.exe", "clang-cl", "clang-cl.exe"})
+    if msvc_style:
+        object_path = package_root / "execution_contract.obj"
+        standard = "/std:c11" if language == "c" else "/std:c++17"
+        command = compiler + [
+            "/nologo",
+            standard,
+            "/W4",
+            "/WX",
+            "/c",
+            str(source_path),
+            f"/Fo{object_path}",
+        ]
+    else:
+        object_path = package_root / "execution_contract.o"
+        standard = "-std=c11" if language == "c" else "-std=c++17"
+        command = compiler + [
+            standard,
+            "-pedantic-errors",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-c",
+            str(source_path),
+            "-o",
+            str(object_path),
+        ]
+
+    result = subprocess.run(
+        command,
+        cwd=package_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert object_path.is_file()
+
+
+@pytest.mark.parametrize("language", ("c", "c++"), ids=("c11", "cxx17"))
+def test_packaged_execution_headers_compile_together(
+    tmp_path, reduced_runtime_package, language
+):
+    package_root = tmp_path / "abi-package"
+    package = build_native_loader_abi_package(
+        reduced_runtime_package["loader_manifest_path"],
+        package_root,
+    )
+
+    _compile_packaged_execution_headers(language, package_root, package)
