@@ -127,6 +127,14 @@ from .runtime_graph_execution import (
     RuntimeGraphExecutionResult,
     execute_runtime_graph,
 )
+from .runtime_graph_package import (
+    RUNTIME_GRAPH_PACKAGE_INSPECTION_KIND,
+    RUNTIME_GRAPH_PACKAGE_INSPECTION_NON_GOALS,
+    RUNTIME_GRAPH_PACKAGE_INSPECTION_SCHEMA_VERSION,
+    RUNTIME_GRAPH_PACKAGE_INSPECTION_SCOPE,
+    inspect_runtime_graph_package,
+    runtime_graph_package_inspection_json,
+)
 from .runtime_verification import (
     DirectXRuntimeParityAdapter,
     NativeRuntimeBufferBinding,
@@ -234,6 +242,10 @@ __all__ = [
     "RUNTIME_EXECUTION_GRAPH_SCHEMA_VERSION",
     "RUNTIME_EXECUTION_GRAPH_VALIDATION_KIND",
     "RUNTIME_GRAPH_EXECUTION_RESULT_KIND",
+    "RUNTIME_GRAPH_PACKAGE_INSPECTION_KIND",
+    "RUNTIME_GRAPH_PACKAGE_INSPECTION_NON_GOALS",
+    "RUNTIME_GRAPH_PACKAGE_INSPECTION_SCHEMA_VERSION",
+    "RUNTIME_GRAPH_PACKAGE_INSPECTION_SCOPE",
     "RUNTIME_VARIANT_LOOKUP_KIND",
     "RUNTIME_VARIANT_REGISTRY_KIND",
     "REFLECTION_AMBIGUOUS_BINDING",
@@ -339,6 +351,7 @@ __all__ = [
     "inspect_runtime_host_integration_handoff",
     "inspect_runtime_host_loader_scaffolds",
     "inspect_runtime_package",
+    "inspect_runtime_graph_package",
     "inspect_project_report",
     "inspect_project_test_runner_plan",
     "load_runtime_verification_fixtures",
@@ -365,6 +378,7 @@ __all__ = [
     "scan_project",
     "translate_project",
     "runtime_execution_request_to_graph",
+    "runtime_graph_package_inspection_json",
     "validate_runtime_execution_graph",
     "validate_project_report",
     "verify_runtime_fixtures",
