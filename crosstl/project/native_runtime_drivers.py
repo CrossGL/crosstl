@@ -41,6 +41,7 @@ class _PreparedDirectXBuffer:
     byte_length: int | None = None
     upload: bool = True
     writable: bool = False
+    allocation_explicit: bool = False
 
     @property
     def size(self) -> int:
@@ -50,8 +51,16 @@ class _PreparedDirectXBuffer:
 @dataclass
 class _DirectXBufferResource:
     prepared: _PreparedDirectXBuffer
-    upload_buffer: Any
+    upload_buffer: Any | None
     device_buffer: Any
+
+
+@dataclass(frozen=True)
+class _PreparedDirectXDispatch:
+    request: NativeRuntimeDispatchRequest
+    shader: bytes
+    buffers: tuple[_PreparedDirectXBuffer, ...]
+    workgroup_count: tuple[int, int, int]
 
 
 @dataclass(frozen=True)
@@ -105,6 +114,7 @@ class _PreparedOpenGLBuffer:
     byte_length: int | None = None
     upload: bool = True
     writable: bool = False
+    allocation_explicit: bool = False
 
     @property
     def size(self) -> int:
@@ -132,6 +142,25 @@ class _PreparedOpenGLSpecialization:
         if self.source is not None:
             payload["source"] = self.source
         return payload
+
+
+@dataclass(frozen=True)
+class _PreparedOpenGLDispatch:
+    request: NativeRuntimeDispatchRequest
+    shader_artifact: str | bytes
+    buffers: tuple[_PreparedOpenGLBuffer, ...]
+    specialization_bindings: Mapping[str, Any]
+    uniform_bindings: Mapping[str, Any]
+    specializations: tuple[_PreparedOpenGLSpecialization, ...]
+    workgroup_count: tuple[int, int, int]
+
+
+@dataclass(frozen=True)
+class _PreparedSequenceAllocation:
+    key: tuple[Any, ...]
+    allocation_id: str
+    views: tuple[Any, ...]
+    upload_payload: bytes | None
 
 
 @dataclass(frozen=True)
@@ -376,40 +405,65 @@ class DirectXComputeRuntime:
         state: Any,
         request: NativeRuntimeDispatchRequest,
     ) -> dict[str, Mapping[str, Any]]:
+        return self.dispatch_sequence(adapter, state, (request,))
+
+    def dispatch_sequence(
+        self,
+        adapter: Any,
+        state: Any,
+        requests: Sequence[NativeRuntimeDispatchRequest],
+    ) -> dict[str, Mapping[str, Any]]:
+        """Execute ordered dispatches with allocation IDs scoped to the sequence."""
+
         _ = adapter, state
+        sequence = _validate_dispatch_sequence_requests(requests, target="directx")
         if not self._platform_supported():
             raise RuntimeExecutorUnavailable(
                 "Direct3D 12 compute runtime is available on Windows only."
             )
-        if (
-            request.dispatch is not None
-            and request.dispatch.entry_point is not None
-            and request.entry_point is not None
-            and request.dispatch.entry_point != request.entry_point
-        ):
-            raise RuntimeAdapterSetupError(
-                "DirectX runtime entry-point metadata is inconsistent.",
-                details={
-                    "target": "directx",
-                    "reasonKind": "entry-point-mismatch",
-                    "entryPoint": request.entry_point,
-                    "dispatchEntryPoint": request.dispatch.entry_point,
-                },
-            )
-
         compushady = self._load_compushady()
-        shader = self._shader_code(request)
-        prepared = (
-            *_prepare_directx_buffers(request.buffers),
-            *_prepare_directx_constants(request.constants),
+        prepared_dispatches: list[_PreparedDirectXDispatch] = []
+        for node_index, request in enumerate(sequence):
+            if (
+                request.dispatch is not None
+                and request.dispatch.entry_point is not None
+                and request.entry_point is not None
+                and request.dispatch.entry_point != request.entry_point
+            ):
+                raise RuntimeAdapterSetupError(
+                    "DirectX runtime entry-point metadata is inconsistent.",
+                    details={
+                        "target": "directx",
+                        "runtime": self.name,
+                        "reasonKind": "entry-point-mismatch",
+                        "nodeIndex": node_index,
+                        "entryPoint": request.entry_point,
+                        "dispatchEntryPoint": request.dispatch.entry_point,
+                    },
+                )
+            prepared = (
+                *_prepare_directx_buffers(request.buffers),
+                *_prepare_directx_constants(request.constants),
+            )
+            prepared = _validate_directx_register_layout(
+                _complete_directx_register_layout(prepared)
+            )
+            prepared_dispatches.append(
+                _PreparedDirectXDispatch(
+                    request=request,
+                    shader=self._shader_code(request),
+                    buffers=prepared,
+                    workgroup_count=_workgroup_count(request, target="DirectX"),
+                )
+            )
+        allocation_plan, view_keys = _prepare_sequence_allocations(
+            [item.buffers for item in prepared_dispatches],
+            target="directx",
         )
-        prepared = _complete_directx_register_layout(prepared)
-        prepared = _validate_directx_register_layout(prepared)
-        workgroup_count = _workgroup_count(request, target="DirectX")
 
         owned_objects: list[Any] = []
-        resources: list[_DirectXBufferResource] = []
-        compute = None
+        node_resources: list[list[_DirectXBufferResource]] = []
+        computes: list[Any] = []
         try:
             try:
                 backend = compushady.get_backend()
@@ -435,15 +489,35 @@ class DirectXComputeRuntime:
                     },
                 ) from exc
 
+            physical_resources: dict[tuple[Any, ...], _DirectXBufferResource] = {}
             try:
-                resources.extend(
-                    self._create_buffer_resources(
+                for allocation in allocation_plan:
+                    representative = allocation.views[0]
+                    physical_resources[allocation.key] = self._create_buffer_resource(
                         compushady,
                         device,
-                        prepared,
+                        replace(
+                            representative,
+                            name=allocation.allocation_id,
+                            payload=allocation.upload_payload or b"",
+                            byte_offset=0,
+                            byte_length=representative.allocation_size,
+                            upload=allocation.upload_payload is not None,
+                        ),
                         owned_objects,
                     )
-                )
+                for prepared_dispatch in prepared_dispatches:
+                    resources = []
+                    for prepared in prepared_dispatch.buffers:
+                        physical = physical_resources[view_keys[id(prepared)]]
+                        resources.append(
+                            _DirectXBufferResource(
+                                prepared=prepared,
+                                upload_buffer=physical.upload_buffer,
+                                device_buffer=physical.device_buffer,
+                            )
+                        )
+                    node_resources.append(resources)
             except (RuntimeAdapterSetupError, RuntimeExecutorUnavailable):
                 raise
             except Exception as exc:
@@ -456,51 +530,62 @@ class DirectXComputeRuntime:
                     },
                 ) from exc
 
-            bound_resources = {
-                namespace: [
-                    resource.device_buffer
-                    for resource in resources
-                    if resource.prepared.namespace == namespace
-                ]
-                for namespace in ("cbv", "srv", "uav")
-            }
-            try:
-                compute = compushady.Compute(
-                    shader,
-                    cbv=bound_resources["cbv"],
-                    srv=bound_resources["srv"],
-                    uav=bound_resources["uav"],
-                    device=device,
-                )
-                owned_objects.append(compute)
-            except Exception as exc:
-                raise RuntimeAdapterSetupError(
-                    f"DirectX compute pipeline creation failed: {exc}",
-                    details={
-                        "target": "directx",
-                        "runtime": self.name,
-                        "reasonKind": "compute-pipeline-creation-failed",
-                        "cbvCount": len(bound_resources["cbv"]),
-                        "srvCount": len(bound_resources["srv"]),
-                        "uavCount": len(bound_resources["uav"]),
-                    },
-                ) from exc
-            try:
-                compute.dispatch(*workgroup_count)
-            except Exception as exc:
-                raise RuntimeAdapterDispatchError(
-                    f"DirectX compute dispatch failed: {exc}",
-                    details={
-                        "target": "directx",
-                        "runtime": self.name,
-                        "reasonKind": "dispatch-failed",
-                        "workgroupCount": list(workgroup_count),
-                    },
-                ) from exc
+            for node_index, (prepared_dispatch, resources) in enumerate(
+                zip(prepared_dispatches, node_resources)
+            ):
+                bound_resources = {
+                    namespace: [
+                        resource.device_buffer
+                        for resource in resources
+                        if resource.prepared.namespace == namespace
+                    ]
+                    for namespace in ("cbv", "srv", "uav")
+                }
+                try:
+                    compute = compushady.Compute(
+                        prepared_dispatch.shader,
+                        cbv=bound_resources["cbv"],
+                        srv=bound_resources["srv"],
+                        uav=bound_resources["uav"],
+                        device=device,
+                    )
+                    computes.append(compute)
+                    owned_objects.append(compute)
+                except Exception as exc:
+                    raise RuntimeAdapterSetupError(
+                        f"DirectX compute pipeline creation failed: {exc}",
+                        details={
+                            "target": "directx",
+                            "runtime": self.name,
+                            "reasonKind": "compute-pipeline-creation-failed",
+                            "nodeIndex": node_index,
+                            "cbvCount": len(bound_resources["cbv"]),
+                            "srvCount": len(bound_resources["srv"]),
+                            "uavCount": len(bound_resources["uav"]),
+                        },
+                    ) from exc
+
+            for node_index, (prepared_dispatch, compute) in enumerate(
+                zip(prepared_dispatches, computes)
+            ):
+                try:
+                    # compushady's Direct3D dispatch waits on its queue fence.
+                    compute.dispatch(*prepared_dispatch.workgroup_count)
+                except Exception as exc:
+                    raise RuntimeAdapterDispatchError(
+                        f"DirectX compute dispatch failed: {exc}",
+                        details={
+                            "target": "directx",
+                            "runtime": self.name,
+                            "reasonKind": "dispatch-failed",
+                            "nodeIndex": node_index,
+                            "workgroupCount": list(prepared_dispatch.workgroup_count),
+                        },
+                    ) from exc
             return self._read_outputs(
                 compushady,
                 device,
-                resources,
+                [resource for resources in node_resources for resource in resources],
                 owned_objects,
             )
         except (
@@ -515,10 +600,14 @@ class DirectXComputeRuntime:
                 details={"target": "directx", "runtime": self.name},
             ) from exc
         finally:
+            released: set[int] = set()
             for value in reversed(owned_objects):
+                if id(value) in released:
+                    continue
+                released.add(id(value))
                 _release_directx_object(value)
-            resources.clear()
-            compute = None
+            node_resources.clear()
+            computes.clear()
 
     def _platform_supported(self) -> bool:
         return any(
@@ -569,14 +658,16 @@ class DirectXComputeRuntime:
         prepared: _PreparedDirectXBuffer,
         owned_objects: list[Any],
     ) -> _DirectXBufferResource:
-        upload_buffer = compushady.Buffer(
-            prepared.allocation_size,
-            compushady.HEAP_UPLOAD,
-            device=device,
-        )
-        owned_objects.append(upload_buffer)
-        payload = prepared.payload.ljust(prepared.allocation_size, b"\x00")
-        upload_buffer.upload(payload)
+        upload_buffer = None
+        if prepared.upload:
+            upload_buffer = compushady.Buffer(
+                prepared.allocation_size,
+                compushady.HEAP_UPLOAD,
+                device=device,
+            )
+            owned_objects.append(upload_buffer)
+            payload = prepared.payload.ljust(prepared.allocation_size, b"\x00")
+            upload_buffer.upload(payload)
         device_buffer = compushady.Buffer(
             prepared.allocation_size,
             compushady.HEAP_DEFAULT,
@@ -584,7 +675,8 @@ class DirectXComputeRuntime:
             device=device,
         )
         owned_objects.append(device_buffer)
-        upload_buffer.copy_to(device_buffer)
+        if upload_buffer is not None:
+            upload_buffer.copy_to(device_buffer)
         return _DirectXBufferResource(
             prepared=prepared,
             upload_buffer=upload_buffer,
@@ -610,10 +702,10 @@ class DirectXComputeRuntime:
             allocation = replace(
                 representative,
                 name=allocation_id,
-                payload=allocation_payload,
+                payload=allocation_payload or b"",
                 byte_offset=0,
                 byte_length=representative.allocation_size,
-                upload=True,
+                upload=allocation_payload is not None,
             )
             physical = self._create_buffer_resource(
                 compushady,
@@ -826,34 +918,59 @@ class OpenGLComputeRuntime:
         state: Any,
         request: NativeRuntimeDispatchRequest,
     ) -> dict[str, Mapping[str, Any]]:
-        _ = adapter, state
-        if request.entry_point not in (None, "main"):
-            raise RuntimeExecutorUnavailable(
-                "OpenGL compute artifacts expose the selected entry point as main; "
-                f"got {request.entry_point!r}."
-            )
+        return self.dispatch_sequence(adapter, state, (request,))
 
+    def dispatch_sequence(
+        self,
+        adapter: Any,
+        state: Any,
+        requests: Sequence[NativeRuntimeDispatchRequest],
+    ) -> dict[str, Mapping[str, Any]]:
+        """Execute ordered dispatches with allocation IDs scoped to the sequence."""
+
+        _ = adapter
+        sequence = _validate_dispatch_sequence_requests(requests, target="opengl")
         moderngl = self._load_moderngl()
-        specialization_bindings, uniform_bindings = _partition_opengl_constants(
-            request.constants
-        )
-        prepared_specializations = _prepare_opengl_specializations(
-            specialization_bindings
-        )
-        shader_artifact = self._shader_artifact(request)
-        prepared_buffers = _prepare_opengl_buffers(request.buffers)
-        workgroup_count = _workgroup_count(request, target="OpenGL")
-        if not prepared_buffers:
-            raise RuntimeExecutorUnavailable(
-                "OpenGL compute runtime requires at least one buffer resource."
+        prepared_dispatches: list[_PreparedOpenGLDispatch] = []
+        for request in sequence:
+            if request.entry_point not in (None, "main"):
+                raise RuntimeExecutorUnavailable(
+                    "OpenGL compute artifacts expose the selected entry point as main; "
+                    f"got {request.entry_point!r}."
+                )
+            specialization_bindings, uniform_bindings = _partition_opengl_constants(
+                request.constants
             )
+            prepared_buffers = _prepare_opengl_buffers(request.buffers)
+            if not prepared_buffers:
+                raise RuntimeExecutorUnavailable(
+                    "OpenGL compute runtime requires at least one buffer resource."
+                )
+            prepared_dispatches.append(
+                _PreparedOpenGLDispatch(
+                    request=request,
+                    shader_artifact=self._shader_artifact(request),
+                    buffers=prepared_buffers,
+                    specialization_bindings=specialization_bindings,
+                    uniform_bindings=uniform_bindings,
+                    specializations=_prepare_opengl_specializations(
+                        specialization_bindings
+                    ),
+                    workgroup_count=_workgroup_count(request, target="OpenGL"),
+                )
+            )
+        allocation_plan, view_keys = _prepare_sequence_allocations(
+            [item.buffers for item in prepared_dispatches],
+            target="opengl",
+        )
 
         context = None
-        shader = None
-        resources: list[tuple[_PreparedOpenGLBuffer, Any]] = []
+        shaders: list[Any] = []
+        allocation_buffers: dict[tuple[Any, ...], Any] = {}
+        node_resources: list[list[tuple[_PreparedOpenGLBuffer, Any]]] = []
         try:
             try:
-                context, _backend = self._create_context(moderngl)
+                context, backend = self._create_context(moderngl)
             except Exception as exc:
                 raise RuntimeAdapterSetupError(
                     f"OpenGL compute context creation failed: {exc}",
@@ -869,61 +986,29 @@ class OpenGLComputeRuntime:
                     "OpenGL compute requires context version "
                     f"{self.require_version}, got {version_code}.",
                     "opengl-version-unsupported",
-                    contextBackend=_backend or "default",
+                    contextBackend=backend or "default",
                     requiredVersionCode=self.require_version,
                     versionCode=version_code,
                 )
-            try:
-                if specialization_bindings:
-                    if not isinstance(shader_artifact, bytes):
-                        raise _opengl_setup_error(
-                            "OpenGL specialization constants require a compiled SPIR-V runtime artifact.",
-                            "spirv-artifact-required",
-                            modulePath=str(request.module_path),
-                        )
-                    api = self._load_opengl_spirv_api(context)
-                    shader = self._create_spirv_shader(
-                        api,
-                        shader_artifact,
-                        prepared_specializations,
-                        entry_point=request.entry_point or "main",
-                    )
-                    self._record_specialization_application(
-                        state,
-                        prepared_specializations,
-                        uniform_count=len(uniform_bindings),
-                        entry_point=request.entry_point or "main",
-                        api=api,
-                    )
-                else:
-                    if not isinstance(shader_artifact, str):
-                        raise _opengl_setup_error(
-                            "OpenGL source runtime dispatch requires a GLSL text artifact.",
-                            "glsl-source-artifact-required",
-                            modulePath=str(request.module_path),
-                        )
-                    shader = context.compute_shader(shader_artifact)
-            except (_OpenGLSPIRVUnavailable, RuntimeAdapterSetupError) as exc:
-                if isinstance(exc, _OpenGLSPIRVUnavailable):
-                    raise RuntimeAdapterSetupError(
-                        str(exc),
-                        details={"target": "opengl", **exc.details},
-                    ) from exc
-                raise
-            except Exception as exc:
-                raise RuntimeAdapterSetupError(
-                    f"OpenGL compute shader compilation or linking failed: {exc}",
-                    details={
-                        "target": "opengl",
-                        "runtime": self.name,
-                        "reasonKind": "shader-compilation-or-linking-failed",
-                    },
-                ) from exc
 
             try:
-                resources.extend(
-                    self._create_buffer_resources(context, prepared_buffers)
-                )
+                for allocation in allocation_plan:
+                    _validate_opengl_context_view_alignment(
+                        context,
+                        allocation.allocation_id,
+                        allocation.views,
+                    )
+                    allocation_buffers[allocation.key] = self._create_allocation_buffer(
+                        context,
+                        allocation.upload_payload,
+                        allocation.views[0].allocation_size,
+                    )
+                for prepared_dispatch in prepared_dispatches:
+                    resources = [
+                        (prepared, allocation_buffers[view_keys[id(prepared)]])
+                        for prepared in prepared_dispatch.buffers
+                    ]
+                    node_resources.append(resources)
             except (RuntimeAdapterSetupError, RuntimeExecutorUnavailable):
                 raise
             except Exception as exc:
@@ -935,38 +1020,60 @@ class OpenGLComputeRuntime:
                         "reasonKind": "resource-binding-failed",
                     },
                 ) from exc
-            self._bind_constants(shader, uniform_bindings)
-            try:
-                shader.run(
-                    group_x=workgroup_count[0],
-                    group_y=workgroup_count[1],
-                    group_z=workgroup_count[2],
+
+            for node_index, prepared_dispatch in enumerate(prepared_dispatches):
+                shader = self._create_sequence_shader(
+                    context,
+                    state,
+                    prepared_dispatch,
+                    node_index=node_index,
                 )
-            except Exception as exc:
-                raise RuntimeAdapterDispatchError(
-                    f"OpenGL compute dispatch failed: {exc}",
-                    details={
-                        "target": "opengl",
-                        "runtime": self.name,
-                        "reasonKind": "dispatch-failed",
-                    },
-                ) from exc
+                shaders.append(shader)
+                self._bind_constants(shader, prepared_dispatch.uniform_bindings)
+
+            for node_index, resources in enumerate(node_resources):
+                self._bind_sequence_buffer_views(resources, node_index=node_index)
+
+            for node_index, (prepared_dispatch, shader, resources) in enumerate(
+                zip(prepared_dispatches, shaders, node_resources)
+            ):
+                self._bind_sequence_buffer_views(resources, node_index=node_index)
+                try:
+                    shader.run(
+                        group_x=prepared_dispatch.workgroup_count[0],
+                        group_y=prepared_dispatch.workgroup_count[1],
+                        group_z=prepared_dispatch.workgroup_count[2],
+                    )
+                except Exception as exc:
+                    raise RuntimeAdapterDispatchError(
+                        f"OpenGL compute dispatch failed: {exc}",
+                        details={
+                            "target": "opengl",
+                            "runtime": self.name,
+                            "reasonKind": "dispatch-failed",
+                            "nodeIndex": node_index,
+                            "workgroupCount": list(prepared_dispatch.workgroup_count),
+                        },
+                    ) from exc
+                try:
+                    context.memory_barrier()
+                    finish = getattr(context, "finish", None)
+                    if callable(finish):
+                        finish()
+                except Exception as exc:
+                    raise RuntimeAdapterDispatchError(
+                        f"OpenGL compute synchronization failed: {exc}",
+                        details={
+                            "target": "opengl",
+                            "runtime": self.name,
+                            "reasonKind": "synchronization-failed",
+                            "nodeIndex": node_index,
+                        },
+                    ) from exc
             try:
-                context.memory_barrier()
-                finish = getattr(context, "finish", None)
-                if callable(finish):
-                    finish()
-            except Exception as exc:
-                raise RuntimeAdapterDispatchError(
-                    f"OpenGL compute synchronization failed: {exc}",
-                    details={
-                        "target": "opengl",
-                        "runtime": self.name,
-                        "reasonKind": "synchronization-failed",
-                    },
-                ) from exc
-            try:
-                return self._read_outputs(resources)
+                return self._read_outputs(
+                    [resource for resources in node_resources for resource in resources]
+                )
             except RuntimeAdapterDispatchError:
                 raise
             except Exception as exc:
@@ -988,14 +1095,104 @@ class OpenGLComputeRuntime:
                 details={"target": "opengl", "runtime": self.name},
             ) from exc
         finally:
-            released_buffers: set[int] = set()
-            for _prepared, buffer in reversed(resources):
-                if id(buffer) in released_buffers:
+            released: set[int] = set()
+            for value in (
+                *reversed(shaders),
+                *reversed(tuple(allocation_buffers.values())),
+                context,
+            ):
+                if value is None or id(value) in released:
                     continue
-                released_buffers.add(id(buffer))
-                _release_opengl_object(buffer)
+                released.add(id(value))
+                _release_opengl_object(value)
+
+    def _create_sequence_shader(
+        self,
+        context: Any,
+        state: Any,
+        prepared: _PreparedOpenGLDispatch,
+        *,
+        node_index: int,
+    ) -> Any:
+        request = prepared.request
+        shader = None
+        try:
+            if prepared.specialization_bindings:
+                if not isinstance(prepared.shader_artifact, bytes):
+                    raise _opengl_setup_error(
+                        "OpenGL specialization constants require a compiled SPIR-V runtime artifact.",
+                        "spirv-artifact-required",
+                        nodeIndex=node_index,
+                        modulePath=str(request.module_path),
+                    )
+                api = self._load_opengl_spirv_api(context)
+                shader = self._create_spirv_shader(
+                    api,
+                    prepared.shader_artifact,
+                    prepared.specializations,
+                    entry_point=request.entry_point or "main",
+                )
+                self._record_specialization_application(
+                    state,
+                    prepared.specializations,
+                    uniform_count=len(prepared.uniform_bindings),
+                    entry_point=request.entry_point or "main",
+                    api=api,
+                )
+                return shader
+            if not isinstance(prepared.shader_artifact, str):
+                raise _opengl_setup_error(
+                    "OpenGL source runtime dispatch requires a GLSL text artifact.",
+                    "glsl-source-artifact-required",
+                    nodeIndex=node_index,
+                    modulePath=str(request.module_path),
+                )
+            return context.compute_shader(prepared.shader_artifact)
+        except _OpenGLSPIRVUnavailable as exc:
             _release_opengl_object(shader)
-            _release_opengl_object(context)
+            raise RuntimeAdapterSetupError(
+                str(exc),
+                details={"target": "opengl", "nodeIndex": node_index, **exc.details},
+            ) from exc
+        except RuntimeAdapterSetupError:
+            _release_opengl_object(shader)
+            raise
+        except Exception as exc:
+            _release_opengl_object(shader)
+            raise RuntimeAdapterSetupError(
+                f"OpenGL compute shader compilation or linking failed: {exc}",
+                details={
+                    "target": "opengl",
+                    "runtime": self.name,
+                    "reasonKind": "shader-compilation-or-linking-failed",
+                    "nodeIndex": node_index,
+                },
+            ) from exc
+
+    def _bind_sequence_buffer_views(
+        self,
+        resources: Sequence[tuple[_PreparedOpenGLBuffer, Any]],
+        *,
+        node_index: int | None = None,
+    ) -> None:
+        for prepared, buffer in resources:
+            try:
+                self._bind_buffer_view(buffer, prepared)
+            except Exception as exc:
+                details: dict[str, Any] = {
+                    "target": "opengl",
+                    "runtime": self.name,
+                    "reasonKind": "resource-binding-failed",
+                    "resource": prepared.name,
+                    "binding": prepared.binding_index,
+                    "allocationId": _prepared_allocation_id(prepared),
+                }
+                if node_index is not None:
+                    details["nodeIndex"] = node_index
+                raise RuntimeAdapterSetupError(
+                    f"OpenGL resource binding failed for {prepared.name!r}: {exc}",
+                    details=details,
+                ) from exc
 
     def _load_moderngl(self) -> Any:
         try:
@@ -1286,7 +1483,11 @@ class OpenGLComputeRuntime:
             (prepared,),
             target="opengl",
         )
-        buffer = self._create_allocation_buffer(context, payload)
+        buffer = self._create_allocation_buffer(
+            context,
+            payload,
+            prepared.allocation_size,
+        )
         try:
             self._bind_buffer_view(buffer, prepared)
         except Exception:
@@ -1308,7 +1509,11 @@ class OpenGLComputeRuntime:
                 views,
                 target="opengl",
             )
-            buffer = self._create_allocation_buffer(context, payload)
+            buffer = self._create_allocation_buffer(
+                context,
+                payload,
+                views[0].allocation_size,
+            )
             try:
                 for view in views:
                     try:
@@ -1332,10 +1537,14 @@ class OpenGLComputeRuntime:
         return resources
 
     @staticmethod
-    def _create_allocation_buffer(context: Any, payload: bytes) -> Any:
-        if payload:
+    def _create_allocation_buffer(
+        context: Any,
+        payload: bytes | None,
+        allocation_size: int,
+    ) -> Any:
+        if payload is not None:
             return context.buffer(payload)
-        return context.buffer(reserve=1)
+        return context.buffer(reserve=allocation_size)
 
     @staticmethod
     def _bind_buffer_view(buffer: Any, prepared: _PreparedOpenGLBuffer) -> None:
@@ -2030,7 +2239,7 @@ def _prepared_allocation_payload(
     views: Sequence[Any],
     *,
     target: str,
-) -> bytes:
+) -> bytes | None:
     allocation_sizes = {view.allocation_size for view in views}
     error = _directx_setup_error if target == "directx" else _opengl_setup_error
     target_name = {"directx": "DirectX", "opengl": "OpenGL"}[target]
@@ -2043,6 +2252,8 @@ def _prepared_allocation_payload(
             views=[_prepared_allocation_view_payload(view) for view in views],
         )
     allocation_size = next(iter(allocation_sizes))
+    if not any(view.upload for view in views):
+        return None
     payload = bytearray(allocation_size)
     written = bytearray(allocation_size)
     owners: list[str | None] = [None] * allocation_size
@@ -2083,6 +2294,8 @@ def _prepared_allocation_payload(
 def _validate_directx_allocation_views(
     allocation_id: str,
     views: Sequence[_PreparedDirectXBuffer],
+    *,
+    validate_writes: bool = True,
 ) -> None:
     if len(views) < 2:
         return
@@ -2107,16 +2320,19 @@ def _validate_directx_allocation_views(
             views=[_prepared_allocation_view_payload(view) for view in views],
             targetConstraint="structured-buffer-view-layout",
         )
-    _validate_prepared_writable_overlaps(
-        allocation_id,
-        views,
-        target="directx",
-    )
+    if validate_writes:
+        _validate_prepared_writable_overlaps(
+            allocation_id,
+            views,
+            target="directx",
+        )
 
 
 def _validate_opengl_allocation_views(
     allocation_id: str,
     views: Sequence[_PreparedOpenGLBuffer],
+    *,
+    validate_writes: bool = True,
 ) -> None:
     if len(views) < 2:
         return
@@ -2146,11 +2362,12 @@ def _validate_opengl_allocation_views(
                 ],
                 targetConstraint="overlapping-buffer-view-layout",
             )
-    _validate_prepared_writable_overlaps(
-        allocation_id,
-        views,
-        target="opengl",
-    )
+    if validate_writes:
+        _validate_prepared_writable_overlaps(
+            allocation_id,
+            views,
+            target="opengl",
+        )
 
 
 def _validate_opengl_context_view_alignment(
@@ -2217,6 +2434,95 @@ def _prepared_views_overlap(left: Any, right: Any) -> bool:
     left_end = left.byte_offset + left.size
     right_end = right.byte_offset + right.size
     return left.byte_offset < right_end and right.byte_offset < left_end
+
+
+def _prepare_sequence_allocations(
+    prepared_nodes: Sequence[Sequence[Any]],
+    *,
+    target: str,
+) -> tuple[tuple[_PreparedSequenceAllocation, ...], Mapping[int, tuple[Any, ...]]]:
+    groups: dict[tuple[Any, ...], list[Any]] = {}
+    display_ids: dict[tuple[Any, ...], str] = {}
+    view_keys: dict[int, tuple[Any, ...]] = {}
+    validate = (
+        _validate_directx_allocation_views
+        if target == "directx"
+        else _validate_opengl_allocation_views
+    )
+
+    for node_index, prepared_buffers in enumerate(prepared_nodes):
+        node_groups: dict[tuple[Any, ...], list[Any]] = {}
+        for view_index, prepared in enumerate(prepared_buffers):
+            if prepared.allocation_explicit:
+                key = ("allocation", _prepared_allocation_id(prepared))
+            else:
+                key = ("binding", node_index, view_index)
+            groups.setdefault(key, []).append(prepared)
+            node_groups.setdefault(key, []).append(prepared)
+            display_ids.setdefault(key, _prepared_allocation_id(prepared))
+            view_keys[id(prepared)] = key
+        for key, views in node_groups.items():
+            validate(display_ids[key], views)
+
+    allocations = []
+    for key, views in groups.items():
+        allocation_id = display_ids[key]
+        validate(allocation_id, views, validate_writes=False)
+        allocations.append(
+            _PreparedSequenceAllocation(
+                key=key,
+                allocation_id=allocation_id,
+                views=tuple(views),
+                upload_payload=_prepared_allocation_payload(
+                    allocation_id,
+                    views,
+                    target=target,
+                ),
+            )
+        )
+    return tuple(allocations), view_keys
+
+
+def _validate_dispatch_sequence_requests(
+    requests: Sequence[NativeRuntimeDispatchRequest],
+    *,
+    target: str,
+) -> tuple[NativeRuntimeDispatchRequest, ...]:
+    sequence = tuple(requests)
+    error = _directx_setup_error if target == "directx" else _opengl_setup_error
+    target_name = {"directx": "DirectX", "opengl": "OpenGL"}[target]
+    if not sequence:
+        raise error(
+            f"{target_name} runtime dispatch sequence must contain at least one request.",
+            "dispatch-sequence-empty",
+        )
+    for node_index, request in enumerate(sequence):
+        request_target = str(getattr(request, "target", "")).strip().lower()
+        if request_target != target:
+            raise error(
+                f"{target_name} runtime dispatch sequence contains a target mismatch.",
+                "target-mismatch",
+                nodeIndex=node_index,
+                expectedTarget=target,
+                requestTarget=request_target or None,
+            )
+        artifact = getattr(request, "artifact", None)
+        artifact_target = (
+            artifact.get("target") if isinstance(artifact, Mapping) else None
+        )
+        if (
+            isinstance(artifact_target, str)
+            and artifact_target.strip()
+            and artifact_target.strip().lower() != target
+        ):
+            raise error(
+                f"{target_name} runtime artifact target does not match its sequence.",
+                "artifact-target-mismatch",
+                nodeIndex=node_index,
+                expectedTarget=target,
+                artifactTarget=artifact_target,
+            )
+    return sequence
 
 
 def _prepared_allocation_view_payload(view: Any) -> dict[str, Any]:
@@ -2311,8 +2617,9 @@ def _prepare_directx_buffers(
                 resource=name,
                 shape=list(shape),
             )
-        if binding.value is None and readback:
-            payload = b"\x00" * (element_count * _dtype_size(dtype))
+        payload_size = element_count * _dtype_size(dtype)
+        if binding.value is None:
+            payload = b""
         else:
             try:
                 payload = _pack_values(
@@ -2330,7 +2637,7 @@ def _prepare_directx_buffers(
                     shape=list(shape),
                 ) from exc
 
-        stride = _directx_buffer_stride(binding, namespace, dtype, len(payload))
+        stride = _directx_buffer_stride(binding, namespace, dtype, payload_size)
         (
             allocation_id,
             byte_offset,
@@ -2338,7 +2645,7 @@ def _prepare_directx_buffers(
             requested_allocation_size,
         ) = _native_buffer_allocation_view(
             binding,
-            payload_size=len(payload),
+            payload_size=payload_size,
             target="directx",
             alignment=stride or _dtype_size(dtype),
             allow_padding=namespace == "cbv",
@@ -2348,7 +2655,7 @@ def _prepare_directx_buffers(
                 binding,
                 target="directx",
                 dtype=dtype,
-                payload_size=len(payload),
+                payload_size=payload_size,
             )
             allocation_size = _align_to(max(requested_allocation_size, block_size), 256)
         else:
@@ -2387,6 +2694,7 @@ def _prepare_directx_buffers(
                 byte_length=byte_length,
                 upload=binding.value is not None,
                 writable=namespace == "uav",
+                allocation_explicit=binding.allocation is not None,
             )
         )
     return tuple(
@@ -3366,8 +3674,9 @@ def _prepare_opengl_buffers(
         element_count = (
             math.prod(shape) if shape else len(_flatten_values(binding.value))
         )
-        if binding.value is None and readback:
-            payload = b"\x00" * (element_count * _dtype_size(dtype))
+        payload_size = element_count * _dtype_size(dtype)
+        if binding.value is None:
+            payload = b""
         else:
             payload = _pack_values(
                 binding.value,
@@ -3382,14 +3691,14 @@ def _prepare_opengl_buffers(
             allocation_size,
         ) = _native_buffer_allocation_view(
             binding,
-            payload_size=len(payload),
+            payload_size=payload_size,
             target="opengl",
             alignment=_dtype_size(dtype),
             allow_padding=namespace == "uniform",
         )
         if namespace == "uniform":
             block_size = _scalar_block_size(
-                binding, target="opengl", dtype=dtype, payload_size=len(payload)
+                binding, target="opengl", dtype=dtype, payload_size=payload_size
             )
             if (
                 binding.allocation is not None
@@ -3432,6 +3741,7 @@ def _prepare_opengl_buffers(
                 byte_length=byte_length,
                 upload=binding.value is not None,
                 writable=access in {"write", "read_write", "readwrite"},
+                allocation_explicit=binding.allocation is not None,
             )
         )
     return tuple(

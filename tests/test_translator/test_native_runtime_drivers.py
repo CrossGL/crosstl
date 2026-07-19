@@ -853,7 +853,8 @@ def test_prepare_directx_buffers_maps_and_packs_descriptor_namespaces(tmp_path):
     assert prepared[0].stride == 0
     assert prepared[1].payload == struct.pack("<2f", 1.0, 2.0)
     assert prepared[1].stride == 4
-    assert prepared[2].payload == b"\x00" * 8
+    assert prepared[2].payload == b""
+    assert prepared[2].upload is False
     assert prepared[2].readback is True
     assert prepared[2].output_name == "result"
 
@@ -2627,7 +2628,8 @@ def test_prepare_opengl_buffers_packs_storage_and_uniform_buffers():
         ("constant-buffer", 0),
     ]
     assert buffers[0].payload == b"\x00\x00\x80?\x00\x00\x00@"
-    assert buffers[1].payload == b"\x00" * 8
+    assert buffers[1].payload == b""
+    assert buffers[1].upload is False
     assert buffers[1].readback is True
     assert buffers[1].output_name == "result"
     assert buffers[2].payload == b"\x03\x00\x00\x00"
@@ -4274,6 +4276,574 @@ void main() {
     assert report["success"] is True, failure_context
     assert result["status"] == "passed"
     assert result["comparisons"][0]["status"] == "passed", failure_context
+
+
+def _native_dispatch_sequence_requests(tmp_path, target):
+    is_directx = target == "directx"
+
+    def resource(name, binding, access):
+        type_name = None
+        if is_directx:
+            type_name = (
+                "RWStructuredBuffer<uint>"
+                if access == "write"
+                else "StructuredBuffer<uint>"
+            )
+        return RuntimeResourceBinding(
+            name=name,
+            kind="storage-buffer",
+            type_name=type_name,
+            set=0,
+            binding=binding,
+            access=access,
+        )
+
+    temporary = RuntimeAllocationView(
+        allocation_id="temporary",
+        byte_length=16,
+        allocation_byte_length=16,
+    )
+    loaded_artifacts = (
+        (b"stage-one", b"stage-two") if is_directx else ("stage-one", "stage-two")
+    )
+    entry_points = ("stage_one", "stage_two") if is_directx else ("main", "main")
+    producer = NativeRuntimeDispatchRequest(
+        target=target,
+        artifact={"target": target, "id": "stage-one"},
+        artifact_path=tmp_path / f"stage-one.{target}",
+        module_path=tmp_path / f"stage-one.{target}.bin",
+        loaded_artifact=loaded_artifacts[0],
+        buffers={
+            "source": NativeRuntimeBufferBinding(
+                name="source",
+                binding=resource("source", 0, "read"),
+                value=[1, 2, 3, 4],
+                source="input",
+                dtype="uint32",
+                shape=(4,),
+            ),
+            "temporary": NativeRuntimeBufferBinding(
+                name="temporary",
+                binding=resource("temporary", 0 if is_directx else 1, "write"),
+                dtype="uint32",
+                shape=(4,),
+                allocation=temporary,
+            ),
+        },
+        constants={},
+        dispatch=RuntimeDispatchGeometry(
+            entry_point=entry_points[0],
+            workgroup_count=(1, 1, 1),
+        ),
+        entry_point=entry_points[0],
+    )
+    consumer = NativeRuntimeDispatchRequest(
+        target=target,
+        artifact={"target": target, "id": "stage-two"},
+        artifact_path=tmp_path / f"stage-two.{target}",
+        module_path=tmp_path / f"stage-two.{target}.bin",
+        loaded_artifact=loaded_artifacts[1],
+        buffers={
+            "temporary": NativeRuntimeBufferBinding(
+                name="temporary",
+                binding=resource("temporary", 0, "read"),
+                dtype="uint32",
+                shape=(4,),
+                allocation=temporary,
+            ),
+            "result": NativeRuntimeBufferBinding(
+                name="result",
+                binding=resource("result", 0 if is_directx else 1, "write"),
+                dtype="uint32",
+                shape=(4,),
+                expected_output=RuntimeValue(
+                    name="result",
+                    dtype="uint32",
+                    shape=(4,),
+                    values=[5, 7, 9, 11],
+                ),
+            ),
+        },
+        constants={},
+        dispatch=RuntimeDispatchGeometry(
+            entry_point=entry_points[1],
+            workgroup_count=(1, 1, 1),
+        ),
+        entry_point=entry_points[1],
+    )
+    return producer, consumer
+
+
+class _SequenceDirectXBuffer:
+    def __init__(self, runtime, size, heap_type, stride, device):
+        self.runtime = runtime
+        self.size = size
+        self.heap_type = heap_type
+        self.stride = stride
+        self.device = device
+        self.payload = bytearray(size)
+        self.release_count = 0
+
+    def upload(self, payload):
+        self.runtime.events.append(("upload", self.heap_type))
+        self.payload[: len(payload)] = payload
+
+    def copy_to(self, destination):
+        self.runtime.events.append(("copy", self.heap_type, destination.heap_type))
+        destination.payload[: len(self.payload)] = self.payload
+
+    def readback(self, size=0, offset=0):
+        self.runtime.events.append(("readback", size, offset))
+        size = size or len(self.payload) - offset
+        return bytes(self.payload[offset : offset + size])
+
+    def release(self):
+        self.release_count += 1
+
+
+class _SequenceDirectXCompute:
+    def __init__(self, runtime, shader, cbv, srv, uav, device):
+        self.runtime = runtime
+        self.shader = shader
+        self.cbv = cbv
+        self.srv = srv
+        self.uav = uav
+        self.device = device
+        self.release_count = 0
+
+    def dispatch(self, x, y, z):
+        assert (x, y, z) == (1, 1, 1)
+        self.runtime.events.append(("dispatch", self.shader))
+        if self.runtime.fail_shader == self.shader:
+            raise RuntimeError(f"{self.shader!r} dispatch failed")
+        values = struct.unpack("<4I", self.srv[0].payload)
+        if self.shader == b"stage-one":
+            result = tuple(value * 2 for value in values)
+            self.runtime.producer_temporary = self.uav[0]
+        else:
+            assert self.shader == b"stage-two"
+            result = tuple(value + 3 for value in values)
+            self.runtime.consumer_temporary = self.srv[0]
+        self.uav[0].payload[:] = struct.pack("<4I", *result)
+
+    def release(self):
+        self.release_count += 1
+
+
+class _SequenceCompushady:
+    HEAP_DEFAULT = 0
+    HEAP_UPLOAD = 1
+    HEAP_READBACK = 2
+
+    def __init__(self):
+        self.backend = SimpleNamespace(name="d3d12")
+        self.device = _FakeDirectXDevice()
+        self.buffers = []
+        self.computes = []
+        self.events = []
+        self.device_selection_count = 0
+        self.fail_shader = None
+        self.producer_temporary = None
+        self.consumer_temporary = None
+
+    def get_backend(self):
+        return self.backend
+
+    def get_discovered_devices(self):
+        return [self.device]
+
+    def get_current_device(self):
+        self.device_selection_count += 1
+        return self.device
+
+    def Buffer(self, size, heap_type=0, stride=0, device=None):
+        buffer = _SequenceDirectXBuffer(self, size, heap_type, stride, device)
+        self.buffers.append(buffer)
+        return buffer
+
+    def Compute(self, shader, cbv=None, srv=None, uav=None, device=None):
+        compute = _SequenceDirectXCompute(
+            self,
+            shader,
+            list(cbv or ()),
+            list(srv or ()),
+            list(uav or ()),
+            device,
+        )
+        self.computes.append(compute)
+        return compute
+
+
+class _SequenceOpenGLBuffer:
+    def __init__(self, context, payload, allocation_mode):
+        self.context = context
+        self.payload = bytearray(payload)
+        self.allocation_mode = allocation_mode
+        self.read_count = 0
+        self.release_count = 0
+
+    def bind_to_storage_buffer(self, binding, offset=0, size=-1):
+        if size < 0:
+            size = len(self.payload) - offset
+        self.context.bindings[binding] = (self, offset, size)
+
+    def bind_to_uniform_block(self, binding, offset=0, size=-1):
+        if size < 0:
+            size = len(self.payload) - offset
+        self.context.uniform_bindings[binding] = (self, offset, size)
+
+    def read(self, size, offset=0):
+        self.read_count += 1
+        self.context.events.append(("readback", size, offset))
+        return bytes(self.payload[offset : offset + size])
+
+    def release(self):
+        self.release_count += 1
+
+
+class _SequenceOpenGLShader:
+    def __init__(self, context, source):
+        self.context = context
+        self.source = source
+        self.release_count = 0
+
+    def run(self, **kwargs):
+        assert kwargs == {"group_x": 1, "group_y": 1, "group_z": 1}
+        self.context.events.append(("dispatch", self.source))
+        if self.context.fail_shader == self.source:
+            raise RuntimeError(f"{self.source} dispatch failed")
+        source, source_offset, source_size = self.context.bindings[0]
+        destination, destination_offset, destination_size = self.context.bindings[1]
+        values = struct.unpack(
+            "<4I",
+            source.payload[source_offset : source_offset + source_size],
+        )
+        if self.source == "stage-one":
+            result = tuple(value * 2 for value in values)
+            self.context.producer_temporary = destination
+        else:
+            assert self.source == "stage-two"
+            result = tuple(value + 3 for value in values)
+            self.context.consumer_temporary = source
+        destination.payload[
+            destination_offset : destination_offset + destination_size
+        ] = struct.pack("<4I", *result)
+
+    def release(self):
+        self.release_count += 1
+
+
+class _SequenceOpenGLContext:
+    version_code = 460
+    info = {"GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT": 4}
+
+    def __init__(self):
+        self.buffers = []
+        self.shaders = []
+        self.bindings = {}
+        self.uniform_bindings = {}
+        self.events = []
+        self.fail_shader = None
+        self.producer_temporary = None
+        self.consumer_temporary = None
+        self.release_count = 0
+
+    def buffer(self, data=None, reserve=None):
+        if data is not None:
+            payload = bytes(data)
+            mode = "upload"
+        else:
+            payload = b"\x00" * reserve
+            mode = "reserve"
+        buffer = _SequenceOpenGLBuffer(self, payload, mode)
+        self.buffers.append(buffer)
+        return buffer
+
+    def compute_shader(self, source):
+        self.events.append(("compile", source))
+        shader = _SequenceOpenGLShader(self, source)
+        self.shaders.append(shader)
+        return shader
+
+    def memory_barrier(self):
+        self.events.append(("barrier",))
+
+    def finish(self):
+        self.events.append(("finish",))
+
+    def release(self):
+        self.release_count += 1
+
+
+def test_directx_compute_runtime_dispatch_sequence_preserves_temporary_allocation(
+    tmp_path,
+):
+    module = _SequenceCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+    requests = _native_dispatch_sequence_requests(tmp_path, "directx")
+
+    outputs = runtime.dispatch_sequence(None, None, requests)
+
+    assert outputs == {
+        "result": {"dtype": "uint32", "shape": [4], "values": [5, 7, 9, 11]}
+    }
+    assert requests[0].buffers["temporary"].value is None
+    assert requests[0].buffers["temporary"].expected_output is None
+    assert requests[1].buffers["temporary"].value is None
+    assert requests[1].buffers["temporary"].expected_output is None
+    assert module.device_selection_count == 1
+    assert [compute.shader for compute in module.computes] == [
+        b"stage-one",
+        b"stage-two",
+    ]
+    assert module.producer_temporary is module.consumer_temporary
+    assert [
+        event for event in module.events if event[0] in {"dispatch", "readback"}
+    ] == [
+        ("dispatch", b"stage-one"),
+        ("dispatch", b"stage-two"),
+        ("readback", 16, 0),
+    ]
+    assert (
+        sum(buffer.heap_type == module.HEAP_DEFAULT for buffer in module.buffers) == 3
+    )
+    assert sum(buffer.heap_type == module.HEAP_UPLOAD for buffer in module.buffers) == 1
+    assert (
+        sum(buffer.heap_type == module.HEAP_READBACK for buffer in module.buffers) == 1
+    )
+    assert all(buffer.release_count == 1 for buffer in module.buffers)
+    assert all(compute.release_count == 1 for compute in module.computes)
+
+
+def test_directx_compute_runtime_dispatch_sequence_cleans_up_after_failure(tmp_path):
+    module = _SequenceCompushady()
+    module.fail_shader = b"stage-two"
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+
+    with pytest.raises(RuntimeAdapterDispatchError) as excinfo:
+        runtime.dispatch_sequence(
+            None,
+            None,
+            _native_dispatch_sequence_requests(tmp_path, "directx"),
+        )
+
+    assert excinfo.value.details["reasonKind"] == "dispatch-failed"
+    assert excinfo.value.details["nodeIndex"] == 1
+    assert len(module.computes) == 2
+    assert all(buffer.release_count == 1 for buffer in module.buffers)
+    assert all(compute.release_count == 1 for compute in module.computes)
+    assert not any(event[0] == "readback" for event in module.events)
+
+
+def test_opengl_compute_runtime_dispatch_sequence_preserves_temporary_allocation(
+    tmp_path,
+):
+    context = _SequenceOpenGLContext()
+    context_creations = []
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context_creations.append(module) or context,
+    )
+    requests = _native_dispatch_sequence_requests(tmp_path, "opengl")
+
+    outputs = runtime.dispatch_sequence(None, None, requests)
+
+    assert outputs == {
+        "result": {"dtype": "uint32", "shape": [4], "values": [5, 7, 9, 11]}
+    }
+    assert requests[0].buffers["temporary"].value is None
+    assert requests[0].buffers["temporary"].expected_output is None
+    assert requests[1].buffers["temporary"].value is None
+    assert requests[1].buffers["temporary"].expected_output is None
+    assert len(context_creations) == 1
+    assert [shader.source for shader in context.shaders] == ["stage-one", "stage-two"]
+    assert context.producer_temporary is context.consumer_temporary
+    assert context.events == [
+        ("compile", "stage-one"),
+        ("compile", "stage-two"),
+        ("dispatch", "stage-one"),
+        ("barrier",),
+        ("finish",),
+        ("dispatch", "stage-two"),
+        ("barrier",),
+        ("finish",),
+        ("readback", 16, 0),
+    ]
+    assert [buffer.allocation_mode for buffer in context.buffers].count("upload") == 1
+    assert [buffer.allocation_mode for buffer in context.buffers].count("reserve") == 2
+    assert context.producer_temporary.read_count == 0
+    assert all(buffer.release_count == 1 for buffer in context.buffers)
+    assert all(shader.release_count == 1 for shader in context.shaders)
+    assert context.release_count == 1
+
+
+def test_opengl_compute_runtime_dispatch_sequence_cleans_up_after_failure(tmp_path):
+    context = _SequenceOpenGLContext()
+    context.fail_shader = "stage-two"
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context,
+    )
+
+    with pytest.raises(RuntimeAdapterDispatchError) as excinfo:
+        runtime.dispatch_sequence(
+            None,
+            None,
+            _native_dispatch_sequence_requests(tmp_path, "opengl"),
+        )
+
+    assert excinfo.value.details["reasonKind"] == "dispatch-failed"
+    assert excinfo.value.details["nodeIndex"] == 1
+    assert len(context.shaders) == 2
+    assert all(buffer.release_count == 1 for buffer in context.buffers)
+    assert all(shader.release_count == 1 for shader in context.shaders)
+    assert context.release_count == 1
+    assert not any(event[0] == "readback" for event in context.events)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_native_dispatch_sequence_rejects_target_mismatch_before_runtime_setup(
+    tmp_path,
+    target,
+):
+    requests = list(_native_dispatch_sequence_requests(tmp_path, target))
+    requests[1] = NativeRuntimeDispatchRequest(
+        **{**requests[1].__dict__, "target": "vulkan"}
+    )
+    runtime = (
+        DirectXComputeRuntime(
+            module_loader=lambda name: pytest.fail(f"unexpected import: {name}"),
+            platform_name="win32",
+        )
+        if target == "directx"
+        else OpenGLComputeRuntime(
+            module_loader=lambda name: pytest.fail(f"unexpected import: {name}")
+        )
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.dispatch_sequence(None, None, requests)
+
+    assert excinfo.value.details["reasonKind"] == "target-mismatch"
+    assert excinfo.value.details["nodeIndex"] == 1
+    assert excinfo.value.details["expectedTarget"] == target
+    assert excinfo.value.details["requestTarget"] == "vulkan"
+
+
+def _invalid_native_dispatch_sequence(requests, reason_kind):
+    producer, consumer = requests
+    producer_buffers = dict(producer.buffers)
+    consumer_buffers = dict(consumer.buffers)
+    producer_temporary = producer_buffers["temporary"]
+    consumer_temporary = consumer_buffers["temporary"]
+
+    if reason_kind == "allocation-upload-conflict":
+        producer_buffers["temporary"] = NativeRuntimeBufferBinding(
+            **{
+                **producer_temporary.__dict__,
+                "value": [1, 1, 1, 1],
+                "source": "input",
+            }
+        )
+        consumer_buffers["temporary"] = NativeRuntimeBufferBinding(
+            **{
+                **consumer_temporary.__dict__,
+                "value": [2, 2, 2, 2],
+                "source": "input",
+            }
+        )
+    elif reason_kind == "allocation-size-conflict":
+        consumer_buffers["temporary"] = NativeRuntimeBufferBinding(
+            **{
+                **consumer_temporary.__dict__,
+                "shape": (8,),
+                "allocation": RuntimeAllocationView(
+                    allocation_id="temporary",
+                    byte_length=32,
+                    allocation_byte_length=32,
+                ),
+            }
+        )
+    elif reason_kind == "allocation-layout-incompatible":
+        consumer_buffers["temporary"] = NativeRuntimeBufferBinding(
+            **{**consumer_temporary.__dict__, "dtype": "float32"}
+        )
+    else:
+        assert reason_kind == "allocation-write-conflict"
+        alias = producer_temporary.binding
+        producer_buffers["temporary_alias"] = NativeRuntimeBufferBinding(
+            **{
+                **producer_temporary.__dict__,
+                "name": "temporary_alias",
+                "binding": RuntimeResourceBinding(
+                    **{
+                        **alias.__dict__,
+                        "name": "temporary_alias",
+                        "binding": alias.binding + 1,
+                    }
+                ),
+            }
+        )
+
+    return (
+        NativeRuntimeDispatchRequest(
+            **{**producer.__dict__, "buffers": producer_buffers}
+        ),
+        NativeRuntimeDispatchRequest(
+            **{**consumer.__dict__, "buffers": consumer_buffers}
+        ),
+    )
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize(
+    "reason_kind",
+    [
+        "allocation-upload-conflict",
+        "allocation-size-conflict",
+        "allocation-layout-incompatible",
+        "allocation-write-conflict",
+    ],
+)
+def test_native_dispatch_sequence_rejects_invalid_allocation_plan_before_device_setup(
+    tmp_path,
+    target,
+    reason_kind,
+):
+    requests = _invalid_native_dispatch_sequence(
+        _native_dispatch_sequence_requests(tmp_path, target),
+        reason_kind,
+    )
+    module = None
+    context_creations = []
+    if target == "directx":
+        module = _SequenceCompushady()
+        runtime = DirectXComputeRuntime(
+            module_loader=lambda name: module,
+            platform_name="win32",
+        )
+    else:
+        context = _SequenceOpenGLContext()
+        runtime = OpenGLComputeRuntime(
+            module_loader=lambda name: object(),
+            context_factory=lambda value: context_creations.append(value) or context,
+        )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.dispatch_sequence(None, None, requests)
+
+    assert excinfo.value.details["reasonKind"] == reason_kind
+    assert excinfo.value.details["allocationId"] == "temporary"
+    if module is not None:
+        assert module.device_selection_count == 0
+    else:
+        assert context_creations == []
 
 
 def test_runtime_parity_glsl_workgroup_alias_offset_executes_on_vulkan(tmp_path):
