@@ -10,20 +10,24 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/native-host-loader.yml"
+      - "crosstl/_crosstl.py"
       - "crosstl/project/native_loader_abi.py"
       - "crosstl/project/native_loader_abi_package.py"
       - "crosstl/project/__init__.py"
       - "tests/test_translator/test_native_loader_abi.py"
       - "tests/test_translator/test_native_loader_abi_integration.py"
+      - "tests/test_native_loader_abi_cli.py"
   pull_request:
     branches: [main]
     paths:
       - ".github/workflows/native-host-loader.yml"
+      - "crosstl/_crosstl.py"
       - "crosstl/project/native_loader_abi.py"
       - "crosstl/project/native_loader_abi_package.py"
       - "crosstl/project/__init__.py"
       - "tests/test_translator/test_native_loader_abi.py"
       - "tests/test_translator/test_native_loader_abi_integration.py"
+      - "tests/test_native_loader_abi_cli.py"
 
 permissions:
   contents: read
@@ -68,7 +72,7 @@ jobs:
 
       - name: Configure Microsoft C and C++ compilers
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - name: Install project and test dependencies
         run: |
@@ -86,3 +90,4 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_native_loader_abi.py
           tests/test_translator/test_native_loader_abi_integration.py
+          tests/test_native_loader_abi_cli.py
