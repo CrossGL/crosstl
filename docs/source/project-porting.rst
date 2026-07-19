@@ -856,6 +856,81 @@ non-kernel host API ports, application command scheduling, target SDK
 installation, build-system migration, memory lifetime policy, and production
 runtime framework generation remain downstream integration work.
 
+Runtime Execution Graphs
+------------------------
+
+The runtime execution graph API represents a bounded multi-operation workload
+without embedding target runtime calls in the project report. Use
+``parse_runtime_execution_graph`` to load a versioned graph,
+``validate_runtime_execution_graph`` to obtain structured diagnostics,
+``inspect_runtime_graph_package`` to verify packaged artifact and interface
+references, and ``execute_runtime_graph`` to run a supported native graph. The
+types and functions are available from ``crosstl.project``.
+
+A graph declares resources separately from operations. Resource records carry
+their role, kind, exact physical layout, optional allocation view, and bounded
+lifetime. Nodes use stable IDs and explicit ``dependsOn`` edges and have one of
+the following operation records:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Node kind
+     - Contract
+   * - ``dispatch``
+     - Selects one translated artifact and entry point, maps named bindings to
+       graph resources with explicit access, and records dispatch geometry and
+       constants.
+   * - ``copy``
+     - Describes bounded source and destination byte ranges between compatible
+       resources.
+   * - ``fill``
+     - Describes a bounded byte range and scalar fill value for one resource.
+   * - ``barrier``
+     - Makes an explicit write-to-read or write-to-write visibility transition
+       for named resources between dependency-ordered operations.
+
+Dispatch, copy, and fill nodes may also carry bounded repeat or condition
+records. Validation rejects unbounded controls, dependency cycles, missing
+resource or artifact references, unsafe access ordering, missing visibility
+barriers, incompatible layouts or ranges, and temporary-resource lifetimes that
+do not cover their producers and consumers. Failures are returned as structured
+diagnostics with graph, node, resource, path, and missing-capability context;
+unsupported constructs are not silently removed.
+
+Package inspection validates the graph before reading package metadata. For
+each dispatch it resolves the artifact selector deterministically, requires one
+ready packaged artifact, checks the requested entry point, and verifies named
+binding presence, uniqueness, and access compatibility against the reflected
+host interface. Inspection is read-only and records explicitly that device
+execution was not performed.
+
+The DirectX and OpenGL reference runtimes currently execute dependency-ordered
+``dispatch`` and ``barrier`` paths. All requests are validated before device
+work begins, resources are allocated once for the graph sequence, and a
+payload-free temporary resource can retain one physical allocation from its
+producer through its consumer. Intermediate results remain on the device and
+output readback is deferred until the sequence completes. The native proofs
+execute a two-stage reduction: an input of shape ``[4]`` containing
+``[0, 1, 7, 42]`` produces two partial sums in a temporary of shape ``[2]``,
+then an output of shape ``[1]`` containing ``[50]``. Direct3D 12 and OpenGL 4.3
+both verify the exact result.
+
+``copy`` and ``fill`` nodes and bounded control records are part of the
+serializable and validated graph model, but the native executor currently
+returns explicit unsupported-capability diagnostics for them. Vulkan native
+graph execution is not supported, and no native graph execution is claimed for
+Metal, WebGL, WGSL, CUDA, HIP, Mojo, Rust, or Slang. The backend-neutral graph
+contract can still be parsed and validated independently of those targets.
+
+The pinned MLX revision
+``4367c73b60541ddd5a266ce4644fd93d20223b6e`` is a corpus and CI reference for
+the runtime-porting work, not a special case in the graph schema or executor.
+This capability does not rewrite host applications or runtime frameworks and
+does not claim that the complete MLX runtime or upstream test suite has been
+ported.
+
 Project Runtime Fixture Manifest Generation
 -------------------------------------------
 
