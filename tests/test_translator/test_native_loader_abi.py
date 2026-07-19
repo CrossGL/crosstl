@@ -515,12 +515,12 @@ def test_generated_execution_abi_runs_fake_adapter_and_cleans_up(tmp_path):
 
             static int32_t fake_apply_specialization(
                 void *opaque,
-                void *pipeline,
+                void *artifact,
                 const CrossTLNativeLoaderSpecializationDescriptor *descriptor,
                 const CrossTLNativeLoaderSpecializationRequest *request) {{
                 FakeContext *context = (FakeContext *)opaque;
                 record_event(context, 30 + (int)descriptor->id);
-                if (pipeline != &context->pipeline || descriptor->has_id != 1u ||
+                if (artifact != &context->artifact || descriptor->has_id != 1u ||
                     descriptor->id != 3u || request->payload_size_bytes != 4u) {{
                     return 31;
                 }}
@@ -661,10 +661,10 @@ def test_generated_execution_abi_runs_fake_adapter_and_cleans_up(tmp_path):
                 }};
                 CrossTLNativeLoaderExecutionResult result;
                 const int success_events[] = {{
-                    10, 20, 33, 40, 41, 50, 60, 71, 81, 80, 90, 100
+                    10, 33, 20, 40, 41, 50, 60, 71, 81, 80, 90, 100
                 }};
                 const int failure_events[] = {{
-                    10, 20, 33, 40, 41, 81, 80, 90, 100
+                    10, 33, 20, 40, 41, 81, 80, 90, 100
                 }};
 
                 request.abi_version = 2u;

@@ -600,6 +600,19 @@ def generate_native_loader_execution_abi(descriptor: Mapping[str, Any]) -> str:
             "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
             "        goto cleanup;",
             "    }",
+            "    for (index = 0u; index < request->specialization_count; ++index) {",
+            "        status = adapter->apply_specialization(",
+            "            adapter->context, artifact,",
+            f"            &{symbol}_specializations[index],",
+            "            &request->specializations[index]);",
+            "        if (status != 0) {",
+            "            result = crosstl_native_loader_execution_failure(",
+            "                CROSSTL_NATIVE_LOADER_PHASE_APPLY_SPECIALIZATION,",
+            "                CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE,",
+            "                CROSSTL_NATIVE_LOADER_NO_INDEX, index, status);",
+            "            goto cleanup;",
+            "        }",
+            "    }",
             "    status = adapter->create_pipeline(",
             f"        adapter->context, artifact, &{symbol}, &pipeline);",
             "    if (status != 0) {",
@@ -617,19 +630,6 @@ def generate_native_loader_execution_abi(descriptor: Mapping[str, Any]) -> str:
             "            CROSSTL_NATIVE_LOADER_NO_INDEX,",
             "            CROSSTL_NATIVE_LOADER_NO_INDEX, 0);",
             "        goto cleanup;",
-            "    }",
-            "    for (index = 0u; index < request->specialization_count; ++index) {",
-            "        status = adapter->apply_specialization(",
-            "            adapter->context, pipeline,",
-            f"            &{symbol}_specializations[index],",
-            "            &request->specializations[index]);",
-            "        if (status != 0) {",
-            "            result = crosstl_native_loader_execution_failure(",
-            "                CROSSTL_NATIVE_LOADER_PHASE_APPLY_SPECIALIZATION,",
-            "                CROSSTL_NATIVE_LOADER_CODE_ADAPTER_FAILURE,",
-            "                CROSSTL_NATIVE_LOADER_NO_INDEX, index, status);",
-            "            goto cleanup;",
-            "        }",
             "    }",
             "    for (index = 0u; index < request->binding_count; ++index) {",
             "        status = adapter->bind_resource(",
@@ -744,8 +744,8 @@ typedef enum CrossTLNativeLoaderExecutionPhase {
     CROSSTL_NATIVE_LOADER_PHASE_NONE = 0,
     CROSSTL_NATIVE_LOADER_PHASE_VALIDATE_REQUEST = 1,
     CROSSTL_NATIVE_LOADER_PHASE_LOAD_ARTIFACT = 2,
-    CROSSTL_NATIVE_LOADER_PHASE_CREATE_PIPELINE = 3,
-    CROSSTL_NATIVE_LOADER_PHASE_APPLY_SPECIALIZATION = 4,
+    CROSSTL_NATIVE_LOADER_PHASE_APPLY_SPECIALIZATION = 3,
+    CROSSTL_NATIVE_LOADER_PHASE_CREATE_PIPELINE = 4,
     CROSSTL_NATIVE_LOADER_PHASE_BIND_RESOURCE = 5,
     CROSSTL_NATIVE_LOADER_PHASE_DISPATCH = 6,
     CROSSTL_NATIVE_LOADER_PHASE_SYNCHRONIZE = 7,
@@ -851,7 +851,7 @@ typedef struct CrossTLNativeLoaderAdapter {
     int32_t (*destroy_pipeline)(void *context, void *pipeline);
     int32_t (*apply_specialization)(
         void *context,
-        void *pipeline,
+        void *artifact,
         const CrossTLNativeLoaderSpecializationDescriptor *descriptor,
         const CrossTLNativeLoaderSpecializationRequest *request);
     int32_t (*bind_resource)(
@@ -988,7 +988,9 @@ def _execution_specialization_descriptors(
     return result
 
 
-def _execution_workgroup_size(value: Mapping[str, Any]) -> tuple[int, int, int] | ():
+def _execution_workgroup_size(
+    value: Mapping[str, Any],
+) -> tuple[int, int, int] | None:
     candidates: list[tuple[str, tuple[int, int, int]]] = []
     for key in (
         "workgroupSize",
@@ -1018,7 +1020,7 @@ def _execution_workgroup_size(value: Mapping[str, Any]) -> tuple[int, int, int] 
             )
         )
     if not candidates:
-        return ()
+        return None
     first_name, first = candidates[0]
     for candidate_name, candidate in candidates[1:]:
         if candidate != first:
