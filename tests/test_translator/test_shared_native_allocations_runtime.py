@@ -75,28 +75,16 @@ class _DirectXAllocationProbe(DirectXComputeRuntime):
         self.working_resources.append(resource.device_buffer)
         return resource
 
-    def _create_buffer_resources(
-        self,
-        compushady,
-        device,
-        prepared_buffers,
-        owned_objects,
-    ):
-        resources = super()._create_buffer_resources(
-            compushady,
-            device,
-            prepared_buffers,
-            owned_objects,
-        )
-        self.bound_views = [
+    def _group_compute_resources(self, resources):
+        self.bound_views.extend(
             (
                 resource.prepared.namespace,
                 resource.prepared.binding_index,
                 resource.device_buffer,
             )
             for resource in resources
-        ]
-        return resources
+        )
+        return super()._group_compute_resources(resources)
 
 
 class _OpenGLAllocationProbe(OpenGLComputeRuntime):
@@ -105,8 +93,12 @@ class _OpenGLAllocationProbe(OpenGLComputeRuntime):
         self.working_resources = []
         self.bound_views = []
 
-    def _create_allocation_buffer(self, context, payload):
-        buffer = super()._create_allocation_buffer(context, payload)
+    def _create_allocation_buffer(self, context, payload, allocation_size):
+        buffer = super()._create_allocation_buffer(
+            context,
+            payload,
+            allocation_size,
+        )
         self.working_resources.append(buffer)
         return buffer
 

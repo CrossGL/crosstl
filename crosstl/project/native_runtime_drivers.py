@@ -533,14 +533,7 @@ class DirectXComputeRuntime:
             for node_index, (prepared_dispatch, resources) in enumerate(
                 zip(prepared_dispatches, node_resources)
             ):
-                bound_resources = {
-                    namespace: [
-                        resource.device_buffer
-                        for resource in resources
-                        if resource.prepared.namespace == namespace
-                    ]
-                    for namespace in ("cbv", "srv", "uav")
-                }
+                bound_resources = self._group_compute_resources(resources)
                 try:
                     compute = compushady.Compute(
                         prepared_dispatch.shader,
@@ -722,6 +715,19 @@ class DirectXComputeRuntime:
                 for view in views
             )
         return resources
+
+    def _group_compute_resources(
+        self,
+        resources: Sequence[_DirectXBufferResource],
+    ) -> dict[str, list[Any]]:
+        return {
+            namespace: [
+                resource.device_buffer
+                for resource in resources
+                if resource.prepared.namespace == namespace
+            ]
+            for namespace in ("cbv", "srv", "uav")
+        }
 
     def _read_outputs(
         self,
