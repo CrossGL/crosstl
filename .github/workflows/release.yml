@@ -48,6 +48,8 @@ jobs:
               ;;
           esac
 
+          # setup-python does not guarantee that setuptools is preinstalled.
+          python -m pip install setuptools==75.3.2
           package_version="$(python setup.py --version)"
           test "v${package_version}" = "${GITHUB_REF_NAME}"
 
