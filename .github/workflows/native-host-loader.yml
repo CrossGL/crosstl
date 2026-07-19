@@ -1,0 +1,88 @@
+name: Native Host Loader ABI
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/native-host-loader.yml"
+      - "crosstl/project/native_loader_abi.py"
+      - "crosstl/project/native_loader_abi_package.py"
+      - "crosstl/project/__init__.py"
+      - "tests/test_translator/test_native_loader_abi.py"
+      - "tests/test_translator/test_native_loader_abi_integration.py"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/native-host-loader.yml"
+      - "crosstl/project/native_loader_abi.py"
+      - "crosstl/project/native_loader_abi_package.py"
+      - "crosstl/project/__init__.py"
+      - "tests/test_translator/test_native_loader_abi.py"
+      - "tests/test_translator/test_native_loader_abi_integration.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-host-loader-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generated-native-loader-abi:
+    name: Generated native loader ABI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+        include:
+          - os: ubuntu-latest
+            cc: gcc
+            cxx: g++
+          - os: windows-latest
+            cc: cl
+            cxx: cl
+          - os: macOS-latest
+            cc: clang
+            cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure Microsoft C and C++ compilers
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install project and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest-xdist
+
+      - name: Verify native compiler availability
+        run: >-
+          python -c "import os, shutil;
+          assert shutil.which(os.environ['CC']);
+          assert shutil.which(os.environ['CXX'])"
+
+      - name: Compile and test generated C11 and C++17 loader artifacts
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_native_loader_abi.py
+          tests/test_translator/test_native_loader_abi_integration.py

@@ -297,6 +297,49 @@ def test_full_suite_runs_fail_closed_windows_directx_native_runtime_smoke():
     assert "native runtime readback mismatch" in smoke_runner
 
 
+def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
+    workflow = _workflow_texts().get("native-host-loader.yml", "")
+    expected_trigger_paths = {
+        ".github/workflows/native-host-loader.yml",
+        "crosstl/project/native_loader_abi.py",
+        "crosstl/project/native_loader_abi_package.py",
+        "crosstl/project/__init__.py",
+        "tests/test_translator/test_native_loader_abi.py",
+        "tests/test_translator/test_native_loader_abi_integration.py",
+    }
+
+    assert workflow, "native-host-loader.yml must exist"
+    assert "name: Native Host Loader ABI" in workflow
+    assert re.search(r"\bpush\s*:", workflow)
+    assert re.search(r"\bpull_request\s*:", workflow)
+    assert workflow.count("branches: [main]") == 2
+    assert set(_workflow_event_paths(workflow, "push")) == expected_trigger_paths
+    assert (
+        set(_workflow_event_paths(workflow, "pull_request")) == expected_trigger_paths
+    )
+    assert "permissions:\n  contents: read" in workflow
+    assert "concurrency:" in workflow
+    assert (
+        "group: native-host-loader-${{ github.workflow }}-${{ github.ref }}" in workflow
+    )
+    assert "cancel-in-progress: true" in workflow
+
+    job = _workflow_job_section(workflow, "generated-native-loader-abi")
+    assert _matrix_values(job, "os") == RUNNER_OSES
+    assert "runs-on: ${{ matrix.os }}" in job
+    assert "timeout-minutes: 30" in job
+    assert 'python-version: "3.12"' in job
+    assert "python -m pip install -e . pytest-xdist" in job
+    assert "CC: ${{ matrix.cc }}" in job
+    assert "CXX: ${{ matrix.cxx }}" in job
+    assert "uses: ilammy/msvc-dev-cmd@v1" in job
+    assert "Compile and test generated C11 and C++17 loader artifacts" in job
+    assert "python -m pytest -q -n auto" in job
+    assert "tests/test_translator/test_native_loader_abi.py" in job
+    assert "tests/test_translator/test_native_loader_abi_integration.py" in job
+    assert "continue-on-error" not in job
+
+
 def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     workflows = _workflow_texts()
     demo = workflows.get("demo.yml", "")
