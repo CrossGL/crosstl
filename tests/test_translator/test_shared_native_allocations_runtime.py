@@ -270,7 +270,8 @@ def test_opengl_shared_native_allocation_executes_on_device(tmp_path):
 
     _assert_output(outputs)
     assert len(runtime.working_resources) == 1
-    assert [binding for binding, _resource in runtime.bound_views] == [0, 1]
+    # Views are bound during sequence preflight and again immediately before dispatch.
+    assert [binding for binding, _resource in runtime.bound_views] == [0, 1] * 2
     assert all(
         resource is runtime.working_resources[0]
         for _binding, resource in runtime.bound_views
