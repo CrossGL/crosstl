@@ -10894,6 +10894,127 @@
       }
     },
     {
+      "id": "project.runtime_execution_graphs",
+      "category": "project",
+      "name": "Runtime execution graphs",
+      "description": "Describe, validate, inspect, and execute dependency-ordered multi-dispatch workloads with explicit resources, lifetimes, visibility barriers, and structured diagnostics.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "The versioned runtime execution graph contract parses and serializes deterministic resource, layout, lifetime, dispatch, copy, fill, barrier, dependency, and bounded-control records, then validates them with structured diagnostics. Runtime package inspection resolves artifact selectors and entry points and checks reflected binding name presence, uniqueness, and access compatibility before execution. The DirectX graph executor runs dependency-ordered dispatch and visibility-barrier paths through one native dispatch sequence, reuses one graph-scoped payload-free temporary allocation, and defers output readback until the sequence completes. A gated Windows device test compiles both stages with DXC and executes a two-stage reduction through Direct3D 12 from input shape [4] containing [0, 1, 7, 42], through temporary shape [2], to output shape [1] containing the exact result [50]. Copy, fill, and bounded-control nodes are modeled but native execution reports explicit unsupported-capability diagnostics. This contract does not rewrite host or framework code and does not claim that the full MLX runtime or test suite is ported.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_dependency_ordered_write_hazards_require_an_explicit_barrier",
+            "tests/test_translator/test_runtime_graph.py::def test_bounded_repeat_and_condition_accept_explicit_scalar_control_inputs",
+            "tests/test_translator/test_runtime_graph_package.py::def test_inspection_resolves_two_dispatches_and_verifies_host_interfaces",
+            "tests/test_translator/test_runtime_graph_package.py::def test_inspection_rejects_reflected_binding_access_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reflects_hlsl_artifact_metadata",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_uses_dependency_order_and_preserves_temporary",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
+            "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
+            "tests/test_translator/test_runtime_graph_device.py::def test_directx_dispatch_sequence_executes_shared_temporary_on_device"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "The versioned runtime execution graph contract parses and serializes deterministic resource, layout, lifetime, dispatch, copy, fill, barrier, dependency, and bounded-control records, then validates them with structured diagnostics. Runtime package inspection resolves artifact selectors and entry points and checks reflected binding name presence, uniqueness, and access compatibility before execution. The OpenGL graph executor runs dependency-ordered dispatch and visibility-barrier paths through one native dispatch sequence, reuses one graph-scoped payload-free temporary allocation, and defers output readback until the sequence completes. A gated Linux device test executes a two-stage GLSL reduction through an OpenGL 4.3 compute context from input shape [4] containing [0, 1, 7, 42], through temporary shape [2], to output shape [1] containing the exact result [50]. Copy, fill, and bounded-control nodes are modeled but native execution reports explicit unsupported-capability diagnostics. This contract does not rewrite host or framework code and does not claim that the full MLX runtime or test suite is ported.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_dependency_ordered_write_hazards_require_an_explicit_barrier",
+            "tests/test_translator/test_runtime_graph.py::def test_bounded_repeat_and_condition_accept_explicit_scalar_control_inputs",
+            "tests/test_translator/test_runtime_graph_package.py::def test_inspection_resolves_two_dispatches_and_verifies_host_interfaces",
+            "tests/test_translator/test_runtime_graph_package.py::def test_inspection_rejects_reflected_binding_access_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reflects_glsl_artifact_metadata",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_uses_dependency_order_and_preserves_temporary",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
+            "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
+            "tests/test_translator/test_runtime_graph_device.py::def test_opengl_dispatch_sequence_executes_shared_temporary_on_device"
+          ]
+        },
+        "webgl": {
+          "status": "unsupported",
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WebGL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WebGL.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ]
+        },
+        "wgsl": {
+          "status": "unsupported",
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WGSL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WGSL.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ]
+        },
+        "metal": {
+          "status": "unsupported",
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Metal native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Metal.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ]
+        },
+        "vulkan": {
+          "status": "unsupported",
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. The existing Vulkan reference runtime does not implement native graph execution, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Vulkan.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ]
+        },
+        "cuda": {
+          "status": "unsupported",
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in CUDA native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for CUDA.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ]
+        },
+        "hip": {
+          "status": "unsupported",
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in HIP native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for HIP.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ]
+        },
+        "mojo": {
+          "status": "unsupported",
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Mojo native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Mojo.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ]
+        },
+        "rust": {
+          "status": "unsupported",
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Rust native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Rust.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ]
+        },
+        "slang": {
+          "status": "unsupported",
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Slang native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Slang.",
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ]
+        }
+      }
+    },
+    {
       "id": "project.native_loader_abi",
       "category": "project",
       "name": "Native loader ABI descriptors",

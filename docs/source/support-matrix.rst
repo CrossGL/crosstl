@@ -37,17 +37,17 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "78", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "77", "0", "2", "1", "0", "0"
-   "WebGL / GLSL ES", "42", "0", "23", "14", "1", "0"
-   "WebGPU / WGSL", "46", "0", "21", "12", "1", "0"
-   "Metal", "70", "0", "4", "5", "1", "0"
-   "Vulkan SPIR-V", "72", "0", "2", "5", "1", "0"
-   "CUDA", "66", "0", "8", "5", "1", "0"
-   "HIP", "66", "0", "8", "5", "1", "0"
-   "Mojo", "68", "0", "6", "5", "1", "0"
-   "Rust", "69", "0", "5", "5", "1", "0"
-   "Slang", "70", "0", "4", "5", "1", "0"
+   "DirectX / HLSL", "79", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "78", "0", "2", "1", "0", "0"
+   "WebGL / GLSL ES", "42", "0", "23", "14", "2", "0"
+   "WebGPU / WGSL", "46", "0", "21", "12", "2", "0"
+   "Metal", "70", "0", "4", "5", "2", "0"
+   "Vulkan SPIR-V", "72", "0", "2", "5", "2", "0"
+   "CUDA", "66", "0", "8", "5", "2", "0"
+   "HIP", "66", "0", "8", "5", "2", "0"
+   "Mojo", "68", "0", "6", "5", "2", "0"
+   "Rust", "69", "0", "5", "5", "2", "0"
+   "Slang", "70", "0", "4", "5", "2", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -58,14 +58,15 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "78", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "77", "0", "2", "1", "0", "0"
-   "Metal", "70", "0", "4", "5", "1", "0"
+   "DirectX / HLSL", "79", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "78", "0", "2", "1", "0", "0"
+   "Metal", "70", "0", "4", "5", "2", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal actionable backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
    "Metal", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal."
+   "Metal", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Metal native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Metal."
 
 Project Porting Focus
 ---------------------
@@ -76,17 +77,17 @@ inspection, diagnostics, validation, and corpus-coverage rows.
 .. csv-table:: Project-porting status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "35", "0", "1", "0", "0", "0"
-   "OpenGL / GLSL", "34", "0", "1", "1", "0", "0"
-   "WebGL / GLSL ES", "29", "0", "1", "5", "1", "0"
-   "WebGPU / WGSL", "29", "0", "1", "5", "1", "0"
-   "Metal", "29", "0", "1", "5", "1", "0"
-   "Vulkan SPIR-V", "29", "0", "1", "5", "1", "0"
-   "CUDA", "29", "0", "1", "5", "1", "0"
-   "HIP", "29", "0", "1", "5", "1", "0"
-   "Mojo", "29", "0", "1", "5", "1", "0"
-   "Rust", "29", "0", "1", "5", "1", "0"
-   "Slang", "29", "0", "1", "5", "1", "0"
+   "DirectX / HLSL", "36", "0", "1", "0", "0", "0"
+   "OpenGL / GLSL", "35", "0", "1", "1", "0", "0"
+   "WebGL / GLSL ES", "29", "0", "1", "5", "2", "0"
+   "WebGPU / WGSL", "29", "0", "1", "5", "2", "0"
+   "Metal", "29", "0", "1", "5", "2", "0"
+   "Vulkan SPIR-V", "29", "0", "1", "5", "2", "0"
+   "CUDA", "29", "0", "1", "5", "2", "0"
+   "HIP", "29", "0", "1", "5", "2", "0"
+   "Mojo", "29", "0", "1", "5", "2", "0"
+   "Rust", "29", "0", "1", "5", "2", "0"
+   "Slang", "29", "0", "1", "5", "2", "0"
 
 .. csv-table:: Project-porting actionable backlog
    :header: "Backend", "Feature", "Status", "Current gap", "Next scope"
@@ -100,6 +101,15 @@ inspection, diagnostics, validation, and corpus-coverage rows.
    "Mojo", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Mojo runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Mojo.", ""
    "Rust", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Rust runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Rust.", ""
    "Slang", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang.", ""
+   "WebGL / GLSL ES", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WebGL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WebGL.", ""
+   "WebGPU / WGSL", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WGSL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WGSL.", ""
+   "Metal", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Metal native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Metal.", ""
+   "Vulkan SPIR-V", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. The existing Vulkan reference runtime does not implement native graph execution, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Vulkan.", ""
+   "CUDA", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in CUDA native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for CUDA.", ""
+   "HIP", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in HIP native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for HIP.", ""
+   "Mojo", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Mojo native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Mojo.", ""
+   "Rust", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Rust native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Rust.", ""
+   "Slang", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Slang native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Slang.", ""
 
 Feature Matrix
 --------------
@@ -208,6 +218,7 @@ Each category below uses the status codes from the legend.
    "Runtime loader manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Exact scalar physical resource layouts", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
    "Shared native allocation views", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"
+   "Runtime execution graphs", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"
    "Native loader ABI descriptors", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Native loader dispatch request", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
    "Runtime test manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
@@ -248,6 +259,15 @@ implementation work can be scoped accurately.
    "Mojo", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Mojo runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Mojo.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Mojo runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Mojo."
    "Rust", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Rust runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Rust.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Rust runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Rust."
    "Slang", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang.", "", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang."
+   "WebGL / GLSL ES", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WebGL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WebGL.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WebGL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WebGL."
+   "WebGPU / WGSL", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WGSL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WGSL.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WGSL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WGSL."
+   "Metal", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Metal native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Metal.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Metal native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Metal."
+   "Vulkan SPIR-V", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. The existing Vulkan reference runtime does not implement native graph execution, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Vulkan.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. The existing Vulkan reference runtime does not implement native graph execution, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Vulkan."
+   "CUDA", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in CUDA native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for CUDA.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in CUDA native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for CUDA."
+   "HIP", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in HIP native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for HIP.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in HIP native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for HIP."
+   "Mojo", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Mojo native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Mojo.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Mojo native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Mojo."
+   "Rust", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Rust native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Rust.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Rust native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Rust."
+   "Slang", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Slang native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Slang.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Slang native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Slang."
 
 Documentation Sources
 ---------------------

@@ -80,6 +80,87 @@
       "feature_id": "project.shared_native_allocation_views",
       "notes": "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Slang runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Slang.",
       "status": "unsupported"
+    },
+    {
+      "backend": "WebGL / GLSL ES",
+      "backend_id": "webgl",
+      "category": "project",
+      "feature": "Runtime execution graphs",
+      "feature_id": "project.runtime_execution_graphs",
+      "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WebGL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WebGL.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "WebGPU / WGSL",
+      "backend_id": "wgsl",
+      "category": "project",
+      "feature": "Runtime execution graphs",
+      "feature_id": "project.runtime_execution_graphs",
+      "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WGSL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WGSL.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "project",
+      "feature": "Runtime execution graphs",
+      "feature_id": "project.runtime_execution_graphs",
+      "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Metal native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Metal.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Vulkan SPIR-V",
+      "backend_id": "vulkan",
+      "category": "project",
+      "feature": "Runtime execution graphs",
+      "feature_id": "project.runtime_execution_graphs",
+      "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. The existing Vulkan reference runtime does not implement native graph execution, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Vulkan.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "CUDA",
+      "backend_id": "cuda",
+      "category": "project",
+      "feature": "Runtime execution graphs",
+      "feature_id": "project.runtime_execution_graphs",
+      "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in CUDA native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for CUDA.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "HIP",
+      "backend_id": "hip",
+      "category": "project",
+      "feature": "Runtime execution graphs",
+      "feature_id": "project.runtime_execution_graphs",
+      "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in HIP native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for HIP.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Mojo",
+      "backend_id": "mojo",
+      "category": "project",
+      "feature": "Runtime execution graphs",
+      "feature_id": "project.runtime_execution_graphs",
+      "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Mojo native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Mojo.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Rust",
+      "backend_id": "rust",
+      "category": "project",
+      "feature": "Runtime execution graphs",
+      "feature_id": "project.runtime_execution_graphs",
+      "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Rust native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Rust.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Slang",
+      "backend_id": "slang",
+      "category": "project",
+      "feature": "Runtime execution graphs",
+      "feature_id": "project.runtime_execution_graphs",
+      "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Slang native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Slang.",
+      "status": "unsupported"
     }
   ],
   "features": [
@@ -5980,6 +6061,127 @@
     },
     {
       "category": "project",
+      "description": "Describe, validate, inspect, and execute dependency-ordered multi-dispatch workloads with explicit resources, lifetimes, visibility barriers, and structured diagnostics.",
+      "id": "project.runtime_execution_graphs",
+      "name": "Runtime execution graphs",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ],
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in CUDA native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for CUDA.",
+          "status": "unsupported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_dependency_ordered_write_hazards_require_an_explicit_barrier",
+            "tests/test_translator/test_runtime_graph.py::def test_bounded_repeat_and_condition_accept_explicit_scalar_control_inputs",
+            "tests/test_translator/test_runtime_graph_package.py::def test_inspection_resolves_two_dispatches_and_verifies_host_interfaces",
+            "tests/test_translator/test_runtime_graph_package.py::def test_inspection_rejects_reflected_binding_access_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reflects_hlsl_artifact_metadata",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_uses_dependency_order_and_preserves_temporary",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
+            "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
+            "tests/test_translator/test_runtime_graph_device.py::def test_directx_dispatch_sequence_executes_shared_temporary_on_device"
+          ],
+          "notes": "The versioned runtime execution graph contract parses and serializes deterministic resource, layout, lifetime, dispatch, copy, fill, barrier, dependency, and bounded-control records, then validates them with structured diagnostics. Runtime package inspection resolves artifact selectors and entry points and checks reflected binding name presence, uniqueness, and access compatibility before execution. The DirectX graph executor runs dependency-ordered dispatch and visibility-barrier paths through one native dispatch sequence, reuses one graph-scoped payload-free temporary allocation, and defers output readback until the sequence completes. A gated Windows device test compiles both stages with DXC and executes a two-stage reduction through Direct3D 12 from input shape [4] containing [0, 1, 7, 42], through temporary shape [2], to output shape [1] containing the exact result [50]. Copy, fill, and bounded-control nodes are modeled but native execution reports explicit unsupported-capability diagnostics. This contract does not rewrite host or framework code and does not claim that the full MLX runtime or test suite is ported.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ],
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in HIP native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for HIP.",
+          "status": "unsupported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ],
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Metal native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Metal.",
+          "status": "unsupported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ],
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Mojo native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Mojo.",
+          "status": "unsupported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_dependency_ordered_write_hazards_require_an_explicit_barrier",
+            "tests/test_translator/test_runtime_graph.py::def test_bounded_repeat_and_condition_accept_explicit_scalar_control_inputs",
+            "tests/test_translator/test_runtime_graph_package.py::def test_inspection_resolves_two_dispatches_and_verifies_host_interfaces",
+            "tests/test_translator/test_runtime_graph_package.py::def test_inspection_rejects_reflected_binding_access_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reflects_glsl_artifact_metadata",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_uses_dependency_order_and_preserves_temporary",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic",
+            "tests/test_translator/test_runtime_graph_device.py::def test_reduction_device_fixture_matches_runtime_graph_contract",
+            "tests/test_translator/test_runtime_graph_device.py::def test_opengl_dispatch_sequence_executes_shared_temporary_on_device"
+          ],
+          "notes": "The versioned runtime execution graph contract parses and serializes deterministic resource, layout, lifetime, dispatch, copy, fill, barrier, dependency, and bounded-control records, then validates them with structured diagnostics. Runtime package inspection resolves artifact selectors and entry points and checks reflected binding name presence, uniqueness, and access compatibility before execution. The OpenGL graph executor runs dependency-ordered dispatch and visibility-barrier paths through one native dispatch sequence, reuses one graph-scoped payload-free temporary allocation, and defers output readback until the sequence completes. A gated Linux device test executes a two-stage GLSL reduction through an OpenGL 4.3 compute context from input shape [4] containing [0, 1, 7, 42], through temporary shape [2], to output shape [1] containing the exact result [50]. Copy, fill, and bounded-control nodes are modeled but native execution reports explicit unsupported-capability diagnostics. This contract does not rewrite host or framework code and does not claim that the full MLX runtime or test suite is ported.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ],
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Rust native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Rust.",
+          "status": "unsupported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ],
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Slang native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Slang.",
+          "status": "unsupported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ],
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. The existing Vulkan reference runtime does not implement native graph execution, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Vulkan.",
+          "status": "unsupported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ],
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WebGL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WebGL.",
+          "status": "unsupported"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_graph.py::def test_two_dispatch_graph_round_trips_and_validates_deterministically",
+            "tests/test_translator/test_runtime_graph.py::def test_fill_then_copy_provides_a_valid_temporary_lifetime",
+            "tests/test_translator/test_runtime_graph_execution.py::def test_execute_runtime_graph_rejects_controlled_nodes_with_capability_diagnostic"
+          ],
+          "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in WGSL native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for WGSL.",
+          "status": "unsupported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Build deterministic native loader ABI metadata, C declarations, and multi-unit packages from ready runtime loader units without creating runtime objects or dispatching device work.",
       "id": "project.native_loader_abi",
       "name": "Native loader ABI descriptors",
@@ -10783,44 +10985,44 @@
   "summary": {
     "backend_count": 11,
     "backlog": {
-      "backlog_count": 9,
+      "backlog_count": 18,
       "by_backend": {
-        "cuda": 1,
-        "hip": 1,
-        "metal": 1,
-        "mojo": 1,
-        "rust": 1,
-        "slang": 1,
-        "vulkan": 1,
-        "webgl": 1,
-        "wgsl": 1
+        "cuda": 2,
+        "hip": 2,
+        "metal": 2,
+        "mojo": 2,
+        "rust": 2,
+        "slang": 2,
+        "vulkan": 2,
+        "webgl": 2,
+        "wgsl": 2
       },
       "by_category": {
-        "project": 9
+        "project": 18
       },
       "by_status": {
         "diagnostic": 0,
         "partial": 0,
         "supported": 0,
         "unknown": 0,
-        "unsupported": 9,
+        "unsupported": 18,
         "validated_rejection": 0
       }
     },
-    "feature_count": 36,
+    "feature_count": 37,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 1,
+        "unsupported": 2,
         "validated_rejection": 5
       },
       "directx": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 35,
+        "supported": 36,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -10830,7 +11032,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 1,
+        "unsupported": 2,
         "validated_rejection": 5
       },
       "metal": {
@@ -10838,7 +11040,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 1,
+        "unsupported": 2,
         "validated_rejection": 5
       },
       "mojo": {
@@ -10846,13 +11048,13 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 1,
+        "unsupported": 2,
         "validated_rejection": 5
       },
       "opengl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 34,
+        "supported": 35,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1
@@ -10862,7 +11064,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 1,
+        "unsupported": 2,
         "validated_rejection": 5
       },
       "slang": {
@@ -10870,7 +11072,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 1,
+        "unsupported": 2,
         "validated_rejection": 5
       },
       "vulkan": {
@@ -10878,7 +11080,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 1,
+        "unsupported": 2,
         "validated_rejection": 5
       },
       "webgl": {
@@ -10886,7 +11088,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 1,
+        "unsupported": 2,
         "validated_rejection": 5
       },
       "wgsl": {
@@ -10894,7 +11096,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 1,
+        "unsupported": 2,
         "validated_rejection": 5
       }
     }
