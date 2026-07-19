@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 project = "CrossGL Translator"
 author = "CrossGL"
 copyright = "2026, CrossGL"
-release = "1.0.0"
+release = "3.1.0"
 
 extensions = [
     "myst_parser",

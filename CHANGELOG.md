@@ -2,6 +2,35 @@
 
 All notable changes to CrossTL are documented in this file.
 
+## [3.1.0] - 2026-07-19
+
+### Added
+
+- Portable runtime execution graphs, deterministic runtime variant registries, and request generation from native loader descriptors.
+- Generated native loader execution ABI packages with deterministic C11 and C++17 host integration artifacts.
+- Native compute runtime drivers and project-runner adapters for Direct3D, headless OpenGL, and Vulkan.
+- Initialized read-write resources, shared native allocation views, aggregate byte views, and private-array partition views for native execution.
+- Cooperative-matrix types and fragment contracts in the shared IR, including Vulkan KHR cooperative-matrix SPIR-V lowering foundations.
+- Pinned MLX project translation and validation across DirectX, OpenGL, and Vulkan, including reduced-frontier and full-corpus workflows.
+
+### Improved
+
+- Metal project materialization for templates, overloads, references, pointer inference, constexpr propagation, wide vectors, and aggregate return types.
+- DirectX lowering for fixed arrays, 16-bit arithmetic, overload identity, resource relocation, specialization constants, and runtime dispatch.
+- OpenGL lowering for storage aliases, interface-backed structs, specialization constants, scalar conversions, reserved identifiers, and runtime-derived globals.
+- Runtime manifests and host handoff metadata now track selected entry points, device readiness, execution resources, and native loader package identities.
+- MLX compiler-frontier accounting, native validation, and runtime proofs now cover more kernels and fail closed on unsupported contracts.
+
+### Fixed
+
+- Source-language arithmetic conversion order, explicit constructor handling, boolean compound assignments, conditional expressions, and file-scope constant preservation across target backends.
+- Metal alias-template, receiver, reference-accessor, addressed-pointer, and overload-resolution edge cases encountered in project-scale translation.
+- DirectX entry-point validation, fixed-array initialization, aggregate conditionals, minimum-precision division and remainder, and unrepresentable texture-offset diagnostics.
+- OpenGL block-name collisions, partial vector initialization, fixed-array loops, static-member layout leakage, and correlated private pointer views.
+- SPIR-V helper return lowering, empty aggregate typing, unresolved generic storage analysis, and cooperative-matrix memory operations.
+
+---
+
 ## [3.0.0] - 2026-06-23
 
 ### Added
@@ -128,6 +157,7 @@ All notable changes to CrossTL are documented in this file.
 ## [1.0.0] - 2025-10-01
 
 Initial release with:
+
 - CrossGL intermediate representation language.
 - Translation targets: Metal, DirectX (HLSL), OpenGL (GLSL), Vulkan (SPIR-V), CUDA, HIP.
 - Bidirectional translation (native → CrossGL and CrossGL → native).
