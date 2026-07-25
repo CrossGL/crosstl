@@ -1212,8 +1212,9 @@ def test_project_native_loader_abi_is_target_neutral_and_separate_from_adapters(
     for backend_support in feature["support"].values():
         notes = backend_support["notes"]
         assert backend_support["status"] == "supported"
-        assert "schema-v2 package publication" in notes
-        assert "targetAdapters availability and hashes" in notes
+        assert "schema-v3 package publication" in notes
+        assert "exact registry metadata" in notes
+        assert "copied ready-registry artifacts" in notes
         assert "project.native_loader_target_adapters" in notes
         assert "host application rewriting" in notes
         assert "repository scheduling" in notes
@@ -1261,7 +1262,7 @@ def test_project_native_loader_target_adapters_are_backend_scoped_and_evidenced(
     assert "package files and input/output payload storage remain caller-owned" in (
         directx["notes"]
     )
-    assert "Schema-v2 ABI packages" in directx["notes"]
+    assert "Schema-v3 ABI packages" in directx["notes"]
     assert (
         "tests/test_translator/test_native_directx_adapter_device.py::def "
         "test_generated_directx_adapter_executes_specialized_hlsl_on_device"
@@ -1275,7 +1276,7 @@ def test_project_native_loader_target_adapters_are_backend_scoped_and_evidenced(
     assert "GLSL source specialization fails closed" in opengl["notes"]
     assert "caller owns and keeps current the OpenGL context" in opengl["notes"]
     assert "adapter owns only the shader, program, and buffer" in opengl["notes"]
-    assert "Schema-v2 ABI packages" in opengl["notes"]
+    assert "Schema-v3 ABI packages" in opengl["notes"]
     assert (
         "tests/test_translator/test_native_opengl_adapter_device.py::def "
         "test_generated_opengl_adapter_contract_from_translated_fixture"
@@ -1352,6 +1353,48 @@ def test_project_runtime_variant_registry_documents_execution_key_schema_v2():
     assert "availableExecutionAlternatives" in normalized_docs
     assert "regenerate both the key and registry" in normalized_docs
     assert "numerical parity are not established by the registry" in normalized_docs
+
+
+def test_project_native_runtime_variant_dispatch_is_backend_scoped():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.native_runtime_variant_dispatch"]
+    supported = {"directx", "opengl"}
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Exact native runtime variant dispatch"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_id, backend_support in feature["support"].items():
+        expected = "supported" if backend_id in supported else "validated_rejection"
+        assert backend_support["status"] == expected
+        assert backend_support["evidence"]
+        if backend_id in supported:
+            notes = backend_support["notes"]
+            assert "Schema-v3 native loader packages" in notes
+            assert "crosstl-rvk2" in notes
+            assert "exact specialization payloads" in notes
+            assert "caller-provided resource values and dispatch extents" in notes
+            assert "cannot override" in notes
+            assert "deferred target compilation" in notes
+            assert "full MLX test-suite parity" in notes
+        else:
+            notes = backend_support["notes"]
+            assert "structured registry-validation or target-unsupported" in notes
+            assert "rather than being mapped to a different runtime" in notes
+
+    docs = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
+        encoding="utf-8"
+    )
+    normalized_docs = " ".join(docs.split())
+    assert (
+        "when a native header is published, the native header hash" in normalized_docs
+    )
+    assert "does not synthesize a missing variant" in normalized_docs
+    assert "perform deferred target compilation" in normalized_docs
 
 
 def test_project_runtime_test_manifest_is_first_class_support_feature():

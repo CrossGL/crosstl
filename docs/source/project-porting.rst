@@ -1142,10 +1142,26 @@ package manifest as JSON.
 Each packaged unit records ``executionABIPath`` and ``executionABIHash``;
 the generated-file inventory identifies execution headers as
 ``native-loader-execution-abi`` and reference adapters as
-``native-loader-target-adapter``. The schema-v2 ``targetAdapters`` array records
+``native-loader-target-adapter``. The schema-v3 ``targetAdapters`` array records
 the target, availability, generated path, and SHA-256 hash. Targets without a
 reference implementation remain in that array with
 ``reason: target-adapter-unavailable`` rather than being silently omitted.
+
+Schema-v3 packages also publish ``runtime/runtime-variant-registry.json`` and
+record its file hash, registry identity, and exact variant count in
+``runtimeVariantRegistry``. When that registry is ready, the package verifies
+and copies every referenced translated artifact, recording each as
+``runtime-target-artifact``; descriptor byte sizes and hashes remain available
+for independent verification. A metadata-only loader manifest that lacks the
+provenance required for exact lookup remains valid, but marks the registry and
+native header unavailable instead of claiming dispatch readiness.
+
+When every registry target has a reference adapter, the package also emits
+``native-runtime-variant-registry.hpp``. This deterministic C++17 header maps
+canonical runtime variant keys to unit execution wrappers and retains the exact
+target, entry point, workgroup size, subgroup width, and specialization
+payloads selected during packaging. Packages containing targets without a
+reference adapter keep the JSON registry but mark the native header unavailable.
 
 The same operations are available through the public project API:
 
@@ -1155,13 +1171,18 @@ The same operations are available through the public project API:
        NATIVE_LOADER_ABI_PACKAGE_KIND,
        NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
        NATIVE_LOADER_ABI_PACKAGE_VERSION,
+       NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH,
+       NATIVE_RUNTIME_VARIANT_REGISTRY_PATH,
        NATIVE_LOADER_TARGET_ADAPTER_KIND,
        NATIVE_LOADER_TARGET_ADAPTER_VERSION,
+       NativeRuntimeVariantRegistryError,
        build_native_loader_abi_descriptor,
        build_native_loader_abi_package,
+       build_runtime_variant_dispatch_request,
        generate_native_loader_declarations,
        generate_native_loader_execution_abi,
        generate_native_loader_target_adapter,
+       generate_native_runtime_variant_registry,
        native_loader_target_adapter_targets,
    )
 
@@ -1357,6 +1378,64 @@ and subgroup width. There is no fallback to one of those alternatives. Legacy
 and registry. This remains deterministic selection and packaging metadata;
 target compilation, deferred compilation, host runtime dispatch, device
 execution, and numerical parity are not established by the registry.
+
+Exact native variant dispatch
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A schema-v3 native loader package binds the exact JSON registry to the
+descriptors, execution wrappers, translated artifacts, and optional native
+registry header by SHA-256 identity. Build a preflighted request from one
+canonical key:
+
+.. code-block:: python
+
+   import json
+   from pathlib import Path
+
+   from crosstl.project import build_runtime_variant_dispatch_request
+
+   package_root = Path("crosstl-native-loader-abi")
+   package = json.loads(
+       (package_root / "native-loader-abi-package.json").read_text()
+   )
+   registry = json.loads(
+       (package_root / package["runtimeVariantRegistry"]["path"]).read_text()
+   )
+   key = registry["lookup"]["readyKeys"][0]
+
+   request = build_runtime_variant_dispatch_request(
+       registry,
+       key,
+       package_root,
+       input_values,
+       output_values,
+       {"workgroupCount": [1, 1, 1]},
+   )
+
+``build_runtime_variant_dispatch_request`` performs exact lookup and rejects a
+registry that does not belong to the package. It verifies the packaged registry
+hash and, when a native header is published, the native header hash. It also
+checks descriptor size and hash, source and target provenance, artifact
+identity, entry point, workgroup size, specialization identity and value, and
+translated artifact bytes before delegating to
+``build_native_loader_dispatch_request``. Runtime callers provide resource
+values and dispatch counts but cannot replace the selected workgroup size or
+specialization values.
+
+The generated C++17 header exposes
+``crosstl_native_runtime_variant_lookup``,
+``crosstl_native_runtime_variant_make_request``, and
+``crosstl_native_runtime_variant_execute``. Execution accepts only a pointer
+returned by the generated registry, checks ABI and target identity, and compares
+the exact specialization payloads before invoking the selected unit wrapper.
+DirectX HLSL and OpenGL SPIR-V specializations are supported according to the
+target adapter contracts; precompiled DXIL specialization and GLSL source
+specialization remain fail-closed.
+
+This bridge selects and prepares one native compute dispatch from an existing
+ready variant. It does not synthesize a missing variant, perform deferred target
+compilation, rewrite a repository's host runtime, schedule multiple kernels,
+translate framework control flow, or establish full MLX test-suite parity.
 
 Build deterministic host loader scaffold metadata from a runtime loader
 manifest:
