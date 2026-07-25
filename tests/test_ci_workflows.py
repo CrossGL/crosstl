@@ -302,11 +302,17 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     expected_trigger_paths = {
         ".github/workflows/native-host-loader.yml",
         "crosstl/_crosstl.py",
+        "crosstl/project/native_directx_adapter.py",
         "crosstl/project/native_loader_abi.py",
         "crosstl/project/native_loader_abi_package.py",
+        "crosstl/project/native_opengl_adapter.py",
+        "crosstl/project/native_target_adapters.py",
         "crosstl/project/__init__.py",
+        "tests/test_native_target_adapters_public_api.py",
+        "tests/test_translator/test_native_directx_adapter.py",
         "tests/test_translator/test_native_loader_abi.py",
         "tests/test_translator/test_native_loader_abi_integration.py",
+        "tests/test_translator/test_native_opengl_adapter.py",
         "tests/test_native_loader_abi_cli.py",
     }
 
@@ -339,6 +345,9 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     assert "python -m pytest -q -n auto" in job
     assert "tests/test_translator/test_native_loader_abi.py" in job
     assert "tests/test_translator/test_native_loader_abi_integration.py" in job
+    assert "tests/test_translator/test_native_directx_adapter.py" in job
+    assert "tests/test_translator/test_native_opengl_adapter.py" in job
+    assert "tests/test_native_target_adapters_public_api.py" in job
     assert "tests/test_native_loader_abi_cli.py" in job
     assert "continue-on-error" not in job
 

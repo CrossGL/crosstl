@@ -2,6 +2,8 @@ import copy
 import json
 from pathlib import Path
 
+import pytest
+
 import crosstl.project as project_api
 from crosstl._crosstl import main
 from crosstl.project.pipeline import (
@@ -174,6 +176,41 @@ def test_native_loader_abi_cli_writes_deterministic_execution_abi(tmp_path, caps
     assert "CrossTLNativeLoaderExecutionResult" in first_execution_abi
 
 
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_native_loader_abi_cli_writes_deterministic_target_adapter(
+    tmp_path, capsys, target
+):
+    manifest_path = _write_manifest(tmp_path, _load_unit(target))
+    first_path = tmp_path / "first" / f"{target}_adapter.hpp"
+    second_path = tmp_path / "second" / f"{target}_adapter.hpp"
+
+    first_result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--target-adapter-output",
+            str(first_path),
+        ]
+    )
+    first_descriptor = json.loads(capsys.readouterr().out)
+    second_result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--target-adapter-output",
+            str(second_path),
+        ]
+    )
+    second_descriptor = json.loads(capsys.readouterr().out)
+
+    assert first_result == second_result == 0
+    assert first_descriptor == second_descriptor
+    first_adapter = first_path.read_text(encoding="utf-8")
+    assert first_adapter == second_path.read_text(encoding="utf-8")
+    assert first_adapter == project_api.generate_native_loader_target_adapter(target)
+    assert "CrossTLNativeLoaderAdapter" in first_adapter
+
+
 def test_native_loader_abi_cli_selects_one_multi_unit_entry(tmp_path, capsys):
     manifest_path = _write_manifest(
         tmp_path,
@@ -329,6 +366,42 @@ def test_native_loader_abi_cli_rejects_declaration_execution_path_collision(
         "severity": "error",
     }
     assert not declarations_path.exists()
+
+
+def test_native_loader_abi_cli_rejects_execution_adapter_path_collision(
+    tmp_path, capsys
+):
+    manifest_path = _write_manifest(tmp_path, _load_unit())
+    execution_path = tmp_path / "generated" / "copy.h"
+    adapter_path = execution_path.parent / "nested" / ".." / execution_path.name
+
+    result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--execution-output",
+            str(execution_path),
+            "--target-adapter-output",
+            str(adapter_path),
+        ]
+    )
+
+    assert result == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "code": "project.native-loader-abi.output-path-conflict",
+        "details": {
+            "executionOutput": str(execution_path),
+            "targetAdapterOutput": str(adapter_path),
+            "resolvedPath": str(execution_path.resolve()),
+        },
+        "message": (
+            "Execution and target adapter outputs must resolve to different paths."
+        ),
+        "path": "$.targetAdapterOutput",
+        "severity": "error",
+    }
+    assert not execution_path.exists()
 
 
 def test_native_loader_abi_cli_reports_manifest_filesystem_failure(tmp_path, capsys):
@@ -495,6 +568,32 @@ def test_native_loader_abi_cli_reports_execution_unicode_failure(
     assert captured.err == ""
 
 
+def test_native_loader_abi_cli_reports_target_adapter_filesystem_failure(
+    tmp_path, capsys
+):
+    manifest_path = _write_manifest(tmp_path, _load_unit())
+    blocked_parent = tmp_path / "not-a-directory"
+    blocked_parent.write_text("file", encoding="utf-8")
+    adapter_path = blocked_parent / "directx_adapter.hpp"
+
+    result = main(
+        [
+            "native-loader-abi",
+            str(manifest_path),
+            "--target-adapter-output",
+            str(adapter_path),
+        ]
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["code"] == "project.native-loader-abi.target-adapter-write-failed"
+    assert payload["path"] == "$.targetAdapterOutput"
+    assert payload["details"] == {"destination": str(adapter_path)}
+    assert captured.err == ""
+
+
 def test_native_loader_abi_package_cli_writes_deterministic_package(tmp_path, capsys):
     manifest_path = _write_manifest(
         tmp_path,
@@ -518,8 +617,10 @@ def test_native_loader_abi_package_cli_writes_deterministic_package(tmp_path, ca
     assert first["kind"] == project_api.NATIVE_LOADER_ABI_PACKAGE_KIND
     assert first["success"] is True
     assert first["summary"] == {
-        "generatedFileCount": 7,
+        "generatedFileCount": 9,
+        "targetAdapterCount": 2,
         "targetCount": 2,
+        "unavailableTargetAdapterCount": 0,
         "unitCount": 2,
     }
     assert [unit["descriptorPath"] for unit in first["units"]] == [

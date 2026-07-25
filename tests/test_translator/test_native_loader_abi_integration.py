@@ -16,11 +16,15 @@ import pytest
 from crosstl.project import (
     NATIVE_LOADER_ABI_PACKAGE_KIND,
     NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
+    NATIVE_LOADER_ABI_PACKAGE_VERSION,
     NativeLoaderABIError,
+    NativeLoaderTargetAdapterError,
     build_native_loader_abi_package,
     build_runtime_artifact_manifest,
     build_runtime_loader_manifest,
     build_runtime_package,
+    generate_native_loader_target_adapter,
+    native_loader_abi_package,
     translate_project,
 )
 from crosstl.project.native_loader_abi import (
@@ -102,6 +106,10 @@ def reduced_runtime_package(tmp_path_factory):
         target: generate_native_loader_execution_abi(descriptor)
         for target, descriptor in descriptors.items()
     }
+    target_adapters = {
+        target: generate_native_loader_target_adapter(target)
+        for target in sorted(descriptors)
+    }
     return {
         "source_path": source_path,
         "package_dir": package_dir,
@@ -111,6 +119,7 @@ def reduced_runtime_package(tmp_path_factory):
         "descriptors": descriptors,
         "headers": headers,
         "execution_headers": execution_headers,
+        "target_adapters": target_adapters,
     }
 
 
@@ -340,11 +349,15 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
 
     assert first == second
     assert first["kind"] == NATIVE_LOADER_ABI_PACKAGE_KIND
+    assert first["schemaVersion"] == NATIVE_LOADER_ABI_PACKAGE_VERSION
+    assert first["schemaVersion"] == 2
     assert first["success"] is True
     assert first["summary"] == {
         "unitCount": 2,
         "targetCount": 2,
-        "generatedFileCount": 7,
+        "targetAdapterCount": 2,
+        "unavailableTargetAdapterCount": 0,
+        "generatedFileCount": 9,
     }
     assert len(first["generatedFiles"]) == first["summary"]["generatedFileCount"]
     assert first["generatedFiles"][0] == {
@@ -352,6 +365,10 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
         "kind": "native-loader-abi-package-manifest",
     }
     assert [unit["target"] for unit in first["units"]] == ["directx", "opengl"]
+    assert [adapter["target"] for adapter in first["targetAdapters"]] == [
+        "directx",
+        "opengl",
+    ]
     assert _relative_file_contents(first_root) == _relative_file_contents(second_root)
     assert (
         json.loads(
@@ -394,6 +411,18 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
     generated_file_kinds = {
         generated["path"]: generated["kind"] for generated in first["generatedFiles"]
     }
+    for adapter in first["targetAdapters"]:
+        assert adapter["available"] is True
+        adapter_path = first_root / adapter["path"]
+        assert (
+            adapter_path.read_text(encoding="utf-8")
+            == reduced_runtime_package["target_adapters"][adapter["target"]]
+        )
+        assert adapter["hash"] == {
+            "algorithm": "sha256",
+            "value": _sha256(adapter_path),
+        }
+        assert generated_file_kinds[adapter["path"]] == ("native-loader-target-adapter")
     for unit in first["units"]:
         assert generated_file_kinds[unit["descriptorPath"]] == (
             "native-loader-abi-descriptor"
@@ -404,6 +433,85 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
         assert generated_file_kinds[unit["executionABIPath"]] == (
             "native-loader-execution-abi"
         )
+
+
+def test_runtime_loader_abi_package_reports_unavailable_target_adapters(
+    tmp_path, reduced_runtime_package, monkeypatch
+):
+    monkeypatch.setattr(
+        native_loader_abi_package,
+        "native_loader_target_adapter_targets",
+        lambda: ("directx",),
+    )
+
+    package_root = tmp_path / "abi-package"
+    package = build_native_loader_abi_package(
+        reduced_runtime_package["loader_manifest_path"],
+        package_root,
+    )
+
+    assert package["summary"]["targetAdapterCount"] == 1
+    assert package["summary"]["unavailableTargetAdapterCount"] == 1
+    assert package["summary"]["generatedFileCount"] == 8
+    assert package["targetAdapters"] == [
+        {
+            "target": "directx",
+            "available": True,
+            "path": "targets/directx-7fde9c43d3d7/" "native-loader-target-adapter.hpp",
+            "hash": {
+                "algorithm": "sha256",
+                "value": _sha256(
+                    package_root
+                    / "targets/directx-7fde9c43d3d7"
+                    / "native-loader-target-adapter.hpp"
+                ),
+            },
+        },
+        {
+            "target": "opengl",
+            "available": False,
+            "reason": "target-adapter-unavailable",
+        },
+    ]
+
+
+def test_runtime_loader_abi_package_rejects_adapter_generation_failure_before_writing(
+    tmp_path, reduced_runtime_package, monkeypatch
+):
+    def fail_generation(target):
+        raise NativeLoaderTargetAdapterError(
+            "generation-failed",
+            "Reference adapter generation failed.",
+            details={"target": target},
+        )
+
+    monkeypatch.setattr(
+        native_loader_abi_package,
+        "generate_native_loader_target_adapter",
+        fail_generation,
+    )
+    package_root = tmp_path / "abi-package"
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(
+            reduced_runtime_package["loader_manifest_path"],
+            package_root,
+        )
+
+    assert exc_info.value.code == (
+        "project.native-loader-abi.target-adapter-generation-failed"
+    )
+    assert exc_info.value.details == {
+        "target": "directx",
+        "diagnostic": {
+            "severity": "error",
+            "code": "project.native-loader-target-adapter.generation-failed",
+            "message": "Reference adapter generation failed.",
+            "path": "$",
+            "details": {"target": "directx"},
+        },
+    }
+    assert not package_root.exists()
 
 
 def test_runtime_loader_abi_package_rejects_blocked_units_before_writing(
