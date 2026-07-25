@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -236,6 +237,35 @@ class RuntimeArtifactSelector:
             ("stage", self.stage),
             ("path", self.path),
             ("id", self.artifact_id),
+        ):
+            if value is not None:
+                payload[field_name] = value
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeArtifactIdentity:
+    """Artifact identity pinned when a native runtime request is built."""
+
+    size_bytes: int
+    hash_value: str
+    hash_algorithm: str = "sha256"
+    artifact_id: str | None = None
+    variant: str | None = None
+    variant_key: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "sizeBytes": self.size_bytes,
+            "hash": {
+                "algorithm": self.hash_algorithm,
+                "value": self.hash_value,
+            },
+        }
+        for value, field_name in (
+            (self.artifact_id, "id"),
+            (self.variant, "variant"),
+            (self.variant_key, "variantKey"),
         ):
             if value is not None:
                 payload[field_name] = value
@@ -667,6 +697,14 @@ class NativeRuntimeValidationCommand:
 
 
 @dataclass(frozen=True)
+class _NativeRuntimeArtifactSnapshot:
+    """Execution-boundary snapshot of one translated runtime artifact."""
+
+    path: Path
+    verification: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class RuntimeFixture:
     """A runtime verification fixture bound to one translated artifact."""
 
@@ -819,6 +857,7 @@ class RuntimeExecutionRequest:
     )
     diagnostics: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
     execution_plan: RuntimeExecutionPlan | None = None
+    artifact_identity: RuntimeArtifactIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -1159,9 +1198,14 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
         artifact_path = self._artifact_path(state)
         temp_handle = tempfile.TemporaryDirectory(prefix="crosstl-runtime-")
         state.temporary_directories.append(temp_handle)
-        module_path = self._validate_artifact(
+        artifact_snapshot = self._snapshot_artifact(
             state,
             artifact_path,
+            temp_dir=Path(temp_handle.name),
+        )
+        module_path = self._validate_artifact(
+            state,
+            artifact_snapshot.path,
             temp_dir=Path(temp_handle.name),
         )
         state.loaded_artifact = self._load_artifact(state, module_path)
@@ -1329,6 +1373,44 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
             )
         return artifact_path
 
+    def _snapshot_artifact(
+        self,
+        state: RuntimeExecutionState,
+        artifact_path: Path,
+        *,
+        temp_dir: Path,
+    ) -> _NativeRuntimeArtifactSnapshot:
+        try:
+            snapshot = _native_runtime_artifact_snapshot(
+                state.request.artifact,
+                artifact_path,
+                temp_dir=temp_dir,
+                target=self.target,
+                pinned_identity=state.request.artifact_identity,
+            )
+        except RuntimeAdapterSetupError as exc:
+            details = dict(exc.details)
+            state.details["artifactIdentityVerification"] = details
+            state.record_step(
+                "setup",
+                "verify-native-runtime-artifact-identity",
+                status=RUNTIME_FAILED,
+                details=details,
+            )
+            raise
+
+        details = dict(snapshot.verification)
+        state.details["artifactIdentityVerification"] = details
+        state.record_step(
+            "setup",
+            "verify-native-runtime-artifact-identity",
+            status=(
+                SKIPPED if details["verificationStatus"] == "not-recorded" else PASSED
+            ),
+            details=details,
+        )
+        return snapshot
+
     def _validate_artifact(
         self,
         state: RuntimeExecutionState,
@@ -1427,9 +1509,12 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
         constants = self._native_constant_bindings(state)
         dispatch = state.plan.dispatch
         entry_point = dispatch.entry_point if dispatch is not None else None
+        runtime_artifact = dict(state.request.artifact)
+        if state.request.artifact_identity is not None:
+            runtime_artifact.update(state.request.artifact_identity.to_json())
         prepared = NativeRuntimeDispatchRequest(
             target=self.target or str(state.request.artifact.get("target") or ""),
-            artifact=state.request.artifact,
+            artifact=runtime_artifact,
             artifact_path=artifact_path,
             module_path=module_path,
             loaded_artifact=state.loaded_artifact,
@@ -3538,6 +3623,190 @@ def _run_native_runtime_command(
         capture_output=True,
         check=False,
     )
+
+
+def _native_runtime_artifact_snapshot(
+    artifact: Mapping[str, Any],
+    artifact_path: Path,
+    *,
+    temp_dir: Path,
+    target: str | None,
+    pinned_identity: RuntimeArtifactIdentity | None = None,
+) -> _NativeRuntimeArtifactSnapshot:
+    identity_source: Mapping[str, Any] = (
+        pinned_identity.to_json() if pinned_identity is not None else artifact
+    )
+    expected_identity, identity_errors = _native_runtime_expected_artifact_identity(
+        identity_source
+    )
+    context = _native_runtime_artifact_identity_context(
+        identity_source,
+        artifact_path,
+        target=target,
+        expected_identity=expected_identity,
+    )
+    try:
+        content = artifact_path.read_bytes()
+    except OSError as exc:
+        details = {
+            **context,
+            "verificationStatus": "failed",
+            "observedIdentity": None,
+            "reasonKind": "artifact-snapshot-read-failed",
+            "error": str(exc),
+        }
+        raise RuntimeAdapterSetupError(
+            "Native runtime artifact could not be captured for execution.",
+            diagnostic_code="project.runtime-verification.artifact-snapshot-failed",
+            details=details,
+        ) from exc
+
+    observed_identity = {
+        "sizeBytes": len(content),
+        "hash": {
+            "algorithm": "sha256",
+            "value": hashlib.sha256(content).hexdigest(),
+        },
+    }
+    if identity_errors:
+        details = {
+            **context,
+            "verificationStatus": "failed",
+            "observedIdentity": observed_identity,
+            "reasonKind": "artifact-identity-invalid",
+            "identityErrors": identity_errors,
+        }
+        raise RuntimeAdapterSetupError(
+            "Native runtime artifact identity metadata is invalid.",
+            diagnostic_code="project.runtime-verification.artifact-identity-invalid",
+            details=details,
+        )
+
+    mismatched_fields = []
+    expected_size = expected_identity.get("sizeBytes")
+    if expected_size is not None and expected_size != observed_identity["sizeBytes"]:
+        mismatched_fields.append("sizeBytes")
+    expected_hash = expected_identity.get("hash")
+    if (
+        isinstance(expected_hash, Mapping)
+        and expected_hash["value"] != observed_identity["hash"]["value"]
+    ):
+        mismatched_fields.append("hash")
+    if mismatched_fields:
+        details = {
+            **context,
+            "verificationStatus": "failed",
+            "observedIdentity": observed_identity,
+            "reasonKind": "artifact-identity-mismatch",
+            "mismatchedFields": mismatched_fields,
+        }
+        raise RuntimeAdapterSetupError(
+            "Native runtime artifact identity changed before execution.",
+            diagnostic_code="project.runtime-verification.artifact-identity-mismatch",
+            details=details,
+        )
+
+    snapshot_dir = temp_dir / "artifact-snapshot"
+    snapshot_path = snapshot_dir / artifact_path.name
+    try:
+        snapshot_dir.mkdir()
+        with snapshot_path.open("xb") as snapshot_file:
+            snapshot_file.write(content)
+    except OSError as exc:
+        details = {
+            **context,
+            "verificationStatus": "failed",
+            "observedIdentity": observed_identity,
+            "reasonKind": "artifact-snapshot-write-failed",
+            "error": str(exc),
+        }
+        raise RuntimeAdapterSetupError(
+            "Native runtime artifact snapshot could not be materialized.",
+            diagnostic_code="project.runtime-verification.artifact-snapshot-failed",
+            details=details,
+        ) from exc
+
+    verification_status = "verified" if expected_identity else "not-recorded"
+    verification = {
+        **context,
+        "verificationStatus": verification_status,
+        "observedIdentity": observed_identity,
+        "snapshotPath": str(snapshot_path),
+    }
+    return _NativeRuntimeArtifactSnapshot(
+        path=snapshot_path,
+        verification=verification,
+    )
+
+
+def _native_runtime_expected_artifact_identity(
+    artifact: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    identity: dict[str, Any] = {}
+    errors = []
+
+    size_bytes = artifact.get("sizeBytes")
+    if size_bytes is not None:
+        identity["sizeBytes"] = size_bytes
+        if (
+            not isinstance(size_bytes, int)
+            or isinstance(size_bytes, bool)
+            or size_bytes < 0
+            or size_bytes > ((1 << 64) - 1)
+        ):
+            errors.append("sizeBytes must be an unsigned 64-bit integer")
+
+    artifact_hash = artifact.get("hash")
+    if artifact_hash is not None:
+        identity["hash"] = (
+            dict(artifact_hash) if isinstance(artifact_hash, Mapping) else artifact_hash
+        )
+        digest = (
+            artifact_hash.get("value") if isinstance(artifact_hash, Mapping) else None
+        )
+        hash_fields = (
+            frozenset(artifact_hash)
+            if isinstance(artifact_hash, Mapping)
+            else frozenset()
+        )
+        if (
+            not isinstance(artifact_hash, Mapping)
+            or hash_fields != frozenset(("algorithm", "value"))
+            or artifact_hash.get("algorithm") != "sha256"
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            errors.append(
+                "hash must contain exactly algorithm and a lowercase SHA-256 value"
+            )
+
+    if (size_bytes is None) != (artifact_hash is None):
+        errors.append("sizeBytes and hash must be recorded together")
+
+    return identity, errors
+
+
+def _native_runtime_artifact_identity_context(
+    artifact: Mapping[str, Any],
+    artifact_path: Path,
+    *,
+    target: str | None,
+    expected_identity: Mapping[str, Any],
+) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "target": target,
+        "artifactPath": str(artifact_path),
+        "expectedIdentity": dict(expected_identity) or None,
+    }
+    for field_name, detail_name in (
+        ("id", "artifactId"),
+        ("variant", "variant"),
+        ("variantKey", "variantKey"),
+    ):
+        value = artifact.get(field_name)
+        if value is not None:
+            context[detail_name] = value
+    return context
 
 
 def _native_runtime_command_result(
@@ -7023,6 +7292,7 @@ def _artifact_result_payload(
         "sourceBackend",
         "stage",
         "variant",
+        "variantKey",
         "status",
         "error",
         "toolchain",

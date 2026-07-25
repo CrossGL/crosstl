@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import math
 import os
@@ -43,7 +44,9 @@ from crosstl.project.runtime_verification import (
     RuntimeAllocationView,
     RuntimeArtifactSelector,
     RuntimeDispatchGeometry,
+    RuntimeEntryPoint,
     RuntimeExecutionRequest,
+    RuntimeExecutionState,
     RuntimeExecutorUnavailable,
     RuntimeFixture,
     RuntimeResourceBinding,
@@ -52,6 +55,7 @@ from crosstl.project.runtime_verification import (
     VulkanRuntimeParityAdapter,
     build_runtime_test_manifest,
     plan_runtime_test_manifest,
+    prepare_runtime_execution,
     verify_runtime_test_manifest,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
@@ -590,6 +594,522 @@ def _directx_dispatch_request(tmp_path: Path) -> NativeRuntimeDispatchRequest:
         dispatch=RuntimeDispatchGeometry(entry_point="main", workgroup_count=(2, 3, 1)),
         entry_point="main",
     )
+
+
+class _CapturingNativeArtifactRuntime:
+    name = "capturing-native-artifact-runtime"
+
+    def __init__(self):
+        self.loaded_paths = []
+        self.loaded_artifacts = []
+
+    def load_artifact(self, adapter, state, module_path):
+        _ = adapter, state
+        path = Path(module_path)
+        content = path.read_bytes()
+        self.loaded_paths.append(path)
+        self.loaded_artifacts.append(content)
+        return content
+
+
+def _native_artifact_execution_state(
+    tmp_path: Path,
+    target: str,
+    content: bytes,
+    *,
+    record_identity: bool = True,
+):
+    suffix = ".hlsl" if target == "directx" else ".comp"
+    artifact_path = tmp_path / f"runtime{suffix}"
+    artifact_path.write_bytes(content)
+    artifact = {
+        "id": f"{target}|runtime",
+        "target": target,
+        "stage": "compute",
+        "path": artifact_path.name,
+        "variant": "runtime-test",
+        "variantKey": f"{target}:runtime-test",
+        "status": "translated",
+    }
+    if record_identity:
+        artifact.update(
+            {
+                "sizeBytes": len(content),
+                "hash": {
+                    "algorithm": "sha256",
+                    "value": hashlib.sha256(content).hexdigest(),
+                },
+            }
+        )
+    entry_point = "RuntimeMain" if target == "directx" else "main"
+    contract = RuntimeAdapterContract(
+        entry_points=(RuntimeEntryPoint(name=entry_point, stage="compute"),),
+        dispatch=RuntimeDispatchGeometry(
+            entry_point=entry_point,
+            workgroup_count=(1, 1, 1),
+        ),
+    )
+    request = RuntimeExecutionRequest(
+        fixture=RuntimeFixture(
+            id=f"{target}-artifact-identity",
+            selector=RuntimeArtifactSelector(target=target),
+            entry_point=entry_point,
+            adapter_contract=contract,
+        ),
+        artifact=artifact,
+        artifact_path=artifact_path,
+        project_root=tmp_path,
+        adapter_contract=contract,
+    )
+    return artifact_path, RuntimeExecutionState(
+        request=request,
+        plan=prepare_runtime_execution(request),
+    )
+
+
+def _native_identity_adapter(target, runtime, command_runner):
+    adapter_type = (
+        DirectXRuntimeParityAdapter
+        if target == "directx"
+        else OpenGLRuntimeParityAdapter
+    )
+    return adapter_type(
+        runtime=runtime,
+        required_tools=(),
+        supported_platforms=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=command_runner,
+    )
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("record_identity", (True, False))
+def test_native_runtime_adapter_consumes_artifact_snapshot(
+    tmp_path,
+    target,
+    record_identity,
+):
+    original = (
+        b"[numthreads(1, 1, 1)] void RuntimeMain() {}\n"
+        if target == "directx"
+        else b"#version 430\nvoid main() {}\n"
+    )
+    replacement = b"replaced after snapshot\n"
+    artifact_path, state = _native_artifact_execution_state(
+        tmp_path,
+        target,
+        original,
+        record_identity=record_identity,
+    )
+    runtime = _CapturingNativeArtifactRuntime()
+    consumed_sources = []
+
+    def validate_snapshot(command, *, input_text=None):
+        assert input_text is None
+        snapshot_path = Path(command[-1])
+        assert snapshot_path != artifact_path
+        artifact_path.write_bytes(replacement)
+        consumed_sources.append(snapshot_path.read_bytes())
+        if target == "directx":
+            output_path = Path(command[command.index("-Fo") + 1])
+            output_path.write_bytes(b"DXBC-snapshot")
+        return {"returncode": 0}
+
+    prepared = _native_identity_adapter(
+        target,
+        runtime,
+        validate_snapshot,
+    ).prepare_buffers(state)
+
+    expected_identity = (
+        {
+            "sizeBytes": len(original),
+            "hash": {
+                "algorithm": "sha256",
+                "value": hashlib.sha256(original).hexdigest(),
+            },
+        }
+        if record_identity
+        else None
+    )
+    observed_identity = {
+        "sizeBytes": len(original),
+        "hash": {
+            "algorithm": "sha256",
+            "value": hashlib.sha256(original).hexdigest(),
+        },
+    }
+    verification = state.details["artifactIdentityVerification"]
+    assert verification["verificationStatus"] == (
+        "verified" if record_identity else "not-recorded"
+    )
+    assert verification["expectedIdentity"] == expected_identity
+    assert verification["observedIdentity"] == observed_identity
+    assert verification["artifactPath"] == str(artifact_path)
+    assert verification["artifactId"] == f"{target}|runtime"
+    assert verification["variant"] == "runtime-test"
+    assert verification["variantKey"] == f"{target}:runtime-test"
+    assert Path(verification["snapshotPath"]) != artifact_path
+    assert consumed_sources == [original]
+    assert artifact_path.read_bytes() == replacement
+    assert runtime.loaded_paths == [prepared.module_path]
+    assert runtime.loaded_artifacts == [
+        b"DXBC-snapshot" if target == "directx" else original
+    ]
+    verification_step = next(
+        step
+        for step in state.adapter_steps
+        if step.action == "verify-native-runtime-artifact-identity"
+    )
+    assert verification_step.status == ("passed" if record_identity else "skipped")
+    assert verification_step.details == verification
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_native_runtime_adapter_rejects_artifact_replaced_after_preflight(
+    tmp_path,
+    target,
+):
+    original = (
+        b"[numthreads(1, 1, 1)] void RuntimeMain() {}\n"
+        if target == "directx"
+        else b"#version 430\nvoid main() {}\n"
+    )
+    artifact_path, state = _native_artifact_execution_state(
+        tmp_path,
+        target,
+        original,
+    )
+    replacement = (
+        b"x" * len(original)
+        if target == "directx"
+        else b"#version 430\nvoid main() { int changed = 1; }\n"
+    )
+    artifact_path.write_bytes(replacement)
+    runtime = _CapturingNativeArtifactRuntime()
+
+    def unexpected_validation(command, *, input_text=None):
+        raise AssertionError(
+            f"identity mismatch reached validation: {command!r}, {input_text!r}"
+        )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _native_identity_adapter(
+            target,
+            runtime,
+            unexpected_validation,
+        ).prepare_buffers(state)
+
+    expected_identity = {
+        "sizeBytes": len(original),
+        "hash": {
+            "algorithm": "sha256",
+            "value": hashlib.sha256(original).hexdigest(),
+        },
+    }
+    observed_identity = {
+        "sizeBytes": len(replacement),
+        "hash": {
+            "algorithm": "sha256",
+            "value": hashlib.sha256(replacement).hexdigest(),
+        },
+    }
+    error = excinfo.value
+    assert error.failure_phase == "runtime-setup"
+    assert error.diagnostic_code == (
+        "project.runtime-verification.artifact-identity-mismatch"
+    )
+    assert error.details["reasonKind"] == "artifact-identity-mismatch"
+    assert error.details["verificationStatus"] == "failed"
+    assert error.details["artifactPath"] == str(artifact_path)
+    assert error.details["artifactId"] == f"{target}|runtime"
+    assert error.details["variant"] == "runtime-test"
+    assert error.details["variantKey"] == f"{target}:runtime-test"
+    assert error.details["expectedIdentity"] == expected_identity
+    assert error.details["observedIdentity"] == observed_identity
+    assert error.details["mismatchedFields"] == (
+        ["hash"] if target == "directx" else ["sizeBytes", "hash"]
+    )
+    assert state.details["artifactIdentityVerification"] == error.details
+    assert runtime.loaded_paths == []
+    verification_step = state.adapter_steps[-1]
+    assert verification_step.action == "verify-native-runtime-artifact-identity"
+    assert verification_step.status == "runtime-failed"
+    assert verification_step.details == error.details
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize(
+    "missing_field",
+    (
+        pytest.param("hash", id="size-without-hash"),
+        pytest.param("sizeBytes", id="hash-without-size"),
+    ),
+)
+def test_native_runtime_adapter_rejects_partial_artifact_identity(
+    tmp_path,
+    target,
+    missing_field,
+):
+    content = (
+        b"[numthreads(1, 1, 1)] void RuntimeMain() {}\n"
+        if target == "directx"
+        else b"#version 430\nvoid main() {}\n"
+    )
+    artifact_path, state = _native_artifact_execution_state(
+        tmp_path,
+        target,
+        content,
+    )
+    artifact = state.request.artifact
+    artifact.pop(missing_field)
+    runtime = _CapturingNativeArtifactRuntime()
+
+    def unexpected_validation(command, *, input_text=None):
+        raise AssertionError(
+            f"partial identity reached validation: {command!r}, {input_text!r}"
+        )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _native_identity_adapter(
+            target,
+            runtime,
+            unexpected_validation,
+        ).prepare_buffers(state)
+
+    error = excinfo.value
+    assert error.failure_phase == "runtime-setup"
+    assert error.diagnostic_code == (
+        "project.runtime-verification.artifact-identity-invalid"
+    )
+    assert error.details["reasonKind"] == "artifact-identity-invalid"
+    assert error.details["verificationStatus"] == "failed"
+    assert error.details["artifactPath"] == str(artifact_path)
+    assert error.details["artifactId"] == f"{target}|runtime"
+    assert error.details["expectedIdentity"] == {
+        field: artifact[field] for field in ("sizeBytes", "hash") if field in artifact
+    }
+    assert error.details["observedIdentity"] == {
+        "sizeBytes": len(content),
+        "hash": {
+            "algorithm": "sha256",
+            "value": hashlib.sha256(content).hexdigest(),
+        },
+    }
+    assert error.details["identityErrors"]
+    assert state.details["artifactIdentityVerification"] == error.details
+    assert runtime.loaded_paths == []
+    verification_step = state.adapter_steps[-1]
+    assert verification_step.action == "verify-native-runtime-artifact-identity"
+    assert verification_step.status == "runtime-failed"
+    assert verification_step.details == error.details
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize(
+    "malformation",
+    (
+        "not-an-object",
+        "missing-algorithm",
+        "missing-value",
+        "wrong-algorithm",
+        "short-digest",
+        "uppercase-digest",
+        "extra-field",
+    ),
+)
+def test_native_runtime_adapter_rejects_noncanonical_artifact_hash(
+    tmp_path,
+    target,
+    malformation,
+):
+    content = (
+        b"[numthreads(1, 1, 1)] void RuntimeMain() {}\n"
+        if target == "directx"
+        else b"#version 430\nvoid main() {}\n"
+    )
+    artifact_path, state = _native_artifact_execution_state(
+        tmp_path,
+        target,
+        content,
+    )
+    digest = hashlib.sha256(content).hexdigest()
+    malformed_hashes = {
+        "not-an-object": f"sha256:{digest}",
+        "missing-algorithm": {"value": digest},
+        "missing-value": {"algorithm": "sha256"},
+        "wrong-algorithm": {"algorithm": "sha512", "value": digest},
+        "short-digest": {"algorithm": "sha256", "value": digest[:-1]},
+        "uppercase-digest": {"algorithm": "sha256", "value": digest.upper()},
+        "extra-field": {
+            "algorithm": "sha256",
+            "value": digest,
+            "encoding": "hex",
+        },
+    }
+    artifact = state.request.artifact
+    artifact["hash"] = malformed_hashes[malformation]
+    runtime = _CapturingNativeArtifactRuntime()
+
+    def unexpected_validation(command, *, input_text=None):
+        raise AssertionError(
+            f"noncanonical identity reached validation: {command!r}, {input_text!r}"
+        )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _native_identity_adapter(
+            target,
+            runtime,
+            unexpected_validation,
+        ).prepare_buffers(state)
+
+    error = excinfo.value
+    assert error.failure_phase == "runtime-setup"
+    assert error.diagnostic_code == (
+        "project.runtime-verification.artifact-identity-invalid"
+    )
+    assert error.details["reasonKind"] == "artifact-identity-invalid"
+    assert error.details["verificationStatus"] == "failed"
+    assert error.details["artifactPath"] == str(artifact_path)
+    assert error.details["artifactId"] == f"{target}|runtime"
+    assert error.details["expectedIdentity"] == {
+        "sizeBytes": len(content),
+        "hash": malformed_hashes[malformation],
+    }
+    assert error.details["observedIdentity"] == {
+        "sizeBytes": len(content),
+        "hash": {"algorithm": "sha256", "value": digest},
+    }
+    assert error.details["identityErrors"]
+    assert state.details["artifactIdentityVerification"] == error.details
+    assert runtime.loaded_paths == []
+    verification_step = state.adapter_steps[-1]
+    assert verification_step.action == "verify-native-runtime-artifact-identity"
+    assert verification_step.status == "runtime-failed"
+    assert verification_step.details == error.details
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_native_runtime_adapter_reports_artifact_snapshot_read_failure(
+    tmp_path,
+    monkeypatch,
+    target,
+):
+    content = (
+        b"[numthreads(1, 1, 1)] void RuntimeMain() {}\n"
+        if target == "directx"
+        else b"#version 430\nvoid main() {}\n"
+    )
+    artifact_path, state = _native_artifact_execution_state(
+        tmp_path,
+        target,
+        content,
+    )
+    runtime = _CapturingNativeArtifactRuntime()
+    original_read_bytes = Path.read_bytes
+
+    def fail_artifact_read(path):
+        if path == artifact_path:
+            raise PermissionError("artifact read denied")
+        return original_read_bytes(path)
+
+    def unexpected_validation(command, *, input_text=None):
+        raise AssertionError(
+            f"snapshot read failure reached validation: {command!r}, {input_text!r}"
+        )
+
+    monkeypatch.setattr(Path, "read_bytes", fail_artifact_read)
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _native_identity_adapter(
+            target,
+            runtime,
+            unexpected_validation,
+        ).prepare_buffers(state)
+
+    error = excinfo.value
+    assert error.failure_phase == "runtime-setup"
+    assert error.diagnostic_code == (
+        "project.runtime-verification.artifact-snapshot-failed"
+    )
+    assert error.details["reasonKind"] == "artifact-snapshot-read-failed"
+    assert error.details["verificationStatus"] == "failed"
+    assert error.details["artifactPath"] == str(artifact_path)
+    assert error.details["artifactId"] == f"{target}|runtime"
+    assert error.details["observedIdentity"] is None
+    assert "artifact read denied" in error.details["error"]
+    assert state.details["artifactIdentityVerification"] == error.details
+    assert runtime.loaded_paths == []
+    verification_step = state.adapter_steps[-1]
+    assert verification_step.action == "verify-native-runtime-artifact-identity"
+    assert verification_step.status == "runtime-failed"
+    assert verification_step.details == error.details
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_native_runtime_adapter_reports_artifact_snapshot_write_failure(
+    tmp_path,
+    monkeypatch,
+    target,
+):
+    content = (
+        b"[numthreads(1, 1, 1)] void RuntimeMain() {}\n"
+        if target == "directx"
+        else b"#version 430\nvoid main() {}\n"
+    )
+    artifact_path, state = _native_artifact_execution_state(
+        tmp_path,
+        target,
+        content,
+    )
+    runtime = _CapturingNativeArtifactRuntime()
+    original_open = Path.open
+
+    def fail_snapshot_write(
+        path,
+        mode="r",
+        buffering=-1,
+        encoding=None,
+        errors=None,
+        newline=None,
+    ):
+        if path.parent.name == "artifact-snapshot" and mode == "xb":
+            raise PermissionError("artifact snapshot write denied")
+        return original_open(path, mode, buffering, encoding, errors, newline)
+
+    def unexpected_validation(command, *, input_text=None):
+        raise AssertionError(
+            f"snapshot write failure reached validation: {command!r}, {input_text!r}"
+        )
+
+    monkeypatch.setattr(Path, "open", fail_snapshot_write)
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _native_identity_adapter(
+            target,
+            runtime,
+            unexpected_validation,
+        ).prepare_buffers(state)
+
+    digest = hashlib.sha256(content).hexdigest()
+    error = excinfo.value
+    assert error.failure_phase == "runtime-setup"
+    assert error.diagnostic_code == (
+        "project.runtime-verification.artifact-snapshot-failed"
+    )
+    assert error.details["reasonKind"] == "artifact-snapshot-write-failed"
+    assert error.details["verificationStatus"] == "failed"
+    assert error.details["artifactPath"] == str(artifact_path)
+    assert error.details["artifactId"] == f"{target}|runtime"
+    assert error.details["observedIdentity"] == {
+        "sizeBytes": len(content),
+        "hash": {"algorithm": "sha256", "value": digest},
+    }
+    assert "artifact snapshot write denied" in error.details["error"]
+    assert state.details["artifactIdentityVerification"] == error.details
+    assert runtime.loaded_paths == []
+    verification_step = state.adapter_steps[-1]
+    assert verification_step.action == "verify-native-runtime-artifact-identity"
+    assert verification_step.status == "runtime-failed"
+    assert verification_step.details == error.details
 
 
 class _FakeDirectXDevice:

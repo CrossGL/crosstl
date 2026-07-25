@@ -3187,7 +3187,10 @@ def test_runtime_parity_native_opengl_adapter_compiles_specialization_to_spirv(
         "main",
     )
     assert calls[0][-3] == "-o"
-    assert calls[0][-1] == str(artifact_path.resolve())
+    validated_source = Path(calls[0][-1])
+    assert validated_source.name == artifact_path.name
+    assert validated_source.parent.name == "artifact-snapshot"
+    assert validated_source != artifact_path.resolve()
     assert runtime.prepared.module_path.suffix == ".spv"
     details = result["executor"]["details"]
     assert details["nativeRuntimeDispatch"]["modulePath"].endswith(".spv")
@@ -3245,15 +3248,13 @@ def test_runtime_parity_native_opengl_adapter_preserves_uniform_source_path(
 
     result = report["results"][0]
     assert result["status"] == PASSED
-    assert calls == [
-        (
-            "/fake/glslangValidator",
-            "-S",
-            "comp",
-            str(artifact_path.resolve()),
-        )
-    ]
-    assert runtime.prepared.module_path == artifact_path.resolve()
+    assert calls[0][:3] == ("/fake/glslangValidator", "-S", "comp")
+    validated_source = Path(calls[0][-1])
+    assert validated_source.name == artifact_path.name
+    assert validated_source.parent.name == "artifact-snapshot"
+    assert validated_source != artifact_path.resolve()
+    assert runtime.prepared.artifact_path == artifact_path.resolve()
+    assert runtime.prepared.module_path == validated_source
     assert result["executor"]["details"]["openglRuntimeConstants"] == {
         "specializationConstantCount": 0,
         "specializationConstantIds": [],
@@ -3475,11 +3476,12 @@ def test_runtime_parity_native_vulkan_adapter_assembles_and_validates_spirv(
     )
 
     assert report["results"][0]["status"] == PASSED
-    assert calls[0][:3] == (
-        "/fake/spirv-as",
-        str(artifact_path.resolve()),
-        "-o",
-    )
+    assert calls[0][0] == "/fake/spirv-as"
+    assembled_source = Path(calls[0][1])
+    assert assembled_source.name == artifact_path.name
+    assert assembled_source.parent.name == "artifact-snapshot"
+    assert assembled_source != artifact_path.resolve()
+    assert calls[0][2] == "-o"
     assert calls[1][0] == "/fake/spirv-val"
     assert calls[1][1].endswith(".spv")
 
@@ -3520,7 +3522,10 @@ def test_runtime_parity_native_directx_adapter_compiles_hlsl(tmp_path):
     assert calls[0][:-2] == ("/fake/dxc", "-T", "cs_6_0", "-E", "main", "-Fo")
     assert "-enable-16bit-types" not in calls[0]
     assert Path(calls[0][-2]).name == "add.dxil"
-    assert calls[0][-1] == str(artifact_path.resolve())
+    compiled_source = Path(calls[0][-1])
+    assert compiled_source.name == artifact_path.name
+    assert compiled_source.parent.name == "artifact-snapshot"
+    assert compiled_source != artifact_path.resolve()
 
 
 def test_runtime_parity_native_directx_adapter_enables_native_16bit_hlsl(tmp_path):
@@ -3570,7 +3575,10 @@ def test_runtime_parity_native_directx_adapter_enables_native_16bit_hlsl(tmp_pat
         "-Fo",
     )
     assert Path(calls[0][-2]).name == "add.dxil"
-    assert calls[0][-1] == str(artifact_path.resolve())
+    compiled_source = Path(calls[0][-1])
+    assert compiled_source.name == artifact_path.name
+    assert compiled_source.parent.name == "artifact-snapshot"
+    assert compiled_source != artifact_path.resolve()
 
 
 def test_default_runtime_test_adapters_cover_native_platform_classes():

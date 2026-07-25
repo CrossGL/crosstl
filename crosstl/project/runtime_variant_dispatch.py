@@ -190,7 +190,7 @@ def build_runtime_variant_dispatch_request(
         entry_point=selected["target"]["entryPoint"],
     )
     try:
-        return build_native_loader_dispatch_request(
+        request = build_native_loader_dispatch_request(
             descriptor,
             package_root,
             input_snapshot,
@@ -209,6 +209,29 @@ def build_runtime_variant_dispatch_request(
                 "dispatchDiagnostic": exc.to_json(),
             },
         ) from exc
+    artifact = copy.deepcopy(dict(request.artifact))
+    artifact["variantKey"] = key
+    variant_name = selected.get("variant")
+    if isinstance(variant_name, str) and variant_name:
+        artifact["variant"] = variant_name
+    execution_plan = request.execution_plan
+    if execution_plan is not None:
+        execution_plan = replace(execution_plan, artifact=artifact)
+    artifact_identity = request.artifact_identity
+    if artifact_identity is not None:
+        artifact_identity = replace(
+            artifact_identity,
+            variant=(
+                variant_name if isinstance(variant_name, str) and variant_name else None
+            ),
+            variant_key=key,
+        )
+    return replace(
+        request,
+        artifact=artifact,
+        execution_plan=execution_plan,
+        artifact_identity=artifact_identity,
+    )
 
 
 def _snapshot_caller_value(value: Any, *, path: str, label: str) -> Any:

@@ -21,6 +21,7 @@ from crosstl.project.native_runtime_drivers import (
 from crosstl.project.runtime_verification import (
     DirectXRuntimeParityAdapter,
     OpenGLRuntimeParityAdapter,
+    RuntimeExecutionError,
     RuntimeExecutorAvailability,
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
@@ -204,6 +205,11 @@ def test_complete_package_descriptor_builds_preflighted_request(tmp_path, target
 
     assert request.artifact_path == artifact_path.resolve()
     assert request.artifact["hash"] == descriptor["artifact"]["hash"]
+    assert request.artifact_identity.to_json() == {
+        "sizeBytes": descriptor["artifact"]["sizeBytes"],
+        "hash": descriptor["artifact"]["hash"],
+        "id": descriptor["unitId"],
+    }
     assert request.execution_plan is not None
     assert request.execution_plan.diagnostics == ()
     assert request.execution_plan.dispatch.global_size == (4, 1, 1)
@@ -282,6 +288,98 @@ def test_tampered_package_artifact_fails_before_runtime_consultation(tmp_path, t
 
     assert caught.value.code == "project.native-loader-dispatch.artifact-hash-mismatch"
     assert runtime.calls == []
+
+
+@pytest.mark.parametrize(
+    ("target", "adapter_type"),
+    [
+        ("directx", DirectXRuntimeParityAdapter),
+        ("opengl", OpenGLRuntimeParityAdapter),
+    ],
+)
+def test_replaced_artifact_fails_before_native_execution(
+    tmp_path, target, adapter_type
+):
+    request, descriptor, artifact_path = _build_request(tmp_path, target)
+    replacement = artifact_path.read_bytes().replace(b"* 3u", b"* 4u")
+    assert len(replacement) == descriptor["artifact"]["sizeBytes"]
+    artifact_path.write_bytes(replacement)
+    actual_hash = hashlib.sha256(replacement).hexdigest()
+    request.artifact["id"] = "caller-mutated-artifact"
+    request.artifact["sizeBytes"] = len(replacement)
+    request.artifact["hash"]["value"] = actual_hash
+
+    consultations = []
+
+    def unexpected_tool_lookup(tool):
+        consultations.append(("tool", tool))
+        raise AssertionError("artifact replacement must fail before tool lookup")
+
+    def unexpected_command(command, *, input_text=None):
+        consultations.append(("command", command, input_text))
+        raise AssertionError("artifact replacement must fail before tool execution")
+
+    class RuntimeGuard:
+        name = "guarded-native-runtime"
+
+        def is_available(self, adapter, candidate):
+            consultations.append(("availability", adapter, candidate))
+            raise AssertionError("artifact replacement must fail before runtime lookup")
+
+        def load_artifact(self, adapter, state, module_path):
+            consultations.append(("load", adapter, state, module_path))
+            raise AssertionError(
+                "artifact replacement must fail before runtime loading"
+            )
+
+        def dispatch(self, adapter, state, prepared):
+            consultations.append(("dispatch", adapter, state, prepared))
+            raise AssertionError(
+                "artifact replacement must fail before runtime dispatch"
+            )
+
+    runtime_adapter = adapter_type(
+        runtime=RuntimeGuard(),
+        required_tools=(),
+        supported_platforms=(),
+        tool_resolver=unexpected_tool_lookup,
+        command_runner=unexpected_command,
+    )
+    executor = RuntimeParityExecutor(
+        RuntimeTestAdapterSpec(
+            adapter_id=f"{target}-artifact-identity",
+            target=target,
+            executor=target,
+            adapter_kind=f"{target}-native-runtime",
+        ),
+        runtime_adapter=runtime_adapter,
+    )
+
+    with pytest.raises(RuntimeExecutionError) as caught:
+        executor.run(request)
+
+    expected_hash = descriptor["artifact"]["hash"]["value"]
+    assert caught.value.diagnostic_code == (
+        "project.runtime-verification.artifact-identity-mismatch"
+    )
+    assert caught.value.failure_phase == "runtime-setup"
+    assert caught.value.details == {
+        "target": target,
+        "artifactPath": str(artifact_path.resolve()),
+        "artifactId": descriptor["unitId"],
+        "expectedIdentity": {
+            "sizeBytes": len(replacement),
+            "hash": {"algorithm": "sha256", "value": expected_hash},
+        },
+        "verificationStatus": "failed",
+        "observedIdentity": {
+            "sizeBytes": len(replacement),
+            "hash": {"algorithm": "sha256", "value": actual_hash},
+        },
+        "reasonKind": "artifact-identity-mismatch",
+        "mismatchedFields": ["hash"],
+    }
+    assert consultations == []
 
 
 def test_native_loader_descriptor_executes_directx_on_device(tmp_path):

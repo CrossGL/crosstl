@@ -20,6 +20,7 @@ from crosstl.project.native_loader_abi import (
 )
 from crosstl.project.runtime_verification import (
     RuntimeAdapterContract,
+    RuntimeArtifactIdentity,
     RuntimeArtifactSelector,
     RuntimeDispatchGeometry,
     RuntimeEntryPoint,
@@ -229,6 +230,12 @@ def build_native_loader_dispatch_request(
         artifact_path=artifact_path,
         project_root=package_root,
         adapter_contract=contract,
+        artifact_identity=RuntimeArtifactIdentity(
+            size_bytes=normalized["artifact"]["sizeBytes"],
+            hash_value=normalized["artifact"]["hash"]["value"],
+            hash_algorithm=normalized["artifact"]["hash"]["algorithm"],
+            artifact_id=normalized["unitId"],
+        ),
     )
     plan = prepare_runtime_execution(request)
     setup_errors = [
