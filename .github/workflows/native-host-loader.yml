@@ -127,10 +127,18 @@ jobs:
           tests/test_translator/test_native_loader_abi.py
           tests/test_translator/test_native_loader_abi_integration.py
           tests/test_translator/test_native_loader_dispatch.py
+          tests/test_translator/test_native_loader_dispatch_integration.py::test_complete_package_descriptor_builds_preflighted_request
+          tests/test_translator/test_native_loader_dispatch_integration.py::test_replaced_artifact_fails_before_native_execution
           tests/test_translator/test_native_directx_adapter.py
           tests/test_translator/test_native_directx_adapter_device.py
           tests/test_translator/test_native_opengl_adapter.py
           tests/test_translator/test_native_opengl_adapter_device.py
+          tests/test_translator/test_native_runtime_drivers.py::test_native_runtime_adapter_consumes_artifact_snapshot
+          tests/test_translator/test_native_runtime_drivers.py::test_native_runtime_adapter_rejects_artifact_replaced_after_preflight
+          tests/test_translator/test_native_runtime_drivers.py::test_native_runtime_adapter_rejects_partial_artifact_identity
+          tests/test_translator/test_native_runtime_drivers.py::test_native_runtime_adapter_rejects_noncanonical_artifact_hash
+          tests/test_translator/test_native_runtime_drivers.py::test_native_runtime_adapter_reports_artifact_snapshot_read_failure
+          tests/test_translator/test_native_runtime_drivers.py::test_native_runtime_adapter_reports_artifact_snapshot_write_failure
           tests/test_translator/test_native_runtime_variant_registry.py
           tests/test_translator/test_runtime_variant_registry.py
           tests/test_translator/test_runtime_variant_dispatch.py
