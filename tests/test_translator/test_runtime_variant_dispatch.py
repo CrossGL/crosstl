@@ -481,8 +481,19 @@ def test_builds_exact_native_request_for_selected_variant(
     )
 
     request = _build(fixture, target, package_input=package_input)
+    record = fixture["records"][target]
 
     assert request.artifact["target"] == target
+    assert request.artifact["variant"] == record["variant"]
+    assert request.artifact["variantKey"] == record["key"]
+    assert request.execution_plan.artifact == request.artifact
+    assert request.artifact_identity.to_json() == {
+        "sizeBytes": record["artifact"]["sizeBytes"],
+        "hash": record["artifact"]["hash"],
+        "id": record["artifact"]["id"],
+        "variant": record["variant"],
+        "variantKey": record["key"],
+    }
     assert request.fixture.selector.artifact_id == f"{target}|copy"
     assert request.fixture.entry_point == (
         "CopyMain" if target == "directx" else "main"

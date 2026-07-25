@@ -1311,6 +1311,14 @@ returns a preflighted ``RuntimeExecutionRequest``. Buffer bindings require a
 complete, tightly packed 32-bit scalar layout; missing or ambiguous physical
 layout metadata is a structured error rather than an inferred ABI.
 
+The returned request also carries a frozen ``RuntimeArtifactIdentity`` copied
+from the validated descriptor's byte size, SHA-256 digest, and unit ID. Native
+execution uses this pinned record instead of rereading identity fields from the
+request's public artifact mapping. Later mutation of that mapping therefore
+cannot replace the expected identity used at execution. The record pins
+identity metadata only; it does not freeze other artifact metadata or the file
+at the artifact path.
+
 An exact binding name may appear in both ``input_values`` and ``output_values``
 only when the descriptor reflects that resource as ``read_write``. In the
 example above, the input payload initializes one native allocation and the
@@ -1421,6 +1429,32 @@ translated artifact bytes before delegating to
 ``build_native_loader_dispatch_request``. Runtime callers provide resource
 values and dispatch counts but cannot replace the selected workgroup size or
 specialization values.
+
+Exact variant selection extends the request's frozen artifact identity with the
+selected variant name and canonical variant key. Native execution retains the
+pinned descriptor size, hash, and artifact ID plus those variant fields even if
+the request's public artifact mapping is later mutated.
+
+At native runtime setup, the DirectX and OpenGL adapters read the selected
+translated artifact once and compute its byte size and SHA-256 digest. When the
+request records both values, a mismatch produces a structured setup diagnostic
+with the expected and observed identities before target validation, compilation,
+or runtime loading. Partial identity metadata and malformed fields fail closed.
+An artifact without either recorded field is still captured, but the result is
+reported as ``not-recorded`` rather than verified. Artifact read and snapshot
+materialization failures also produce structured setup diagnostics. The
+captured bytes are materialized in an adapter-owned temporary directory, and
+subsequent source validation and target compilation use that snapshot instead
+of reopening the original artifact path. Source-format loading reads the
+snapshot, while compiled modules are produced from it. Replacing the original
+file after capture therefore cannot change the bytes consumed by that
+execution.
+
+This snapshot isolates one execution from later changes to the original path;
+it is not a filesystem security boundary. It does not prevent another process
+with access to the temporary directory from changing the snapshot, attest
+compiler output, or verify artifacts consumed by a caller-supplied runtime
+outside these DirectX and OpenGL adapters.
 
 The generated C++17 header exposes
 ``crosstl_native_runtime_variant_lookup``,
