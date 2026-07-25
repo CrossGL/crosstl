@@ -90,6 +90,8 @@ def test_directx_native_loader_adapter_generation_is_deterministic():
     assert "#if !defined(_WIN32)" in first
     assert "#include <d3d12.h>" in first
     assert "#include <dxgi1_6.h>" in first
+    assert "#if __has_include(<dxcapi.h>)" in first
+    assert "#include <dxcapi.h>" in first
 
 
 def test_directx_native_loader_adapter_encodes_native_execution_lifecycle():
@@ -141,7 +143,155 @@ def test_directx_native_loader_adapter_encodes_native_execution_lifecycle():
     assert dispatch_function < native_dispatch < command_submission < success
 
 
-def test_directx_native_loader_adapter_rejects_unsupported_contracts():
+def test_directx_native_loader_adapter_accepts_verified_hlsl_and_dxil_contracts():
+    header = generate_directx_native_loader_adapter()
+    load_start = header.rindex(
+        "static inline int32_t crosstl_directx_native_loader_load_artifact("
+    )
+    load_end = header.index(
+        "static inline int32_t crosstl_directx_native_loader_unload_artifact(",
+        load_start,
+    )
+    load_artifact = header[load_start:load_end]
+
+    assert 'unit->artifact_format, "HLSL source"' in load_artifact
+    assert 'unit->artifact_format, "DXIL binary"' in load_artifact
+    assert "artifact->packaged_content.resize((size_t)length);" in load_artifact
+    hash_verification = load_artifact.index(
+        "crosstl_directx_native_loader_verify_sha256("
+    )
+    dxil_container_check = load_artifact.index("if (is_dxil_binary &&")
+    success = load_artifact.index("*artifact_out = artifact.release();")
+    assert hash_verification < dxil_container_check < success
+
+    pipeline_start = header.index(
+        "static inline int32_t crosstl_directx_native_loader_create_pipeline("
+    )
+    pipeline_end = header.index(
+        "static inline int32_t " "crosstl_directx_native_loader_specialization_value(",
+        pipeline_start,
+    )
+    pipeline = header[pipeline_start:pipeline_end]
+    hlsl_branch = pipeline.index("CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_HLSL_SOURCE")
+    source_compile = pipeline.index(
+        "crosstl_directx_native_loader_compile_hlsl(", hlsl_branch
+    )
+    dxil_branch = pipeline.index(
+        "CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_DXIL_BINARY",
+        source_compile,
+    )
+    pipeline_creation = pipeline.index("CreateComputePipelineState(")
+    assert hlsl_branch < source_compile < dxil_branch < pipeline_creation
+    assert "shader_bytecode = &artifact->compiled_dxil;" in pipeline
+    assert "shader_bytecode = &artifact->packaged_content;" in pipeline
+    assert "artifact->compiled_entry_point != unit->entry_point" in pipeline
+
+
+def test_directx_native_loader_adapter_encodes_dxc_compile_and_diagnostics():
+    header = generate_directx_native_loader_adapter()
+
+    for contract in (
+        'LoadLibraryExW(\n        L"dxcompiler.dll"',
+        'GetProcAddress(\n        context->dxcompiler_module, "DxcCreateInstance")',
+        "DxcCreateInstanceProc",
+        "ComPtr<IDxcUtils> utilities;",
+        "ComPtr<IDxcCompiler3> compiler;",
+        "utilities->BuildArguments(",
+        "compiler->Compile(",
+        "DXC_OUT_ERRORS",
+        "diagnostics->GetStringPointer()",
+        "diagnostics->GetStringLength()",
+        "compile_result->GetStatus(&compilation_status)",
+        "DXC_OUT_OBJECT",
+        "crosstl_directx_native_loader_last_diagnostic(",
+    ):
+        assert contract in header
+
+    assert (
+        "#define CROSSTL_DIRECTX_NATIVE_LOADER_DXC_COMPUTE_PROFILE " 'L"cs_6_2"'
+    ) in header
+    assert 'L"-enable-16bit-types"' in header
+    assert 'L"-HV"' in header
+    assert 'L"2021"' in header
+    assert "entry_point.c_str()," in header
+    assert "include_root.c_str()," in header
+
+    compile_start = header.index(
+        "static inline int32_t crosstl_directx_native_loader_compile_hlsl("
+    )
+    source_preparation = header.index(
+        "crosstl_directx_native_loader_prepare_hlsl_source(", compile_start
+    )
+    build_arguments = header.index("utilities->BuildArguments(", compile_start)
+    compile_call = header.index("compiler->Compile(", build_arguments)
+    diagnostic_output = header.index("DXC_OUT_ERRORS", compile_call)
+    compilation_status = header.index(
+        "compile_result->GetStatus(&compilation_status)", diagnostic_output
+    )
+    object_output = header.index("DXC_OUT_OBJECT", compilation_status)
+    bytecode_copy = header.index("artifact->compiled_dxil.assign(", object_output)
+    entry_point_cache = header.index(
+        "artifact->compiled_entry_point.assign(unit->entry_point)", bytecode_copy
+    )
+    assert (
+        compile_start
+        < source_preparation
+        < build_arguments
+        < compile_call
+        < diagnostic_output
+        < compilation_status
+        < object_output
+        < bytecode_copy
+        < entry_point_cache
+    )
+
+
+def test_directx_native_loader_adapter_encodes_named_dxc_definitions():
+    header = generate_directx_native_loader_adapter()
+
+    for encoding in (
+        'descriptor->type_name, "bool"',
+        '*value_out = value ? L"true" : L"false";',
+        'descriptor->type_name, "int32"',
+        '*value_out = L"(-2147483647 - 1)";',
+        'descriptor->type_name, "uint32"',
+        '*value_out = std::to_wstring(value) + L"u";',
+        'descriptor->type_name, "float32"',
+        "std::numeric_limits<float>::max_digits10",
+        'encoded += "f";',
+        "DxcDefine definition = {};",
+        "definition.Name = specialization.name.c_str();",
+        "definition.Value = specialization.value.c_str();",
+        "definitions.empty() ? NULL : definitions.data()",
+        '"CrossGL DirectX specialization constant id "',
+        '"__crosstl_materialized_" + specialization.source_name + "_"',
+        "source_out->replace(",
+    ):
+        assert encoding in header
+
+    apply_start = header.index(
+        "static inline int32_t " "crosstl_directx_native_loader_apply_specialization("
+    )
+    apply_end = header.index(
+        "static inline size_t crosstl_directx_native_loader_binding_slot(",
+        apply_start,
+    )
+    specialization = header[apply_start:apply_end]
+    assert (
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_PRECOMPILED_DXIL"
+        in specialization
+    )
+    assert (
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_NAME_REQUIRED" in specialization
+    )
+    assert "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_NAME_INVALID" in specialization
+    assert "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_DUPLICATE" in specialization
+    assert "existing.name == name" in specialization
+    assert "existing.id == descriptor->id" in specialization
+    assert "artifact->specializations.push_back(" in specialization
+
+
+def test_directx_native_loader_adapter_rejects_fail_closed_contracts():
     header = generate_directx_native_loader_adapter()
 
     for status in (
@@ -149,7 +299,23 @@ def test_directx_native_loader_adapter_rejects_unsupported_contracts():
         "CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_NOT_DXIL",
         "CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_SIZE_MISMATCH",
         "CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_HASH_MISMATCH",
-        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_UNSUPPORTED",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_NAME_REQUIRED",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_NAME_INVALID",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_TYPE_UNSUPPORTED",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_PAYLOAD_INVALID",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_DUPLICATE",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_PRECOMPILED_DXIL",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_AFTER_COMPILE",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_SOURCE_REWRITE_FAILED",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_API_UNAVAILABLE",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_LIBRARY_UNAVAILABLE",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_ENTRY_POINT_UNAVAILABLE",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_INSTANCE_CREATION_FAILED",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_ARGUMENT_BUILD_FAILED",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_COMPILE_CALL_FAILED",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_COMPILATION_FAILED",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_OUTPUT_MISSING",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_OUTPUT_INVALID",
         "CROSSTL_DIRECTX_NATIVE_LOADER_STAGE_UNSUPPORTED",
         "CROSSTL_DIRECTX_NATIVE_LOADER_RESOURCE_KIND_UNSUPPORTED",
         "CROSSTL_DIRECTX_NATIVE_LOADER_BINDING_NAMESPACE_UNSUPPORTED",
@@ -162,23 +328,12 @@ def test_directx_native_loader_adapter_rejects_unsupported_contracts():
     ):
         assert status in header
 
-    specialization = header[
-        header.index(
-            "static inline int32_t "
-            "crosstl_directx_native_loader_apply_specialization("
-        ) :
-    ]
-    specialization = specialization[
-        : specialization.index(
-            "static inline size_t crosstl_directx_native_loader_binding_slot("
-        )
-    ]
-    assert "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_UNSUPPORTED" in (
-        specialization
-    )
     assert "BCryptOpenAlgorithmProvider(" in header
     assert "BCRYPT_SHA256_ALGORITHM" in header
-    assert 'std::memcmp(artifact->dxil.data(), "DXBC", 4u)' in header
+    assert (
+        "std::memcmp(\n                 artifact->packaged_content.data(), "
+        '"DXBC", 4u)'
+    ) in header
 
 
 @pytest.mark.skipif(
@@ -326,7 +481,8 @@ def test_directx_native_loader_adapter_portable_path_fails_closed(tmp_path):
     assert run_result.returncode == 0, run_result.stdout + run_result.stderr
 
 
-def test_directx_native_loader_adapter_cross_compiles_for_windows(tmp_path):
+@pytest.mark.parametrize("dxc_api", ("enabled", "disabled"))
+def test_directx_native_loader_adapter_cross_compiles_for_windows(tmp_path, dxc_api):
     compiler = shutil.which("x86_64-w64-mingw32-g++")
     if compiler is None:
         pytest.skip("The MinGW-w64 C++ cross-compiler is unavailable.")
@@ -355,19 +511,26 @@ def test_directx_native_loader_adapter_cross_compiles_for_windows(tmp_path):
             """),
         encoding="utf-8",
     )
-    result = subprocess.run(
+    command = [
+        compiler,
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-unknown-pragmas",
+    ]
+    if dxc_api == "disabled":
+        command.append("-DCROSSTL_DIRECTX_NATIVE_LOADER_DISABLE_DXC_API=1")
+    command.extend(
         [
-            compiler,
-            "-std=c++17",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-Wno-unknown-pragmas",
             "-c",
             str(source_path),
             "-o",
-            str(tmp_path / "windows-compile.o"),
-        ],
+            str(tmp_path / f"windows-compile-{dxc_api}.o"),
+        ]
+    )
+    result = subprocess.run(
+        command,
         cwd=tmp_path,
         check=False,
         capture_output=True,
