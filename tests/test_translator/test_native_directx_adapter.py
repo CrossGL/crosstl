@@ -297,7 +297,6 @@ def test_directx_native_loader_adapter_encodes_dxc_compile_and_diagnostics():
     assert 'L"-HV"' in header
     assert 'L"2021"' in header
     assert "entry_point.c_str()," in header
-    assert "include_root.c_str()," in header
 
     compile_start = header.index(
         "static inline int32_t crosstl_directx_native_loader_compile_hlsl("
@@ -326,6 +325,32 @@ def test_directx_native_loader_adapter_encodes_dxc_compile_and_diagnostics():
         < object_output
         < bytecode_copy
         < entry_point_cache
+    )
+
+
+def test_directx_native_loader_adapter_disables_unverified_hlsl_includes():
+    header = generate_directx_native_loader_adapter()
+    compile_start = header.index(
+        "static inline int32_t crosstl_directx_native_loader_compile_hlsl("
+    )
+    compile_end = header.index(
+        "static inline int32_t crosstl_directx_native_loader_create_pipeline(",
+        compile_start,
+    )
+    compile_hlsl = header[compile_start:compile_end]
+
+    assert "CreateDefaultIncludeHandler(" not in compile_hlsl
+    assert "include_root" not in compile_hlsl
+    assert 'L"-I"' not in compile_hlsl
+    assert (
+        "compiler_arguments->GetCount(),\n"
+        "            NULL,\n"
+        "            IID_PPV_ARGS(compile_result.ReleaseAndGetAddressOf())"
+        in compile_hlsl
+    )
+    assert (
+        '"must be self-contained because include files are not part of "\n'
+        '                "the verified artifact."' in compile_hlsl
     )
 
 

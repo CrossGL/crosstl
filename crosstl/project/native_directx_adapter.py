@@ -1407,15 +1407,12 @@ static inline int32_t crosstl_directx_native_loader_compile_hlsl(
         std::wstring source_name = artifact->source_path.wstring();
         std::wstring entry_point =
             crosstl_directx_native_loader_widen_identifier(unit->entry_point);
-        std::wstring include_root = context->package_root.wstring();
         LPCWSTR arguments[] = {
             L"-HV",
             L"2021",
             L"-enable-16bit-types",
             L"-Ges",
             L"-O3",
-            L"-I",
-            include_root.c_str(),
         };
         std::vector<DxcDefine> definitions;
         definitions.reserve(artifact->specializations.size());
@@ -1446,18 +1443,6 @@ static inline int32_t crosstl_directx_native_loader_compile_hlsl(
                 result);
         }
 
-        ComPtr<IDxcIncludeHandler> include_handler;
-        result = utilities->CreateDefaultIncludeHandler(
-            include_handler.ReleaseAndGetAddressOf());
-        if (FAILED(result)) {
-            crosstl_directx_native_loader_set_diagnostic(
-                context, "DXC could not create its default include handler.");
-            return crosstl_directx_native_loader_fail(
-                context,
-                CROSSTL_DIRECTX_NATIVE_LOADER_DXC_INSTANCE_CREATION_FAILED,
-                result);
-        }
-
         DxcBuffer source = {};
         source.Ptr = compilation_source.data();
         source.Size = compilation_source.size();
@@ -1467,11 +1452,14 @@ static inline int32_t crosstl_directx_native_loader_compile_hlsl(
             &source,
             compiler_arguments->GetArguments(),
             compiler_arguments->GetCount(),
-            include_handler.Get(),
+            NULL,
             IID_PPV_ARGS(compile_result.ReleaseAndGetAddressOf()));
         if (FAILED(result) || compile_result == NULL) {
             crosstl_directx_native_loader_set_diagnostic(
-                context, "DXC did not return an HLSL compilation result.");
+                context,
+                "DXC did not return an HLSL compilation result. Packaged HLSL "
+                "must be self-contained because include files are not part of "
+                "the verified artifact.");
             return crosstl_directx_native_loader_fail(
                 context,
                 CROSSTL_DIRECTX_NATIVE_LOADER_DXC_COMPILE_CALL_FAILED,
