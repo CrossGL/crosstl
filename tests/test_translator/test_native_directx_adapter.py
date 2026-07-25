@@ -187,6 +187,44 @@ def test_directx_native_loader_adapter_accepts_verified_hlsl_and_dxil_contracts(
     assert "artifact->compiled_entry_point != unit->entry_point" in pipeline
 
 
+def test_directx_native_loader_adapter_rejects_resolved_package_path_escape():
+    header = generate_directx_native_loader_adapter()
+    initialize_start = header.rindex(
+        "static inline int32_t crosstl_directx_native_loader_context_initialize("
+    )
+    initialize_end = header.index(
+        "static inline int32_t crosstl_directx_native_loader_context_shutdown(",
+        initialize_start,
+    )
+    initialize = header[initialize_start:initialize_end]
+    assert "std::filesystem::canonical(absolute_root, root_error)" in initialize
+    assert "std::filesystem::is_directory(resolved_root, type_error)" in initialize
+    assert "context->package_root = std::move(resolved_root);" in initialize
+
+    load_start = header.rindex(
+        "static inline int32_t crosstl_directx_native_loader_load_artifact("
+    )
+    load_end = header.index(
+        "static inline int32_t crosstl_directx_native_loader_unload_artifact(",
+        load_start,
+    )
+    load_artifact = header[load_start:load_end]
+    canonicalize = load_artifact.index("std::filesystem::canonical(")
+    containment = load_artifact.index(
+        "crosstl_directx_native_loader_resolved_path_within_package("
+    )
+    reject_escape = load_artifact.index(
+        "CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_PATH_OUTSIDE_PACKAGE"
+    )
+    open_artifact = load_artifact.index("std::ifstream stream(")
+    assert canonicalize < containment < reject_escape < open_artifact
+    assert (
+        '"The packaged artifact path resolves outside the package root."'
+        in load_artifact
+    )
+    assert "(context->package_root / relative_path).lexically_normal()" not in header
+
+
 def test_directx_native_loader_adapter_encodes_dxc_compile_and_diagnostics():
     header = generate_directx_native_loader_adapter()
 
@@ -269,7 +307,7 @@ def test_directx_native_loader_adapter_encodes_named_dxc_definitions():
     ):
         assert encoding in header
 
-    apply_start = header.index(
+    apply_start = header.rindex(
         "static inline int32_t " "crosstl_directx_native_loader_apply_specialization("
     )
     apply_end = header.index(
@@ -291,6 +329,49 @@ def test_directx_native_loader_adapter_encodes_named_dxc_definitions():
     assert "artifact->specializations.push_back(" in specialization
 
 
+def test_directx_native_loader_adapter_rejects_name_only_specialization():
+    header = generate_directx_native_loader_adapter()
+    apply_start = header.rindex(
+        "static inline int32_t " "crosstl_directx_native_loader_apply_specialization("
+    )
+    apply_end = header.index(
+        "static inline size_t crosstl_directx_native_loader_binding_slot(",
+        apply_start,
+    )
+    apply_specialization = header[apply_start:apply_end]
+    id_check = apply_specialization.index("if (descriptor->has_id == 0u)")
+    id_failure = apply_specialization.index(
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_ID_REQUIRED", id_check
+    )
+    value_encoding = apply_specialization.index(
+        "crosstl_directx_native_loader_specialization_value(", id_failure
+    )
+    assert id_check < id_failure < value_encoding
+
+    prepare_start = header.index(
+        "static inline int32_t " "crosstl_directx_native_loader_prepare_hlsl_source("
+    )
+    prepare_end = header.index(
+        "static inline int32_t crosstl_directx_native_loader_compile_hlsl(",
+        prepare_start,
+    )
+    prepare_source = header[prepare_start:prepare_end]
+    defensive_check = prepare_source.index("if (specialization.has_id == 0u)")
+    defensive_failure = prepare_source.index(
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_ID_REQUIRED",
+        defensive_check,
+    )
+    marker_lookup = prepare_source.index(
+        '"CrossGL DirectX specialization constant id "', defensive_failure
+    )
+    assert defensive_check < defensive_failure < marker_lookup
+    assert "continue;" not in prepare_source[defensive_check:defensive_failure]
+    assert (
+        '"Generated HLSL specialization materialization requires "'
+        in apply_specialization
+    )
+
+
 def test_directx_native_loader_adapter_rejects_fail_closed_contracts():
     header = generate_directx_native_loader_adapter()
 
@@ -299,6 +380,7 @@ def test_directx_native_loader_adapter_rejects_fail_closed_contracts():
         "CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_NOT_DXIL",
         "CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_SIZE_MISMATCH",
         "CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_HASH_MISMATCH",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_PATH_OUTSIDE_PACKAGE",
         "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_NAME_REQUIRED",
         "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_NAME_INVALID",
         "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_TYPE_UNSUPPORTED",
@@ -307,6 +389,7 @@ def test_directx_native_loader_adapter_rejects_fail_closed_contracts():
         "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_PRECOMPILED_DXIL",
         "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_AFTER_COMPILE",
         "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_SOURCE_REWRITE_FAILED",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_ID_REQUIRED",
         "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_API_UNAVAILABLE",
         "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_LIBRARY_UNAVAILABLE",
         "CROSSTL_DIRECTX_NATIVE_LOADER_DXC_ENTRY_POINT_UNAVAILABLE",

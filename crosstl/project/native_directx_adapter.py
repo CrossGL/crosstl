@@ -48,6 +48,7 @@ typedef enum CrossTLDirectXNativeLoaderStatus {
     CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_HASH_UNSUPPORTED = 1108,
     CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_HASH_FAILED = 1109,
     CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_HASH_MISMATCH = 1110,
+    CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_PATH_OUTSIDE_PACKAGE = 1111,
     CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_NAME_REQUIRED = 1201,
     CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_NAME_INVALID = 1202,
     CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_TYPE_UNSUPPORTED = 1203,
@@ -56,6 +57,7 @@ typedef enum CrossTLDirectXNativeLoaderStatus {
     CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_PRECOMPILED_DXIL = 1206,
     CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_AFTER_COMPILE = 1207,
     CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_SOURCE_REWRITE_FAILED = 1208,
+    CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_ID_REQUIRED = 1209,
     CROSSTL_DIRECTX_NATIVE_LOADER_DXC_API_UNAVAILABLE = 1220,
     CROSSTL_DIRECTX_NATIVE_LOADER_DXC_LIBRARY_UNAVAILABLE = 1221,
     CROSSTL_DIRECTX_NATIVE_LOADER_DXC_ENTRY_POINT_UNAVAILABLE = 1222,
@@ -308,6 +310,7 @@ static inline int32_t crosstl_directx_native_loader_readback(
 #include <new>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -597,7 +600,33 @@ static inline int32_t crosstl_directx_native_loader_context_initialize(
         std::filesystem::path root = package_root == NULL || *package_root == '\0'
             ? std::filesystem::current_path()
             : std::filesystem::u8path(package_root);
-        context->package_root = std::filesystem::absolute(root).lexically_normal();
+        std::error_code root_error;
+        std::filesystem::path absolute_root =
+            std::filesystem::absolute(root, root_error);
+        std::filesystem::path resolved_root;
+        if (!root_error) {
+            resolved_root =
+                std::filesystem::canonical(absolute_root, root_error);
+        }
+        std::error_code type_error;
+        bool root_is_directory =
+            !root_error &&
+            std::filesystem::is_directory(resolved_root, type_error);
+        if (root_error || type_error || !root_is_directory) {
+            const std::error_code &failure =
+                root_error ? root_error : type_error;
+            HRESULT result = failure
+                ? HRESULT_FROM_WIN32((DWORD)failure.value())
+                : HRESULT_FROM_WIN32(ERROR_DIRECTORY);
+            crosstl_directx_native_loader_set_diagnostic(
+                context,
+                "The package root could not be resolved to a directory.");
+            return crosstl_directx_native_loader_fail(
+                context,
+                CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_PATH_INVALID,
+                result);
+        }
+        context->package_root = std::move(resolved_root);
     } catch (const std::bad_alloc &) {
         return crosstl_directx_native_loader_fail(
             context, CROSSTL_DIRECTX_NATIVE_LOADER_HOST_ALLOCATION_FAILED);
@@ -855,6 +884,35 @@ static inline bool crosstl_directx_native_loader_safe_relative_path(
     return true;
 }
 
+static inline bool
+crosstl_directx_native_loader_resolved_path_within_package(
+    const std::filesystem::path &package_root,
+    const std::filesystem::path &artifact_path,
+    std::error_code *error_out) {
+    if (error_out == NULL) {
+        return false;
+    }
+    error_out->clear();
+    std::filesystem::path current = artifact_path.parent_path();
+    while (!current.empty()) {
+        std::error_code comparison_error;
+        if (std::filesystem::equivalent(
+                package_root, current, comparison_error)) {
+            return true;
+        }
+        if (comparison_error) {
+            *error_out = comparison_error;
+            return false;
+        }
+        std::filesystem::path parent = current.parent_path();
+        if (parent == current) {
+            break;
+        }
+        current = std::move(parent);
+    }
+    return false;
+}
+
 static inline int32_t crosstl_directx_native_loader_load_artifact(
     void *context_value,
     const CrossTLNativeLoaderUnitDescriptor *unit,
@@ -901,8 +959,37 @@ static inline int32_t crosstl_directx_native_loader_load_artifact(
                 context,
                 CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_PATH_INVALID);
         }
-        std::filesystem::path artifact_path =
-            (context->package_root / relative_path).lexically_normal();
+        std::error_code resolution_error;
+        std::filesystem::path artifact_path = std::filesystem::canonical(
+            context->package_root / relative_path, resolution_error);
+        if (resolution_error) {
+            crosstl_directx_native_loader_set_diagnostic(
+                context,
+                "The packaged artifact path could not be resolved.");
+            return crosstl_directx_native_loader_fail(
+                context,
+                CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_PATH_INVALID,
+                HRESULT_FROM_WIN32((DWORD)resolution_error.value()));
+        }
+        std::error_code containment_error;
+        if (!crosstl_directx_native_loader_resolved_path_within_package(
+                context->package_root, artifact_path, &containment_error)) {
+            if (containment_error) {
+                crosstl_directx_native_loader_set_diagnostic(
+                    context,
+                    "The packaged artifact path containment check failed.");
+                return crosstl_directx_native_loader_fail(
+                    context,
+                    CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_PATH_INVALID,
+                    HRESULT_FROM_WIN32((DWORD)containment_error.value()));
+            }
+            crosstl_directx_native_loader_set_diagnostic(
+                context,
+                "The packaged artifact path resolves outside the package root.");
+            return crosstl_directx_native_loader_fail(
+                context,
+                CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_PATH_OUTSIDE_PACKAGE);
+        }
         std::ifstream stream(artifact_path, std::ios::binary | std::ios::ate);
         if (!stream.is_open()) {
             return crosstl_directx_native_loader_fail(
@@ -1152,7 +1239,13 @@ static inline int32_t crosstl_directx_native_loader_prepare_hlsl_source(
         for (const CrossTLDirectXNativeLoaderSpecialization &specialization :
              artifact->specializations) {
             if (specialization.has_id == 0u) {
-                continue;
+                crosstl_directx_native_loader_set_diagnostic(
+                    context,
+                    "Generated HLSL specialization materialization requires "
+                    "a reflected constant ID.");
+                return crosstl_directx_native_loader_fail(
+                    context,
+                    CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_ID_REQUIRED);
             }
             std::string marker =
                 "CrossGL DirectX specialization constant id " +
@@ -1776,6 +1869,15 @@ static inline int32_t crosstl_directx_native_loader_apply_specialization(
         return crosstl_directx_native_loader_fail(
             context,
             CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_NAME_INVALID);
+    }
+    if (descriptor->has_id == 0u) {
+        crosstl_directx_native_loader_set_diagnostic(
+            context,
+            "Generated HLSL specialization materialization requires "
+            "a reflected constant ID.");
+        return crosstl_directx_native_loader_fail(
+            context,
+            CROSSTL_DIRECTX_NATIVE_LOADER_SPECIALIZATION_ID_REQUIRED);
     }
 
     try {
