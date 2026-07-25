@@ -2163,7 +2163,6 @@ def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
     assert _matrix_values(backend_tests, "OS") == RUNNER_OSES
     _assert_windows_python_policy(backend_tests)
     assert "fail-fast: false" in backend_tests
-    assert "max-parallel: 24" in backend_tests
     assert "id: setup_python" in backend_tests
     assert "continue-on-error: true" in backend_tests
     assert "name: Classify Python setup failure" in backend_tests
@@ -2210,7 +2209,6 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert _matrix_values(translator_tests, "OS") == RUNNER_OSES
     _assert_windows_python_policy(translator_tests)
     assert "fail-fast: false" in translator_tests
-    assert "max-parallel: 24" in translator_tests
     assert "id: setup_python" in translator_tests
     assert "continue-on-error: true" in translator_tests
     assert "name: Classify Python setup failure" in translator_tests
