@@ -334,6 +334,21 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
         "group: native-host-loader-${{ github.workflow }}-${{ github.ref }}" in workflow
     )
     assert "cancel-in-progress: true" in workflow
+    assert (
+        workflow.count(
+            "uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+        )
+        == 3
+    )
+    assert (
+        workflow.count(
+            "uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+        )
+        == 3
+    )
+    assert "uses: actions/checkout@v" not in workflow
+    assert "uses: actions/setup-python@v" not in workflow
+    assert workflow.count("persist-credentials: false") == 3
 
     job = _workflow_job_section(workflow, "generated-native-loader-abi")
     assert _matrix_values(job, "os") == RUNNER_OSES
