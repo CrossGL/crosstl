@@ -49,6 +49,8 @@ from .native_loader_abi_package import (
     NATIVE_LOADER_ABI_PACKAGE_KIND,
     NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
     NATIVE_LOADER_ABI_PACKAGE_VERSION,
+    NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH,
+    NATIVE_RUNTIME_VARIANT_REGISTRY_PATH,
     build_native_loader_abi_package,
 )
 from .native_loader_dispatch import (
@@ -59,6 +61,10 @@ from .native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
     VulkanComputeRuntime,
+)
+from .native_runtime_variant_registry import (
+    NativeRuntimeVariantRegistryError,
+    generate_native_runtime_variant_registry,
 )
 from .native_target_adapters import (
     NATIVE_LOADER_TARGET_ADAPTER_KIND,
@@ -142,6 +148,10 @@ from .runtime_graph_package import (
     RUNTIME_GRAPH_PACKAGE_INSPECTION_SCOPE,
     inspect_runtime_graph_package,
     runtime_graph_package_inspection_json,
+)
+from .runtime_variant_dispatch import (
+    RuntimeVariantDispatchError,
+    build_runtime_variant_dispatch_request,
 )
 from .runtime_verification import (
     DirectXRuntimeParityAdapter,
@@ -227,6 +237,8 @@ __all__ = [
     "NATIVE_LOADER_ABI_PACKAGE_MANIFEST",
     "NATIVE_LOADER_ABI_PACKAGE_VERSION",
     "NATIVE_LOADER_ABI_VERSION",
+    "NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH",
+    "NATIVE_RUNTIME_VARIANT_REGISTRY_PATH",
     "NATIVE_LOADER_TARGET_ADAPTER_KIND",
     "NATIVE_LOADER_TARGET_ADAPTER_VERSION",
     "DispatchArtifactJob",
@@ -275,6 +287,7 @@ __all__ = [
     "NativeLoaderABIError",
     "NativeLoaderDispatchError",
     "NativeLoaderTargetAdapterError",
+    "NativeRuntimeVariantRegistryError",
     "OpenGLRuntimeParityAdapter",
     "OpenGLComputeRuntime",
     "RuntimeAllocationView",
@@ -332,6 +345,7 @@ __all__ = [
     "RuntimeTolerance",
     "RuntimeValue",
     "RuntimeValidationHook",
+    "RuntimeVariantDispatchError",
     "RuntimeVerificationError",
     "VulkanRuntimeParityAdapter",
     "VulkanComputeRuntime",
@@ -349,6 +363,7 @@ __all__ = [
     "build_runtime_loader_manifest",
     "build_runtime_package",
     "build_runtime_variant_registry",
+    "build_runtime_variant_dispatch_request",
     "build_project_test_runner_plan",
     "compare_runtime_outputs",
     "default_runtime_test_adapters",
@@ -361,6 +376,7 @@ __all__ = [
     "generate_native_loader_declarations",
     "generate_native_loader_execution_abi",
     "generate_native_loader_target_adapter",
+    "generate_native_runtime_variant_registry",
     "inspect_runtime_host_integration_handoff",
     "inspect_runtime_host_loader_scaffolds",
     "inspect_runtime_package",

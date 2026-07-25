@@ -17,12 +17,15 @@ from crosstl.project import (
     NATIVE_LOADER_ABI_PACKAGE_KIND,
     NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
     NATIVE_LOADER_ABI_PACKAGE_VERSION,
+    NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH,
+    NATIVE_RUNTIME_VARIANT_REGISTRY_PATH,
     NativeLoaderABIError,
     NativeLoaderTargetAdapterError,
     build_native_loader_abi_package,
     build_runtime_artifact_manifest,
     build_runtime_loader_manifest,
     build_runtime_package,
+    build_runtime_variant_dispatch_request,
     generate_native_loader_target_adapter,
     native_loader_abi_package,
     translate_project,
@@ -350,14 +353,15 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
     assert first == second
     assert first["kind"] == NATIVE_LOADER_ABI_PACKAGE_KIND
     assert first["schemaVersion"] == NATIVE_LOADER_ABI_PACKAGE_VERSION
-    assert first["schemaVersion"] == 2
+    assert first["schemaVersion"] == 3
     assert first["success"] is True
     assert first["summary"] == {
         "unitCount": 2,
         "targetCount": 2,
         "targetAdapterCount": 2,
         "unavailableTargetAdapterCount": 0,
-        "generatedFileCount": 9,
+        "runtimeVariantCount": 2,
+        "generatedFileCount": 13,
     }
     assert len(first["generatedFiles"]) == first["summary"]["generatedFileCount"]
     assert first["generatedFiles"][0] == {
@@ -399,6 +403,7 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
             "algorithm": "sha256",
             "value": _sha256(descriptor_path),
         }
+        assert unit["descriptorSizeBytes"] == descriptor_path.stat().st_size
         assert unit["declarationsHash"] == {
             "algorithm": "sha256",
             "value": _sha256(declarations_path),
@@ -433,6 +438,40 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
         assert generated_file_kinds[unit["executionABIPath"]] == (
             "native-loader-execution-abi"
         )
+    runtime_registry = first["runtimeVariantRegistry"]
+    registry_path = first_root / NATIVE_RUNTIME_VARIANT_REGISTRY_PATH
+    native_header_path = first_root / NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert registry["kind"] == "crosstl-runtime-variant-registry"
+    assert registry["status"] == "ready"
+    assert runtime_registry == {
+        "available": True,
+        "path": NATIVE_RUNTIME_VARIANT_REGISTRY_PATH,
+        "hash": {
+            "algorithm": "sha256",
+            "value": _sha256(registry_path),
+        },
+        "registryHash": registry["registryHash"],
+        "variantCount": 2,
+        "nativeHeader": {
+            "available": True,
+            "path": NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH,
+            "hash": {
+                "algorithm": "sha256",
+                "value": _sha256(native_header_path),
+            },
+        },
+    }
+    assert generated_file_kinds[NATIVE_RUNTIME_VARIANT_REGISTRY_PATH] == (
+        "runtime-variant-registry"
+    )
+    assert generated_file_kinds[NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH] == (
+        "native-runtime-variant-registry"
+    )
+    for record in registry["variants"].values():
+        artifact_path = record["artifact"]["path"]
+        assert generated_file_kinds[artifact_path] == "runtime-target-artifact"
+        assert (first_root / artifact_path).is_file()
 
 
 def test_runtime_loader_abi_package_reports_unavailable_target_adapters(
@@ -452,7 +491,8 @@ def test_runtime_loader_abi_package_reports_unavailable_target_adapters(
 
     assert package["summary"]["targetAdapterCount"] == 1
     assert package["summary"]["unavailableTargetAdapterCount"] == 1
-    assert package["summary"]["generatedFileCount"] == 8
+    assert package["summary"]["runtimeVariantCount"] == 2
+    assert package["summary"]["generatedFileCount"] == 11
     assert package["targetAdapters"] == [
         {
             "target": "directx",
@@ -473,6 +513,13 @@ def test_runtime_loader_abi_package_reports_unavailable_target_adapters(
             "reason": "target-adapter-unavailable",
         },
     ]
+    assert package["runtimeVariantRegistry"]["nativeHeader"] == {
+        "available": False,
+        "reason": "target-adapter-unavailable",
+        "unavailableTargets": ["opengl"],
+    }
+    assert (package_root / package["runtimeVariantRegistry"]["path"]).is_file()
+    assert not (package_root / NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH).exists()
 
 
 def test_runtime_loader_abi_package_rejects_adapter_generation_failure_before_writing(
@@ -550,6 +597,266 @@ def test_runtime_loader_abi_package_rejects_duplicate_unit_ids(
 
     assert exc_info.value.code == ("project.native-loader-abi.load-unit-id-duplicate")
     assert not package_root.exists()
+
+
+def _copy_runtime_package_with_artifact_path(
+    tmp_path,
+    reduced_runtime_package,
+    package_path,
+):
+    package_dir = tmp_path / "runtime-package"
+    shutil.copytree(reduced_runtime_package["package_dir"], package_dir)
+    manifest_path = package_dir / "runtime-loader-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    unit = manifest["loadUnits"][0]
+    artifact_bytes = (package_dir / unit["packagePath"]).read_bytes()
+    replacement_path = package_dir / package_path
+    replacement_path.parent.mkdir(parents=True, exist_ok=True)
+    replacement_path.write_bytes(artifact_bytes)
+    unit["packagePath"] = package_path
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def test_runtime_loader_abi_package_rejects_artifact_package_manifest_collision(
+    tmp_path, reduced_runtime_package
+):
+    manifest_path = _copy_runtime_package_with_artifact_path(
+        tmp_path,
+        reduced_runtime_package,
+        NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
+    )
+    output_root = tmp_path / "abi-package"
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(manifest_path, output_root)
+
+    assert exc_info.value.code == "project.native-loader-abi.output-path-collision"
+    assert exc_info.value.details == {
+        "firstRelativePath": NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
+        "secondRelativePath": NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
+    }
+    assert not output_root.exists()
+
+
+def test_runtime_loader_abi_package_rejects_portable_case_collision(
+    tmp_path, reduced_runtime_package
+):
+    artifact_path = NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH.upper()
+    manifest_path = _copy_runtime_package_with_artifact_path(
+        tmp_path,
+        reduced_runtime_package,
+        artifact_path,
+    )
+    output_root = tmp_path / "abi-package"
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(manifest_path, output_root)
+
+    assert exc_info.value.code == "project.native-loader-abi.output-path-collision"
+    assert {
+        exc_info.value.details["firstRelativePath"].casefold(),
+        exc_info.value.details["secondRelativePath"].casefold(),
+    } == {NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH.casefold()}
+    assert not output_root.exists()
+
+
+@pytest.mark.parametrize(
+    "artifact_path",
+    [
+        "artifacts/CON.hlsl",
+        "artifacts/kernel.hlsl:payload",
+        "artifacts/kernel.hlsl.",
+        "artifacts/trailing /kernel.hlsl",
+    ],
+)
+def test_runtime_loader_abi_package_rejects_nonportable_artifact_paths(
+    tmp_path, reduced_runtime_package, artifact_path
+):
+    package_dir = tmp_path / "runtime-package"
+    shutil.copytree(reduced_runtime_package["package_dir"], package_dir)
+    manifest_path = package_dir / "runtime-loader-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["loadUnits"][0]["packagePath"] = artifact_path
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    output_root = tmp_path / "abi-package"
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(manifest_path, output_root)
+
+    assert exc_info.value.code == "project.native-loader-abi.artifact-path-invalid"
+    assert not output_root.exists()
+
+
+def test_runtime_loader_abi_package_rejects_generated_path_input_collision(
+    tmp_path, reduced_runtime_package
+):
+    manifest_path = tmp_path / NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH
+    manifest_path.write_text(
+        json.dumps(
+            reduced_runtime_package["loader_manifest"],
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    shutil.copytree(
+        reduced_runtime_package["package_dir"] / "artifacts",
+        tmp_path / "artifacts",
+    )
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(manifest_path, tmp_path)
+
+    assert exc_info.value.code == "project.native-loader-abi.path-collision"
+    assert exc_info.value.details == {
+        "manifestPath": str(manifest_path),
+        "relativePath": NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH,
+    }
+    assert manifest_path.read_text(encoding="utf-8").startswith("{")
+
+
+def test_runtime_loader_abi_package_rejects_output_symlink_escape(
+    tmp_path, reduced_runtime_package
+):
+    output_root = tmp_path / "abi-package"
+    outside_root = tmp_path / "outside"
+    output_root.mkdir()
+    outside_root.mkdir()
+    try:
+        (output_root / "artifacts").symlink_to(
+            outside_root,
+            target_is_directory=True,
+        )
+    except OSError as exc:
+        pytest.skip(f"Directory symlinks are unavailable: {exc}")
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(
+            reduced_runtime_package["loader_manifest_path"],
+            output_root,
+        )
+
+    assert exc_info.value.code == "project.native-loader-abi.output-path-escape"
+    assert exc_info.value.details["relativePath"].startswith("artifacts/")
+    assert not list(outside_root.iterdir())
+    assert not (output_root / NATIVE_LOADER_ABI_PACKAGE_MANIFEST).exists()
+
+
+def test_runtime_loader_abi_package_does_not_follow_temporary_output_symlink(
+    tmp_path, reduced_runtime_package
+):
+    output_root = tmp_path / "abi-package"
+    artifact_package_path = reduced_runtime_package["loader_manifest"]["loadUnits"][0][
+        "packagePath"
+    ]
+    artifact_output_path = output_root / artifact_package_path
+    artifact_output_path.parent.mkdir(parents=True)
+    outside_path = tmp_path / "outside.bin"
+    outside_path.write_bytes(b"outside")
+    temporary_path = artifact_output_path.with_name(f".{artifact_output_path.name}.tmp")
+    try:
+        temporary_path.symlink_to(outside_path)
+    except OSError as exc:
+        pytest.skip(f"File symlinks are unavailable: {exc}")
+
+    build_native_loader_abi_package(
+        reduced_runtime_package["loader_manifest_path"],
+        output_root,
+    )
+
+    assert outside_path.read_bytes() == b"outside"
+    assert temporary_path.is_symlink()
+    assert (
+        artifact_output_path.read_bytes()
+        == (reduced_runtime_package["package_dir"] / artifact_package_path).read_bytes()
+    )
+
+
+def test_runtime_loader_abi_package_invalidates_manifest_before_failed_rebuild(
+    tmp_path, reduced_runtime_package, monkeypatch
+):
+    output_root = tmp_path / "abi-package"
+    build_native_loader_abi_package(
+        reduced_runtime_package["loader_manifest_path"],
+        output_root,
+    )
+    package_manifest_path = output_root / NATIVE_LOADER_ABI_PACKAGE_MANIFEST
+    assert package_manifest_path.is_file()
+    original_write_output = native_loader_abi_package._write_output
+
+    def fail_native_registry_write(root, relative_path, content):
+        if relative_path == NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH:
+            raise NativeLoaderABIError(
+                "package-write-failed",
+                "Native registry write failed.",
+                path="$.outputDirectory",
+            )
+        original_write_output(root, relative_path, content)
+
+    monkeypatch.setattr(
+        native_loader_abi_package,
+        "_write_output",
+        fail_native_registry_write,
+    )
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(
+            reduced_runtime_package["loader_manifest_path"],
+            output_root,
+        )
+
+    assert exc_info.value.code == "project.native-loader-abi.package-write-failed"
+    assert not package_manifest_path.exists()
+
+
+def test_runtime_loader_abi_package_rejects_modified_target_artifact(
+    tmp_path, reduced_runtime_package
+):
+    package_dir = tmp_path / "runtime-package"
+    shutil.copytree(reduced_runtime_package["package_dir"], package_dir)
+    manifest_path = package_dir / "runtime-loader-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifact_package_path = manifest["loadUnits"][0]["packagePath"]
+    artifact_path = package_dir / artifact_package_path
+    artifact_path.write_bytes(artifact_path.read_bytes() + b"\n")
+    output_root = tmp_path / "abi-package"
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(manifest_path, output_root)
+
+    assert exc_info.value.code == "project.native-loader-abi.artifact-size-mismatch"
+    assert exc_info.value.details["packagePath"] == artifact_package_path
+    assert not output_root.exists()
+
+
+def test_runtime_loader_abi_package_rejects_same_size_artifact_hash_mismatch(
+    tmp_path, reduced_runtime_package
+):
+    package_dir = tmp_path / "runtime-package"
+    shutil.copytree(reduced_runtime_package["package_dir"], package_dir)
+    manifest_path = package_dir / "runtime-loader-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifact_package_path = manifest["loadUnits"][0]["packagePath"]
+    artifact_path = package_dir / artifact_package_path
+    artifact_bytes = bytearray(artifact_path.read_bytes())
+    artifact_bytes[0] ^= 0x01
+    artifact_path.write_bytes(artifact_bytes)
+    output_root = tmp_path / "abi-package"
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(manifest_path, output_root)
+
+    assert exc_info.value.code == "project.native-loader-abi.artifact-hash-mismatch"
+    assert exc_info.value.details["packagePath"] == artifact_package_path
+    assert not output_root.exists()
 
 
 @pytest.mark.parametrize("language", ("c", "c++"), ids=("c11", "cxx17"))
@@ -666,3 +973,138 @@ def test_packaged_execution_headers_compile_together(
     )
 
     _compile_packaged_execution_headers(language, package_root, package)
+
+
+def test_packaged_native_runtime_variant_registry_compiles(
+    tmp_path, reduced_runtime_package
+):
+    compiler = _compiler_command("c++")
+    if compiler is None:
+        pytest.skip("No native C++ compiler is available")
+
+    package_root = tmp_path / "abi-package"
+    package = build_native_loader_abi_package(
+        reduced_runtime_package["loader_manifest_path"],
+        package_root,
+    )
+    runtime_registry = package["runtimeVariantRegistry"]
+    assert runtime_registry["nativeHeader"]["available"] is True
+    registry = json.loads(
+        (package_root / runtime_registry["path"]).read_text(encoding="utf-8")
+    )
+    selected_key = sorted(registry["lookup"]["readyKeys"])[0]
+    source_path = package_root / "native_runtime_variant_registry.cpp"
+    source_path.write_text(
+        textwrap.dedent(f"""
+            #include "{runtime_registry['nativeHeader']['path']}"
+
+            int main() {{
+                const CrossTLNativeRuntimeVariantEntry *variant =
+                    crosstl_native_runtime_variant_lookup(
+                        {json.dumps(selected_key)});
+                if (variant == nullptr) return 1;
+                const uint32_t workgroup_count[3] = {{1u, 1u, 1u}};
+                CrossTLNativeLoaderExecutionRequest request =
+                    crosstl_native_runtime_variant_make_request(
+                        variant, 0u, nullptr, workgroup_count);
+                return request.target == nullptr ||
+                       request.dispatch.workgroup_size[0] == 0u;
+            }}
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    executable_names = {
+        Path(part).name.lower() for part in compiler if not part.startswith("-")
+    }
+    msvc_style = bool(executable_names & {"cl", "cl.exe", "clang-cl", "clang-cl.exe"})
+    if msvc_style:
+        object_path = package_root / "native_runtime_variant_registry.obj"
+        command = compiler + [
+            "/nologo",
+            "/std:c++17",
+            "/W4",
+            "/WX",
+            "/c",
+            str(source_path),
+            f"/Fo{object_path}",
+        ]
+    else:
+        object_path = package_root / "native_runtime_variant_registry.o"
+        command = compiler + [
+            "-std=c++17",
+            "-pedantic-errors",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-c",
+            str(source_path),
+            "-o",
+            str(object_path),
+        ]
+    result = subprocess.run(
+        command,
+        cwd=package_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert object_path.is_file()
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_packaged_runtime_variant_registry_builds_exact_dispatch_request(
+    tmp_path, reduced_runtime_package, target
+):
+    package_root = tmp_path / "abi-package"
+    package = build_native_loader_abi_package(
+        reduced_runtime_package["loader_manifest_path"],
+        package_root,
+    )
+    registry = json.loads(
+        (package_root / package["runtimeVariantRegistry"]["path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    key, record = next(
+        (key, record)
+        for key, record in registry["variants"].items()
+        if record["target"]["backend"] == target
+    )
+    descriptor = reduced_runtime_package["descriptors"][target]
+    input_binding = next(
+        binding for binding in descriptor["bindings"] if binding["access"] == "read"
+    )
+    output_binding = next(
+        binding
+        for binding in descriptor["bindings"]
+        if binding["access"] == "read_write"
+    )
+
+    request = build_runtime_variant_dispatch_request(
+        registry,
+        key,
+        package_root,
+        {
+            input_binding["name"]: {
+                "dtype": "float32",
+                "shape": [4],
+                "values": [1.0, 2.0, 3.0, 4.0],
+            }
+        },
+        {
+            output_binding["name"]: {
+                "dtype": "float32",
+                "shape": [4],
+            }
+        },
+        {
+            "workgroupCount": [4, 1, 1],
+            "globalSize": [4, 1, 1],
+        },
+    )
+
+    assert request.artifact["target"] == target
+    assert request.fixture.selector.artifact_id == record["artifact"]["id"]
+    assert request.execution_plan.dispatch.workgroup_size == (1, 1, 1)

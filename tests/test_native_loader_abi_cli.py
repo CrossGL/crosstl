@@ -615,14 +615,27 @@ def test_native_loader_abi_package_cli_writes_deterministic_package(tmp_path, ca
     assert first_result == second_result == 0
     assert first == second
     assert first["kind"] == project_api.NATIVE_LOADER_ABI_PACKAGE_KIND
+    assert first["schemaVersion"] == project_api.NATIVE_LOADER_ABI_PACKAGE_VERSION == 3
     assert first["success"] is True
     assert first["summary"] == {
-        "generatedFileCount": 9,
+        "generatedFileCount": 10,
+        "runtimeVariantCount": 0,
         "targetAdapterCount": 2,
         "targetCount": 2,
         "unavailableTargetAdapterCount": 0,
         "unitCount": 2,
     }
+    assert first["runtimeVariantRegistry"]["available"] is False
+    assert first["runtimeVariantRegistry"]["reason"] == (
+        "runtime-variant-registry-unavailable"
+    )
+    assert first["runtimeVariantRegistry"]["nativeHeader"] == {
+        "available": False,
+        "reason": "runtime-variant-registry-unavailable",
+    }
+    assert not any(
+        entry["kind"] == "runtime-target-artifact" for entry in first["generatedFiles"]
+    )
     assert [unit["descriptorPath"] for unit in first["units"]] == [
         (
             "targets/directx-7fde9c43d3d7/"
@@ -665,6 +678,59 @@ def test_native_loader_abi_package_cli_reports_manifest_failure(tmp_path, capsys
     assert not output_dir.exists()
 
 
+def test_native_loader_abi_package_cli_rejects_duplicate_json_members(tmp_path, capsys):
+    manifest_path = tmp_path / "runtime-loader-manifest.json"
+    manifest_text = json.dumps(_loader_manifest(_load_unit()), indent=2)
+    manifest_path.write_text(
+        manifest_text.replace(
+            '"success": true,',
+            '"success": true,\n  "success": true,',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "abi-package"
+
+    result = main(["native-loader-abi-package", str(manifest_path), str(output_dir)])
+
+    assert result == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["code"] == "project.native-loader-abi.manifest-parse-failed"
+    assert payload["path"] == "$"
+    assert "duplicate JSON object member 'success'" in payload["message"]
+    assert captured.err == ""
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("invalid_number", ["NaN", "1e999"])
+def test_native_loader_abi_package_cli_rejects_nonfinite_json_numbers(
+    tmp_path, capsys, invalid_number
+):
+    manifest_path = tmp_path / "runtime-loader-manifest.json"
+    manifest_text = json.dumps(_loader_manifest(_load_unit()), indent=2)
+    manifest_path.write_text(
+        manifest_text.replace(
+            '"schemaVersion": 1,',
+            f'"schemaVersion": {invalid_number},',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "abi-package"
+
+    result = main(["native-loader-abi-package", str(manifest_path), str(output_dir)])
+
+    assert result == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["code"] == "project.native-loader-abi.manifest-parse-failed"
+    assert payload["path"] == "$"
+    assert "non-finite JSON number" in payload["message"]
+    assert captured.err == ""
+    assert not output_dir.exists()
+
+
 def test_native_loader_abi_package_cli_reports_output_failure(tmp_path, capsys):
     manifest_path = _write_manifest(tmp_path, _load_unit())
     blocked_parent = tmp_path / "not-a-directory"
@@ -679,7 +745,10 @@ def test_native_loader_abi_package_cli_reports_output_failure(tmp_path, capsys):
     assert payload["code"] == "project.native-loader-abi.package-write-failed"
     assert payload["path"] == "$.outputDirectory"
     assert payload["details"]["outputDirectory"] == str(output_dir)
-    assert payload["details"]["relativePath"].startswith("targets/directx-")
+    assert (
+        payload["details"]["relativePath"]
+        == project_api.NATIVE_RUNTIME_VARIANT_REGISTRY_PATH
+    )
     assert captured.err == ""
 
 
