@@ -161,6 +161,87 @@
       "feature_id": "project.runtime_execution_graphs",
       "notes": "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Slang native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Slang.",
       "status": "unsupported"
+    },
+    {
+      "backend": "WebGL / GLSL ES",
+      "backend_id": "webgl",
+      "category": "project",
+      "feature": "Generated native loader target adapters",
+      "feature_id": "project.native_loader_target_adapters",
+      "notes": "No generated WebGL native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the browser runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "WebGPU / WGSL",
+      "backend_id": "wgsl",
+      "category": "project",
+      "feature": "Generated native loader target adapters",
+      "feature_id": "project.native_loader_target_adapters",
+      "notes": "No generated WebGPU native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the WebGPU runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "project",
+      "feature": "Generated native loader target adapters",
+      "feature_id": "project.native_loader_target_adapters",
+      "notes": "No generated Metal native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Metal runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Vulkan SPIR-V",
+      "backend_id": "vulkan",
+      "category": "project",
+      "feature": "Generated native loader target adapters",
+      "feature_id": "project.native_loader_target_adapters",
+      "notes": "No generated Vulkan native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Vulkan runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "CUDA",
+      "backend_id": "cuda",
+      "category": "project",
+      "feature": "Generated native loader target adapters",
+      "feature_id": "project.native_loader_target_adapters",
+      "notes": "No generated CUDA native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the CUDA runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "HIP",
+      "backend_id": "hip",
+      "category": "project",
+      "feature": "Generated native loader target adapters",
+      "feature_id": "project.native_loader_target_adapters",
+      "notes": "No generated HIP native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the HIP runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Mojo",
+      "backend_id": "mojo",
+      "category": "project",
+      "feature": "Generated native loader target adapters",
+      "feature_id": "project.native_loader_target_adapters",
+      "notes": "No generated Mojo native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Mojo runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Rust",
+      "backend_id": "rust",
+      "category": "project",
+      "feature": "Generated native loader target adapters",
+      "feature_id": "project.native_loader_target_adapters",
+      "notes": "No generated Rust native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Rust GPU runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Slang",
+      "backend_id": "slang",
+      "category": "project",
+      "feature": "Generated native loader target adapters",
+      "feature_id": "project.native_loader_target_adapters",
+      "notes": "No generated Slang native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Slang runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+      "status": "unsupported"
     }
   ],
   "features": [
@@ -6182,7 +6263,7 @@
     },
     {
       "category": "project",
-      "description": "Build deterministic native loader ABI metadata, C declarations, allocation-free execution wrappers, and multi-unit packages from ready runtime loader units for use with caller-supplied target adapters.",
+      "description": "Build deterministic, target-neutral native loader ABI metadata, C declarations, allocation-free execution wrappers, and multi-unit packages from ready runtime loader units.",
       "id": "project.native_loader_abi",
       "name": "Native loader ABI descriptors",
       "support": {
@@ -6203,7 +6284,7 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
         },
         "directx": {
@@ -6224,7 +6305,7 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned artifact, pipeline, and resource handles remain adapter-owned and are passed to paired cleanup callbacks. Structured results preserve the primary phase, index, and adapter status separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. Tests cover deterministic output, C11/C++17 compilation, fake-adapter lifecycle and cleanup, and combined DirectX/OpenGL package headers. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned artifact, pipeline, and resource handles remain adapter-owned and are passed to paired cleanup callbacks. Structured results preserve the primary phase, index, and adapter status separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. Tests cover deterministic output, C11/C++17 compilation, fake-adapter lifecycle and cleanup, and combined DirectX/OpenGL package headers. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
         },
         "hip": {
@@ -6244,7 +6325,7 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
         },
         "metal": {
@@ -6264,7 +6345,7 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
         },
         "mojo": {
@@ -6284,7 +6365,7 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
         },
         "opengl": {
@@ -6305,7 +6386,7 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned artifact, pipeline, and resource handles remain adapter-owned and are passed to paired cleanup callbacks. Structured results preserve the primary phase, index, and adapter status separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. Tests cover deterministic output, C11/C++17 compilation, fake-adapter lifecycle and cleanup, and combined DirectX/OpenGL package headers. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned artifact, pipeline, and resource handles remain adapter-owned and are passed to paired cleanup callbacks. Structured results preserve the primary phase, index, and adapter status separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. Tests cover deterministic output, C11/C++17 compilation, fake-adapter lifecycle and cleanup, and combined DirectX/OpenGL package headers. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
         },
         "rust": {
@@ -6325,7 +6406,7 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
         },
         "slang": {
@@ -6345,7 +6426,7 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
         },
         "vulkan": {
@@ -6365,7 +6446,7 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
         },
         "webgl": {
@@ -6385,7 +6466,7 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
         },
         "wgsl": {
@@ -6405,8 +6486,112 @@
             "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_execution_abi",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_packaged_execution_headers_compile_together"
           ],
-          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; package publication records executionABIPath and executionABIHash and validates every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. Target-specific C adapters, host rewriting, full MLX runtime integration, and MLX test-suite parity are not provided or claimed.",
+          "notes": "build_native_loader_abi_descriptor validates and selects one ready runtime loader unit and emits a versioned target-neutral crosstl-native-loader-abi-descriptor with artifact identity, entry-point metadata, binding coordinates and access, scalar layout, specialization constants, source remap, and provenance. generate_native_loader_declarations renders deterministic guarded declarations, while generate_native_loader_execution_abi renders an allocation-free C11/C++17 wrapper that validates the request and invokes caller-supplied callbacks in load, specialize, pipeline-create, bind, dispatch, synchronize, and readback order before reverse cleanup. Adapter-returned handles are passed to paired cleanup callbacks, and structured results preserve the primary adapter failure separately from the first cleanup error. native-loader-abi publishes the wrapper through --execution-output; schema-v2 package publication records executionABIPath, executionABIHash, and targetAdapters availability and hashes after validating every unit before writing. DirectX and OpenGL integration tests cover namespace mappings, fake-adapter execution, deterministic multi-unit publication, and combined compilation; other ready loader units preserve their reflected resource kinds without claiming a native runtime adapter. The ABI remains target-neutral; generated target-specific implementations are tracked separately by project.native_loader_target_adapters. This feature does not claim host application rewriting, repository scheduling, full MLX runtime integration, or MLX test-suite parity.",
           "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
+      "description": "Generate target-specific C++17 reference adapters that implement the native loader execution ABI for bounded DirectX and OpenGL compute dispatch.",
+      "id": "project.native_loader_target_adapters",
+      "name": "Generated native loader target adapters",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract"
+          ],
+          "notes": "No generated CUDA native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the CUDA runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+          "status": "unsupported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract",
+            "tests/test_translator/test_native_directx_adapter.py::def test_directx_native_loader_adapter_generation_is_deterministic",
+            "tests/test_translator/test_native_directx_adapter.py::def test_directx_native_loader_adapter_accepts_verified_hlsl_and_dxil_contracts",
+            "tests/test_translator/test_native_directx_adapter.py::def test_directx_native_loader_adapter_encodes_dxc_compile_and_diagnostics",
+            "tests/test_translator/test_native_directx_adapter.py::def test_directx_native_loader_adapter_encodes_named_dxc_definitions",
+            "tests/test_translator/test_native_directx_adapter.py::def test_directx_native_loader_adapter_rejects_fail_closed_contracts",
+            "tests/test_translator/test_native_directx_adapter.py::def test_directx_native_loader_adapter_cross_compiles_for_windows",
+            "tests/test_translator/test_native_directx_adapter_device.py::def test_directx_adapter_device_fixture_matches_generated_contract",
+            "tests/test_translator/test_native_directx_adapter_device.py::def test_generated_directx_adapter_executes_specialized_hlsl_on_device",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_target_adapter",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package"
+          ],
+          "notes": "generate_native_loader_target_adapter(\"directx\") emits a deterministic C++17 Direct3D 12 reference adapter for the generated native loader execution ABI. It confines artifact paths to the package root, verifies declared size and SHA-256 before use, accepts HLSL source or precompiled DXIL, dynamically loads DXC for source compilation and diagnostics, and materializes bool, int32, uint32, and float32 specialization values before compilation. HLSL source specialization requires both a name and the reflected numeric ID; missing identifiers, unsupported values, duplicates, and specialization of precompiled DXIL fail closed. The adapter creates compute pipelines, binds reflected constant and storage resources, dispatches, synchronizes, reads back, and performs reverse cleanup. The generated context owns the Direct3D device, queue, fence, command objects, adapter-created pipelines, and adapter-created resources until the corresponding cleanup call or context shutdown; package files and input/output payload storage remain caller-owned. Schema-v2 ABI packages publish the generated header and its hash through targetAdapters, and native-loader-abi can write the same adapter directly. Focused tests cover deterministic generation, failure diagnostics, Windows compilation, and exact specialized numerical device execution. This reference adapter does not rewrite a host application, provide a repository scheduler, manage an application's existing device, or establish full MLX runtime integration or MLX test-suite parity.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract"
+          ],
+          "notes": "No generated HIP native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the HIP runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+          "status": "unsupported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract",
+            "tests/test_native_target_adapters_public_api.py::def test_native_loader_target_adapter_rejects_unsupported_target"
+          ],
+          "notes": "No generated Metal native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Metal runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+          "status": "unsupported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract"
+          ],
+          "notes": "No generated Mojo native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Mojo runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+          "status": "unsupported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract",
+            "tests/test_translator/test_native_opengl_adapter.py::def test_generated_opengl_adapter_is_deterministic_and_self_contained",
+            "tests/test_translator/test_native_opengl_adapter.py::def test_generated_opengl_adapter_encodes_platform_and_execution_contracts",
+            "tests/test_translator/test_native_opengl_adapter.py::def test_generated_opengl_adapter_runs_execution_abi_and_enforces_lifecycle",
+            "tests/test_translator/test_native_opengl_adapter.py::def test_generated_opengl_adapter_specializes_spirv_with_core_and_arb_paths",
+            "tests/test_translator/test_native_opengl_adapter_device.py::def test_generated_opengl_adapter_contract_from_translated_fixture",
+            "tests/test_translator/test_native_opengl_adapter_device.py::def test_generated_opengl_adapter_executes_specialized_spirv_on_device",
+            "tests/test_native_loader_abi_cli.py::def test_native_loader_abi_cli_writes_deterministic_target_adapter",
+            "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package"
+          ],
+          "notes": "generate_native_loader_target_adapter(\"opengl\") emits a deterministic C++17 desktop OpenGL 4.3+ reference adapter for the generated native loader execution ABI. It confines artifact paths to the package root, verifies declared size and SHA-256 before use, and loads GLSL compute source or OpenGL SPIR-V. Specialization applies only to SPIR-V binaries, using numeric bool, int32, uint32, and float32 constant IDs through core or ARB SPIR-V specialization entry points; GLSL source specialization fails closed. The adapter creates and links programs, binds reflected uniform and storage buffers, dispatches, synchronizes, reads back, and performs reverse cleanup. The caller owns and keeps current the OpenGL context and supplies the function table for the adapter lifetime; the adapter owns only the shader, program, and buffer objects it creates until paired cleanup, while package files and input/output payload storage remain caller-owned. Schema-v2 ABI packages publish the generated header and its hash through targetAdapters, and native-loader-abi can write the same adapter directly. Focused tests cover deterministic generation, failure diagnostics, translated-fixture contract generation, lifecycle ordering, core and ARB specialization paths, and exact specialized numerical device execution through a caller-created EGL context. This reference adapter does not create or own the host OpenGL context, rewrite a host application, provide a repository scheduler, or establish full MLX runtime integration or MLX test-suite parity.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract"
+          ],
+          "notes": "No generated Rust native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Rust GPU runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+          "status": "unsupported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract"
+          ],
+          "notes": "No generated Slang native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Slang runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+          "status": "unsupported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract"
+          ],
+          "notes": "No generated Vulkan native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Vulkan runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+          "status": "unsupported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract"
+          ],
+          "notes": "No generated WebGL native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the browser runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+          "status": "unsupported"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_native_target_adapters_public_api.py::def test_project_exports_native_loader_target_adapter_contract"
+          ],
+          "notes": "No generated WebGPU native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the WebGPU runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.",
+          "status": "unsupported"
         }
       }
     },
@@ -11029,44 +11214,44 @@
   "summary": {
     "backend_count": 11,
     "backlog": {
-      "backlog_count": 18,
+      "backlog_count": 27,
       "by_backend": {
-        "cuda": 2,
-        "hip": 2,
-        "metal": 2,
-        "mojo": 2,
-        "rust": 2,
-        "slang": 2,
-        "vulkan": 2,
-        "webgl": 2,
-        "wgsl": 2
+        "cuda": 3,
+        "hip": 3,
+        "metal": 3,
+        "mojo": 3,
+        "rust": 3,
+        "slang": 3,
+        "vulkan": 3,
+        "webgl": 3,
+        "wgsl": 3
       },
       "by_category": {
-        "project": 18
+        "project": 27
       },
       "by_status": {
         "diagnostic": 0,
         "partial": 0,
         "supported": 0,
         "unknown": 0,
-        "unsupported": 18,
+        "unsupported": 27,
         "validated_rejection": 0
       }
     },
-    "feature_count": 37,
+    "feature_count": 38,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 5
       },
       "directx": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 36,
+        "supported": 37,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -11076,7 +11261,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 5
       },
       "metal": {
@@ -11084,7 +11269,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 5
       },
       "mojo": {
@@ -11092,13 +11277,13 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 5
       },
       "opengl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 35,
+        "supported": 36,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1
@@ -11108,7 +11293,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 5
       },
       "slang": {
@@ -11116,7 +11301,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 5
       },
       "vulkan": {
@@ -11124,7 +11309,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 5
       },
       "webgl": {
@@ -11132,7 +11317,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 5
       },
       "wgsl": {
@@ -11140,7 +11325,7 @@
         "partial": 0,
         "supported": 29,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 5
       }
     }

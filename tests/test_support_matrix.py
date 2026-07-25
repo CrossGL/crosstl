@@ -1197,6 +1197,105 @@ def test_project_runtime_loader_manifest_is_first_class_support_feature():
         ) in backend_support["evidence"]
 
 
+def test_project_native_loader_abi_is_target_neutral_and_separate_from_adapters():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.native_loader_abi"]
+
+    assert "target-neutral" in feature["description"]
+    assert "caller-supplied target adapters" not in feature["description"]
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        notes = backend_support["notes"]
+        assert backend_support["status"] == "supported"
+        assert "schema-v2 package publication" in notes
+        assert "targetAdapters availability and hashes" in notes
+        assert "project.native_loader_target_adapters" in notes
+        assert "host application rewriting" in notes
+        assert "repository scheduling" in notes
+        assert "full MLX runtime integration" in notes
+        assert "MLX test-suite parity" in notes
+
+
+def test_project_native_loader_target_adapters_are_backend_scoped_and_evidenced():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.native_loader_target_adapters"]
+    supported = {"directx", "opengl"}
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Generated native loader target adapters"
+    assert "C++17 reference adapters" in feature["description"]
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_id, backend_support in feature["support"].items():
+        notes = backend_support["notes"]
+        assert backend_support["status"] == (
+            "supported" if backend_id in supported else "unsupported"
+        )
+        assert "host application" in notes
+        assert "repository scheduler" in notes
+        assert "full MLX runtime integration" in notes
+        assert "MLX test-suite parity" in notes
+        assert backend_support["evidence"]
+
+    directx = feature["support"]["directx"]
+    assert "HLSL source or precompiled DXIL" in directx["notes"]
+    assert "verifies declared size and SHA-256" in directx["notes"]
+    assert "bool, int32, uint32, and float32 specialization values" in (
+        directx["notes"]
+    )
+    assert (
+        "HLSL source specialization requires both a name and the reflected numeric ID"
+        in directx["notes"]
+    )
+    assert "specialization of precompiled DXIL fail closed" in directx["notes"]
+    assert "context owns the Direct3D device, queue, fence" in directx["notes"]
+    assert "package files and input/output payload storage remain caller-owned" in (
+        directx["notes"]
+    )
+    assert "Schema-v2 ABI packages" in directx["notes"]
+    assert (
+        "tests/test_translator/test_native_directx_adapter_device.py::def "
+        "test_generated_directx_adapter_executes_specialized_hlsl_on_device"
+    ) in directx["evidence"]
+
+    opengl = feature["support"]["opengl"]
+    assert "GLSL compute source or OpenGL SPIR-V" in opengl["notes"]
+    assert "verifies declared size and SHA-256" in opengl["notes"]
+    assert "Specialization applies only to SPIR-V binaries" in opengl["notes"]
+    assert "core or ARB SPIR-V specialization entry points" in opengl["notes"]
+    assert "GLSL source specialization fails closed" in opengl["notes"]
+    assert "caller owns and keeps current the OpenGL context" in opengl["notes"]
+    assert "adapter owns only the shader, program, and buffer" in opengl["notes"]
+    assert "Schema-v2 ABI packages" in opengl["notes"]
+    assert (
+        "tests/test_translator/test_native_opengl_adapter_device.py::def "
+        "test_generated_opengl_adapter_contract_from_translated_fixture"
+    ) in opengl["evidence"]
+    assert (
+        "tests/test_translator/test_native_opengl_adapter_device.py::def "
+        "test_generated_opengl_adapter_executes_specialized_spirv_on_device"
+    ) in opengl["evidence"]
+
+    unsupported_evidence = (
+        "tests/test_native_target_adapters_public_api.py::def "
+        "test_project_exports_native_loader_target_adapter_contract"
+    )
+    for backend_id in set(feature["support"]) - supported:
+        backend_support = feature["support"][backend_id]
+        assert "No generated" in backend_support["notes"]
+        assert "application must supply and own" in backend_support["notes"]
+        assert unsupported_evidence in backend_support["evidence"]
+
+
 def test_project_runtime_variant_registry_documents_execution_key_schema_v2():
     catalog = json.loads(
         (ROOT / "support" / "features.json").read_text(encoding="utf-8")
