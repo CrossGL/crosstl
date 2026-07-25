@@ -335,6 +335,7 @@ def generate_opengl_native_loader_adapter() -> str:
         } CrossTLOpenGL43Artifact;
 
         typedef struct CrossTLOpenGL43Pipeline {
+            CrossTLOpenGL43Context *owner;
             CrossTLOpenGL43UInt shader;
             CrossTLOpenGL43UInt program;
             uint64_t dispatch_serial;
@@ -1503,7 +1504,7 @@ def generate_opengl_native_loader_adapter() -> str:
             }
             CrossTLOpenGL43Pipeline *pipeline =
                 new (std::nothrow) CrossTLOpenGL43Pipeline{
-                    shader, program, 0u, 0};
+                    context, shader, program, 0u, 0};
             if (pipeline == NULL) {
                 context->functions.delete_program(program);
                 context->functions.delete_shader(shader);
@@ -1530,9 +1531,15 @@ def generate_opengl_native_loader_adapter() -> str:
             }
             CrossTLOpenGL43Pipeline *pipeline =
                 static_cast<CrossTLOpenGL43Pipeline *>(pipeline_opaque);
+            if (pipeline->owner != context) {
+                return crosstl_opengl43_report(
+                    context,
+                    CROSSTL_OPENGL43_STATUS_INVALID_ARGUMENT,
+                    "cleanup-pipeline",
+                    "The pipeline belongs to a different OpenGL context.");
+            }
             int32_t status = crosstl_opengl43_validate_context(context);
             if (status != CROSSTL_OPENGL43_STATUS_OK) {
-                delete pipeline;
                 return status;
             }
             crosstl_opengl43_clear_errors(context);
@@ -1742,6 +1749,15 @@ def generate_opengl_native_loader_adapter() -> str:
                     "bind-resource",
                     "Resource binding received an incomplete request.");
             }
+            CrossTLOpenGL43Pipeline *pipeline =
+                static_cast<CrossTLOpenGL43Pipeline *>(pipeline_opaque);
+            if (pipeline->owner != context) {
+                return crosstl_opengl43_report(
+                    context,
+                    CROSSTL_OPENGL43_STATUS_INVALID_ARGUMENT,
+                    "bind-resource",
+                    "The pipeline belongs to a different OpenGL context.");
+            }
             int32_t status = crosstl_opengl43_validate_context(context);
             if (status != CROSSTL_OPENGL43_STATUS_OK) {
                 return status;
@@ -1848,6 +1864,10 @@ def generate_opengl_native_loader_adapter() -> str:
                     static_cast<CrossTLOpenGL43UInt>(
                         previous_indexed_buffer));
                 context->functions.delete_buffers(1, &buffer);
+                context->functions.bind_buffer(
+                    target,
+                    static_cast<CrossTLOpenGL43UInt>(
+                        previous_generic_buffer));
                 return crosstl_opengl43_report(
                     context,
                     CROSSTL_OPENGL43_STATUS_OUT_OF_MEMORY,
@@ -1874,26 +1894,46 @@ def generate_opengl_native_loader_adapter() -> str:
             }
             CrossTLOpenGL43Resource *resource =
                 static_cast<CrossTLOpenGL43Resource *>(resource_opaque);
-            int32_t status = crosstl_opengl43_validate_context(context);
-            if (status != CROSSTL_OPENGL43_STATUS_OK) {
-                delete resource;
-                return status;
-            }
             if (resource->owner != context) {
-                status = crosstl_opengl43_report(
+                return crosstl_opengl43_report(
                     context,
                     CROSSTL_OPENGL43_STATUS_INVALID_ARGUMENT,
                     "cleanup-resource",
                     "The resource belongs to a different OpenGL context.");
-                delete resource;
+            }
+            int32_t status = crosstl_opengl43_validate_context(context);
+            if (status != CROSSTL_OPENGL43_STATUS_OK) {
                 return status;
             }
+            CrossTLOpenGL43Enum binding_token =
+                resource->target ==
+                        CROSSTL_OPENGL43_SHADER_STORAGE_BUFFER
+                    ? CROSSTL_OPENGL43_SHADER_STORAGE_BUFFER_BINDING
+                    : CROSSTL_OPENGL43_UNIFORM_BUFFER_BINDING;
+            CrossTLOpenGL43Int previous_generic_buffer = 0;
             crosstl_opengl43_clear_errors(context);
+            context->functions.get_integerv(
+                binding_token, &previous_generic_buffer);
+            status = crosstl_opengl43_check_error(
+                context,
+                "cleanup-resource",
+                "OpenGL buffer binding query");
+            if (status != CROSSTL_OPENGL43_STATUS_OK) {
+                return status;
+            }
             context->functions.bind_buffer_base(
                 resource->target,
                 resource->binding,
                 resource->previous_indexed_buffer);
             context->functions.delete_buffers(1, &resource->buffer);
+            context->functions.bind_buffer(
+                resource->target,
+                static_cast<CrossTLOpenGL43UInt>(
+                    previous_generic_buffer ==
+                            static_cast<CrossTLOpenGL43Int>(
+                                resource->buffer)
+                        ? 0
+                        : previous_generic_buffer));
             status = crosstl_opengl43_check_error(
                 context, "cleanup-resource", "OpenGL buffer deletion");
             delete resource;
@@ -1912,6 +1952,15 @@ def generate_opengl_native_loader_adapter() -> str:
                     CROSSTL_OPENGL43_STATUS_INVALID_ARGUMENT,
                     "dispatch",
                     "Dispatch requires a pipeline and geometry.");
+            }
+            CrossTLOpenGL43Pipeline *pipeline =
+                static_cast<CrossTLOpenGL43Pipeline *>(pipeline_opaque);
+            if (pipeline->owner != context) {
+                return crosstl_opengl43_report(
+                    context,
+                    CROSSTL_OPENGL43_STATUS_INVALID_ARGUMENT,
+                    "dispatch",
+                    "The pipeline belongs to a different OpenGL context.");
             }
             int32_t status = crosstl_opengl43_validate_context(context);
             if (status != CROSSTL_OPENGL43_STATUS_OK) {
@@ -1938,8 +1987,6 @@ def generate_opengl_native_loader_adapter() -> str:
                         "Dispatch workgroup count exceeds the context limit.");
                 }
             }
-            CrossTLOpenGL43Pipeline *pipeline =
-                static_cast<CrossTLOpenGL43Pipeline *>(pipeline_opaque);
             crosstl_opengl43_clear_errors(context);
             CrossTLOpenGL43Int previous_program = 0;
             context->functions.get_integerv(
@@ -2000,12 +2047,19 @@ def generate_opengl_native_loader_adapter() -> str:
                     "synchronize",
                     "Synchronization requires a pipeline.");
             }
+            CrossTLOpenGL43Pipeline *pipeline =
+                static_cast<CrossTLOpenGL43Pipeline *>(pipeline_opaque);
+            if (pipeline->owner != context) {
+                return crosstl_opengl43_report(
+                    context,
+                    CROSSTL_OPENGL43_STATUS_INVALID_ARGUMENT,
+                    "synchronize",
+                    "The pipeline belongs to a different OpenGL context.");
+            }
             int32_t status = crosstl_opengl43_validate_context(context);
             if (status != CROSSTL_OPENGL43_STATUS_OK) {
                 return status;
             }
-            CrossTLOpenGL43Pipeline *pipeline =
-                static_cast<CrossTLOpenGL43Pipeline *>(pipeline_opaque);
             if (pipeline->dispatched == 0 || pipeline->dispatch_serial == 0u) {
                 return crosstl_opengl43_report(
                     context,
@@ -2040,10 +2094,6 @@ def generate_opengl_native_loader_adapter() -> str:
                     "readback",
                     "Readback received an incomplete resource request.");
             }
-            int32_t status = crosstl_opengl43_validate_context(context);
-            if (status != CROSSTL_OPENGL43_STATUS_OK) {
-                return status;
-            }
             CrossTLOpenGL43Resource *resource =
                 static_cast<CrossTLOpenGL43Resource *>(resource_opaque);
             if (resource->owner != context) {
@@ -2052,6 +2102,10 @@ def generate_opengl_native_loader_adapter() -> str:
                     CROSSTL_OPENGL43_STATUS_INVALID_ARGUMENT,
                     "readback",
                     "The resource belongs to a different OpenGL context.");
+            }
+            int32_t status = crosstl_opengl43_validate_context(context);
+            if (status != CROSSTL_OPENGL43_STATUS_OK) {
+                return status;
             }
             if (request->payload_size_bytes != resource->size_bytes) {
                 return crosstl_opengl43_report(

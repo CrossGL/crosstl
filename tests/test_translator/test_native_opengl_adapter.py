@@ -474,9 +474,10 @@ def test_generated_opengl_adapter_runs_execution_abi_and_enforces_lifecycle(
             }
 
             static void TEST_GL_API fake_bind_buffer_base(
-                CrossTLOpenGL43Enum,
+                CrossTLOpenGL43Enum target,
                 CrossTLOpenGL43UInt binding,
                 CrossTLOpenGL43UInt buffer) {
+                *fake_bound_buffer(target) = buffer;
                 fake_base_bindings[binding] = buffer;
             }
 
@@ -644,7 +645,8 @@ def test_generated_opengl_adapter_runs_execution_abi_and_enforces_lifecycle(
                 }
 
                 state.current = 1;
-                CrossTLOpenGL43Pipeline unused_pipeline = {11u, 22u, 0u, 0};
+                CrossTLOpenGL43Pipeline unused_pipeline = {
+                    &context, 11u, 22u, 0u, 0};
                 if (adapter.synchronize(
                         adapter.context, &unused_pipeline) !=
                     CROSSTL_OPENGL43_STATUS_DISPATCH_REQUIRED) {
@@ -862,6 +864,70 @@ def test_generated_opengl_adapter_runs_execution_abi_and_enforces_lifecycle(
                     if (output_values[index] != expected[index]) {
                             return 17;
                     }
+                }
+
+                CrossTLOpenGL43Resource *retry_resource =
+                    new CrossTLOpenGL43Resource{
+                        &context,
+                        CROSSTL_OPENGL43_SHADER_STORAGE_BUFFER,
+                        91u,
+                        3u,
+                        12u,
+                        sizeof(output_values)};
+                state.current = 0;
+                if (adapter.release_resource(
+                        adapter.context, retry_resource, NULL) !=
+                        CROSSTL_OPENGL43_STATUS_CONTEXT_NOT_CURRENT ||
+                    fake_deleted_buffer_count != 2) {
+                    return 18;
+                }
+                state.current = 1;
+                CrossTLOpenGL43Context other_context = {};
+                crosstl_opengl43_initialize_context(
+                    &other_context,
+                    &functions,
+                    &state,
+                    fake_context_current);
+                CrossTLNativeLoaderAdapter other_adapter =
+                    crosstl_opengl43_make_adapter(&other_context);
+                if (other_adapter.release_resource(
+                        other_adapter.context, retry_resource, NULL) !=
+                        CROSSTL_OPENGL43_STATUS_INVALID_ARGUMENT ||
+                    fake_deleted_buffer_count != 2) {
+                    return 19;
+                }
+                if (adapter.release_resource(
+                        adapter.context, retry_resource, NULL) !=
+                        CROSSTL_OPENGL43_STATUS_OK ||
+                    fake_deleted_buffer_count != 3) {
+                    return 20;
+                }
+
+                CrossTLOpenGL43Pipeline *retry_pipeline =
+                    new CrossTLOpenGL43Pipeline{
+                        &context, 92u, 93u, 0u, 0};
+                state.current = 0;
+                if (adapter.destroy_pipeline(
+                        adapter.context, retry_pipeline) !=
+                        CROSSTL_OPENGL43_STATUS_CONTEXT_NOT_CURRENT ||
+                    fake_deleted_program_count != 2 ||
+                    fake_deleted_shader_count != 3) {
+                    return 21;
+                }
+                state.current = 1;
+                if (other_adapter.destroy_pipeline(
+                        other_adapter.context, retry_pipeline) !=
+                        CROSSTL_OPENGL43_STATUS_INVALID_ARGUMENT ||
+                    fake_deleted_program_count != 2 ||
+                    fake_deleted_shader_count != 3) {
+                    return 22;
+                }
+                if (adapter.destroy_pipeline(
+                        adapter.context, retry_pipeline) !=
+                        CROSSTL_OPENGL43_STATUS_OK ||
+                    fake_deleted_program_count != 3 ||
+                    fake_deleted_shader_count != 4) {
+                    return 23;
                 }
                 return 0;
             }
