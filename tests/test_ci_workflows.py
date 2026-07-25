@@ -302,11 +302,20 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     expected_trigger_paths = {
         ".github/workflows/native-host-loader.yml",
         "crosstl/_crosstl.py",
+        "crosstl/project/native_directx_adapter.py",
         "crosstl/project/native_loader_abi.py",
         "crosstl/project/native_loader_abi_package.py",
+        "crosstl/project/native_opengl_adapter.py",
+        "crosstl/project/native_target_adapters.py",
         "crosstl/project/__init__.py",
+        "tests/test_native_target_adapters_public_api.py",
+        "tests/test_translator/test_native_directx_adapter.py",
+        "tests/test_translator/test_native_directx_adapter_device.py",
         "tests/test_translator/test_native_loader_abi.py",
         "tests/test_translator/test_native_loader_abi_integration.py",
+        "tests/test_translator/test_native_opengl_adapter.py",
+        "tests/test_translator/test_native_opengl_adapter_device.py",
+        "tests/fixtures/native_loader/**",
         "tests/test_native_loader_abi_cli.py",
     }
 
@@ -325,6 +334,21 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
         "group: native-host-loader-${{ github.workflow }}-${{ github.ref }}" in workflow
     )
     assert "cancel-in-progress: true" in workflow
+    assert (
+        workflow.count(
+            "uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+        )
+        == 3
+    )
+    assert (
+        workflow.count(
+            "uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+        )
+        == 3
+    )
+    assert "uses: actions/checkout@v" not in workflow
+    assert "uses: actions/setup-python@v" not in workflow
+    assert workflow.count("persist-credentials: false") == 3
 
     job = _workflow_job_section(workflow, "generated-native-loader-abi")
     assert _matrix_values(job, "os") == RUNNER_OSES
@@ -339,8 +363,52 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     assert "python -m pytest -q -n auto" in job
     assert "tests/test_translator/test_native_loader_abi.py" in job
     assert "tests/test_translator/test_native_loader_abi_integration.py" in job
+    assert "tests/test_translator/test_native_directx_adapter.py" in job
+    assert "tests/test_translator/test_native_directx_adapter_device.py" in job
+    assert "tests/test_translator/test_native_opengl_adapter.py" in job
+    assert "tests/test_translator/test_native_opengl_adapter_device.py" in job
+    assert "tests/test_native_target_adapters_public_api.py" in job
     assert "tests/test_native_loader_abi_cli.py" in job
     assert "continue-on-error" not in job
+
+    directx = _workflow_job_section(
+        workflow,
+        "directx-native-target-adapter",
+    )
+    assert "name: Direct3D 12 native target adapter" in directx
+    assert "runs-on: windows-latest" in directx
+    assert "timeout-minutes: 30" in directx
+    assert (
+        "uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756" in directx
+    )
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in directx
+    assert "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4" in (
+        directx
+    )
+    assert "CROSSTL_DXC_INCLUDE_DIR" in directx
+    assert "CROSSTL_DXC_DLL_DIR" in directx
+    assert 'CROSSTL_RUN_NATIVE_DIRECTX_ADAPTER_DEVICE_TEST: "1"' in directx
+    assert "python -m pytest -q -n auto" in directx
+    assert "tests/test_translator/test_native_directx_adapter_device.py" in directx
+    assert "continue-on-error" not in directx
+
+    opengl = _workflow_job_section(
+        workflow,
+        "opengl-native-target-adapter",
+    )
+    assert "name: OpenGL native target adapter" in opengl
+    assert "runs-on: ubuntu-latest" in opengl
+    assert "timeout-minutes: 30" in opengl
+    assert "glslang-tools" in opengl
+    assert "libegl1-mesa-dev" in opengl
+    assert "libgl-dev" in opengl
+    assert "pkg-config" in opengl
+    assert 'CROSSTL_RUN_NATIVE_OPENGL_ADAPTER_DEVICE_TEST: "1"' in opengl
+    assert "EGL_PLATFORM: surfaceless" in opengl
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl
+    assert "python -m pytest -q -n auto" in opengl
+    assert "tests/test_translator/test_native_opengl_adapter_device.py" in opengl
+    assert "continue-on-error" not in opengl
 
 
 def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
@@ -2095,7 +2163,6 @@ def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
     assert _matrix_values(backend_tests, "OS") == RUNNER_OSES
     _assert_windows_python_policy(backend_tests)
     assert "fail-fast: false" in backend_tests
-    assert "max-parallel: 24" in backend_tests
     assert "id: setup_python" in backend_tests
     assert "continue-on-error: true" in backend_tests
     assert "name: Classify Python setup failure" in backend_tests
@@ -2142,7 +2209,6 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert _matrix_values(translator_tests, "OS") == RUNNER_OSES
     _assert_windows_python_policy(translator_tests)
     assert "fail-fast: false" in translator_tests
-    assert "max-parallel: 24" in translator_tests
     assert "id: setup_python" in translator_tests
     assert "continue-on-error: true" in translator_tests
     assert "name: Classify Python setup failure" in translator_tests

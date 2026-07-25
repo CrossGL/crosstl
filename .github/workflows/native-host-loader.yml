@@ -13,9 +13,18 @@ on:
       - "crosstl/_crosstl.py"
       - "crosstl/project/native_loader_abi.py"
       - "crosstl/project/native_loader_abi_package.py"
+      - "crosstl/project/native_directx_adapter.py"
+      - "crosstl/project/native_opengl_adapter.py"
+      - "crosstl/project/native_target_adapters.py"
       - "crosstl/project/__init__.py"
+      - "tests/test_native_target_adapters_public_api.py"
       - "tests/test_translator/test_native_loader_abi.py"
       - "tests/test_translator/test_native_loader_abi_integration.py"
+      - "tests/test_translator/test_native_directx_adapter.py"
+      - "tests/test_translator/test_native_directx_adapter_device.py"
+      - "tests/test_translator/test_native_opengl_adapter.py"
+      - "tests/test_translator/test_native_opengl_adapter_device.py"
+      - "tests/fixtures/native_loader/**"
       - "tests/test_native_loader_abi_cli.py"
   pull_request:
     branches: [main]
@@ -24,9 +33,18 @@ on:
       - "crosstl/_crosstl.py"
       - "crosstl/project/native_loader_abi.py"
       - "crosstl/project/native_loader_abi_package.py"
+      - "crosstl/project/native_directx_adapter.py"
+      - "crosstl/project/native_opengl_adapter.py"
+      - "crosstl/project/native_target_adapters.py"
       - "crosstl/project/__init__.py"
+      - "tests/test_native_target_adapters_public_api.py"
       - "tests/test_translator/test_native_loader_abi.py"
       - "tests/test_translator/test_native_loader_abi_integration.py"
+      - "tests/test_translator/test_native_directx_adapter.py"
+      - "tests/test_translator/test_native_directx_adapter_device.py"
+      - "tests/test_translator/test_native_opengl_adapter.py"
+      - "tests/test_translator/test_native_opengl_adapter_device.py"
+      - "tests/fixtures/native_loader/**"
       - "tests/test_native_loader_abi_cli.py"
 
 permissions:
@@ -61,12 +79,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -90,4 +108,123 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_native_loader_abi.py
           tests/test_translator/test_native_loader_abi_integration.py
+          tests/test_translator/test_native_directx_adapter.py
+          tests/test_translator/test_native_directx_adapter_device.py
+          tests/test_translator/test_native_opengl_adapter.py
+          tests/test_translator/test_native_opengl_adapter_device.py
+          tests/test_native_target_adapters_public_api.py
           tests/test_native_loader_abi_cli.py
+
+  directx-native-target-adapter:
+    name: Direct3D 12 native target adapter
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Configure Microsoft C and C++ compilers
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Install DirectX Shader Compiler
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $dxcUri -OutFile $archive
+              break
+            } catch {
+              if ($attempt -eq 5) {
+                throw
+              }
+              Write-Warning "DXC download failed on attempt $attempt; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          $archiveSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveSha256 -ne $dxcSha256) {
+            throw "DXC archive checksum mismatch: expected $dxcSha256, got $archiveSha256."
+          }
+          Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
+          $dxc = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxc.exe |
+            Where-Object { $_.FullName -match "\\bin\\x64\\dxc.exe$" } |
+            Select-Object -First 1
+          $dxcHeader = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxcapi.h |
+            Select-Object -First 1
+          $dxcompiler = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxcompiler.dll |
+            Where-Object { $_.FullName -match "\\bin\\x64\\dxcompiler.dll$" } |
+            Select-Object -First 1
+          $dxil = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxil.dll |
+            Where-Object { $_.FullName -match "\\bin\\x64\\dxil.dll$" } |
+            Select-Object -First 1
+          if ($null -eq $dxc -or $null -eq $dxcHeader -or
+              $null -eq $dxcompiler -or $null -eq $dxil) {
+            throw "The DXC release archive is missing required x64 binaries or headers."
+          }
+          $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "CROSSTL_DXC_INCLUDE_DIR=$($dxcHeader.DirectoryName)" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CROSSTL_DXC_DLL_DIR=$($dxc.DirectoryName)" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install project and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest-xdist
+
+      - name: Execute translated Direct3D artifact
+        env:
+          CROSSTL_RUN_NATIVE_DIRECTX_ADAPTER_DEVICE_TEST: "1"
+        run: >-
+          dxc --version &&
+          python -m pytest -q -n auto
+          tests/test_translator/test_native_directx_adapter_device.py
+
+  opengl-native-target-adapter:
+    name: OpenGL native target adapter
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install OpenGL build and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ glslang-tools libegl1-mesa-dev libgl-dev libgl1-mesa-dri mesa-utils pkg-config
+          glslangValidator --version
+
+      - name: Install project and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest-xdist
+
+      - name: Execute translated OpenGL artifact
+        env:
+          CROSSTL_RUN_NATIVE_OPENGL_ADAPTER_DEVICE_TEST: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_native_opengl_adapter_device.py

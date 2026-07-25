@@ -60,6 +60,13 @@ from .native_runtime_drivers import (
     OpenGLComputeRuntime,
     VulkanComputeRuntime,
 )
+from .native_target_adapters import (
+    NATIVE_LOADER_TARGET_ADAPTER_KIND,
+    NATIVE_LOADER_TARGET_ADAPTER_VERSION,
+    NativeLoaderTargetAdapterError,
+    generate_native_loader_target_adapter,
+    native_loader_target_adapter_targets,
+)
 from .pipeline import (
     RUNTIME_DEVICE_RUNNER_MANIFEST_KIND,
     RUNTIME_VARIANT_LOOKUP_KIND,
@@ -220,6 +227,8 @@ __all__ = [
     "NATIVE_LOADER_ABI_PACKAGE_MANIFEST",
     "NATIVE_LOADER_ABI_PACKAGE_VERSION",
     "NATIVE_LOADER_ABI_VERSION",
+    "NATIVE_LOADER_TARGET_ADAPTER_KIND",
+    "NATIVE_LOADER_TARGET_ADAPTER_VERSION",
     "DispatchArtifactJob",
     "DispatchArtifactPlan",
     "DispatchArtifactPlanError",
@@ -265,6 +274,7 @@ __all__ = [
     "NativeRuntimeValidationCommand",
     "NativeLoaderABIError",
     "NativeLoaderDispatchError",
+    "NativeLoaderTargetAdapterError",
     "OpenGLRuntimeParityAdapter",
     "OpenGLComputeRuntime",
     "RuntimeAllocationView",
@@ -350,6 +360,7 @@ __all__ = [
     "execute_project_test_runner_plan",
     "generate_native_loader_declarations",
     "generate_native_loader_execution_abi",
+    "generate_native_loader_target_adapter",
     "inspect_runtime_host_integration_handoff",
     "inspect_runtime_host_loader_scaffolds",
     "inspect_runtime_package",
@@ -364,6 +375,7 @@ __all__ = [
     "materialize_runtime_adapters",
     "native_runtime_parity_adapter",
     "native_runtime_parity_adapters",
+    "native_loader_target_adapter_targets",
     "parse_runtime_verification_fixtures",
     "parse_runtime_execution_graph",
     "parse_runtime_test_manifest",

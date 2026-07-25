@@ -2332,6 +2332,7 @@ def _validate_native_loader_abi_output_paths(
     output,
     declarations_output,
     execution_output,
+    target_adapter_output,
 ):
     from .project import NativeLoaderABIError
 
@@ -2348,6 +2349,12 @@ def _validate_native_loader_abi_output_paths(
             execution_output,
             "$.executionOutput",
             "executionOutput",
+        ),
+        (
+            "target-adapter-output",
+            target_adapter_output,
+            "$.targetAdapterOutput",
+            "targetAdapterOutput",
         ),
     )
     resolved_paths = {}
@@ -2382,6 +2389,24 @@ def _validate_native_loader_abi_output_paths(
             "execution-output",
             "Declaration and execution outputs must resolve to different paths.",
             "$.executionOutput",
+        ),
+        (
+            "output",
+            "target-adapter-output",
+            "Descriptor and target adapter outputs must resolve to different paths.",
+            "$.targetAdapterOutput",
+        ),
+        (
+            "declarations-output",
+            "target-adapter-output",
+            "Declaration and target adapter outputs must resolve to different paths.",
+            "$.targetAdapterOutput",
+        ),
+        (
+            "execution-output",
+            "target-adapter-output",
+            "Execution and target adapter outputs must resolve to different paths.",
+            "$.targetAdapterOutput",
         ),
     )
     for first, second, message, diagnostic_path in conflicts:
@@ -2463,12 +2488,30 @@ def _write_native_loader_execution_abi(execution_abi, output):
         ) from exc
 
 
+def _write_native_loader_target_adapter(target_adapter, output):
+    from .project import NativeLoaderABIError
+
+    target_adapter_path = Path(output)
+    try:
+        target_adapter_path.parent.mkdir(parents=True, exist_ok=True)
+        target_adapter_path.write_text(target_adapter, encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise NativeLoaderABIError(
+            "target-adapter-write-failed",
+            "Could not write native loader target adapter as UTF-8 text.",
+            path="$.targetAdapterOutput",
+            details={"destination": str(target_adapter_path)},
+        ) from exc
+
+
 def _run_native_loader_abi(args):
     from .project import (
         NativeLoaderABIError,
+        NativeLoaderTargetAdapterError,
         build_native_loader_abi_descriptor,
         generate_native_loader_declarations,
         generate_native_loader_execution_abi,
+        generate_native_loader_target_adapter,
     )
 
     try:
@@ -2476,6 +2519,7 @@ def _run_native_loader_abi(args):
             args.output,
             args.declarations_output,
             args.execution_output,
+            args.target_adapter_output,
         )
     except NativeLoaderABIError as exc:
         _emit_native_loader_abi_error(exc)
@@ -2497,7 +2541,12 @@ def _run_native_loader_abi(args):
             if args.execution_output
             else None
         )
-    except NativeLoaderABIError as exc:
+        target_adapter = (
+            generate_native_loader_target_adapter(descriptor["target"])
+            if args.target_adapter_output
+            else None
+        )
+    except (NativeLoaderABIError, NativeLoaderTargetAdapterError) as exc:
         _emit_native_loader_abi_error(exc, args.output)
         return 1
 
@@ -2506,6 +2555,15 @@ def _run_native_loader_abi(args):
             _write_native_loader_declarations(
                 declarations,
                 args.declarations_output,
+            )
+        except NativeLoaderABIError as exc:
+            _emit_native_loader_abi_error(exc, args.output)
+            return 1
+    if target_adapter is not None:
+        try:
+            _write_native_loader_target_adapter(
+                target_adapter,
+                args.target_adapter_output,
             )
         except NativeLoaderABIError as exc:
             _emit_native_loader_abi_error(exc, args.output)
@@ -7389,6 +7447,10 @@ def _build_parser():
     native_loader_abi_parser.add_argument(
         "--execution-output",
         help="Write a deterministic standalone C execution ABI for the selected load unit",
+    )
+    native_loader_abi_parser.add_argument(
+        "--target-adapter-output",
+        help="Write a deterministic C++17 native adapter for the selected target",
     )
     native_loader_abi_parser.add_argument(
         "--output", "-o", help="Write native loader ABI descriptor; use '-' for stdout"

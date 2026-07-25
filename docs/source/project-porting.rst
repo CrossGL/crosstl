@@ -1071,7 +1071,8 @@ one ready load unit:
      --load-unit copy:directx \
      --output copy.directx.abi.json \
      --declarations-output copy.directx.abi.h \
-     --execution-output copy.directx.native-loader-execution.h
+     --execution-output copy.directx.native-loader-execution.h \
+     --target-adapter-output copy.directx.native-loader-adapter.hpp
 
 ``native-loader-abi`` selects exactly one ready load unit. ``--load-unit`` is
 optional only when the input manifest contains one unit. The command emits a
@@ -1116,6 +1117,15 @@ specialization index. ``error`` records the primary execution failure, while
 earlier primary failure. A cleanup failure becomes the primary error only
 when all preceding execution phases succeeded.
 
+``--target-adapter-output`` writes the deterministic C++17 reference adapter
+for the selected target. Include the unit execution header before this adapter
+header. The adapter fills the shared callback table rather than replacing the
+unit-specific validation wrapper, so request validation, execution order,
+structured errors, and cleanup behavior remain defined by the common ABI.
+Direct3D 12 and OpenGL compute have reference adapters. A target without a
+reference adapter produces a structured
+``project.native-loader-target-adapter.target-unsupported`` diagnostic.
+
 Build descriptors and declarations for every ready unit in one operation:
 
 .. code-block:: bash
@@ -1124,12 +1134,18 @@ Build descriptors and declarations for every ready unit in one operation:
      crosstl-runtime-package/runtime-loader-manifest.json \
      crosstl-native-loader-abi
 
-``native-loader-abi-package`` validates every unit before writing output. It
-emits target-scoped descriptor, declaration, and execution header files plus
-``native-loader-abi-package.json`` and prints that package manifest as JSON.
+``native-loader-abi-package`` validates every unit and generates every
+available target adapter before writing output. It emits target-scoped
+descriptor, declaration, and execution header files, one adapter header per
+supported target, plus ``native-loader-abi-package.json`` and prints that
+package manifest as JSON.
 Each packaged unit records ``executionABIPath`` and ``executionABIHash``;
-the generated-file inventory identifies the header as
-``native-loader-execution-abi``.
+the generated-file inventory identifies execution headers as
+``native-loader-execution-abi`` and reference adapters as
+``native-loader-target-adapter``. The schema-v2 ``targetAdapters`` array records
+the target, availability, generated path, and SHA-256 hash. Targets without a
+reference implementation remain in that array with
+``reason: target-adapter-unavailable`` rather than being silently omitted.
 
 The same operations are available through the public project API:
 
@@ -1139,10 +1155,14 @@ The same operations are available through the public project API:
        NATIVE_LOADER_ABI_PACKAGE_KIND,
        NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
        NATIVE_LOADER_ABI_PACKAGE_VERSION,
+       NATIVE_LOADER_TARGET_ADAPTER_KIND,
+       NATIVE_LOADER_TARGET_ADAPTER_VERSION,
        build_native_loader_abi_descriptor,
        build_native_loader_abi_package,
        generate_native_loader_declarations,
        generate_native_loader_execution_abi,
+       generate_native_loader_target_adapter,
+       native_loader_target_adapter_targets,
    )
 
    descriptor = build_native_loader_abi_descriptor(
@@ -1151,6 +1171,9 @@ The same operations are available through the public project API:
    )
    declarations = generate_native_loader_declarations(descriptor)
    execution_abi = generate_native_loader_execution_abi(descriptor)
+   target_adapter = generate_native_loader_target_adapter(
+       descriptor["target"]
+   )
 
    package = build_native_loader_abi_package(
        "crosstl-runtime-package/runtime-loader-manifest.json",
@@ -1162,22 +1185,59 @@ unit before returning deterministic JSON-compatible metadata.
 ``generate_native_loader_declarations`` validates that descriptor before
 rendering the C representation. ``generate_native_loader_execution_abi``
 validates the same descriptor before rendering the executable callback
-wrapper. ``build_native_loader_abi_package`` validates all load units before
-writing output, then emits one descriptor, declaration header, and execution
-header per unit under target-scoped paths plus a deterministic package
-manifest. The manifest records content hashes, source loader-manifest
-identity, generated paths, target and unit counts, and uses the exported
+wrapper. ``generate_native_loader_target_adapter`` renders the target callback
+implementation for a supported canonical target, while
+``native_loader_target_adapter_targets`` reports the available target names.
+``build_native_loader_abi_package`` validates all load units and adapter output
+before writing, then emits one descriptor, declaration header, and execution
+header per unit, one reference adapter per supported target, and a
+deterministic package manifest. The manifest records content hashes, source
+loader-manifest identity, generated paths, target, adapter, and unit counts,
+and uses the exported
 ``NATIVE_LOADER_ABI_PACKAGE_KIND``, ``NATIVE_LOADER_ABI_PACKAGE_VERSION``, and
 ``NATIVE_LOADER_ABI_PACKAGE_MANIFEST`` constants for its kind, schema version,
 and file name. A blocked, incomplete, or duplicate unit prevents package
 publication rather than producing a partially described package.
 
-These APIs and the CLI publish a target-neutral execution contract, not
-target-specific C adapters. The generated wrapper cannot instantiate
-Direct3D, OpenGL, or other runtime objects unless the caller supplies an
-adapter that implements those operations. Host application rewriting, full
-MLX runtime integration, and MLX test-suite parity are not provided or
-claimed.
+The generated Direct3D adapter owns its device, queue, fence, pipelines, and
+resource allocations within an explicit caller-created context. The generated
+OpenGL adapter consumes a caller-owned current desktop context and an explicit
+function table; it does not create a window-system context or choose EGL, GLX,
+WGL, or another loader. Both adapters reject unsupported artifact, resource,
+layout, and capability contracts through nonzero adapter statuses. They are
+reference implementations for one unit execution lifecycle, not repository
+schedulers or host-runtime rewrites. Host application rewriting, primitive
+selection, graph policy, full MLX runtime integration, and MLX test-suite
+parity are not provided or claimed.
+
+The Direct3D 12 adapter accepts packaged HLSL compute source and DXIL
+containers. HLSL source compilation uses the DXC API with shader model 6.2 and
+native 16-bit types enabled. Hosts that compile HLSL source need the official
+``dxcapi.h`` header; ``dxcompiler.dll`` and ``dxil.dll`` must be discoverable
+at execution time. DXIL-only hosts do not need the DXC API, but cannot apply
+source specializations. Generated HLSL source specialization requires both the
+reflected constant name and numeric ID so the adapter can replace the exact
+CrossTL fallback declaration before passing a numeric definition to DXC.
+Structured-buffer SRV and UAV bindings and constant-buffer CBV bindings are
+supported when the descriptor includes a compatible scalar layout. Other
+resource kinds fail closed.
+
+The OpenGL adapter accepts GLSL compute source with entry point ``main`` and
+OpenGL SPIR-V compute binaries. GLSL source can run on a current OpenGL 4.3
+desktop context but does not support specialization. SPIR-V specialization
+requires OpenGL 4.6 or caller-confirmed ``GL_ARB_gl_spirv`` support and the
+matching ``glShaderBinary`` and ``glSpecializeShader`` entry points. The
+adapter supports set-zero shader-storage and uniform-buffer bindings; nonzero
+sets and texture, image, sampler, scalar-uniform, and shared-allocation
+contracts fail closed.
+
+Native CI translates reduced source fixtures through CrossTL, verifies
+packaged artifact hashes, binds distinct input and output buffers, applies one
+specialization, dispatches on Direct3D 12 and surfaceless OpenGL, and compares
+deterministic readback with the expected values. These checks prove the
+generated adapter lifecycle for the reduced contracts. They do not establish
+semantic parity for every translated kernel or execute an upstream
+repository's complete test suite.
 
 For a complete DirectX or OpenGL compute descriptor, the public project API can
 construct and preflight the backend-neutral runtime request consumed by the

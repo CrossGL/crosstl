@@ -16,9 +16,14 @@ from .native_loader_abi import (
     generate_native_loader_declarations,
     generate_native_loader_execution_abi,
 )
+from .native_target_adapters import (
+    NativeLoaderTargetAdapterError,
+    generate_native_loader_target_adapter,
+    native_loader_target_adapter_targets,
+)
 
 NATIVE_LOADER_ABI_PACKAGE_KIND = "crosstl-native-loader-abi-package"
-NATIVE_LOADER_ABI_PACKAGE_VERSION = 1
+NATIVE_LOADER_ABI_PACKAGE_VERSION = 2
 NATIVE_LOADER_ABI_PACKAGE_MANIFEST = "native-loader-abi-package.json"
 
 _PATH_COMPONENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -28,11 +33,11 @@ def build_native_loader_abi_package(
     loader_manifest_path: str | os.PathLike[str],
     output_dir: str | os.PathLike[str],
 ) -> dict[str, Any]:
-    """Write descriptors and C execution interfaces for every ready loader unit.
+    """Write descriptors, execution interfaces, and available target adapters.
 
-    All descriptors, declarations, and execution interfaces are built before
-    any output is written. A blocked, incomplete, or duplicate load unit
-    therefore prevents publication of a package manifest.
+    All descriptors, declarations, execution interfaces, and adapters are
+    built before any output is written. A blocked, incomplete, or duplicate
+    load unit therefore prevents publication of a package manifest.
     """
 
     manifest_path = _filesystem_path(
@@ -104,6 +109,10 @@ def build_native_loader_abi_package(
         )
 
     generated_units.sort(key=lambda unit: (unit["target"], unit["unitId"]))
+    target_adapters = _generate_target_adapters(
+        {unit["target"] for unit in generated_units},
+        generated_contents,
+    )
     generated_contents.sort(key=lambda item: item[0])
     package = {
         "schemaVersion": NATIVE_LOADER_ABI_PACKAGE_VERSION,
@@ -115,9 +124,16 @@ def build_native_loader_abi_package(
         "summary": {
             "unitCount": len(generated_units),
             "targetCount": len({unit["target"] for unit in generated_units}),
+            "targetAdapterCount": sum(
+                adapter["available"] for adapter in target_adapters
+            ),
+            "unavailableTargetAdapterCount": sum(
+                not adapter["available"] for adapter in target_adapters
+            ),
             "generatedFileCount": 1 + len(generated_contents),
         },
         "units": generated_units,
+        "targetAdapters": target_adapters,
         "generatedFiles": [
             {
                 "path": NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
@@ -137,6 +153,44 @@ def build_native_loader_abi_package(
         _write_output(package_root, relative_path, content)
     _write_output(package_root, NATIVE_LOADER_ABI_PACKAGE_MANIFEST, _json_text(package))
     return package
+
+
+def _generate_target_adapters(
+    targets: set[str],
+    generated_contents: list[tuple[str, str, str]],
+) -> list[dict[str, Any]]:
+    supported = set(native_loader_target_adapter_targets())
+    adapters: list[dict[str, Any]] = []
+    for target in sorted(targets):
+        if target not in supported:
+            adapters.append(
+                {
+                    "target": target,
+                    "available": False,
+                    "reason": "target-adapter-unavailable",
+                }
+            )
+            continue
+        try:
+            content = generate_native_loader_target_adapter(target)
+        except NativeLoaderTargetAdapterError as exc:
+            raise NativeLoaderABIError(
+                "target-adapter-generation-failed",
+                f"Native loader target adapter could not be generated: {exc.message}",
+                path="$.loadUnits",
+                details={"target": target, "diagnostic": exc.to_json()},
+            ) from exc
+        path = _target_adapter_output_path(target)
+        generated_contents.append((path, content, "native-loader-target-adapter"))
+        adapters.append(
+            {
+                "target": target,
+                "available": True,
+                "path": path,
+                "hash": _content_hash(content.encode("utf-8")),
+            }
+        )
+    return adapters
 
 
 def _read_loader_manifest(path: Path) -> tuple[Mapping[str, Any], bytes]:
@@ -215,6 +269,11 @@ def _unit_output_paths(descriptor: Mapping[str, Any]) -> tuple[str, str, str]:
         f"{declarations_base}.h",
         f"{directory}/{unit}.native-loader-execution.h",
     )
+
+
+def _target_adapter_output_path(target: str) -> str:
+    component = _path_component(target, fallback="target")
+    return f"targets/{component}/native-loader-target-adapter.hpp"
 
 
 def _path_component(value: str, *, fallback: str) -> str:

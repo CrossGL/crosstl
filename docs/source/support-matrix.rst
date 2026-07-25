@@ -37,17 +37,17 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "79", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "78", "0", "2", "1", "0", "0"
-   "WebGL / GLSL ES", "42", "0", "23", "14", "2", "0"
-   "WebGPU / WGSL", "46", "0", "21", "12", "2", "0"
-   "Metal", "70", "0", "4", "5", "2", "0"
-   "Vulkan SPIR-V", "72", "0", "2", "5", "2", "0"
-   "CUDA", "66", "0", "8", "5", "2", "0"
-   "HIP", "66", "0", "8", "5", "2", "0"
-   "Mojo", "68", "0", "6", "5", "2", "0"
-   "Rust", "69", "0", "5", "5", "2", "0"
-   "Slang", "70", "0", "4", "5", "2", "0"
+   "DirectX / HLSL", "80", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "79", "0", "2", "1", "0", "0"
+   "WebGL / GLSL ES", "42", "0", "23", "14", "3", "0"
+   "WebGPU / WGSL", "46", "0", "21", "12", "3", "0"
+   "Metal", "70", "0", "4", "5", "3", "0"
+   "Vulkan SPIR-V", "72", "0", "2", "5", "3", "0"
+   "CUDA", "66", "0", "8", "5", "3", "0"
+   "HIP", "66", "0", "8", "5", "3", "0"
+   "Mojo", "68", "0", "6", "5", "3", "0"
+   "Rust", "69", "0", "5", "5", "3", "0"
+   "Slang", "70", "0", "4", "5", "3", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -58,15 +58,16 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "79", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "78", "0", "2", "1", "0", "0"
-   "Metal", "70", "0", "4", "5", "2", "0"
+   "DirectX / HLSL", "80", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "79", "0", "2", "1", "0", "0"
+   "Metal", "70", "0", "4", "5", "3", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal actionable backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
    "Metal", "project", "Shared native allocation views", "unsupported", "Runtime fixtures can preserve allocation metadata for backend-neutral planning, but CrossTL has no built-in Metal runtime driver that realizes one physical allocation across bindings. Shared native allocation reuse and bounded native views are not claimed for Metal."
    "Metal", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Metal native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Metal."
+   "Metal", "project", "Generated native loader target adapters", "unsupported", "No generated Metal native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Metal runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity."
 
 Project Porting Focus
 ---------------------
@@ -77,17 +78,17 @@ inspection, diagnostics, validation, and corpus-coverage rows.
 .. csv-table:: Project-porting status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "36", "0", "1", "0", "0", "0"
-   "OpenGL / GLSL", "35", "0", "1", "1", "0", "0"
-   "WebGL / GLSL ES", "29", "0", "1", "5", "2", "0"
-   "WebGPU / WGSL", "29", "0", "1", "5", "2", "0"
-   "Metal", "29", "0", "1", "5", "2", "0"
-   "Vulkan SPIR-V", "29", "0", "1", "5", "2", "0"
-   "CUDA", "29", "0", "1", "5", "2", "0"
-   "HIP", "29", "0", "1", "5", "2", "0"
-   "Mojo", "29", "0", "1", "5", "2", "0"
-   "Rust", "29", "0", "1", "5", "2", "0"
-   "Slang", "29", "0", "1", "5", "2", "0"
+   "DirectX / HLSL", "37", "0", "1", "0", "0", "0"
+   "OpenGL / GLSL", "36", "0", "1", "1", "0", "0"
+   "WebGL / GLSL ES", "29", "0", "1", "5", "3", "0"
+   "WebGPU / WGSL", "29", "0", "1", "5", "3", "0"
+   "Metal", "29", "0", "1", "5", "3", "0"
+   "Vulkan SPIR-V", "29", "0", "1", "5", "3", "0"
+   "CUDA", "29", "0", "1", "5", "3", "0"
+   "HIP", "29", "0", "1", "5", "3", "0"
+   "Mojo", "29", "0", "1", "5", "3", "0"
+   "Rust", "29", "0", "1", "5", "3", "0"
+   "Slang", "29", "0", "1", "5", "3", "0"
 
 .. csv-table:: Project-porting actionable backlog
    :header: "Backend", "Feature", "Status", "Current gap", "Next scope"
@@ -110,6 +111,15 @@ inspection, diagnostics, validation, and corpus-coverage rows.
    "Mojo", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Mojo native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Mojo.", ""
    "Rust", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Rust native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Rust.", ""
    "Slang", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Slang native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Slang.", ""
+   "WebGL / GLSL ES", "Generated native loader target adapters", "unsupported", "No generated WebGL native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the browser runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", ""
+   "WebGPU / WGSL", "Generated native loader target adapters", "unsupported", "No generated WebGPU native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the WebGPU runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", ""
+   "Metal", "Generated native loader target adapters", "unsupported", "No generated Metal native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Metal runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", ""
+   "Vulkan SPIR-V", "Generated native loader target adapters", "unsupported", "No generated Vulkan native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Vulkan runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", ""
+   "CUDA", "Generated native loader target adapters", "unsupported", "No generated CUDA native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the CUDA runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", ""
+   "HIP", "Generated native loader target adapters", "unsupported", "No generated HIP native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the HIP runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", ""
+   "Mojo", "Generated native loader target adapters", "unsupported", "No generated Mojo native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Mojo runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", ""
+   "Rust", "Generated native loader target adapters", "unsupported", "No generated Rust native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Rust GPU runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", ""
+   "Slang", "Generated native loader target adapters", "unsupported", "No generated Slang native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Slang runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", ""
 
 Feature Matrix
 --------------
@@ -220,6 +230,7 @@ Each category below uses the status codes from the legend.
    "Shared native allocation views", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"
    "Runtime execution graphs", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"
    "Native loader ABI descriptors", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Generated native loader target adapters", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"
    "Native loader dispatch request", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
    "Runtime test manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Project test-runner environment execution", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
@@ -268,6 +279,15 @@ implementation work can be scoped accurately.
    "Mojo", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Mojo native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Mojo.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Mojo native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Mojo."
    "Rust", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Rust native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Rust.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Rust native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Rust."
    "Slang", "project", "Runtime execution graphs", "unsupported", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Slang native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Slang.", "", "The versioned backend-neutral graph contract parses, serializes, and validates independently of the target. CrossTL has no built-in Slang native graph executor, so ordered dispatch, visibility-barrier execution, graph-scoped temporary allocation, copy, fill, and bounded-control execution are not claimed for Slang."
+   "WebGL / GLSL ES", "project", "Generated native loader target adapters", "unsupported", "No generated WebGL native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the browser runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", "", "No generated WebGL native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the browser runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity."
+   "WebGPU / WGSL", "project", "Generated native loader target adapters", "unsupported", "No generated WebGPU native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the WebGPU runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", "", "No generated WebGPU native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the WebGPU runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity."
+   "Metal", "project", "Generated native loader target adapters", "unsupported", "No generated Metal native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Metal runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", "", "No generated Metal native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Metal runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity."
+   "Vulkan SPIR-V", "project", "Generated native loader target adapters", "unsupported", "No generated Vulkan native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Vulkan runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", "", "No generated Vulkan native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Vulkan runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity."
+   "CUDA", "project", "Generated native loader target adapters", "unsupported", "No generated CUDA native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the CUDA runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", "", "No generated CUDA native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the CUDA runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity."
+   "HIP", "project", "Generated native loader target adapters", "unsupported", "No generated HIP native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the HIP runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", "", "No generated HIP native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the HIP runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity."
+   "Mojo", "project", "Generated native loader target adapters", "unsupported", "No generated Mojo native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Mojo runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", "", "No generated Mojo native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Mojo runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity."
+   "Rust", "project", "Generated native loader target adapters", "unsupported", "No generated Rust native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Rust GPU runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", "", "No generated Rust native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Rust GPU runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity."
+   "Slang", "project", "Generated native loader target adapters", "unsupported", "No generated Slang native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Slang runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity.", "", "No generated Slang native loader target adapter is available. The target-neutral native loader ABI can describe a unit, but an application must supply and own the Slang runtime integration and all device-resource lifetimes. This feature does not claim host application rewriting, a repository scheduler, full MLX runtime integration, or MLX test-suite parity."
 
 Documentation Sources
 ---------------------
