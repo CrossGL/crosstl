@@ -600,6 +600,7 @@ def test_directx_native_loader_adapter_cross_compiles_for_windows(tmp_path, dxc_
         "-Wall",
         "-Wextra",
         "-Werror",
+        "-Wno-attributes",
         "-Wno-unknown-pragmas",
     ]
     if dxc_api == "disabled":

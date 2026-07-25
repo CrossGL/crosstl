@@ -1210,6 +1210,35 @@ schedulers or host-runtime rewrites. Host application rewriting, primitive
 selection, graph policy, full MLX runtime integration, and MLX test-suite
 parity are not provided or claimed.
 
+The Direct3D 12 adapter accepts packaged HLSL compute source and DXIL
+containers. HLSL source compilation uses the DXC API with shader model 6.2 and
+native 16-bit types enabled. Hosts that compile HLSL source need the official
+``dxcapi.h`` header; ``dxcompiler.dll`` and ``dxil.dll`` must be discoverable
+at execution time. DXIL-only hosts do not need the DXC API, but cannot apply
+source specializations. Generated HLSL source specialization requires both the
+reflected constant name and numeric ID so the adapter can replace the exact
+CrossTL fallback declaration before passing a numeric definition to DXC.
+Structured-buffer SRV and UAV bindings and constant-buffer CBV bindings are
+supported when the descriptor includes a compatible scalar layout. Other
+resource kinds fail closed.
+
+The OpenGL adapter accepts GLSL compute source with entry point ``main`` and
+OpenGL SPIR-V compute binaries. GLSL source can run on a current OpenGL 4.3
+desktop context but does not support specialization. SPIR-V specialization
+requires OpenGL 4.6 or caller-confirmed ``GL_ARB_gl_spirv`` support and the
+matching ``glShaderBinary`` and ``glSpecializeShader`` entry points. The
+adapter supports set-zero shader-storage and uniform-buffer bindings; nonzero
+sets and texture, image, sampler, scalar-uniform, and shared-allocation
+contracts fail closed.
+
+Native CI translates reduced source fixtures through CrossTL, verifies
+packaged artifact hashes, binds distinct input and output buffers, applies one
+specialization, dispatches on Direct3D 12 and surfaceless OpenGL, and compares
+deterministic readback with the expected values. These checks prove the
+generated adapter lifecycle for the reduced contracts. They do not establish
+semantic parity for every translated kernel or execute an upstream
+repository's complete test suite.
+
 For a complete DirectX or OpenGL compute descriptor, the public project API can
 construct and preflight the backend-neutral runtime request consumed by the
 native parity adapters:

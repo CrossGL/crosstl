@@ -310,9 +310,12 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
         "crosstl/project/__init__.py",
         "tests/test_native_target_adapters_public_api.py",
         "tests/test_translator/test_native_directx_adapter.py",
+        "tests/test_translator/test_native_directx_adapter_device.py",
         "tests/test_translator/test_native_loader_abi.py",
         "tests/test_translator/test_native_loader_abi_integration.py",
         "tests/test_translator/test_native_opengl_adapter.py",
+        "tests/test_translator/test_native_opengl_adapter_device.py",
+        "tests/fixtures/native_loader/**",
         "tests/test_native_loader_abi_cli.py",
     }
 
@@ -346,10 +349,51 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     assert "tests/test_translator/test_native_loader_abi.py" in job
     assert "tests/test_translator/test_native_loader_abi_integration.py" in job
     assert "tests/test_translator/test_native_directx_adapter.py" in job
+    assert "tests/test_translator/test_native_directx_adapter_device.py" in job
     assert "tests/test_translator/test_native_opengl_adapter.py" in job
+    assert "tests/test_translator/test_native_opengl_adapter_device.py" in job
     assert "tests/test_native_target_adapters_public_api.py" in job
     assert "tests/test_native_loader_abi_cli.py" in job
     assert "continue-on-error" not in job
+
+    directx = _workflow_job_section(
+        workflow,
+        "directx-native-target-adapter",
+    )
+    assert "name: Direct3D 12 native target adapter" in directx
+    assert "runs-on: windows-latest" in directx
+    assert "timeout-minutes: 30" in directx
+    assert (
+        "uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756" in directx
+    )
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in directx
+    assert "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4" in (
+        directx
+    )
+    assert "CROSSTL_DXC_INCLUDE_DIR" in directx
+    assert "CROSSTL_DXC_DLL_DIR" in directx
+    assert 'CROSSTL_RUN_NATIVE_DIRECTX_ADAPTER_DEVICE_TEST: "1"' in directx
+    assert "python -m pytest -q -n auto" in directx
+    assert "tests/test_translator/test_native_directx_adapter_device.py" in directx
+    assert "continue-on-error" not in directx
+
+    opengl = _workflow_job_section(
+        workflow,
+        "opengl-native-target-adapter",
+    )
+    assert "name: OpenGL native target adapter" in opengl
+    assert "runs-on: ubuntu-latest" in opengl
+    assert "timeout-minutes: 30" in opengl
+    assert "glslang-tools" in opengl
+    assert "libegl1-mesa-dev" in opengl
+    assert "libgl-dev" in opengl
+    assert "pkg-config" in opengl
+    assert 'CROSSTL_RUN_NATIVE_OPENGL_ADAPTER_DEVICE_TEST: "1"' in opengl
+    assert "EGL_PLATFORM: surfaceless" in opengl
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl
+    assert "python -m pytest -q -n auto" in opengl
+    assert "tests/test_translator/test_native_opengl_adapter_device.py" in opengl
+    assert "continue-on-error" not in opengl
 
 
 def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
