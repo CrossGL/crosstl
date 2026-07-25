@@ -143,6 +143,51 @@ def test_directx_native_loader_adapter_encodes_native_execution_lifecycle():
     assert dispatch_function < native_dispatch < command_submission < success
 
 
+def test_directx_native_loader_adapter_prevents_shutdown_with_live_pipelines():
+    header = generate_directx_native_loader_adapter()
+
+    assert "CROSSTL_DIRECTX_NATIVE_LOADER_PIPELINES_ACTIVE = 1007" in header
+    assert "size_t active_pipeline_count = 0u;" in header
+
+    shutdown_start = header.rindex(
+        "static inline int32_t crosstl_directx_native_loader_context_shutdown("
+    )
+    shutdown_end = header.index(
+        "static inline int32_t crosstl_directx_native_loader_last_status(",
+        shutdown_start,
+    )
+    shutdown = header[shutdown_start:shutdown_end]
+    active_check = shutdown.index("if (context->active_pipeline_count != 0u)")
+    active_failure = shutdown.index(
+        "CROSSTL_DIRECTX_NATIVE_LOADER_PIPELINES_ACTIVE", active_check
+    )
+    queue_wait = shutdown.index(
+        "crosstl_directx_native_loader_wait_for_queue(", active_failure
+    )
+    device_reset = shutdown.index("context->device.Reset();", queue_wait)
+    assert active_check < active_failure < queue_wait < device_reset
+
+    create_start = header.index(
+        "static inline int32_t crosstl_directx_native_loader_create_pipeline("
+    )
+    create_end = header.index(
+        "static inline int32_t " "crosstl_directx_native_loader_specialization_value(",
+        create_start,
+    )
+    create_pipeline = header[create_start:create_end]
+    assert "++context->active_pipeline_count;" in create_pipeline
+
+    destroy_start = header.rindex(
+        "static inline int32_t crosstl_directx_native_loader_destroy_pipeline("
+    )
+    destroy_end = header.index("\n}\n", destroy_start)
+    destroy_pipeline = header[destroy_start:destroy_end]
+    assert "if (context->active_pipeline_count == 0u)" in destroy_pipeline
+    decrement = destroy_pipeline.index("--context->active_pipeline_count;")
+    deletion = destroy_pipeline.index("delete pipeline;", decrement)
+    assert decrement < deletion
+
+
 def test_directx_native_loader_adapter_accepts_verified_hlsl_and_dxil_contracts():
     header = generate_directx_native_loader_adapter()
     load_start = header.rindex(
@@ -408,6 +453,7 @@ def test_directx_native_loader_adapter_rejects_fail_closed_contracts():
         "CROSSTL_DIRECTX_NATIVE_LOADER_BINDINGS_INCOMPLETE",
         "CROSSTL_DIRECTX_NATIVE_LOADER_SYNCHRONIZE_BEFORE_DISPATCH",
         "CROSSTL_DIRECTX_NATIVE_LOADER_READBACK_BEFORE_SYNCHRONIZE",
+        "CROSSTL_DIRECTX_NATIVE_LOADER_PIPELINES_ACTIVE",
     ):
         assert status in header
 

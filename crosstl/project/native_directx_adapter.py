@@ -38,6 +38,7 @@ typedef enum CrossTLDirectXNativeLoaderStatus {
     CROSSTL_DIRECTX_NATIVE_LOADER_ALREADY_INITIALIZED = 1004,
     CROSSTL_DIRECTX_NATIVE_LOADER_HOST_ALLOCATION_FAILED = 1005,
     CROSSTL_DIRECTX_NATIVE_LOADER_INTERNAL_FAILURE = 1006,
+    CROSSTL_DIRECTX_NATIVE_LOADER_PIPELINES_ACTIVE = 1007,
     CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_PATH_INVALID = 1101,
     CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_FORMAT_UNSUPPORTED = 1102,
     CROSSTL_DIRECTX_NATIVE_LOADER_ARTIFACT_OPEN_FAILED = 1103,
@@ -337,6 +338,7 @@ typedef struct CrossTLDirectXNativeLoaderContext {
     FARPROC dxc_create_instance = NULL;
 #endif
     uint64_t next_fence_value = 1u;
+    size_t active_pipeline_count = 0u;
     std::filesystem::path package_root;
     std::string last_diagnostic;
     int32_t last_status = CROSSTL_DIRECTX_NATIVE_LOADER_OK;
@@ -731,6 +733,13 @@ static inline int32_t crosstl_directx_native_loader_context_shutdown(
     CrossTLDirectXNativeLoaderContext *context) {
     if (context == NULL) {
         return CROSSTL_DIRECTX_NATIVE_LOADER_INVALID_ARGUMENT;
+    }
+    if (context->active_pipeline_count != 0u) {
+        crosstl_directx_native_loader_set_diagnostic(
+            context,
+            "Every Direct3D pipeline must be destroyed before context shutdown.");
+        return crosstl_directx_native_loader_fail(
+            context, CROSSTL_DIRECTX_NATIVE_LOADER_PIPELINES_ACTIVE);
     }
     int32_t status = CROSSTL_DIRECTX_NATIVE_LOADER_OK;
     if (context->initialized && context->queue != NULL &&
@@ -1727,6 +1736,13 @@ static inline int32_t crosstl_directx_native_loader_create_pipeline(
                 result);
         }
         pipeline->command_list_open = true;
+        if (context->active_pipeline_count ==
+            std::numeric_limits<size_t>::max()) {
+            delete pipeline;
+            return crosstl_directx_native_loader_fail(
+                context, CROSSTL_DIRECTX_NATIVE_LOADER_INTERNAL_FAILURE);
+        }
+        ++context->active_pipeline_count;
         *pipeline_out = pipeline;
         return crosstl_directx_native_loader_succeed(context);
     } catch (const std::bad_alloc &) {
@@ -2453,6 +2469,11 @@ static inline int32_t crosstl_directx_native_loader_destroy_pipeline(
                 CROSSTL_DIRECTX_NATIVE_LOADER_BINDINGS_INCOMPLETE);
         }
     }
+    if (context->active_pipeline_count == 0u) {
+        return crosstl_directx_native_loader_fail(
+            context, CROSSTL_DIRECTX_NATIVE_LOADER_INTERNAL_FAILURE);
+    }
+    --context->active_pipeline_count;
     delete pipeline;
     return crosstl_directx_native_loader_succeed(context);
 }
