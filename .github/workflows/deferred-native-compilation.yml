@@ -1,0 +1,194 @@
+name: Deferred Native Compilation
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deferred-native-compilation.yml"
+      - "crosstl/project/directx_toolchain.py"
+      - "crosstl/project/host_reflection.py"
+      - "crosstl/project/native_deferred_compilation*.py"
+      - "crosstl/project/native_loader_abi.py"
+      - "crosstl/project/native_loader_dispatch.py"
+      - "crosstl/project/native_runtime_drivers.py"
+      - "crosstl/project/pipeline.py"
+      - "crosstl/project/runtime_verification.py"
+      - "crosstl/project/__init__.py"
+      - "setup.py"
+      - "tests/test_translator/test_native_deferred_compilation*.py"
+      - "tests/test_translator/test_native_loader_dispatch.py"
+      - "tests/test_translator/test_native_runtime_drivers.py"
+      - "tests/test_translator/test_project_translation.py"
+      - "tests/test_translator/test_runtime_verification.py"
+      - "tests/test_ci_workflows.py"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/deferred-native-compilation.yml"
+      - "crosstl/project/directx_toolchain.py"
+      - "crosstl/project/host_reflection.py"
+      - "crosstl/project/native_deferred_compilation*.py"
+      - "crosstl/project/native_loader_abi.py"
+      - "crosstl/project/native_loader_dispatch.py"
+      - "crosstl/project/native_runtime_drivers.py"
+      - "crosstl/project/pipeline.py"
+      - "crosstl/project/runtime_verification.py"
+      - "crosstl/project/__init__.py"
+      - "setup.py"
+      - "tests/test_translator/test_native_deferred_compilation*.py"
+      - "tests/test_translator/test_native_loader_dispatch.py"
+      - "tests/test_translator/test_native_runtime_drivers.py"
+      - "tests/test_translator/test_project_translation.py"
+      - "tests/test_translator/test_runtime_verification.py"
+      - "tests/test_ci_workflows.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deferred-native-compilation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Deferred compilation contract (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install project and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest-xdist
+
+      - name: Verify deterministic request, package, cache, and loader contracts
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_native_deferred_compilation.py
+          tests/test_translator/test_native_deferred_compilation_package.py
+          tests/test_translator/test_native_deferred_compilation_cache.py
+          tests/test_translator/test_native_deferred_compilation_runtime.py
+          tests/test_translator/test_native_loader_dispatch.py
+          tests/test_translator/test_native_runtime_drivers.py
+          tests/test_translator/test_runtime_verification.py
+          tests/test_translator/test_project_translation.py::test_project_package_exposes_public_api_surface
+
+  directx-runtime:
+    name: Direct3D 12 deferred compile and dispatch
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install DirectX Shader Compiler
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $dxcUri -OutFile $archive
+              break
+            } catch {
+              if ($attempt -eq 5) {
+                throw
+              }
+              Write-Warning "DXC download failed on attempt $attempt; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $dxcSha256) {
+            throw "DXC archive checksum mismatch: expected $dxcSha256, got $actualSha256."
+          }
+          Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
+          $dxc = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxc.exe |
+            Where-Object { $_.FullName -match "\\bin\\x64\\dxc.exe$" } |
+            Select-Object -First 1
+          if ($null -eq $dxc) {
+            throw "dxc.exe not found in release archive."
+          }
+          $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Direct3D runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[directx-runtime]" pytest-xdist
+
+      - name: Compile, inspect, dispatch, and read back DXIL
+        env:
+          CROSSTL_REQUIRE_DEFERRED_NATIVE_TARGET: directx
+        run: >-
+          dxc --version &&
+          python -m pytest -q -n auto
+          "tests/test_translator/test_native_deferred_compilation_runtime.py::test_real_deferred_compilation_dispatch[directx]"
+
+  opengl-runtime:
+    name: OpenGL deferred compile and dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install OpenGL compiler and software runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-utils spirv-tools
+          python -m pip install --upgrade pip
+          python -m pip install -e . moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist
+          glslangValidator --version
+          spirv-val --version
+
+      - name: Compile, validate, dispatch, and read back OpenGL SPIR-V
+        env:
+          CROSSTL_REQUIRE_DEFERRED_NATIVE_TARGET: opengl
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          MESA_GL_VERSION_OVERRIDE: "4.6"
+          MESA_GLSL_VERSION_OVERRIDE: "460"
+          PYOPENGL_PLATFORM: egl
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_native_deferred_compilation_runtime.py::test_real_opengl_toolchain_compiles_and_validates_cached_output
+          "tests/test_translator/test_native_deferred_compilation_runtime.py::test_real_deferred_compilation_dispatch[opengl]"

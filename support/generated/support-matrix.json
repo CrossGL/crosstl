@@ -13804,6 +13804,213 @@
     },
     {
       "category": "project",
+      "description": "Describe one finite, fully resolved native variant with versioned source, include-closure, target, execution, specialization, and loader-interface identities.",
+      "id": "project.native_deferred_compilation_request",
+      "name": "Deferred native compilation request",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "The closed deferred native compilation request accepts only DirectX HLSL-to-DXIL and OpenGL GLSL-to-SPIR-V compute targets. CUDA is rejected before package materialization, toolchain resolution, cache lookup, or dispatch.",
+          "status": "validated_rejection"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_build_request_is_closed_versioned_and_self_verifying",
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_normalization_is_independent_of_map_and_include_order",
+            "tests/test_translator/test_native_deferred_compilation.py::def test_distinct_bounded_values_produce_distinct_keys_and_request_hashes",
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unknown_and_arbitrary_compiler_argument_fields",
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unbounded_or_nonfinite_value_arguments",
+            "tests/test_translator/test_native_deferred_compilation_package.py::def test_materializes_verified_nested_include_closure",
+            "tests/test_translator/test_native_deferred_compilation_package.py::def test_rejects_undeclared_include",
+            "tests/test_translator/test_native_deferred_compilation_package.py::def test_rejects_unreachable_declared_include",
+            "tests/test_translator/test_native_deferred_compilation_package.py::def test_rejects_symlinked_package_paths"
+          ],
+          "notes": "The schema-v1 crosstl-native-deferred-compilation-request contract binds one canonical finite variant key to HLSL source, its complete literal include closure, a DirectX compute profile and entry point, type and value arguments, compile definitions, specialization values, execution identity, and the expected native loader ABI descriptor. Source, include, and descriptor records carry portable package paths, byte sizes, and SHA-256 digests, and a canonical request hash covers the complete closed-schema document. Materialization verifies every identity, rejects symbolic links and path escapes, requires all literal includes to be declared and reachable, rejects dynamic or ambiguous includes, and publishes only an isolated complete input tree. Arbitrary compiler flags, unresolved values, format mismatches, and unsupported target fields fail with structured diagnostics. Source-interface reflection currently covers the primary translation unit; includes are verified compiler inputs but are not preprocessed into reflection. The bounded scope is tracked by CrossGL/crosstl#1854 and does not claim host-runtime rewriting or complete MLX parity.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "The closed deferred native compilation request accepts only DirectX HLSL-to-DXIL and OpenGL GLSL-to-SPIR-V compute targets. HIP is rejected before package materialization, toolchain resolution, cache lookup, or dispatch.",
+          "status": "validated_rejection"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "The closed deferred native compilation request accepts only DirectX HLSL-to-DXIL and OpenGL GLSL-to-SPIR-V compute targets. Metal is rejected before package materialization, toolchain resolution, cache lookup, or dispatch.",
+          "status": "validated_rejection"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "The closed deferred native compilation request accepts only DirectX HLSL-to-DXIL and OpenGL GLSL-to-SPIR-V compute targets. Mojo is rejected before package materialization, toolchain resolution, cache lookup, or dispatch.",
+          "status": "validated_rejection"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_build_request_is_closed_versioned_and_self_verifying",
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_normalization_is_independent_of_map_and_include_order",
+            "tests/test_translator/test_native_deferred_compilation.py::def test_distinct_bounded_values_produce_distinct_keys_and_request_hashes",
+            "tests/test_translator/test_native_deferred_compilation.py::def test_opengl_glsl_to_spirv_request_is_supported",
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unknown_and_arbitrary_compiler_argument_fields",
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unbounded_or_nonfinite_value_arguments",
+            "tests/test_translator/test_native_deferred_compilation_package.py::def test_materializes_verified_nested_include_closure",
+            "tests/test_translator/test_native_deferred_compilation_package.py::def test_rejects_undeclared_include",
+            "tests/test_translator/test_native_deferred_compilation_package.py::def test_rejects_unreachable_declared_include",
+            "tests/test_translator/test_native_deferred_compilation_package.py::def test_rejects_symlinked_package_paths"
+          ],
+          "notes": "The schema-v1 crosstl-native-deferred-compilation-request contract binds one canonical finite variant key to GLSL source, its complete literal include closure, an OpenGL compute entry point, type and value arguments, compile definitions, specialization values, execution identity, and the expected native loader ABI descriptor. Source, include, and descriptor records carry portable package paths, byte sizes, and SHA-256 digests, and a canonical request hash covers the complete closed-schema document. Materialization verifies every identity, rejects symbolic links and path escapes, requires all literal includes to be declared and reachable, rejects dynamic or ambiguous includes, and publishes only an isolated complete input tree. Arbitrary compiler flags, unresolved values, format mismatches, and unsupported target fields fail with structured diagnostics. Source-interface reflection currently covers the primary translation unit; includes are verified compiler inputs but are not preprocessed into reflection. The bounded scope is tracked by CrossGL/crosstl#1854 and does not claim host-runtime rewriting or complete MLX parity.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "The closed deferred native compilation request accepts only DirectX HLSL-to-DXIL and OpenGL GLSL-to-SPIR-V compute targets. Rust GPU is rejected before package materialization, toolchain resolution, cache lookup, or dispatch.",
+          "status": "validated_rejection"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "The closed deferred native compilation request accepts only DirectX HLSL-to-DXIL and OpenGL GLSL-to-SPIR-V compute targets. Slang is rejected before package materialization, toolchain resolution, cache lookup, or dispatch.",
+          "status": "validated_rejection"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "The closed deferred native compilation request accepts only DirectX HLSL-to-DXIL and OpenGL GLSL-to-SPIR-V compute targets. Vulkan is rejected before package materialization, toolchain resolution, cache lookup, or dispatch.",
+          "status": "validated_rejection"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "The closed deferred native compilation request accepts only DirectX HLSL-to-DXIL and OpenGL GLSL-to-SPIR-V compute targets. WebGL is rejected before package materialization, toolchain resolution, cache lookup, or dispatch.",
+          "status": "validated_rejection"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "The closed deferred native compilation request accepts only DirectX HLSL-to-DXIL and OpenGL GLSL-to-SPIR-V compute targets. WebGPU is rejected before package materialization, toolchain resolution, cache lookup, or dispatch.",
+          "status": "validated_rejection"
+        }
+      }
+    },
+    {
+      "category": "project",
+      "description": "Compile, cache, preflight, and dispatch one verified deferred native variant through the DirectX or OpenGL runtime path.",
+      "id": "project.native_deferred_compilation_execution",
+      "name": "Deferred native compilation execution",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "Deferred native compilation execution accepts only validated DirectX and OpenGL requests. CUDA is rejected by the request contract before toolchain resolution, cache lookup, or runtime dispatch.",
+          "status": "validated_rejection"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation_cache.py::def test_publish_and_lookup_verified_success_entry",
+            "tests/test_translator/test_native_deferred_compilation_cache.py::def test_distinct_requests_do_not_collide",
+            "tests/test_translator/test_native_deferred_compilation_cache.py::def test_complete_toolchain_identity_separates_cache_entries",
+            "tests/test_translator/test_native_deferred_compilation_cache.py::def test_failed_atomic_publication_leaves_a_clean_miss",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_compiles_and_reuses_exact_success_cache",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_interface_drift_fails_before_toolchain_or_cache",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_compiler_failure_is_structured_and_not_cached",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_invalid_compiler_output_is_not_published",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_builds_compiled_native_loader_dispatch_request",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_execute_runs_compiled_request_through_supplied_adapter",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_real_deferred_compilation_dispatch"
+          ],
+          "notes": "compile_native_deferred_compilation_request validates the expected loader descriptor against the request, including its target, compute entry point, source identity, execution configuration, and exact specialization identity and value rules. It separately compares the descriptor's entry-point execution, bindings, scalar layout, and constants with the reflected primary translation unit before invoking DXC. Compiler arguments are derived only from the validated request. The schema-v1 result records compiler diagnostics, command and input provenance, DXC name, version, and executable hash, and the DXIL size and SHA-256 identity. Only nonempty successful output with the expected DXIL container signature is atomically published. Cache identity covers the complete request plus toolchain name, version, and executable hash; hits revalidate metadata, output bytes, and the current executable. build_native_deferred_compilation_dispatch_request preserves the exact interface, specialization, execution, and artifact identity, and execute_native_deferred_compilation_request dispatches through the DirectX native adapter. Compiler failures and interface drift never produce usable cache entries. Native Windows coverage performs compilation and device dispatch. This implements the bounded execution scope tracked by CrossGL/crosstl#1854 without rewriting a repository runtime or claiming complete MLX parity.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "Deferred native compilation execution accepts only validated DirectX and OpenGL requests. HIP is rejected by the request contract before toolchain resolution, cache lookup, or runtime dispatch.",
+          "status": "validated_rejection"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "Deferred native compilation execution accepts only validated DirectX and OpenGL requests. Metal is rejected by the request contract before toolchain resolution, cache lookup, or runtime dispatch.",
+          "status": "validated_rejection"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "Deferred native compilation execution accepts only validated DirectX and OpenGL requests. Mojo is rejected by the request contract before toolchain resolution, cache lookup, or runtime dispatch.",
+          "status": "validated_rejection"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation_cache.py::def test_publish_and_lookup_verified_success_entry",
+            "tests/test_translator/test_native_deferred_compilation_cache.py::def test_distinct_requests_do_not_collide",
+            "tests/test_translator/test_native_deferred_compilation_cache.py::def test_complete_toolchain_identity_separates_cache_entries",
+            "tests/test_translator/test_native_deferred_compilation_cache.py::def test_failed_atomic_publication_leaves_a_clean_miss",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_compiles_and_reuses_exact_success_cache",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_interface_drift_fails_before_toolchain_or_cache",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_compiler_failure_is_structured_and_not_cached",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_invalid_compiler_output_is_not_published",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_execute_runs_compiled_request_through_supplied_adapter",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_real_opengl_toolchain_compiles_and_validates_cached_output",
+            "tests/test_translator/test_native_deferred_compilation_runtime.py::def test_real_deferred_compilation_dispatch"
+          ],
+          "notes": "compile_native_deferred_compilation_request validates the expected loader descriptor against the request, including its target, compute entry point, source identity, execution configuration, and exact specialization identity rules. It separately compares the descriptor's entry-point execution, bindings, scalar layout, constants, and specialization interface with the reflected primary translation unit before invoking glslangValidator. Compiler arguments are derived only from the validated request. The schema-v1 result records compiler diagnostics, command and input provenance, tool name, version, and executable hash, and the SPIR-V size and SHA-256 identity. Only nonempty successful output with the expected SPIR-V header is atomically published. Cache identity covers the complete request plus toolchain name, version, and executable hash; hits revalidate metadata, output bytes, and the current executable. build_native_deferred_compilation_dispatch_request preserves the exact interface, specialization, execution, and artifact identity, and execute_native_deferred_compilation_request dispatches through the OpenGL native adapter in a caller-owned context. Compiler failures and interface drift never produce usable cache entries. Native Linux coverage performs compilation, SPIR-V validation, and device dispatch. This implements the bounded execution scope tracked by CrossGL/crosstl#1854 without rewriting a repository runtime or claiming complete MLX parity.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "Deferred native compilation execution accepts only validated DirectX and OpenGL requests. Rust GPU is rejected by the request contract before toolchain resolution, cache lookup, or runtime dispatch.",
+          "status": "validated_rejection"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "Deferred native compilation execution accepts only validated DirectX and OpenGL requests. Slang is rejected by the request contract before toolchain resolution, cache lookup, or runtime dispatch.",
+          "status": "validated_rejection"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "Deferred native compilation execution accepts only validated DirectX and OpenGL requests. Vulkan is rejected by the request contract before toolchain resolution, cache lookup, or runtime dispatch.",
+          "status": "validated_rejection"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "Deferred native compilation execution accepts only validated DirectX and OpenGL requests. WebGL is rejected by the request contract before toolchain resolution, cache lookup, or runtime dispatch.",
+          "status": "validated_rejection"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_native_deferred_compilation.py::def test_request_rejects_unsupported_target_contracts"
+          ],
+          "notes": "Deferred native compilation execution accepts only validated DirectX and OpenGL requests. WebGPU is rejected by the request contract before toolchain resolution, cache lookup, or runtime dispatch.",
+          "status": "validated_rejection"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Emit deterministic host loader scaffold metadata from runtime loader manifests without rewriting host code or executing device code.",
       "id": "project.runtime_host_loader_scaffolds",
       "name": "Runtime host loader scaffolds",
@@ -17769,7 +17976,7 @@
   "summary": {
     "backend_count": 11,
     "backlog_count": 27,
-    "feature_count": 83,
+    "feature_count": 85,
     "status_counts": {
       "cuda": {
         "diagnostic": 8,
@@ -17777,12 +17984,12 @@
         "supported": 66,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 6
+        "validated_rejection": 8
       },
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 81,
+        "supported": 83,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -17793,7 +18000,7 @@
         "supported": 66,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 6
+        "validated_rejection": 8
       },
       "metal": {
         "diagnostic": 4,
@@ -17801,7 +18008,7 @@
         "supported": 70,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 6
+        "validated_rejection": 8
       },
       "mojo": {
         "diagnostic": 6,
@@ -17809,12 +18016,12 @@
         "supported": 68,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 6
+        "validated_rejection": 8
       },
       "opengl": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 80,
+        "supported": 82,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1
@@ -17825,7 +18032,7 @@
         "supported": 69,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 6
+        "validated_rejection": 8
       },
       "slang": {
         "diagnostic": 4,
@@ -17833,7 +18040,7 @@
         "supported": 70,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 6
+        "validated_rejection": 8
       },
       "vulkan": {
         "diagnostic": 2,
@@ -17841,7 +18048,7 @@
         "supported": 72,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 6
+        "validated_rejection": 8
       },
       "webgl": {
         "diagnostic": 23,
@@ -17849,7 +18056,7 @@
         "supported": 42,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 15
+        "validated_rejection": 17
       },
       "wgsl": {
         "diagnostic": 21,
@@ -17857,7 +18064,7 @@
         "supported": 46,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 13
+        "validated_rejection": 15
       }
     }
   }
