@@ -36,8 +36,8 @@ from crosstl.project.runtime_verification import (
 _ERROR_PREFIX = "project.native-loader-dispatch"
 _COMPUTE_STAGE = "compute"
 _TARGET_ARTIFACT_FORMATS = {
-    "directx": "HLSL source",
-    "opengl": "GLSL source",
+    "directx": frozenset(("HLSL source", "DXIL binary")),
+    "opengl": frozenset(("GLSL source", "SPIR-V binary")),
 }
 _TARGET_RESOURCE_NAMESPACES = {
     "directx": {
@@ -302,16 +302,19 @@ def _validated_target(
                 details={"expectedTarget": expected, "actualTarget": target},
             )
 
-    expected_format = _TARGET_ARTIFACT_FORMATS[target]
+    supported_formats = _TARGET_ARTIFACT_FORMATS[target]
     actual_format = descriptor["artifact"]["format"]
-    if actual_format != expected_format:
+    if actual_format not in supported_formats:
         raise NativeLoaderDispatchError(
             "artifact-format-unsupported",
-            f"{target} native dispatch requires {expected_format} artifacts.",
+            f"{target} native dispatch does not support {actual_format} artifacts.",
             path="$.artifact.format",
             details={
                 "target": target,
-                "expectedFormat": expected_format,
+                "expectedFormat": (
+                    "HLSL source" if target == "directx" else "GLSL source"
+                ),
+                "supportedFormats": sorted(supported_formats),
                 "actualFormat": actual_format,
             },
         )
@@ -1273,7 +1276,7 @@ def _specialization_constants(
             if not has_descriptor_value:
                 raise NativeLoaderDispatchError(
                     "specialization-unmaterialized",
-                    "DirectX dispatch requires specialization constants to be materialized in HLSL source.",
+                    "DirectX dispatch requires specialization constants to be materialized at compilation time.",
                     path=path,
                     details={"id": constant_id, "name": constant.get("name")},
                 )
@@ -1281,7 +1284,7 @@ def _specialization_constants(
             if has_explicit and explicit_values[constant_id] != compiled_value:
                 raise NativeLoaderDispatchError(
                     "specialization-override-unsupported",
-                    "DirectX dispatch cannot override a specialization value materialized in HLSL source.",
+                    "DirectX dispatch cannot override a specialization value materialized at compilation time.",
                     path=f"$.specializationValues[{constant_id}]",
                     details={
                         "id": constant_id,

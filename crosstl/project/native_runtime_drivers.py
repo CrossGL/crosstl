@@ -786,11 +786,13 @@ class OpenGLComputeRuntime:
         context_factory: Any | None = None,
         context_backends: Sequence[str | None] = ("egl", None),
         require_version: int = 430,
+        release_context: bool = True,
     ):
         self._module_loader = module_loader or importlib.import_module
         self._context_factory = context_factory
         self.context_backends = tuple(context_backends)
         self.require_version = int(require_version)
+        self.release_context = bool(release_context)
 
     def is_available(
         self,
@@ -798,7 +800,7 @@ class OpenGLComputeRuntime:
         request: RuntimeExecutionRequest,
     ) -> RuntimeExecutorAvailability:
         _ = adapter
-        requires_specialization = _opengl_request_requires_specialization(request)
+        requires_spirv = _opengl_request_requires_spirv(request)
         try:
             moderngl = self._load_moderngl()
         except RuntimeExecutorUnavailable as exc:
@@ -833,7 +835,7 @@ class OpenGLComputeRuntime:
                     },
                 )
             specialization_details: dict[str, Any] = {}
-            if requires_specialization:
+            if requires_spirv:
                 api = self._load_opengl_spirv_api(context)
                 specialization_details = {
                     "specializationMode": "spirv",
@@ -860,7 +862,8 @@ class OpenGLComputeRuntime:
                 },
             )
         finally:
-            _release_opengl_object(context)
+            if self.release_context:
+                _release_opengl_object(context)
 
         return RuntimeExecutorAvailability(
             True,
@@ -875,8 +878,12 @@ class OpenGLComputeRuntime:
         )
 
     def load_artifact(self, adapter: Any, state: Any, module_path: Path) -> str | bytes:
-        _ = adapter, state
-        if Path(module_path).suffix.lower() == ".spv":
+        _ = adapter
+        artifact_format = _opengl_state_artifact_format(state)
+        is_spirv = artifact_format == "SPIR-V binary" or (
+            artifact_format is None and Path(module_path).suffix.lower() == ".spv"
+        )
+        if is_spirv:
             try:
                 binary = Path(module_path).read_bytes()
             except OSError as exc:
@@ -1102,10 +1109,11 @@ class OpenGLComputeRuntime:
             ) from exc
         finally:
             released: set[int] = set()
+            context_to_release = context if self.release_context else None
             for value in (
                 *reversed(shaders),
                 *reversed(tuple(allocation_buffers.values())),
-                context,
+                context_to_release,
             ):
                 if value is None or id(value) in released:
                     continue
@@ -1123,10 +1131,12 @@ class OpenGLComputeRuntime:
         request = prepared.request
         shader = None
         try:
-            if prepared.specialization_bindings:
+            if _opengl_dispatch_requires_spirv(
+                request, prepared.specialization_bindings
+            ):
                 if not isinstance(prepared.shader_artifact, bytes):
                     raise _opengl_setup_error(
-                        "OpenGL specialization constants require a compiled SPIR-V runtime artifact.",
+                        "OpenGL SPIR-V execution requires a compiled binary artifact.",
                         "spirv-artifact-required",
                         nodeIndex=node_index,
                         modulePath=str(request.module_path),
@@ -3233,6 +3243,37 @@ def _opengl_request_requires_specialization(request: RuntimeExecutionRequest) ->
         in _OPENGL_SPECIALIZATION_KINDS
         for constant in request.adapter_contract.specialization_constants
     )
+
+
+def _opengl_request_requires_spirv(request: RuntimeExecutionRequest) -> bool:
+    return _runtime_artifact_format(
+        request.artifact
+    ) == "SPIR-V binary" or _opengl_request_requires_specialization(request)
+
+
+def _opengl_dispatch_requires_spirv(
+    request: NativeRuntimeDispatchRequest,
+    specialization_bindings: Mapping[str, Any],
+) -> bool:
+    return _runtime_artifact_format(request.artifact) == "SPIR-V binary" or bool(
+        specialization_bindings
+    )
+
+
+def _opengl_state_artifact_format(state: Any) -> str | None:
+    request = getattr(state, "request", None)
+    artifact = getattr(request, "artifact", None)
+    return _runtime_artifact_format(artifact)
+
+
+def _runtime_artifact_format(artifact: Any) -> str | None:
+    if not isinstance(artifact, Mapping):
+        return None
+    for field in ("artifactFormat", "format"):
+        artifact_format = artifact.get(field)
+        if isinstance(artifact_format, str) and artifact_format.strip():
+            return artifact_format.strip()
+    return None
 
 
 def _partition_opengl_constants(
