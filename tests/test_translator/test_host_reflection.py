@@ -10,6 +10,24 @@ def _reflect_hlsl(tmp_path, source, *, stage=None):
     return reflect_target_host_interface(artifact, target="directx", stage=stage)
 
 
+def test_hlsl_reflection_infers_compute_stage_from_numthreads(tmp_path):
+    reflection = _reflect_hlsl(
+        tmp_path,
+        """
+        [numthreads(4, 2, 1)]
+        void CopyMain(uint3 tid : SV_DispatchThreadID) {}
+        """,
+    )
+
+    assert reflection["entryPoints"] == [
+        {
+            "name": "CopyMain",
+            "stage": "compute",
+            "executionConfig": {"numthreads": [4, 2, 1]},
+        }
+    ]
+
+
 def test_hlsl_reflection_preserves_entry_points_resources_and_constants(tmp_path):
     reflection = _reflect_hlsl(
         tmp_path,

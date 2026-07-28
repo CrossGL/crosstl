@@ -752,6 +752,8 @@ def _hlsl_entry_stage(name: str, attributes: str, stage: str | None) -> str | No
     shader_match = HLSL_SHADER_ATTR_RE.search(attributes)
     if shader_match:
         return HLSL_ENTRY_STAGE_BY_ATTR.get(shader_match.group(1).lower())
+    if HLSL_NUMTHREADS_RE.search(attributes):
+        return "compute"
     if name in HLSL_ENTRY_STAGE_BY_NAME:
         return HLSL_ENTRY_STAGE_BY_NAME[name]
     if name == "main" and stage:
