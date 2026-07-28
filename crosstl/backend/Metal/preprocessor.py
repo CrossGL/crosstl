@@ -327,6 +327,17 @@ class _MetalLexicalScopeLookup:
     innermost_scopes: List[Optional[Tuple[int, int]]]
 
 
+@dataclass
+class _MetalContainingSpanLookup:
+    spans: List[Tuple[int, int]]
+    span_count: int
+    first_span: Tuple[int, int]
+    last_span: Tuple[int, int]
+    starts: Optional[List[int]]
+    boundaries: Optional[List[int]]
+    containing_spans: Optional[List[Optional[Tuple[int, int]]]]
+
+
 @dataclass(frozen=True)
 class _MetalStaticAssertion:
     span: Tuple[int, int]
@@ -692,16 +703,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # nearly every source position. Cache their sorted lookup indexes, but
         # retain only a fixed number of lists as generated source snapshots are
         # replaced during specialization.
-        self._containing_span_cache: Dict[
-            int,
-            Tuple[
-                List[Tuple[int, int]],
-                int,
-                Optional[Tuple[int, int]],
-                Optional[Tuple[int, int]],
-                Optional[List[int]],
-            ],
-        ] = {}
+        self._containing_span_cache: Dict[int, _MetalContainingSpanLookup] = {}
         self._lexical_scope_lookup_cache: Dict[int, _MetalLexicalScopeLookup] = {}
         self.macros.setdefault(
             "TARGET_OS_SIMULATOR",
@@ -3414,9 +3416,16 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _local_integral_constant_bindings_at(
         bindings: Dict[str, List[_MetalIntegralConstantBinding]],
         position: int,
+        *,
+        names: Optional[Set[str]] = None,
     ) -> Dict[str, _MetalIntegralConstantBinding]:
         visible: Dict[str, _MetalIntegralConstantBinding] = {}
-        for name, candidates in bindings.items():
+        binding_items = (
+            bindings.items()
+            if names is None
+            else ((name, bindings[name]) for name in sorted(names) if name in bindings)
+        )
+        for name, candidates in binding_items:
             best: Optional[_MetalIntegralConstantBinding] = None
             for binding in candidates:
                 if binding.declaration_position > position:
@@ -3437,11 +3446,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         cls,
         bindings: Dict[str, List[_MetalIntegralConstantBinding]],
         position: int,
+        *,
+        names: Optional[Set[str]] = None,
     ) -> Dict[str, str]:
         return {
             name: binding.value
             for name, binding in cls._local_integral_constant_bindings_at(
-                bindings, position
+                bindings,
+                position,
+                names=names,
             ).items()
             if binding.value is not None
         }
@@ -9157,6 +9170,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         local_constant_values = self._local_integral_constants_at(
             local_integral_constants or {},
             arg_open,
+            names=set(IDENTIFIER_RE.findall(raw_args)),
         )
         concrete_argument_types: List[str] = []
         for argument in call_arguments:
@@ -9337,6 +9351,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         local_constant_values = self._local_integral_constants_at(
             local_integral_constants or {},
             arg_open,
+            names=set(
+                IDENTIFIER_RE.findall(
+                    " ".join(
+                        [
+                            raw_args,
+                            *(explicit_template_arguments or ()),
+                        ]
+                    )
+                )
+            ),
         )
 
         # Infer the concrete type of every call argument; one un-inferable
@@ -11463,6 +11487,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         local_constant_values = self._local_integral_constants_at(
             local_integral_constants,
             arg_open,
+            names=set(
+                IDENTIFIER_RE.findall(
+                    " ".join(
+                        [
+                            raw_args,
+                            *(explicit_template_arguments or ()),
+                        ]
+                    )
+                )
+            ),
         )
         concrete_argument_types: List[Optional[str]] = []
         for argument_index, argument in enumerate(call_arguments):
@@ -11647,6 +11681,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         local_constant_values = self._local_integral_constants_at(
             local_integral_constants,
             arg_open,
+            names=set(IDENTIFIER_RE.findall(raw_args)),
         )
         concrete_argument_types: List[str] = []
         for argument in call_arguments:
@@ -17138,25 +17173,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         cached = cache.get(key)
         if (
             cached is None
-            or cached[0] is not spans
-            or cached[1] != len(spans)
-            or cached[2] != first
-            or cached[3] != last
+            or cached.spans is not spans
+            or cached.span_count != len(spans)
+            or cached.first_span != first
+            or cached.last_span != last
         ):
-            is_sorted_non_overlapping = all(
-                spans[index - 1][0] <= spans[index][0]
-                and spans[index - 1][1] <= spans[index][0]
-                for index in range(1, len(spans))
-            )
-            starts = (
-                [start for start, _end in spans] if is_sorted_non_overlapping else None
-            )
-            cached = (spans, len(spans), first, last, starts)
+            cached = self._build_containing_span_lookup(spans)
             cache[key] = cached
             if len(cache) > CONTAINING_SPAN_CACHE_LIMIT:
                 del cache[next(iter(cache))]
 
-        starts = cached[4]
+        starts = cached.starts
         if starts is not None:
             index = bisect_right(starts, position) - 1
             if index >= 0:
@@ -17165,10 +17192,68 @@ class MetalPreprocessor(HLSLPreprocessor):
                     return start, end
             return None
 
-        for start, end in spans:
-            if start <= position < end:
-                return start, end
+        boundaries = cached.boundaries
+        containing_spans = cached.containing_spans
+        if boundaries is not None and containing_spans is not None:
+            boundary_index = bisect_right(boundaries, position) - 1
+            if boundary_index >= 0:
+                return containing_spans[boundary_index]
         return None
+
+    @staticmethod
+    def _build_containing_span_lookup(
+        spans: List[Tuple[int, int]],
+    ) -> _MetalContainingSpanLookup:
+        is_sorted_non_overlapping = all(
+            spans[index - 1][0] <= spans[index][0]
+            and spans[index - 1][1] <= spans[index][0]
+            for index in range(1, len(spans))
+        )
+        if is_sorted_non_overlapping:
+            return _MetalContainingSpanLookup(
+                spans=spans,
+                span_count=len(spans),
+                first_span=spans[0],
+                last_span=spans[-1],
+                starts=[start for start, _end in spans],
+                boundaries=None,
+                containing_spans=None,
+            )
+
+        starts_by_position: Dict[int, List[int]] = {}
+        ends_by_position: Dict[int, List[int]] = {}
+        for index, (start, end) in enumerate(spans):
+            if start >= end:
+                continue
+            starts_by_position.setdefault(start, []).append(index)
+            ends_by_position.setdefault(end, []).append(index)
+
+        active = [False] * len(spans)
+        active_by_order: List[int] = []
+        boundaries: List[int] = []
+        containing_spans: List[Optional[Tuple[int, int]]] = []
+        for boundary in sorted(starts_by_position.keys() | ends_by_position.keys()):
+            for index in ends_by_position.get(boundary, ()):
+                active[index] = False
+            for index in starts_by_position.get(boundary, ()):
+                active[index] = True
+                heappush(active_by_order, index)
+            while active_by_order and not active[active_by_order[0]]:
+                heappop(active_by_order)
+            boundaries.append(boundary)
+            containing_spans.append(
+                spans[active_by_order[0]] if active_by_order else None
+            )
+
+        return _MetalContainingSpanLookup(
+            spans=spans,
+            span_count=len(spans),
+            first_span=spans[0],
+            last_span=spans[-1],
+            starts=None,
+            boundaries=boundaries,
+            containing_spans=containing_spans,
+        )
 
     def _scoped_identifier_start(self, code: str, identifier_start: int) -> int:
         start = identifier_start

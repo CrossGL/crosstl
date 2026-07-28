@@ -14,6 +14,7 @@ from crosstl.backend.Metal.preprocessor import (
     MetalStaticAssertionError,
     MetalStructMethodError,
     MetalTemplateSpecializationError,
+    _MetalIntegralConstantBinding,
 )
 
 
@@ -38,6 +39,32 @@ def test_containing_span_preserves_unsorted_overlap_order():
 
     assert preprocessor._containing_span(12, spans) == (10, 20)
     assert preprocessor._containing_span(5, spans) == (0, 15)
+
+
+def test_containing_span_indexes_unsorted_overlaps_once(monkeypatch):
+    preprocessor = MetalPreprocessor()
+    span_count = 4096
+    spans = [(index * 4 + 2, index * 4 + 6) for index in reversed(range(span_count))]
+    build_count = 0
+    original_build = preprocessor._build_containing_span_lookup
+
+    def counted_build(candidate_spans):
+        nonlocal build_count
+        build_count += 1
+        return original_build(candidate_spans)
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_build_containing_span_lookup",
+        counted_build,
+    )
+
+    for index in range(span_count):
+        position = index * 4 + 3
+        expected_span = (index * 4 + 2, index * 4 + 6)
+        assert preprocessor._containing_span(position, spans) == expected_span
+
+    assert build_count == 1
 
 
 def test_containing_span_caches_multiple_span_lists_without_thrashing():
@@ -148,6 +175,29 @@ def test_innermost_lexical_scope_cache_retention_is_bounded():
     assert len(preprocessor._lexical_scope_lookup_cache) == LEXICAL_SCOPE_CACHE_LIMIT
     assert id(scope_lists[0]) not in preprocessor._lexical_scope_lookup_cache
     assert id(scope_lists[-1]) in preprocessor._lexical_scope_lookup_cache
+
+
+def test_local_integral_constant_lookup_skips_unreferenced_binding_families():
+    class UnexpectedBindings(list):
+        def __iter__(self):
+            raise AssertionError("unreferenced bindings must not be scanned")
+
+    used = _MetalIntegralConstantBinding(
+        declaration_position=10,
+        scope_start=0,
+        scope_end=100,
+        value="4",
+    )
+    bindings = {
+        "used": [used],
+        "unused": UnexpectedBindings([used]),
+    }
+
+    assert MetalPreprocessor._local_integral_constants_at(
+        bindings,
+        20,
+        names={"missing", "used"},
+    ) == {"used": "4"}
 
 
 def test_source_analysis_cache_reuses_equal_snapshots_and_is_bounded(monkeypatch):
