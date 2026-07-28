@@ -8,6 +8,7 @@ import pytest
 import crosstl
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.Metal.MetalAst import BinaryOpNode as MetalBinaryOpNode
 from crosstl.backend.Metal.MetalAst import CastNode as MetalCastNode
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalAddressProvenanceError,
@@ -91,6 +92,34 @@ def convert_without_preprocessing(code: str, file_path=None) -> str:
 
 def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def test_binary_expression_type_visits_each_nested_operand_once(monkeypatch):
+    expression = "1.0"
+    binary_nodes = []
+    for _ in range(16):
+        expression = MetalBinaryOpNode(expression, "+", "1.0")
+        binary_nodes.append(expression)
+
+    converter = MetalToCrossGLConverter()
+    converter.local_type_alias_names = set()
+    original_expression_metal_type = converter.expression_metal_type
+    visit_counts = {}
+
+    def counted_expression_metal_type(candidate):
+        if isinstance(candidate, MetalBinaryOpNode):
+            visit_counts[id(candidate)] = visit_counts.get(id(candidate), 0) + 1
+        return original_expression_metal_type(candidate)
+
+    monkeypatch.setattr(
+        converter,
+        "expression_metal_type",
+        counted_expression_metal_type,
+    )
+
+    assert converter.expression_metal_type(expression) == "float"
+    assert set(visit_counts) == {id(node) for node in binary_nodes}
+    assert set(visit_counts.values()) == {1}
 
 
 def parse_crossgl(code: str):

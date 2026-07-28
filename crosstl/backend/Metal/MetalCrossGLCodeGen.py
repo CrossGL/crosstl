@@ -15118,8 +15118,14 @@ class MetalToCrossGLConverter:
             or self.metal_pointer_pointee_type_once(right_type) is not None
         ):
             return None
-        left_wide = self.wide_vector_expression_info(expr.left)
-        right_wide = self.wide_vector_expression_info(expr.right)
+        left_wide = self.wide_vector_type_info(
+            left_type,
+            getattr(expr.left, "source_location", None),
+        )
+        right_wide = self.wide_vector_type_info(
+            right_type,
+            getattr(expr.right, "source_location", None),
+        )
         if left_wide is not None or right_wide is not None:
             wide_type = left_wide or right_wide
             if (
