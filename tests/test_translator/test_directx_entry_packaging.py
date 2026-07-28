@@ -121,6 +121,9 @@ def _write_materialized_metal_source(root):
 
             template [[host_name("copy_float")]] [[kernel]]
             decltype(copy_values<float>) copy_values<float>;
+
+            template [[host_name("copy_uint")]] [[kernel]]
+            decltype(copy_values<uint>) copy_values<uint>;
             """).strip() + "\n",
         encoding="utf-8",
     )
@@ -387,6 +390,69 @@ def test_translate_project_cli_packages_materialized_directx_entry(tmp_path):
     assert "StructuredBuffer<float> values" in generated
     assert "RWStructuredBuffer<float> results" in generated
     _assert_hlsl_compute_compiles_if_available(shader_path, tmp_path)
+
+
+def test_translate_project_emits_each_materialized_directx_entry(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_materialized_metal_source(root)
+    config = ProjectConfig(
+        root=root,
+        include_patterns=("kernels/materialized.metal",),
+        targets=("directx",),
+        output_dir="translated",
+        entry_points={
+            "kernels/*.metal": ("copy_float", "copy_uint"),
+        },
+    )
+
+    report = translate_project(config, format_output=False, validate=True)
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 2
+    assert payload["artifactMatrix"]["complete"] is True
+    assert payload["project"]["entryPointSelections"] == {
+        "kernels/*.metal": ["copy_float", "copy_uint"]
+    }
+    assert [artifact["path"] for artifact in payload["artifacts"]] == [
+        "translated/directx/kernels/materialized/copy_float.hlsl",
+        "translated/directx/kernels/materialized/copy_uint.hlsl",
+    ]
+
+    expected_types = {
+        "copy_float": "float",
+        "copy_uint": "uint",
+    }
+    for artifact in payload["artifacts"]:
+        entry_point = artifact["entryPoint"]["source"]
+        assert artifact["entryPoint"] == {
+            "source": entry_point,
+            "target": "CSMain",
+            "stage": "compute",
+        }
+        assert {
+            record["hostName"]
+            for record in artifact["templateMaterialization"]["specializations"]
+        } == {entry_point}
+        shader_path = root / artifact["path"]
+        generated = shader_path.read_text(encoding="utf-8")
+        expected_type = expected_types[entry_point]
+        assert generated.count("void CSMain(") == 1
+        assert f"StructuredBuffer<{expected_type}> values" in generated
+        assert f"RWStructuredBuffer<{expected_type}> results" in generated
+        other_entry = "copy_uint" if entry_point == "copy_float" else "copy_float"
+        assert other_entry not in json.dumps(artifact, sort_keys=True)
+        _assert_hlsl_compute_compiles_if_available(shader_path, tmp_path)
+
+    report_path = root / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True, validation["diagnostics"][0]["message"]
+    manifest = build_runtime_artifact_manifest(report_path)
+    assert manifest["success"] is True
+    assert manifest["summary"]["artifactCount"] == 2
 
 
 @pytest.mark.parametrize(

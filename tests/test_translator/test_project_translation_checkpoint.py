@@ -39,6 +39,26 @@ SIMPLE_CROSSL = textwrap.dedent("""
     }
     """).strip()
 
+MULTI_ENTRY_COMPUTE_CROSSL = textwrap.dedent("""
+    shader CheckpointCompute {
+        RWStructuredBuffer<uint> output @set(0) @binding(0);
+
+        compute first {
+            @numthreads(1, 1, 1)
+            void main(uint index @gl_GlobalInvocationID) {
+                output[index] = 1u;
+            }
+        }
+
+        compute second {
+            @numthreads(1, 1, 1)
+            void main(uint index @gl_GlobalInvocationID) {
+                output[index] = 2u;
+            }
+        }
+    }
+    """).strip()
+
 
 def _identity():
     return {
@@ -373,6 +393,84 @@ def test_translate_project_checkpoint_resumes_only_verified_pending_jobs(
     assert completed["state"] == "complete"
     assert completed["plan"]["completedCount"] == 2
     assert completed["plan"]["pending"] == []
+    assert completed["finalReport"] == resumed
+
+
+def test_translate_project_checkpoint_resumes_pending_entry_artifact(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        MULTI_ENTRY_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    checkpoint_path = repo / "progress.json"
+    config = project_pipeline.ProjectConfig(
+        root=repo,
+        include_patterns=("multi.cgl",),
+        targets=("opengl",),
+        output_dir="out",
+        entry_points={"multi.cgl": ("first", "second")},
+    )
+    original_generate = project_pipeline._generate_project_target_from_crossgl_ast
+    interrupted_entries = []
+
+    def interrupt_second(*args, **kwargs):
+        entry_point = kwargs.get("entry_point")
+        interrupted_entries.append(entry_point)
+        if entry_point == "second":
+            raise KeyboardInterrupt("interrupted")
+        return original_generate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "_generate_project_target_from_crossgl_ast",
+        interrupt_second,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        project_api.translate_project(
+            config,
+            format_output=False,
+            checkpoint_path=checkpoint_path,
+        )
+
+    interrupted = load_project_translation_checkpoint(checkpoint_path)
+    assert interrupted["state"] == "interrupted"
+    assert interrupted["plan"]["completedCount"] == 1
+    assert interrupted["plan"]["completed"][0]["coordinate"]["entryPoint"] == "first"
+    assert interrupted["plan"]["active"]["entryPoint"] == "second"
+    assert interrupted["plan"]["pending"] == []
+    assert interrupted_entries == ["first", "second"]
+
+    resumed_entries = []
+
+    def record_resumed_translation(*args, **kwargs):
+        resumed_entries.append(kwargs.get("entry_point"))
+        return original_generate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "_generate_project_target_from_crossgl_ast",
+        record_resumed_translation,
+    )
+    resumed = project_api.translate_project(
+        config,
+        format_output=False,
+        checkpoint_path=checkpoint_path,
+        resume=True,
+    ).to_json()
+
+    assert resumed_entries == ["second"]
+    assert resumed["summary"]["translatedCount"] == 2
+    assert [artifact["entryPoint"]["source"] for artifact in resumed["artifacts"]] == [
+        "first",
+        "second",
+    ]
+    completed = load_project_translation_checkpoint(checkpoint_path)
+    assert completed["state"] == "complete"
+    assert completed["plan"]["completedCount"] == 2
     assert completed["finalReport"] == resumed
 
 

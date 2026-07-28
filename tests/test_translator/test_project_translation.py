@@ -1057,6 +1057,124 @@ def test_translate_project_emits_entry_scoped_opengl_artifact_and_reflection(
     } == {0, 1, 2}
 
 
+def test_translate_project_emits_each_selected_opengl_entry(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["multi.cgl"]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.entry_points]
+            "multi.cgl" = ["second", "first"]
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    config = load_project_config(repo)
+    report = translate_project(config, format_output=False, validate=True)
+    payload = report.to_json()
+
+    assert config.entry_points == {"multi.cgl": ("second", "first")}
+    assert payload["project"]["entryPointSelections"] == {
+        "multi.cgl": ["second", "first"]
+    }
+    assert payload["project"]["entryPointSelectionCount"] == 1
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 2
+    assert payload["artifactMatrix"]["complete"] is True
+
+    artifacts = payload["artifacts"]
+    assert [artifact["entryPoint"]["source"] for artifact in artifacts] == [
+        "second",
+        "first",
+    ]
+    assert [artifact["path"] for artifact in artifacts] == [
+        "out/opengl/multi/second.glsl",
+        "out/opengl/multi/first.glsl",
+    ]
+    generated_by_entry = {
+        artifact["entryPoint"]["source"]: (
+            (repo / artifact["path"]).read_text(encoding="utf-8")
+        )
+        for artifact in artifacts
+    }
+    assert "selected_helper" in generated_by_entry["second"]
+    assert "unrelated_helper" not in generated_by_entry["second"]
+    assert "unrelated_helper" in generated_by_entry["first"]
+    assert "selected_helper" not in generated_by_entry["first"]
+    for generated in generated_by_entry.values():
+        assert generated.count("void main()") == 1
+        assert_compute_glsl_validates_if_available(generated, tmp_path)
+
+    report_path = repo / "report.json"
+    report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True
+    manifest = build_runtime_artifact_manifest(report_path)
+    assert manifest["success"] is True
+    assert manifest["summary"]["artifactCount"] == 2
+
+    incomplete = json.loads(report_path.read_text(encoding="utf-8"))
+    incomplete["artifacts"] = incomplete["artifacts"][:1]
+    incomplete_path = repo / "incomplete-report.json"
+    incomplete_path.write_text(json.dumps(incomplete), encoding="utf-8")
+    validation = validate_project_report(incomplete_path)
+    assert validation["success"] is False
+    assert "artifacts must include units[0].path multi.cgl target opengl" in (
+        validation["diagnostics"][0]["message"]
+    )
+
+
+def test_translate_project_multiplies_variants_by_selected_entries(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        include_patterns=("multi.cgl",),
+        targets=("opengl",),
+        output_dir="out",
+        entry_points={"multi.cgl": ("first", "second")},
+        variants={
+            "debug": {"MODE": "1"},
+            "release": {"MODE": "0"},
+        },
+    )
+
+    report = translate_project(config, format_output=False)
+    payload = report.to_json()
+
+    assert payload["artifactMatrix"]["variantCount"] == 2
+    assert payload["artifactMatrix"]["variantMode"] == "named"
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 4
+    assert payload["artifactMatrix"]["complete"] is True
+    assert [
+        (artifact["variant"], artifact["entryPoint"]["source"])
+        for artifact in payload["artifacts"]
+    ] == [
+        ("debug", "first"),
+        ("debug", "second"),
+        ("release", "first"),
+        ("release", "second"),
+    ]
+    assert len({artifact["path"] for artifact in payload["artifacts"]}) == 4
+
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True, validation["diagnostics"]
+
+
 @pytest.mark.parametrize(
     "entry_points",
     (
@@ -1156,6 +1274,38 @@ def test_translate_project_reports_missing_selected_opengl_entry(tmp_path):
     )
     assert diagnostic["severity"] == "error"
     assert diagnostic["missingCapabilities"] == ["artifact.entry-point-selection"]
+
+
+@pytest.mark.parametrize(
+    ("selection", "message"),
+    (
+        pytest.param(
+            [],
+            r"ProjectConfig\.entry_points\[\"multi\.cgl\"\] must select at least one",
+            id="empty",
+        ),
+        pytest.param(
+            ["first", "first"],
+            r"ProjectConfig\.entry_points\[\"multi\.cgl\"\] must not contain duplicate",
+            id="duplicate",
+        ),
+        pytest.param(
+            ["first", " first "],
+            r"ProjectConfig\.entry_points\[\"multi\.cgl\"\] must not contain duplicate",
+            id="normalized-duplicate",
+        ),
+    ),
+)
+def test_project_config_rejects_invalid_entry_point_lists(
+    tmp_path,
+    selection,
+    message,
+):
+    with pytest.raises(ValueError, match=message):
+        project_api.ProjectConfig(
+            root=tmp_path,
+            entry_points={"multi.cgl": selection},
+        )
 
 
 @pytest.mark.parametrize(
@@ -38466,6 +38616,42 @@ def test_runtime_artifact_manifest_accepts_entry_point_selection_metadata(tmp_pa
             {"multi.cgl": ""},
             "project.entryPointSelections values must be non-empty strings",
             id="selection-value",
+        ),
+        pytest.param(
+            "entryPointSelections",
+            {"multi.cgl": []},
+            (
+                'project.entryPointSelections["multi.cgl"] must be a non-empty '
+                "string or list of strings"
+            ),
+            id="empty-selection-list",
+        ),
+        pytest.param(
+            "entryPointSelections",
+            {"multi.cgl": ["second", "second"]},
+            (
+                'project.entryPointSelections["multi.cgl"] must not contain '
+                "duplicate entry points"
+            ),
+            id="duplicate-selection-list",
+        ),
+        pytest.param(
+            "entryPointSelections",
+            {"multi.cgl": ["second", " second "]},
+            (
+                'project.entryPointSelections["multi.cgl"] must not contain '
+                "duplicate entry points"
+            ),
+            id="normalized-duplicate-selection-list",
+        ),
+        pytest.param(
+            "entryPointSelections",
+            {"multi.cgl": ["second", 1]},
+            (
+                'project.entryPointSelections["multi.cgl"] entries must be '
+                "non-empty strings"
+            ),
+            id="invalid-selection-list-entry",
         ),
         pytest.param(
             "entryPointSelectionCount",
