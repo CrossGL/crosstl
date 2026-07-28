@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import bisect
+import copy
 import fnmatch
 import functools
 import hashlib
@@ -55,6 +56,11 @@ from crosstl.project.host_reflection import (
 from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
+)
+from crosstl.project.translation_checkpoint import (
+    ProjectTranslationCheckpointError,
+    ProjectTranslationCheckpointRecorder,
+    load_project_translation_checkpoint,
 )
 from crosstl.translator.ast import (
     AttributeNode,
@@ -9358,6 +9364,110 @@ class _ProjectArtifactTranslationJob:
     configured_subgroup: tuple[int, Mapping[str, Any]] | None = None
 
 
+@dataclass
+class _ProjectTranslationCheckpointRun:
+    path: str | os.PathLike[str] | None
+    resume: bool
+    write_interval_jobs: int
+    recorder: ProjectTranslationCheckpointRecorder | None = None
+    active: Mapping[str, Any] | None = None
+
+    def initialize(
+        self,
+        config: ProjectConfig,
+        units: Sequence[ProjectTranslationUnit],
+        project_identity: Mapping[str, Any],
+        jobs: Sequence[Mapping[str, Any]],
+        diagnostics: Sequence[ProjectDiagnostic],
+    ) -> None:
+        if self.path is None:
+            return
+        _validate_project_translation_checkpoint_path(
+            self.path,
+            config=config,
+            units=units,
+            resume=self.resume,
+        )
+        self.recorder = (
+            ProjectTranslationCheckpointRecorder.resume(
+                self.path,
+                project_identity,
+                jobs,
+                initial_diagnostics=[
+                    diagnostic.to_json() for diagnostic in diagnostics
+                ],
+                write_interval_jobs=self.write_interval_jobs,
+            )
+            if self.resume
+            else ProjectTranslationCheckpointRecorder(
+                self.path,
+                project_identity,
+                jobs,
+                initial_diagnostics=[
+                    diagnostic.to_json() for diagnostic in diagnostics
+                ],
+                write_interval_jobs=self.write_interval_jobs,
+            )
+        )
+        self.recorder.write_running()
+
+    def restore(
+        self,
+        coordinate: Mapping[str, Any],
+        *,
+        config: ProjectConfig,
+        unit: ProjectTranslationUnit,
+    ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]] | None:
+        if self.recorder is None:
+            return None
+        completion = self.recorder.completion_for(coordinate)
+        if completion is None:
+            return None
+        return _restore_project_translation_checkpoint_completion(
+            completion,
+            config=config,
+            unit=unit,
+            coordinate=coordinate,
+        )
+
+    def activate(self, coordinate: Mapping[str, Any]) -> None:
+        if self.recorder is None:
+            return
+        self.active = dict(coordinate)
+        self.recorder.activate(self.active)
+
+    def complete(
+        self,
+        coordinate: Mapping[str, Any],
+        artifacts: Sequence[Mapping[str, Any]],
+        diagnostics: Sequence[ProjectDiagnostic],
+    ) -> None:
+        if self.recorder is None:
+            return
+        self.recorder.record_completion(
+            coordinate,
+            artifacts,
+            [diagnostic.to_json() for diagnostic in diagnostics],
+        )
+        self.active = None
+
+    def finish(self, report: ProjectPortabilityReport) -> None:
+        if self.recorder is not None:
+            self.recorder.write_complete(report.to_json())
+        self.active = None
+
+    def interrupt(self, error: BaseException) -> None:
+        if self.recorder is None:
+            return
+        active = self.active
+        if active is not None and self.recorder.completion_for(active) is not None:
+            active = None
+        try:
+            self.recorder.write_interrupted(active, error)
+        except ProjectTranslationCheckpointError:
+            pass
+
+
 def _regular_project_translation_jobs(
     config: ProjectConfig,
     relative_path: str,
@@ -9523,6 +9633,459 @@ def _project_translation_variants_by_source_target(
                 )
             )
     return variants
+
+
+def _project_translation_checkpoint_coordinate(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+    job: _ProjectArtifactTranslationJob,
+    *,
+    preserve_source_suffix: set[tuple[str, str]],
+) -> dict[str, Any]:
+    output_path = _artifact_path(
+        config,
+        unit,
+        target,
+        job.variant,
+        preserve_source_suffix=(unit.relative_path, target) in preserve_source_suffix,
+        entry_point=job.entry_point,
+    )
+    coordinate = {
+        "source": unit.relative_path,
+        "target": target,
+        "path": _artifact_report_path(output_path, config),
+    }
+    if job.variant is not None:
+        coordinate["variant"] = job.variant
+    if job.entry_point is not None:
+        coordinate["entryPoint"] = job.entry_point
+    if job.dispatch_artifact is not None:
+        coordinate["dispatchArtifact"] = job.dispatch_artifact.artifact_id
+    return coordinate
+
+
+def _project_translation_checkpoint_jobs(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+    targets: Sequence[str],
+    dispatch_artifacts: Mapping[str, Sequence[tuple[int, DispatchArtifactJob]]],
+    *,
+    preserve_source_suffix: set[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    return [
+        _project_translation_checkpoint_coordinate(
+            config,
+            unit,
+            target,
+            job,
+            preserve_source_suffix=preserve_source_suffix,
+        )
+        for unit in units
+        for target in targets
+        for job in _project_translation_jobs_for_target(
+            config,
+            unit,
+            target,
+            dispatch_artifacts,
+        )
+    ]
+
+
+def _validate_project_translation_checkpoint_path(
+    value: str | os.PathLike[str],
+    *,
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+    resume: bool,
+) -> None:
+    checkpoint_path = Path(value).expanduser().resolve()
+    output_path = config.output_path.resolve()
+    if _is_relative_to(checkpoint_path, output_path):
+        raise ProjectTranslationCheckpointError(
+            "path-conflict",
+            "Project translation checkpoint must be outside the artifact output directory.",
+            details={
+                "checkpointPath": str(checkpoint_path),
+                "outputDirectory": str(output_path),
+            },
+        )
+    if config.config_path is not None and checkpoint_path == config.config_path:
+        raise ProjectTranslationCheckpointError(
+            "path-conflict",
+            "Project translation checkpoint cannot replace the project configuration.",
+            details={"checkpointPath": str(checkpoint_path)},
+        )
+    source_paths = {unit.path.resolve() for unit in units}
+    if checkpoint_path in source_paths:
+        raise ProjectTranslationCheckpointError(
+            "path-conflict",
+            "Project translation checkpoint cannot replace a translation source.",
+            details={"checkpointPath": str(checkpoint_path)},
+        )
+    if _is_relative_to(checkpoint_path, config.root):
+        relative_path = _relpath(checkpoint_path, config.root)
+        if _override_for_path(relative_path, config) is not None:
+            raise ProjectTranslationCheckpointError(
+                "path-conflict",
+                "Project translation checkpoint cannot match a source override.",
+                details={
+                    "checkpointPath": str(checkpoint_path),
+                    "sourceOverridePath": relative_path,
+                },
+            )
+    if SOURCE_REGISTRY.get_by_extension(str(checkpoint_path)) is not None:
+        raise ProjectTranslationCheckpointError(
+            "path-conflict",
+            "Project translation checkpoint cannot use a registered source extension.",
+            details={"checkpointPath": str(checkpoint_path)},
+        )
+    if not checkpoint_path.exists():
+        return
+    if not checkpoint_path.is_file():
+        raise ProjectTranslationCheckpointError(
+            "path-conflict",
+            "Project translation checkpoint path must not replace a directory.",
+            details={"checkpointPath": str(checkpoint_path)},
+        )
+    if resume:
+        return
+    try:
+        load_project_translation_checkpoint(checkpoint_path)
+    except ProjectTranslationCheckpointError as exc:
+        raise ProjectTranslationCheckpointError(
+            "path-conflict",
+            "Project translation checkpoint cannot replace an unrelated file.",
+            details={"checkpointPath": str(checkpoint_path)},
+        ) from exc
+
+
+def _project_translation_checkpoint_hash(value: Any) -> dict[str, str]:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return {
+        "algorithm": "sha256",
+        "value": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _project_translation_checkpoint_identity(
+    scan: ProjectScan,
+    targets: Sequence[str],
+    *,
+    format_output: bool,
+    validate: bool,
+    run_toolchains: bool,
+) -> dict[str, Any]:
+    scan_payload = scan.to_report(targets=targets).to_json()
+    project = scan_payload["project"]
+    scan_identity = {
+        "units": scan_payload["units"],
+        "skipped": scan_payload["skipped"],
+        "nativeDirectives": scan_payload["nativeDirectives"],
+    }
+    invocation = {
+        "project": project,
+        "formatOutput": format_output,
+        "validate": validate,
+        "runToolchains": run_toolchains,
+    }
+    return {
+        "root": str(scan.config.root),
+        "configHash": _project_config_hash(scan.config),
+        "scanHash": _project_translation_checkpoint_hash(scan_identity),
+        "invocationHash": _project_translation_checkpoint_hash(invocation),
+        "unitCount": len(scan.units),
+        "targets": list(targets),
+        "outputDir": str(scan.config.output_path),
+        "packageVersion": _package_version(),
+    }
+
+
+def _restore_project_translation_checkpoint_completion(
+    completion: Mapping[str, Any],
+    *,
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    coordinate: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
+    artifacts = completion.get("artifacts")
+    diagnostics = completion.get("diagnostics")
+    if not isinstance(artifacts, list) or not isinstance(diagnostics, list):
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint completion must contain artifact and diagnostic lists.",
+            path="$.plan.completed",
+        )
+    restored_artifacts = [
+        _restore_project_translation_checkpoint_artifact(
+            artifact,
+            config=config,
+            unit=unit,
+            coordinate=coordinate,
+            index=index,
+        )
+        for index, artifact in enumerate(artifacts)
+    ]
+    restored_diagnostics = [
+        _restore_project_translation_checkpoint_diagnostic(
+            diagnostic,
+            index=index,
+        )
+        for index, diagnostic in enumerate(diagnostics)
+    ]
+    return restored_artifacts, restored_diagnostics
+
+
+def _restore_project_translation_checkpoint_artifact(
+    value: Any,
+    *,
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    coordinate: Mapping[str, Any],
+    index: int,
+) -> dict[str, Any]:
+    path = f"$.plan.completed[].artifacts[{index}]"
+    if not isinstance(value, Mapping):
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint artifact must be an object.",
+            path=path,
+        )
+    artifact = copy.deepcopy(dict(value))
+    expected_identity = {
+        "source": unit.relative_path,
+        "target": coordinate["target"],
+        "variant": coordinate.get("variant"),
+    }
+    observed_identity = {
+        "source": artifact.get("source"),
+        "target": artifact.get("target"),
+        "variant": artifact.get("variant"),
+    }
+    if observed_identity != expected_identity:
+        raise ProjectTranslationCheckpointError(
+            "completion-identity-mismatch",
+            "Checkpoint artifact does not match its planned translation coordinate.",
+            path=path,
+            details={"expected": expected_identity, "actual": observed_identity},
+        )
+    if artifact.get("sourceHash") != dict(unit.source_hash):
+        raise ProjectTranslationCheckpointError(
+            "source-identity-mismatch",
+            "Checkpoint artifact source hash does not match the current source.",
+            path=f"{path}.sourceHash",
+        )
+    if artifact.get("sourceSizeBytes") != unit.source_size_bytes:
+        raise ProjectTranslationCheckpointError(
+            "source-identity-mismatch",
+            "Checkpoint artifact source size does not match the current source.",
+            path=f"{path}.sourceSizeBytes",
+        )
+    status = artifact.get("status")
+    if status not in {"translated", "failed"}:
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint artifact status must be translated or failed.",
+            path=f"{path}.status",
+        )
+    artifact_report_path = artifact.get("path")
+    if not isinstance(artifact_report_path, str) or not artifact_report_path:
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint artifact path must be a non-empty string.",
+            path=f"{path}.path",
+        )
+    artifact_path = (config.root / artifact_report_path).resolve()
+    if not _is_relative_to(artifact_path, config.output_path.resolve()):
+        raise ProjectTranslationCheckpointError(
+            "artifact-path-invalid",
+            "Checkpoint artifact path resolves outside the configured output directory.",
+            path=f"{path}.path",
+        )
+    if status == "translated":
+        if not artifact_path.is_file():
+            raise ProjectTranslationCheckpointError(
+                "artifact-missing",
+                "Checkpoint translated artifact is missing.",
+                path=f"{path}.path",
+                details={"artifactPath": str(artifact_path)},
+            )
+        generated_hash = artifact.get("generatedHash")
+        generated_size = artifact.get("generatedSizeBytes")
+        if (
+            not isinstance(generated_hash, Mapping)
+            or _source_hash(artifact_path) != generated_hash
+        ):
+            raise ProjectTranslationCheckpointError(
+                "artifact-hash-mismatch",
+                "Checkpoint translated artifact hash does not match the output file.",
+                path=f"{path}.generatedHash",
+            )
+        if generated_size != artifact_path.stat().st_size:
+            raise ProjectTranslationCheckpointError(
+                "artifact-size-mismatch",
+                "Checkpoint translated artifact size does not match the output file.",
+                path=f"{path}.generatedSizeBytes",
+            )
+        _verify_project_translation_checkpoint_source_remap(
+            artifact.get("sourceRemap"),
+            config=config,
+            path=f"{path}.sourceRemap",
+        )
+    return artifact
+
+
+def _verify_project_translation_checkpoint_source_remap(
+    value: Any,
+    *,
+    config: ProjectConfig,
+    path: str,
+) -> None:
+    if not isinstance(value, Mapping):
+        raise ProjectTranslationCheckpointError(
+            "source-remap-invalid",
+            "Checkpoint translated artifact must include source remap metadata.",
+            path=path,
+        )
+    report_path = value.get("path")
+    if not isinstance(report_path, str) or not report_path:
+        raise ProjectTranslationCheckpointError(
+            "source-remap-invalid",
+            "Checkpoint source remap path must be a non-empty string.",
+            path=f"{path}.path",
+        )
+    remap_path = (config.root / report_path).resolve()
+    if not _is_relative_to(remap_path, config.output_path.resolve()):
+        raise ProjectTranslationCheckpointError(
+            "source-remap-invalid",
+            "Checkpoint source remap resolves outside the configured output directory.",
+            path=f"{path}.path",
+        )
+    if not remap_path.is_file():
+        raise ProjectTranslationCheckpointError(
+            "source-remap-missing",
+            "Checkpoint source remap is missing.",
+            path=f"{path}.path",
+            details={"sourceRemapPath": str(remap_path)},
+        )
+    if value.get("hash") != _source_hash(remap_path):
+        raise ProjectTranslationCheckpointError(
+            "source-remap-hash-mismatch",
+            "Checkpoint source remap hash does not match the output file.",
+            path=f"{path}.hash",
+        )
+    if value.get("sizeBytes") != remap_path.stat().st_size:
+        raise ProjectTranslationCheckpointError(
+            "source-remap-size-mismatch",
+            "Checkpoint source remap size does not match the output file.",
+            path=f"{path}.sizeBytes",
+        )
+
+
+def _restore_project_translation_checkpoint_diagnostic(
+    value: Any,
+    *,
+    index: int,
+) -> ProjectDiagnostic:
+    path = f"$.plan.completed[].diagnostics[{index}]"
+    if not isinstance(value, Mapping):
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint diagnostic must be an object.",
+            path=path,
+        )
+    location = _restore_project_translation_checkpoint_location(
+        value.get("location"),
+        path=f"{path}.location",
+    )
+    original_location = (
+        _restore_project_translation_checkpoint_location(
+            value.get("originalLocation"),
+            path=f"{path}.originalLocation",
+        )
+        if value.get("originalLocation") is not None
+        else None
+    )
+    severity = value.get("severity")
+    code = value.get("code")
+    message = value.get("message")
+    if not all(isinstance(item, str) and item for item in (severity, code, message)):
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint diagnostic severity, code, and message must be non-empty strings.",
+            path=path,
+        )
+    missing_capabilities = value.get("missingCapabilities", ())
+    if not isinstance(missing_capabilities, list) or not all(
+        isinstance(item, str) and item for item in missing_capabilities
+    ):
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint diagnostic missing capabilities must be a list of strings.",
+            path=f"{path}.missingCapabilities",
+        )
+    details = value.get("details", {})
+    if not isinstance(details, Mapping):
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint diagnostic details must be an object.",
+            path=f"{path}.details",
+        )
+    return ProjectDiagnostic(
+        severity=severity,
+        code=code,
+        message=message,
+        location=location,
+        target=value.get("target"),
+        source_backend=value.get("sourceBackend"),
+        variant=value.get("variant"),
+        check_kind=value.get("checkKind"),
+        missing_capabilities=tuple(missing_capabilities),
+        original_location=original_location,
+        details=copy.deepcopy(dict(details)),
+    )
+
+
+def _restore_project_translation_checkpoint_location(
+    value: Any,
+    *,
+    path: str,
+) -> SourceLocation:
+    if not isinstance(value, Mapping):
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint diagnostic location must be an object.",
+            path=path,
+        )
+    file = value.get("file")
+    if not isinstance(file, str) or not file:
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint diagnostic location file must be a non-empty string.",
+            path=f"{path}.file",
+        )
+    fields = {
+        "line": value.get("line", 1),
+        "column": value.get("column", 1),
+        "offset": value.get("offset", 0),
+        "length": value.get("length", 0),
+        "end_line": value.get("endLine", 1),
+        "end_column": value.get("endColumn", 1),
+        "end_offset": value.get("endOffset", 0),
+    }
+    if not all(type(item) is int and item >= 0 for item in fields.values()):
+        raise ProjectTranslationCheckpointError(
+            "completion-invalid",
+            "Checkpoint diagnostic location coordinates must be non-negative integers.",
+            path=path,
+        )
+    return SourceLocation(file=file, **fields)
 
 
 def _variant_define_sources(
@@ -24006,8 +24569,59 @@ def translate_project(
     format_output: bool = False,
     validate: bool = False,
     run_toolchains: bool = False,
+    checkpoint_path: str | os.PathLike[str] | None = None,
+    resume: bool = False,
+    checkpoint_interval_jobs: int = 1,
 ) -> ProjectPortabilityReport:
     """Translate all discovered project units to one or more target backends."""
+    resume = _bool_arg(resume, field_name="resume")
+    if checkpoint_path is not None:
+        checkpoint_path = _path_string_arg(
+            checkpoint_path,
+            field_name="checkpoint_path",
+        )
+        if not checkpoint_path.strip():
+            raise ValueError("checkpoint_path must be a non-empty string")
+    elif resume:
+        raise ValueError("resume requires checkpoint_path")
+    if type(checkpoint_interval_jobs) is not int or checkpoint_interval_jobs <= 0:
+        raise ValueError("checkpoint_interval_jobs must be a positive integer")
+    if checkpoint_path is None and checkpoint_interval_jobs != 1:
+        raise ValueError("checkpoint_interval_jobs requires checkpoint_path")
+    checkpoint_run = _ProjectTranslationCheckpointRun(
+        path=checkpoint_path,
+        resume=resume,
+        write_interval_jobs=checkpoint_interval_jobs,
+    )
+    try:
+        report = _translate_project_impl(
+            config_or_root,
+            targets=targets,
+            output_dir=output_dir,
+            variants=variants,
+            format_output=format_output,
+            validate=validate,
+            run_toolchains=run_toolchains,
+            checkpoint_run=checkpoint_run,
+        )
+        checkpoint_run.finish(report)
+    except BaseException as exc:
+        checkpoint_run.interrupt(exc)
+        raise
+    return report
+
+
+def _translate_project_impl(
+    config_or_root: ProjectConfig | str | os.PathLike[str],
+    *,
+    targets: Sequence[str] | str | None,
+    output_dir: str | os.PathLike[str] | None,
+    variants: Sequence[str] | str | None,
+    format_output: bool,
+    validate: bool,
+    run_toolchains: bool,
+    checkpoint_run: _ProjectTranslationCheckpointRun,
+) -> ProjectPortabilityReport:
     format_output = _bool_arg(format_output, field_name="format_output")
     validate = _bool_arg(validate, field_name="validate")
     run_toolchains = _bool_arg(run_toolchains, field_name="run_toolchains")
@@ -24078,6 +24692,27 @@ def translate_project(
     define_forwarding_diagnostics: set[str] = set()
     include_path_forwarding_diagnostics: set[str] = set()
     preserve_source_suffix = _artifact_source_suffix_pairs(scan.units, selected_targets)
+    if checkpoint_run.path is not None:
+        checkpoint_jobs = _project_translation_checkpoint_jobs(
+            config,
+            scan.units,
+            selected_targets,
+            dispatch_artifacts,
+            preserve_source_suffix=preserve_source_suffix,
+        )
+        checkpoint_run.initialize(
+            config,
+            scan.units,
+            _project_translation_checkpoint_identity(
+                scan,
+                selected_targets,
+                format_output=format_output,
+                validate=validate,
+                run_toolchains=run_toolchains,
+            ),
+            checkpoint_jobs,
+            diagnostics,
+        )
 
     for unit in scan.units:
         required_capabilities = _required_capabilities_for_unit(unit)
@@ -24186,6 +24821,25 @@ def translate_project(
                     artifact["dispatchArtifact"] = (
                         translation_job.dispatch_artifact.to_json()
                     )
+                checkpoint_coordinate = _project_translation_checkpoint_coordinate(
+                    config,
+                    unit,
+                    target,
+                    translation_job,
+                    preserve_source_suffix=preserve_source_suffix,
+                )
+                restored_completion = checkpoint_run.restore(
+                    checkpoint_coordinate,
+                    config=config,
+                    unit=unit,
+                )
+                if restored_completion is not None:
+                    restored_artifacts, restored_diagnostics = restored_completion
+                    artifacts.extend(restored_artifacts)
+                    diagnostics.extend(restored_diagnostics)
+                    continue
+                checkpoint_run.activate(checkpoint_coordinate)
+                checkpoint_diagnostic_start = len(diagnostics)
                 if output_dir_blocked:
                     artifact["status"] = "failed"
                     artifact["error"] = (
@@ -24193,6 +24847,11 @@ def translate_project(
                         "artifact was not written."
                     )
                     artifacts.append(artifact)
+                    checkpoint_run.complete(
+                        checkpoint_coordinate,
+                        [artifact],
+                        diagnostics[checkpoint_diagnostic_start:],
+                    )
                     continue
                 source_options = _source_options_for_unit(
                     config,
@@ -24258,6 +24917,11 @@ def translate_project(
                         )
                     )
                     artifacts.append(artifact)
+                    checkpoint_run.complete(
+                        checkpoint_coordinate,
+                        [artifact],
+                        diagnostics[checkpoint_diagnostic_start:],
+                    )
                     continue
                 if template_materialization is not None:
                     if template_materialization.metadata:
@@ -24272,6 +24936,11 @@ def translate_project(
                         )
                         _remove_artifact_output_files(output_path)
                         artifacts.append(artifact)
+                        checkpoint_run.complete(
+                            checkpoint_coordinate,
+                            [artifact],
+                            diagnostics[checkpoint_diagnostic_start:],
+                        )
                         continue
                 artifact_records = [artifact]
                 template_temp_dir: tempfile.TemporaryDirectory[str] | None = None
@@ -24765,6 +25434,11 @@ def translate_project(
                     if template_temp_dir is not None:
                         template_temp_dir.cleanup()
                 artifacts.extend(artifact_records)
+                checkpoint_run.complete(
+                    checkpoint_coordinate,
+                    artifact_records,
+                    diagnostics[checkpoint_diagnostic_start:],
+                )
 
     validation = (
         _validate_artifacts(artifacts, selected_targets, config)

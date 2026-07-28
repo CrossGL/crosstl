@@ -27,6 +27,9 @@ _CHECKPOINT_FIELDS = frozenset(
         "completedAt",
         "projectIdentity",
         "plan",
+        "artifactMatrix",
+        "initialDiagnosticCount",
+        "diagnostics",
         "interruption",
         "finalReport",
         "checkpointHash",
@@ -43,7 +46,9 @@ _PLAN_FIELDS = frozenset(
         "pending",
     )
 )
-_COORDINATE_FIELDS = frozenset(("source", "target", "path", "variant", "entryPoint"))
+_COORDINATE_FIELDS = frozenset(
+    ("source", "target", "path", "variant", "entryPoint", "dispatchArtifact")
+)
 _COMPLETION_FIELDS = frozenset(("coordinate", "artifacts", "diagnostics"))
 _INTERRUPTION_FIELDS = frozenset(("type", "message"))
 _HASH_FIELDS = frozenset(("algorithm", "value"))
@@ -90,6 +95,8 @@ class ProjectTranslationCheckpointRecorder:
         *,
         started_at: int | None = None,
         completed: Sequence[Mapping[str, Any]] = (),
+        initial_diagnostics: Sequence[Mapping[str, Any]] = (),
+        write_interval_jobs: int = 1,
     ) -> None:
         self.path = _checkpoint_path(path)
         self.project_identity = _json_mapping(
@@ -104,6 +111,17 @@ class ProjectTranslationCheckpointRecorder:
         self.started_at = _timestamp(
             int(time.time()) if started_at is None else started_at,
             path="$.startedAt",
+        )
+        self.initial_diagnostics = tuple(
+            _json_mapping(
+                diagnostic,
+                path=f"$.diagnostics[{index}]",
+            )
+            for index, diagnostic in enumerate(initial_diagnostics)
+        )
+        self.write_interval_jobs = _positive_int(
+            write_interval_jobs,
+            path="$.writeIntervalJobs",
         )
         self._completed: dict[str, dict[str, Any]] = {}
         for index, record in enumerate(completed):
@@ -127,6 +145,9 @@ class ProjectTranslationCheckpointRecorder:
         path: str | os.PathLike[str],
         project_identity: Mapping[str, Any],
         jobs: Sequence[Mapping[str, Any]],
+        *,
+        initial_diagnostics: Sequence[Mapping[str, Any]] = (),
+        write_interval_jobs: int = 1,
     ) -> ProjectTranslationCheckpointRecorder:
         checkpoint = load_project_translation_checkpoint(path)
         normalized_identity = _json_mapping(
@@ -163,12 +184,31 @@ class ProjectTranslationCheckpointRecorder:
                 "Checkpoint already records a complete translation.",
                 path="$.state",
             )
+        normalized_initial_diagnostics = tuple(
+            _json_mapping(
+                diagnostic,
+                path=f"$.diagnostics[{index}]",
+            )
+            for index, diagnostic in enumerate(initial_diagnostics)
+        )
+        initial_count = checkpoint["initialDiagnosticCount"]
+        if (
+            tuple(checkpoint["diagnostics"][:initial_count])
+            != normalized_initial_diagnostics
+        ):
+            raise ProjectTranslationCheckpointError(
+                "initial-diagnostics-mismatch",
+                "Checkpoint scan diagnostics do not match this translation.",
+                path="$.diagnostics",
+            )
         return cls(
             path,
             normalized_identity,
             normalized_jobs,
             started_at=checkpoint["startedAt"],
             completed=checkpoint["plan"]["completed"],
+            initial_diagnostics=normalized_initial_diagnostics,
+            write_interval_jobs=write_interval_jobs,
         )
 
     @property
@@ -191,12 +231,17 @@ class ProjectTranslationCheckpointRecorder:
     ) -> dict[str, Any]:
         return self._write(state="running", active=active)
 
+    def activate(self, coordinate: Mapping[str, Any]) -> dict[str, Any] | None:
+        if len(self._completed) % self.write_interval_jobs != 0:
+            return None
+        return self.write_running(coordinate)
+
     def record_completion(
         self,
         coordinate: Mapping[str, Any],
         artifacts: Sequence[Mapping[str, Any]],
         diagnostics: Sequence[Mapping[str, Any]],
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         normalized = _completion_record(
             {
                 "coordinate": coordinate,
@@ -220,6 +265,8 @@ class ProjectTranslationCheckpointRecorder:
                 path="$.plan.completed[].coordinate",
             )
         self._completed[key] = normalized
+        if len(self._completed) % self.write_interval_jobs != 0:
+            return None
         return self._write(state="running")
 
     def write_interrupted(
@@ -308,6 +355,21 @@ class ProjectTranslationCheckpointRecorder:
                 "active": normalized_active,
                 "pending": pending,
             },
+            "artifactMatrix": _artifact_matrix(
+                self.jobs,
+                tuple(self._completed[key] for key in self._ordered_completed_keys()),
+                active=normalized_active,
+                pending=pending,
+            ),
+            "initialDiagnosticCount": len(self.initial_diagnostics),
+            "diagnostics": [
+                *copy.deepcopy(list(self.initial_diagnostics)),
+                *[
+                    copy.deepcopy(diagnostic)
+                    for key in self._ordered_completed_keys()
+                    for diagnostic in self._completed[key]["diagnostics"]
+                ],
+            ],
             "interruption": (
                 _json_mapping(interruption, path="$.interruption")
                 if interruption is not None
@@ -409,6 +471,66 @@ def validate_project_translation_checkpoint(value: Any) -> dict[str, Any]:
         path="$.projectIdentity",
     )
     checkpoint["plan"] = _validate_plan(checkpoint.get("plan"))
+    initial_diagnostic_count = checkpoint.get("initialDiagnosticCount")
+    if type(initial_diagnostic_count) is not int or initial_diagnostic_count < 0:
+        raise ProjectTranslationCheckpointError(
+            "diagnostic-count-invalid",
+            "Checkpoint initial diagnostic count must be a non-negative integer.",
+            path="$.initialDiagnosticCount",
+        )
+    diagnostics = checkpoint.get("diagnostics")
+    if not isinstance(diagnostics, list) or not all(
+        isinstance(diagnostic, Mapping) for diagnostic in diagnostics
+    ):
+        raise ProjectTranslationCheckpointError(
+            "diagnostics-invalid",
+            "Checkpoint diagnostics must be a list of objects.",
+            path="$.diagnostics",
+        )
+    if initial_diagnostic_count > len(diagnostics):
+        raise ProjectTranslationCheckpointError(
+            "diagnostic-count-invalid",
+            "Checkpoint initial diagnostic count exceeds the diagnostic records.",
+            path="$.initialDiagnosticCount",
+        )
+    checkpoint["diagnostics"] = [
+        _json_mapping(diagnostic, path=f"$.diagnostics[{index}]")
+        for index, diagnostic in enumerate(diagnostics)
+    ]
+    expected_completed_diagnostics = [
+        diagnostic
+        for completion in checkpoint["plan"]["completed"]
+        for diagnostic in completion["diagnostics"]
+    ]
+    if checkpoint["diagnostics"][initial_diagnostic_count:] != (
+        expected_completed_diagnostics
+    ):
+        raise ProjectTranslationCheckpointError(
+            "diagnostics-mismatch",
+            "Checkpoint diagnostics do not match completed translation records.",
+            path="$.diagnostics",
+        )
+    expected_artifact_matrix = _artifact_matrix(
+        checkpoint["plan"]["jobs"],
+        checkpoint["plan"]["completed"],
+        active=checkpoint["plan"]["active"],
+        pending=checkpoint["plan"]["pending"],
+    )
+    observed_artifact_matrix = _json_mapping(
+        checkpoint.get("artifactMatrix"),
+        path="$.artifactMatrix",
+    )
+    if observed_artifact_matrix != expected_artifact_matrix:
+        raise ProjectTranslationCheckpointError(
+            "artifact-matrix-mismatch",
+            "Checkpoint artifact matrix does not match the translation plan.",
+            path="$.artifactMatrix",
+            details={
+                "expected": expected_artifact_matrix,
+                "actual": observed_artifact_matrix,
+            },
+        )
+    checkpoint["artifactMatrix"] = observed_artifact_matrix
     interruption = checkpoint.get("interruption")
     final_report = checkpoint.get("finalReport")
     if state == "running":
@@ -575,7 +697,7 @@ def _coordinate(value: Any, *, path: str) -> dict[str, Any]:
                 f"Translation coordinate {field_name} must be a non-empty string.",
                 path=f"{path}.{field_name}",
             )
-    for field_name in ("variant", "entryPoint"):
+    for field_name in ("variant", "entryPoint", "dispatchArtifact"):
         field_value = coordinate.get(field_name)
         if field_value is not None and (
             not isinstance(field_value, str) or not field_value.strip()
@@ -611,6 +733,65 @@ def _completion_record(value: Any, *, path: str) -> dict[str, Any]:
         "coordinate": coordinate,
         "artifacts": [copy.deepcopy(dict(item)) for item in artifacts],
         "diagnostics": [copy.deepcopy(dict(item)) for item in diagnostics],
+    }
+
+
+def _artifact_matrix(
+    jobs: Sequence[Mapping[str, Any]],
+    completed: Sequence[Mapping[str, Any]],
+    *,
+    active: Mapping[str, Any] | None,
+    pending: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    rows: dict[str, dict[str, int]] = {}
+
+    def row(target: str) -> dict[str, int]:
+        return rows.setdefault(
+            target,
+            {
+                "expectedJobCount": 0,
+                "completedJobCount": 0,
+                "activeJobCount": 0,
+                "pendingJobCount": 0,
+                "emittedArtifactCount": 0,
+                "translatedArtifactCount": 0,
+                "failedArtifactCount": 0,
+            },
+        )
+
+    for job in jobs:
+        row(str(job["target"]))["expectedJobCount"] += 1
+    for job in pending:
+        row(str(job["target"]))["pendingJobCount"] += 1
+    if active is not None:
+        row(str(active["target"]))["activeJobCount"] += 1
+
+    emitted_count = 0
+    translated_count = 0
+    failed_count = 0
+    for completion in completed:
+        target_row = row(str(completion["coordinate"]["target"]))
+        target_row["completedJobCount"] += 1
+        for artifact in completion["artifacts"]:
+            emitted_count += 1
+            target_row["emittedArtifactCount"] += 1
+            status = artifact.get("status")
+            if status == "translated":
+                translated_count += 1
+                target_row["translatedArtifactCount"] += 1
+            elif status == "failed":
+                failed_count += 1
+                target_row["failedArtifactCount"] += 1
+
+    return {
+        "expectedJobCount": len(jobs),
+        "completedJobCount": len(completed),
+        "activeJobCount": int(active is not None),
+        "pendingJobCount": len(pending),
+        "emittedArtifactCount": emitted_count,
+        "translatedArtifactCount": translated_count,
+        "failedArtifactCount": failed_count,
+        "statusByTarget": {target: rows[target] for target in sorted(rows)},
     }
 
 
@@ -750,6 +931,12 @@ def _checkpoint_path(value: str | os.PathLike[str]) -> Path:
 def _timestamp(value: Any, *, path: str) -> int:
     if type(value) is not int or value < 0:
         _invalid("Checkpoint timestamp must be a non-negative integer.", path=path)
+    return value
+
+
+def _positive_int(value: Any, *, path: str) -> int:
+    if type(value) is not int or value <= 0:
+        _invalid("Value must be a positive integer.", path=path)
     return value
 
 
