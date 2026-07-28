@@ -274,12 +274,14 @@ class ProjectTranslationCheckpointRecorder:
         active: Mapping[str, Any] | None,
         error: BaseException,
     ) -> dict[str, Any]:
+        error_type = type(error).__name__
+        message = str(error).strip() or error_type
         return self._write(
             state="interrupted",
             active=active,
             interruption={
-                "type": type(error).__name__,
-                "message": str(error),
+                "type": error_type,
+                "message": message,
             },
         )
 

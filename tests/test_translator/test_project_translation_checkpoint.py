@@ -207,6 +207,20 @@ def test_checkpoint_records_interruption_and_resumes_completed_jobs(tmp_path):
     assert running["plan"]["active"] == jobs[1]
 
 
+def test_checkpoint_records_message_for_bare_keyboard_interrupt(tmp_path):
+    path = tmp_path / "progress.json"
+    jobs = _jobs()
+    recorder = ProjectTranslationCheckpointRecorder(path, _identity(), jobs)
+
+    interrupted = recorder.write_interrupted(jobs[0], KeyboardInterrupt())
+
+    assert interrupted["state"] == "interrupted"
+    assert interrupted["interruption"] == {
+        "type": "KeyboardInterrupt",
+        "message": "KeyboardInterrupt",
+    }
+
+
 @pytest.mark.parametrize("mismatch", ["identity", "jobs"])
 def test_checkpoint_resume_rejects_stale_translation_identity(tmp_path, mismatch):
     path = tmp_path / "progress.json"
