@@ -197,6 +197,61 @@ Vulkan smoke checks validate binary ``.spv`` artifacts with ``spirv-val`` and
 assemble textual ``.spvasm`` artifacts with ``spirv-as -o`` pointed at the
 platform null device.
 
+Checkpointing Long Runs
+-----------------------
+
+``translate-project`` can persist progress independently of the final
+portability report. Use a checkpoint for repository runs that may be interrupted
+by a local process limit or CI timeout:
+
+.. code-block:: bash
+
+   python -m crosstl translate-project /path/to/repo \
+     --target directx \
+     --target opengl \
+     --output-dir crosstl-out \
+     --report crosstl-reports/portability-report.json \
+     --checkpoint crosstl-reports/translation-checkpoint.json
+
+The checkpoint is replaced atomically as work advances. It records the
+``running``, ``interrupted``, or ``complete`` state; project and invocation
+identity hashes; the deterministic job plan; completed, active, and pending
+coordinates; scan and translation diagnostics; and a partial artifact matrix.
+Generated source is not embedded in the checkpoint.
+
+Resume an unfinished run with the same project configuration and translation
+options:
+
+.. code-block:: bash
+
+   python -m crosstl translate-project /path/to/repo \
+     --target directx \
+     --target opengl \
+     --output-dir crosstl-out \
+     --report crosstl-reports/portability-report.json \
+     --checkpoint crosstl-reports/translation-checkpoint.json \
+     --resume
+
+Before skipping a completed job, resume verifies the project identity, complete
+job plan, current source identity, generated artifact hash and size, and source
+remap hash and size. Stale, modified, missing, or mismatched outputs stop the
+resume instead of being trusted. A checkpoint path must be outside the artifact
+output directory and cannot replace the project configuration or a registered
+source file.
+
+The default writes each job transition. For projects with large report metadata,
+``--checkpoint-interval-jobs N`` persists batches of completed jobs. A larger
+interval reduces write overhead, but an ungraceful termination may cause up to
+``N - 1`` already-emitted jobs to be translated again because only persisted
+completions are trusted.
+
+Python callers use the corresponding ``checkpoint_path``, ``resume``, and
+``checkpoint_interval_jobs`` arguments to ``translate_project``.
+
+A progress checkpoint is not a final portability report. Only a ``complete``
+checkpoint contains the canonical final report, and neither state establishes
+host runtime integration or numerical parity.
+
 Entry-Scoped Compute Artifacts
 ------------------------------
 

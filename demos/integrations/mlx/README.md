@@ -216,8 +216,10 @@ failed `fence.metal` records, one per target, with no fence target files emitted
 That condition is a gate expectation, not a claim that the pinned full corpus
 currently satisfies it. Additional failures remain issue-backed scout results.
 CI uploads generated portability reports, validation summaries embedded in
-those reports, generated logs, available generated artifacts, and a concise JSON
-summary.
+those reports, the durable full-corpus translation checkpoint, generated logs,
+available generated artifacts, and a concise JSON summary. A subsequent
+full-corpus invocation resumes verified completed jobs from a running or
+interrupted checkpoint.
 Because `binary_two.metal` was already in the DirectX/Vulkan frontier, its OpenGL
 promotion does not change either reduced source count.
 The same applies to `ternary.metal`: its OpenGL promotion expands the native
@@ -423,11 +425,22 @@ The latest full-corpus scout at MLX commit
 `4367c73b60541ddd5a266ce4644fd93d20223b6e` discovered 40 Metal units, 841
 include dependencies, and 120 planned target artifacts. It emitted `arange.metal`
 for DirectX, OpenGL, and Vulkan plus a Vulkan `arg_reduce.metal` artifact before
-the 900-second limit expired without a canonical project report. This interrupted
-run does not establish an active full-corpus coordinate. CrossGL/crosstl#1376
-tracks bounded materialization runtime and CrossGL/crosstl#1576 tracks durable
-per-unit checkpointing. [#1676](https://github.com/CrossGL/crosstl/issues/1676)
-remains the repository-level acceptance target.
+the 900-second limit expired without a canonical project report. That recorded
+attempt predates durable progress files and therefore does not establish an
+active full-corpus coordinate. Current runs write an atomic checkpoint containing
+the completed, active, and pending job coordinates, accumulated diagnostics, and
+partial artifact matrix. A later invocation resumes only artifacts whose source,
+generated output, and source-remap identities still match. CrossGL/crosstl#1376
+continues to track bounded materialization runtime.
+[#1676](https://github.com/CrossGL/crosstl/issues/1676) remains the
+repository-level acceptance target.
+
+A bounded checkpoint probe against the same pin planned 80 DirectX and OpenGL
+jobs. It preserved four completed records, identified `binary.metal`/DirectX as
+active with 75 jobs pending, and validated the checkpoint after a bare process
+interrupt. Resuming the probe retained those four records and returned directly
+to the active coordinate. This verifies interruption recovery, not completion
+of the full corpus or numerical parity.
 
 Materialization charges configured work budgets to unique reachable entries,
 helpers, struct specializations, and actual type-environment resolution. Exact

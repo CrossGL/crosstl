@@ -20,6 +20,7 @@ from crosstl.project import (
     build_project_test_runner_plan,
     build_runtime_artifact_manifest,
     execute_project_test_runner_plan,
+    load_project_translation_checkpoint,
     native_runtime_parity_adapters,
 )
 from crosstl.project.directx_toolchain import (
@@ -723,7 +724,6 @@ FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1376",
-    "https://github.com/CrossGL/crosstl/issues/1576",
     "https://github.com/CrossGL/crosstl/issues/1676",
     "https://github.com/CrossGL/crosstl/issues/1479",
     "https://github.com/CrossGL/crosstl/issues/1490",
@@ -819,6 +819,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1576",
     "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1800",
     "https://github.com/CrossGL/crosstl/issues/1801",
@@ -6434,6 +6435,97 @@ def _plan_reduced_runtime_readiness(
     }
 
 
+def _load_full_corpus_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
+    try:
+        return load_project_translation_checkpoint(checkpoint_path)
+    except ValueError as exc:
+        raise PortingCheckError(
+            f"full-corpus checkpoint is invalid: {checkpoint_path}"
+        ) from exc
+
+
+def _full_corpus_checkpoint_summary(
+    checkpoint_path: Path,
+    *,
+    mlx_root: Path,
+) -> dict[str, Any]:
+    if not checkpoint_path.is_file():
+        return {
+            "path": _relpath(checkpoint_path, mlx_root),
+            "produced": False,
+        }
+
+    checkpoint = _load_full_corpus_checkpoint(checkpoint_path)
+    _require(
+        checkpoint.get("schemaVersion") == 1,
+        "full-corpus checkpoint schema version changed",
+    )
+    _require(
+        checkpoint.get("kind") == "crosstl-project-translation-checkpoint",
+        "full-corpus checkpoint kind changed",
+    )
+    state = checkpoint.get("state")
+    _require(
+        state in {"running", "interrupted", "complete"},
+        "full-corpus checkpoint state is invalid",
+    )
+    plan = checkpoint.get("plan")
+    _require(isinstance(plan, Mapping), "full-corpus checkpoint plan must be an object")
+    completed = plan.get("completed")
+    _require(
+        isinstance(completed, list),
+        "full-corpus checkpoint completed jobs must be a list",
+    )
+    active = plan.get("active")
+    _require(
+        active is None or isinstance(active, Mapping),
+        "full-corpus checkpoint active coordinate must be an object or null",
+    )
+    artifact_matrix = checkpoint.get("artifactMatrix")
+    _require(
+        isinstance(artifact_matrix, Mapping),
+        "full-corpus checkpoint artifact matrix must be an object",
+    )
+    diagnostics = checkpoint.get("diagnostics")
+    _require(
+        isinstance(diagnostics, list),
+        "full-corpus checkpoint diagnostics must be a list",
+    )
+    diagnostic_counts = Counter(
+        diagnostic.get("severity")
+        for diagnostic in diagnostics
+        if isinstance(diagnostic, Mapping)
+        and isinstance(diagnostic.get("severity"), str)
+    )
+    diagnostics_by_code = Counter(
+        diagnostic.get("code")
+        for diagnostic in diagnostics
+        if isinstance(diagnostic, Mapping) and isinstance(diagnostic.get("code"), str)
+    )
+    last_completed = None
+    if completed:
+        last_record = completed[-1]
+        if isinstance(last_record, Mapping) and isinstance(
+            last_record.get("coordinate"), Mapping
+        ):
+            last_completed = dict(last_record["coordinate"])
+    return {
+        "path": _relpath(checkpoint_path, mlx_root),
+        "produced": True,
+        "state": state,
+        "resumable": state in {"running", "interrupted"},
+        "jobCount": plan.get("jobCount"),
+        "completedCount": plan.get("completedCount"),
+        "pendingCount": plan.get("pendingCount"),
+        "activeCoordinate": dict(active) if active is not None else None,
+        "lastCompletedCoordinate": last_completed,
+        "artifactMatrix": dict(artifact_matrix),
+        "diagnosticCounts": dict(sorted(diagnostic_counts.items())),
+        "diagnosticsByCode": dict(sorted(diagnostics_by_code.items())),
+        "checkpointHash": checkpoint.get("checkpointHash"),
+    }
+
+
 def _translate_full_corpus(
     mlx_root: Path,
     work_dir: Path,
@@ -6444,6 +6536,7 @@ def _translate_full_corpus(
 ) -> dict[str, Any]:
     config_path = config_dir / "full-corpus.toml"
     report_path = report_dir / "full-corpus.json"
+    checkpoint_path = report_dir / "full-corpus.checkpoint.json"
     output_dir = work_dir / "out-full-corpus"
     _write_project_config(
         config_path,
@@ -6457,25 +6550,44 @@ def _translate_full_corpus(
             ),
         },
     )
+    resume_checkpoint = False
+    if checkpoint_path.is_file():
+        checkpoint = _load_full_corpus_checkpoint(checkpoint_path)
+        resume_checkpoint = checkpoint.get("state") in {"running", "interrupted"}
+    report_path.unlink(missing_ok=True)
+    command = [
+        python,
+        "-m",
+        "crosstl",
+        "translate-project",
+        str(mlx_root),
+        "--config",
+        str(config_path),
+        "--report",
+        str(report_path),
+        "--checkpoint",
+        str(checkpoint_path),
+        "--validate",
+    ]
+    if resume_checkpoint:
+        command.append("--resume")
     result = _run_command(
         "translate-full-corpus",
-        [
-            python,
-            "-m",
-            "crosstl",
-            "translate-project",
-            str(mlx_root),
-            "--config",
-            str(config_path),
-            "--report",
-            str(report_path),
-            "--validate",
-        ],
+        command,
         log_dir=log_dir,
         check=False,
         timeout_seconds=FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS,
     )
+    checkpoint_summary = _full_corpus_checkpoint_summary(
+        checkpoint_path,
+        mlx_root=mlx_root,
+    )
     if not report_path.is_file() and result.returncode:
+        if result.returncode == 124:
+            _require(
+                checkpoint_summary["produced"],
+                "full-corpus translation timed out without a progress checkpoint",
+            )
         _require(
             FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
             "full-corpus translation failed before writing a report without "
@@ -6491,6 +6603,7 @@ def _translate_full_corpus(
             "targets": list(FULL_CORPUS_TARGETS),
             "returncode": result.returncode,
             "timeoutSeconds": FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS,
+            "checkpoint": checkpoint_summary,
             "shaderArtifactsOnly": True,
             "runtimeIntegrationIncluded": False,
             "trackedTranslationIssues": list(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES),
@@ -6632,6 +6745,7 @@ def _translate_full_corpus(
             "shaderArtifactsOnly": True,
             "runtimeIntegrationIncluded": False,
             "trackedTranslationIssues": list(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES),
+            "checkpoint": checkpoint_summary,
             "maxTemplateSpecializations": FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS,
             "maxTemplateMaterializationWork": (
                 FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK
@@ -6658,6 +6772,7 @@ def _translate_full_corpus(
         "runtimeIntegrationIncluded": False,
         "runtimeParityClaimed": False,
         "trackedTranslationIssues": list(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES),
+        "checkpoint": checkpoint_summary,
         "maxTemplateSpecializations": FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS,
         "maxTemplateMaterializationWork": FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK,
     }

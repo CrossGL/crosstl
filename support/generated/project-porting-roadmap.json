@@ -2645,6 +2645,146 @@
     },
     {
       "category": "project",
+      "description": "Persist deterministic project translation progress atomically and resume only verified completed jobs.",
+      "id": "project.translation_checkpoint",
+      "name": "Project translation checkpoints",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_only_verified_pending_jobs",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_atomic_write_preserves_previous_file_on_serialization_failure",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_checkpoint_write_interval_bounds_progress_writes",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_resume_rejects_modified_completed_output",
+            "tests/test_mlx_porting_harness.py::def test_full_corpus_mode_reports_tracked_timeout_without_report",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Select one materialized source entry and emit an independently loadable artifact with deterministic identity, path, provenance, and reflected interface metadata.",
       "id": "project.entry_scoped_artifacts",
       "name": "Entry-scoped project artifacts",
@@ -11573,12 +11713,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 41,
+    "feature_count": 42,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 29,
+        "supported": 30,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 8
@@ -11586,7 +11726,7 @@
       "directx": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 40,
+        "supported": 41,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -11594,7 +11734,7 @@
       "hip": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 29,
+        "supported": 30,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 8
@@ -11602,7 +11742,7 @@
       "metal": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 29,
+        "supported": 30,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 8
@@ -11610,7 +11750,7 @@
       "mojo": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 29,
+        "supported": 30,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 8
@@ -11618,7 +11758,7 @@
       "opengl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 39,
+        "supported": 40,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1
@@ -11626,7 +11766,7 @@
       "rust": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 29,
+        "supported": 30,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 8
@@ -11634,7 +11774,7 @@
       "slang": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 29,
+        "supported": 30,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 8
@@ -11642,7 +11782,7 @@
       "vulkan": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 29,
+        "supported": 30,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 8
@@ -11650,7 +11790,7 @@
       "webgl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 29,
+        "supported": 30,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 8
@@ -11658,7 +11798,7 @@
       "wgsl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 29,
+        "supported": 30,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 8
