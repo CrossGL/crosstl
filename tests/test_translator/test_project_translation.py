@@ -695,6 +695,7 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_package",
         "build_runtime_variant_registry",
         "build_runtime_variant_dispatch_request",
+        "build_runtime_variant_deferred_compilation_request",
         "build_runtime_test_manifest",
         "build_project_test_runner_plan",
         "compare_runtime_outputs",

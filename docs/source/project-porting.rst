@@ -1508,6 +1508,48 @@ API:
        {"workgroupCount": [1, 1, 1]},
    )
 
+An exact ready runtime variant can form the same closed request directly from a
+schema-v3 native loader package:
+
+.. code-block:: python
+
+   from crosstl.project import (
+       build_runtime_variant_deferred_compilation_request,
+       execute_native_deferred_compilation_request,
+   )
+
+   request = build_runtime_variant_deferred_compilation_request(
+       registry,
+       key,
+       package_root,
+   )
+   result = execute_native_deferred_compilation_request(
+       request,
+       package_root,
+       cache_root,
+       input_values,
+       output_values,
+       {"globalSize": [count, 1, 1]},
+   )
+
+``build_runtime_variant_deferred_compilation_request`` performs the same exact
+lookup and package-to-registry identity checks as native variant dispatch. It
+then verifies the selected source artifact bytes, loader descriptor size and
+digest, source and target identity, entry point, execution configuration, and
+specialization interface before deriving the request. The canonical variant
+key, type and value arguments, compile definitions, specialization values, and
+execution identity are copied from the selected registry record rather than
+accepted from the runtime caller.
+
+This bridge accepts DirectX HLSL source and OpenGL GLSL source records. Binary
+DXIL or SPIR-V records remain ahead-of-time artifacts and cannot be treated as
+compiler source. Native CI selects the exact record, compiles it with DXC or
+``glslangValidator``, and dispatches the resulting binary on Direct3D 12 or a
+software OpenGL device. The current package bridge emits an empty include list,
+so the selected target source must be self-contained. A source artifact with
+literal includes fails during verified materialization until the native loader
+package carries a complete include closure.
+
 ``source`` and every ``includes`` record carry a portable package path, source
 format, byte size, and SHA-256 digest. ``target`` fixes the backend, profile,
 compute entry point, and binary output format. ``variant`` carries the canonical

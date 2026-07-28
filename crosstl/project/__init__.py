@@ -178,6 +178,7 @@ from .runtime_graph_package import (
 )
 from .runtime_variant_dispatch import (
     RuntimeVariantDispatchError,
+    build_runtime_variant_deferred_compilation_request,
     build_runtime_variant_dispatch_request,
 )
 from .runtime_verification import (
@@ -406,6 +407,7 @@ __all__ = [
     "build_runtime_package",
     "build_runtime_variant_registry",
     "build_runtime_variant_dispatch_request",
+    "build_runtime_variant_deferred_compilation_request",
     "build_project_test_runner_plan",
     "compare_runtime_outputs",
     "default_runtime_test_adapters",

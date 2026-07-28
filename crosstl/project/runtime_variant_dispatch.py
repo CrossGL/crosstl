@@ -12,6 +12,10 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from .native_deferred_compilation import (
+    NativeDeferredCompilationError,
+    build_native_deferred_compilation_request,
+)
 from .native_loader_abi import (
     NATIVE_LOADER_ABI_VERSION,
     NativeLoaderABIError,
@@ -169,19 +173,13 @@ def build_runtime_variant_dispatch_request(
         label="Dispatch geometry",
     )
 
-    selected = _selected_record(registry_snapshot, key)
-    package, package_root = _load_package(native_loader_package)
-    packaged_registry = _load_packaged_registry(package, package_root)
-    _verify_registry_binding(
-        registry_snapshot,
-        selected,
-        packaged_registry,
-        key=key,
-        reference=package["runtimeVariantRegistry"],
+    selected, package_root, _package_unit, descriptor = (
+        _verified_runtime_variant_selection(
+            registry_snapshot,
+            key,
+            native_loader_package,
+        )
     )
-    package_unit = _select_package_unit(package, selected)
-    descriptor = _load_descriptor(package_root, package_unit)
-    _cross_check_identities(selected, package_unit, descriptor)
 
     specialization_values = _selected_specialization_values(selected, descriptor)
     selected_geometry = _selected_dispatch_geometry(
@@ -232,6 +230,140 @@ def build_runtime_variant_dispatch_request(
         execution_plan=execution_plan,
         artifact_identity=artifact_identity,
     )
+
+
+def build_runtime_variant_deferred_compilation_request(
+    registry: Mapping[str, Any],
+    key: str,
+    native_loader_package: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build a bounded compilation request for one exact source artifact variant."""
+
+    registry_snapshot = _snapshot_caller_value(
+        registry,
+        path="$.runtimeVariantRegistry",
+        label="Runtime variant registry",
+    )
+    selected, package_root, package_unit, descriptor = (
+        _verified_runtime_variant_selection(
+            registry_snapshot,
+            key,
+            native_loader_package,
+        )
+    )
+
+    artifact = selected["artifact"]
+    source_bytes = _read_verified_package_file(
+        package_root,
+        artifact["path"],
+        artifact["hash"],
+        field_path="$.selectedVariant.artifact.path",
+        label="Selected runtime variant source artifact",
+        code_prefix="variant-source-artifact",
+    )
+    if len(source_bytes) != artifact["sizeBytes"]:
+        raise RuntimeVariantDispatchError(
+            "variant-source-artifact-size-mismatch",
+            "Selected runtime variant source artifact size does not match its registry identity.",
+            path="$.selectedVariant.artifact.sizeBytes",
+            details={
+                "expectedSizeBytes": artifact["sizeBytes"],
+                "actualSizeBytes": len(source_bytes),
+            },
+        )
+
+    target = selected["target"]
+    output_formats = {
+        "directx": "DXIL binary",
+        "opengl": "SPIR-V binary",
+    }
+    output_format = output_formats.get(target["backend"])
+    if output_format is None:
+        raise RuntimeVariantDispatchError(
+            "deferred-target-unsupported",
+            "Deferred runtime variant compilation supports only DirectX and OpenGL.",
+            path="$.selectedVariant.target.backend",
+            details={
+                "target": target["backend"],
+                "supportedTargets": sorted(output_formats),
+            },
+        )
+
+    specialization_values = _selected_specialization_values(selected, descriptor)
+    selected_constants = selected["specializationConstants"]
+    request_specializations = [
+        {
+            "id": constant["id"],
+            "name": constant.get("name"),
+            "value": copy.deepcopy(specialization_values[constant["id"]]),
+        }
+        for constant in sorted(
+            selected_constants,
+            key=lambda item: (item["id"], item.get("name") or ""),
+        )
+    ]
+    arguments = selected["arguments"]
+    try:
+        return build_native_deferred_compilation_request(
+            {
+                "path": artifact["path"],
+                "format": artifact["format"],
+                "hash": copy.deepcopy(artifact["hash"]),
+                "sizeBytes": artifact["sizeBytes"],
+            },
+            (),
+            {
+                "backend": target["backend"],
+                "profile": target.get("profile"),
+                "stage": target["stage"],
+                "entryPoint": target["entryPoint"],
+                "outputFormat": output_format,
+            },
+            {
+                "key": key,
+                "typeArguments": copy.deepcopy(arguments["types"]),
+                "valueArguments": copy.deepcopy(arguments["values"]),
+                "compileDefines": copy.deepcopy(selected["defines"]),
+                "specializationValues": request_specializations,
+                "execution": copy.deepcopy(selected["execution"]),
+            },
+            {
+                "path": package_unit["descriptorPath"],
+                "hash": copy.deepcopy(package_unit["descriptorHash"]),
+                "sizeBytes": package_unit["descriptorSizeBytes"],
+            },
+        )
+    except NativeDeferredCompilationError as exc:
+        raise RuntimeVariantDispatchError(
+            "deferred-request-invalid",
+            "The selected runtime variant could not form a bounded deferred compilation request.",
+            path=exc.path,
+            details={
+                "requestedKey": key,
+                "deferredCompilationDiagnostic": exc.to_json(),
+            },
+        ) from exc
+
+
+def _verified_runtime_variant_selection(
+    registry: Mapping[str, Any],
+    key: str,
+    native_loader_package: str | os.PathLike[str],
+) -> tuple[dict[str, Any], Path, dict[str, Any], dict[str, Any]]:
+    selected = _selected_record(registry, key)
+    package, package_root = _load_package(native_loader_package)
+    packaged_registry = _load_packaged_registry(package, package_root)
+    _verify_registry_binding(
+        registry,
+        selected,
+        packaged_registry,
+        key=key,
+        reference=package["runtimeVariantRegistry"],
+    )
+    package_unit = _select_package_unit(package, selected)
+    descriptor = _load_descriptor(package_root, package_unit)
+    _cross_check_identities(selected, package_unit, descriptor)
+    return selected, package_root, package_unit, descriptor
 
 
 def _snapshot_caller_value(value: Any, *, path: str, label: str) -> Any:

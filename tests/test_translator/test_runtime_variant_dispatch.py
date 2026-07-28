@@ -1,20 +1,33 @@
 import copy
 import hashlib
+import importlib.util
 import json
+import os
+import shutil
+import sys
+from pathlib import Path
 
 import pytest
 
 import crosstl.project.runtime_variant_dispatch as dispatch_module
 from crosstl.project import (
+    NATIVE_DEFERRED_COMPILATION_KIND,
     NATIVE_LOADER_ABI_KIND,
     NATIVE_LOADER_ABI_PACKAGE_KIND,
     NATIVE_LOADER_ABI_PACKAGE_VERSION,
     NATIVE_LOADER_ABI_VERSION,
+    NativeDeferredCompilationRuntimeError,
     RuntimeVariantDispatchError,
+    build_runtime_variant_deferred_compilation_request,
     build_runtime_variant_dispatch_request,
+    compile_native_deferred_compilation_request,
     encode_runtime_variant_key,
+    execute_native_deferred_compilation_request,
 )
 from crosstl.project import pipeline as project_pipeline
+from crosstl.project import validate_native_deferred_compilation_request
+from crosstl.project.native_runtime_drivers import OpenGLComputeRuntime
+from crosstl.project.runtime_verification import native_runtime_parity_adapter
 
 
 def _sha256(content):
@@ -66,7 +79,14 @@ def _artifact_source(target, entry_point):
     )
 
 
-def _descriptor(target, artifact_path, artifact_bytes, *, unit_id=None):
+def _descriptor(
+    target,
+    artifact_path,
+    artifact_bytes,
+    *,
+    unit_id=None,
+    with_specializations=True,
+):
     entry_point = "CopyMain" if target == "directx" else "main"
     unit_id = unit_id or f"{target}|copy"
     layout = _layout(target)
@@ -140,7 +160,7 @@ def _descriptor(target, artifact_path, artifact_bytes, *, unit_id=None):
                 for binding in bindings
             ],
         },
-        "specializationConstants": [specialization],
+        "specializationConstants": [specialization] if with_specializations else [],
         "provenance": {"pipeline": "metal-to-crossgl"},
     }
 
@@ -149,18 +169,22 @@ def _record(descriptor):
     target = descriptor["target"]
     entry_point = descriptor["entryPoint"]["name"]
     execution = {"workgroupSize": [4, 1, 1], "subgroupWidth": None}
-    specialization = {
-        "id": 7,
-        "name": "mode",
-        "kind": "specialization-constant",
-        "dtype": "uint32",
-        "value": 11,
-        "valueSource": "concreteValue",
-        "required": True,
-        "status": "materialized",
-        "source": "project.variant",
-        "runtimeRole": "pipeline-specialization",
-    }
+    specialization_constants = []
+    if descriptor["specializationConstants"]:
+        specialization_constants.append(
+            {
+                "id": 7,
+                "name": "mode",
+                "kind": "specialization-constant",
+                "dtype": "uint32",
+                "value": 11,
+                "valueSource": "concreteValue",
+                "required": True,
+                "status": "materialized",
+                "source": "project.variant",
+                "runtimeRole": "pipeline-specialization",
+            }
+        )
     key = encode_runtime_variant_key(
         "kernels/copy.metal",
         "copy",
@@ -169,7 +193,7 @@ def _record(descriptor):
         execution=execution,
         type_arguments={"T": "float"},
         value_arguments={"N": 4},
-        specialization_constants=[specialization],
+        specialization_constants=specialization_constants,
         defines={"COPY_MODE": "1"},
     )
     return {
@@ -189,7 +213,7 @@ def _record(descriptor):
         "variant": "float-n4",
         "arguments": {"types": {"T": "float"}, "values": {"N": 4}},
         "defines": {"COPY_MODE": "1"},
-        "specializationConstants": [specialization],
+        "specializationConstants": copy.deepcopy(specialization_constants),
         "execution": execution,
         "bindingInterface": {
             "status": "ready",
@@ -206,8 +230,8 @@ def _record(descriptor):
             "resourceCount": 0,
             "constants": [],
             "constantCount": 0,
-            "specializationConstants": [copy.deepcopy(specialization)],
-            "specializationConstantCount": 1,
+            "specializationConstants": copy.deepcopy(specialization_constants),
+            "specializationConstantCount": len(specialization_constants),
             "diagnostics": [],
             "diagnosticRecords": [],
         },
@@ -327,7 +351,13 @@ def _package_unit(descriptor, descriptor_path, descriptor_bytes):
     }
 
 
-def _write_fixture(tmp_path, *, reverse_registry=False, reverse_package=False):
+def _write_fixture(
+    tmp_path,
+    *,
+    reverse_registry=False,
+    reverse_package=False,
+    with_specializations=True,
+):
     package_root = tmp_path / "package"
     records = []
     units = []
@@ -340,7 +370,12 @@ def _write_fixture(tmp_path, *, reverse_registry=False, reverse_package=False):
         output_artifact = package_root / artifact_path
         output_artifact.parent.mkdir(parents=True, exist_ok=True)
         output_artifact.write_bytes(artifact_bytes)
-        descriptor = _descriptor(target, artifact_path, artifact_bytes)
+        descriptor = _descriptor(
+            target,
+            artifact_path,
+            artifact_bytes,
+            with_specializations=with_specializations,
+        )
         descriptor_path = f"targets/{target}/copy.native-loader-abi.json"
         descriptor_bytes = _json_bytes(descriptor)
         output_descriptor = package_root / descriptor_path
@@ -436,6 +471,15 @@ def _build(fixture, target, *, package_input=None, geometry=None):
     )
 
 
+def _build_deferred(fixture, target, *, package_input=None):
+    record = fixture["records"][target]
+    return build_runtime_variant_deferred_compilation_request(
+        fixture["registry"],
+        record["key"],
+        package_input or fixture["packageRoot"],
+    )
+
+
 def _rewrite_package(fixture):
     fixture["manifestPath"].write_bytes(_json_bytes(fixture["package"]))
 
@@ -452,6 +496,18 @@ def _rewrite_packaged_registry(fixture):
     _rewrite_package(fixture)
 
 
+def _rehash_registry(fixture):
+    registry = fixture["registry"]
+    registry["registryHash"] = project_pipeline._runtime_variant_payload_hash(
+        {
+            "schemaVersion": project_pipeline.REPORT_SCHEMA_VERSION,
+            "keySchema": registry["keySchema"],
+            "variants": registry["variants"],
+        }
+    )
+    _rewrite_packaged_registry(fixture)
+
+
 def _rewrite_descriptor(fixture, target):
     descriptor = fixture["descriptors"][target]
     unit = next(
@@ -464,6 +520,51 @@ def _rewrite_descriptor(fixture, target):
     unit["descriptorHash"] = _sha256(descriptor_bytes)
     unit["descriptorSizeBytes"] = len(descriptor_bytes)
     _rewrite_package(fixture)
+
+
+def _align_opengl_descriptor_with_reflection(fixture):
+    descriptor = fixture["descriptors"]["opengl"]
+    names = ("InputValues", "OutputValues")
+    member_names = ("input_values", "output_values")
+    for binding, name, member_name in zip(
+        descriptor["bindings"],
+        names,
+        member_names,
+    ):
+        binding["name"] = name
+        binding["type"] = name
+        binding["scalarLayout"]["memberName"] = member_name
+    for binding, name, member_name in zip(
+        descriptor["scalarLayout"]["bindings"],
+        names,
+        member_names,
+    ):
+        binding["binding"] = name
+        binding["layout"]["memberName"] = member_name
+    _rewrite_descriptor(fixture, "opengl")
+
+
+def _align_directx_descriptor_with_reflection(fixture):
+    descriptor = fixture["descriptors"]["directx"]
+    types = ("StructuredBuffer<float>", "RWStructuredBuffer<float>")
+    accesses = ("read", "read_write")
+    for binding, type_name, access in zip(
+        descriptor["bindings"],
+        types,
+        accesses,
+    ):
+        binding["type"] = type_name
+        binding["access"] = access
+    _rewrite_descriptor(fixture, "directx")
+
+
+def test_runtime_variant_deferred_compilation_builder_is_public():
+    import crosstl.project as project
+
+    assert "build_runtime_variant_deferred_compilation_request" in project.__all__
+    assert project.build_runtime_variant_deferred_compilation_request is (
+        build_runtime_variant_deferred_compilation_request
+    )
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])
@@ -524,6 +625,159 @@ def test_selects_same_variant_independent_of_registry_and_package_order(tmp_path
         first_request.adapter_contract.to_json()
         == reversed_request.adapter_contract.to_json()
     )
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("package_form", ["root", "manifest"])
+def test_builds_deferred_compilation_request_for_exact_variant(
+    tmp_path, target, package_form
+):
+    fixture = _write_fixture(
+        tmp_path,
+        reverse_registry=True,
+        reverse_package=True,
+    )
+    package_input = (
+        fixture["packageRoot"] if package_form == "root" else fixture["manifestPath"]
+    )
+
+    request = _build_deferred(fixture, target, package_input=package_input)
+    record = fixture["records"][target]
+    descriptor = fixture["descriptors"][target]
+    package_unit = next(
+        unit
+        for unit in fixture["package"]["units"]
+        if unit["unitId"] == descriptor["unitId"]
+    )
+
+    assert request["kind"] == NATIVE_DEFERRED_COMPILATION_KIND
+    assert validate_native_deferred_compilation_request(request) == request
+    assert request["source"] == {
+        "path": record["artifact"]["path"],
+        "format": record["artifact"]["format"],
+        "hash": record["artifact"]["hash"],
+        "sizeBytes": record["artifact"]["sizeBytes"],
+    }
+    assert request["includes"] == []
+    assert request["target"] == {
+        "backend": target,
+        "profile": "cs_6_0" if target == "directx" else None,
+        "stage": "compute",
+        "entryPoint": "CopyMain" if target == "directx" else "main",
+        "outputFormat": "DXIL binary" if target == "directx" else "SPIR-V binary",
+    }
+    assert request["variant"] == {
+        "key": record["key"],
+        "typeArguments": {"T": "float"},
+        "valueArguments": {"N": 4},
+        "compileDefines": {"COPY_MODE": "1"},
+        "specializationValues": [{"id": 7, "name": "mode", "value": 11}],
+        "execution": {"workgroupSize": [4, 1, 1], "subgroupWidth": None},
+    }
+    assert request["expectedLoaderDescriptor"] == {
+        "path": package_unit["descriptorPath"],
+        "hash": package_unit["descriptorHash"],
+        "sizeBytes": package_unit["descriptorSizeBytes"],
+    }
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_deferred_request_is_independent_of_registry_and_package_order(
+    tmp_path, target
+):
+    first = _write_fixture(tmp_path / "first")
+    reversed_fixture = _write_fixture(
+        tmp_path / "reversed",
+        reverse_registry=True,
+        reverse_package=True,
+    )
+
+    assert _build_deferred(first, target) == _build_deferred(
+        reversed_fixture,
+        target,
+    )
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_deferred_request_rejects_modified_source_artifact(tmp_path, target):
+    fixture = _write_fixture(tmp_path)
+    artifact_path = (
+        fixture["packageRoot"] / fixture["records"][target]["artifact"]["path"]
+    )
+    artifact_path.write_bytes(artifact_path.read_bytes() + b"\n")
+
+    with pytest.raises(RuntimeVariantDispatchError) as raised:
+        _build_deferred(fixture, target)
+
+    assert raised.value.code == (
+        "project.runtime-variant-dispatch.variant-source-artifact-hash-mismatch"
+    )
+    assert raised.value.path == "$.selectedVariant.artifact.hash.value"
+
+
+def test_deferred_request_rejects_precompiled_artifact_as_source(tmp_path):
+    fixture = _write_fixture(tmp_path)
+    target = "directx"
+    key = fixture["records"][target]["key"]
+    selected = fixture["registry"]["variants"][key]
+    descriptor = fixture["descriptors"][target]
+    unit = next(
+        unit
+        for unit in fixture["package"]["units"]
+        if unit["unitId"] == descriptor["unitId"]
+    )
+    artifact_bytes = b"DXBC" + b"\0" * 28
+    artifact_identity = {
+        "packagePath": selected["artifact"]["path"],
+        "format": "DXIL binary",
+        "hash": _sha256(artifact_bytes),
+        "sizeBytes": len(artifact_bytes),
+    }
+    (fixture["packageRoot"] / artifact_identity["packagePath"]).write_bytes(
+        artifact_bytes
+    )
+    selected["artifact"].update(
+        {
+            "format": artifact_identity["format"],
+            "hash": artifact_identity["hash"],
+            "sizeBytes": artifact_identity["sizeBytes"],
+        }
+    )
+    selected["bindingInterface"]["artifactFormat"] = artifact_identity["format"]
+    descriptor["artifact"] = copy.deepcopy(artifact_identity)
+    unit["artifact"] = copy.deepcopy(artifact_identity)
+    _rewrite_descriptor(fixture, target)
+    _rehash_registry(fixture)
+
+    with pytest.raises(RuntimeVariantDispatchError) as raised:
+        _build_deferred(fixture, target)
+
+    assert raised.value.code.endswith(".deferred-request-invalid")
+    diagnostic = raised.value.details["deferredCompilationDiagnostic"]
+    assert diagnostic["code"].endswith(".source-format-target-mismatch")
+    assert diagnostic["path"] == "$.source.format"
+
+
+@pytest.mark.skipif(
+    shutil.which("glslangValidator") is None,
+    reason="glslangValidator is unavailable",
+)
+def test_real_opengl_runtime_variant_deferred_request_compiles(tmp_path):
+    fixture = _write_fixture(tmp_path, with_specializations=False)
+    _align_opengl_descriptor_with_reflection(fixture)
+    request = _build_deferred(fixture, "opengl")
+
+    compilation = compile_native_deferred_compilation_request(
+        request,
+        fixture["packageRoot"],
+        tmp_path / "cache",
+    )
+
+    output_path = compilation["output"]["path"]
+    assert Path(output_path).read_bytes().startswith(b"\x03\x02#\x07")
+    assert compilation["runtimeDescriptor"]["artifact"]["format"] == "SPIR-V binary"
+    assert compilation["target"]["backend"] == "opengl"
+    assert compilation["requestHash"] == request["requestHash"]
 
 
 def test_snapshots_runtime_values_before_building_request(tmp_path):
@@ -1076,3 +1330,101 @@ def test_wraps_native_dispatch_value_diagnostics(tmp_path):
     assert caught.value.code.endswith(".request-invalid")
     diagnostic = caught.value.details["dispatchDiagnostic"]
     assert diagnostic["code"].startswith("project.native-loader-dispatch.")
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_real_runtime_variant_deferred_compilation_dispatch(tmp_path, target):
+    required_target = os.environ.get("CROSSTL_REQUIRE_DEFERRED_NATIVE_TARGET")
+    missing = []
+    if target == "directx":
+        if sys.platform != "win32":
+            missing.append("Windows")
+        if shutil.which("dxc") is None:
+            missing.append("dxc")
+        if importlib.util.find_spec("compushady") is None:
+            missing.append("compushady")
+    else:
+        if shutil.which("glslangValidator") is None:
+            missing.append("glslangValidator")
+        for module_name in ("moderngl", "OpenGL"):
+            if importlib.util.find_spec(module_name) is None:
+                missing.append(module_name)
+    if missing:
+        message = f"{target} deferred runtime prerequisites unavailable: {missing}"
+        if required_target == target:
+            pytest.fail(message)
+        pytest.skip(message)
+
+    fixture = _write_fixture(tmp_path, with_specializations=False)
+    if target == "directx":
+        _align_directx_descriptor_with_reflection(fixture)
+    else:
+        _align_opengl_descriptor_with_reflection(fixture)
+    request = _build_deferred(fixture, target)
+    context = None
+    runtime_adapter = None
+    try:
+        if target == "opengl":
+            import moderngl
+
+            try:
+                context = moderngl.create_standalone_context(
+                    backend="egl",
+                    require=430,
+                )
+            except Exception as exc:
+                message = f"OpenGL EGL context unavailable: {exc}"
+                if required_target == target:
+                    pytest.fail(message)
+                pytest.skip(message)
+            runtime_adapter = native_runtime_parity_adapter(
+                "opengl",
+                runtime=OpenGLComputeRuntime(
+                    context_factory=lambda module: context,
+                    release_context=False,
+                ),
+            )
+        try:
+            result = execute_native_deferred_compilation_request(
+                request,
+                fixture["packageRoot"],
+                tmp_path / "cache",
+                {
+                    ("input_values" if target == "directx" else "InputValues"): {
+                        "dtype": "float32",
+                        "shape": [4],
+                        "values": [1.0, 2.0, 3.0, 4.0],
+                    }
+                },
+                {
+                    ("output_values" if target == "directx" else "OutputValues"): {
+                        "dtype": "float32",
+                        "shape": [4],
+                        "values": [1.0, 2.0, 3.0, 4.0],
+                    }
+                },
+                (4, 1, 1),
+                runtime_adapter=runtime_adapter,
+            )
+        except NativeDeferredCompilationRuntimeError as exc:
+            if exc.code.endswith("runtime-unavailable") and required_target != target:
+                pytest.skip(str(exc))
+            raise
+
+        if context is not None:
+            probe = context.buffer(data=b"\x01\x02\x03\x04")
+            try:
+                assert probe.read() == b"\x01\x02\x03\x04"
+            finally:
+                probe.release()
+    finally:
+        if context is not None:
+            context.release()
+
+    output_name = "output_values" if target == "directx" else "OutputValues"
+    assert result.outputs[output_name]["values"] == [1.0, 2.0, 3.0, 4.0]
+    report = result.details["nativeDeferredCompilation"]
+    assert report["target"]["backend"] == target
+    assert report["cache"]["status"] == "published"
+    assert report["interface"]["status"] == "verified"
+    assert report["requestHash"] == request["requestHash"]
