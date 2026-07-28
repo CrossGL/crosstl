@@ -6,6 +6,7 @@ from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
     CONTAINING_SPAN_CACHE_LIMIT,
+    LEXICAL_SCOPE_CACHE_LIMIT,
     SOURCE_ANALYSIS_CACHE_LIMIT,
     MetalMacroExpansionError,
     MetalPreprocessor,
@@ -75,6 +76,78 @@ def test_containing_span_cache_retention_is_bounded():
     assert len(preprocessor._containing_span_cache) == CONTAINING_SPAN_CACHE_LIMIT
     assert id(span_lists[0]) not in preprocessor._containing_span_cache
     assert id(span_lists[-1]) in preprocessor._containing_span_cache
+
+
+def test_innermost_lexical_scope_preserves_half_open_nested_boundaries():
+    preprocessor = MetalPreprocessor()
+    scopes = [(0, 30), (1, 10), (3, 7), (12, 20)]
+
+    assert preprocessor._innermost_lexical_scope(scopes, -1, 30) == (0, 30)
+    assert preprocessor._innermost_lexical_scope(scopes, 0, 30) == (0, 30)
+    assert preprocessor._innermost_lexical_scope(scopes, 1, 30) == (1, 10)
+    assert preprocessor._innermost_lexical_scope(scopes, 3, 30) == (3, 7)
+    assert preprocessor._innermost_lexical_scope(scopes, 7, 30) == (1, 10)
+    assert preprocessor._innermost_lexical_scope(scopes, 10, 30) == (0, 30)
+    assert preprocessor._innermost_lexical_scope(scopes, 12, 30) == (12, 20)
+    assert preprocessor._innermost_lexical_scope(scopes, 20, 30) == (0, 30)
+    assert preprocessor._innermost_lexical_scope(scopes, 30, 30) == (0, 30)
+
+
+def test_innermost_lexical_scope_indexes_large_sibling_sets_once(monkeypatch):
+    preprocessor = MetalPreprocessor()
+    sibling_count = 4096
+    source_length = sibling_count * 4 + 1
+    scopes = [(0, source_length)] + [
+        (index * 4 + 1, index * 4 + 3) for index in range(sibling_count)
+    ]
+    build_count = 0
+    original_build = preprocessor._build_lexical_scope_lookup
+
+    def counted_build(candidate_scopes, candidate_source_length):
+        nonlocal build_count
+        build_count += 1
+        return original_build(candidate_scopes, candidate_source_length)
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_build_lexical_scope_lookup",
+        counted_build,
+    )
+
+    for index in range(sibling_count):
+        position = index * 4 + 2
+        assert (
+            preprocessor._innermost_lexical_scope(
+                scopes,
+                position,
+                source_length,
+            )
+            == scopes[index + 1]
+        )
+
+    assert build_count == 1
+
+
+def test_innermost_lexical_scope_cache_retention_is_bounded():
+    preprocessor = MetalPreprocessor()
+    scope_lists = [
+        [(0, index + 3), (1, index + 2)]
+        for index in range(LEXICAL_SCOPE_CACHE_LIMIT + 5)
+    ]
+
+    for scopes in scope_lists:
+        assert (
+            preprocessor._innermost_lexical_scope(
+                scopes,
+                1,
+                scopes[0][1],
+            )
+            == scopes[1]
+        )
+
+    assert len(preprocessor._lexical_scope_lookup_cache) == LEXICAL_SCOPE_CACHE_LIMIT
+    assert id(scope_lists[0]) not in preprocessor._lexical_scope_lookup_cache
+    assert id(scope_lists[-1]) in preprocessor._lexical_scope_lookup_cache
 
 
 def test_source_analysis_cache_reuses_equal_snapshots_and_is_bounded(monkeypatch):
