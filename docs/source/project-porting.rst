@@ -1471,6 +1471,109 @@ ready variant. It does not synthesize a missing variant, perform deferred target
 compilation, rewrite a repository's host runtime, schedule multiple kernels,
 translate framework control flow, or establish full MLX test-suite parity.
 
+Bounded deferred native compilation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Repositories that select from a finite set of source variants can compile one
+fully resolved variant after packaging without accepting arbitrary source
+generation or compiler arguments. This path is defined by the schema-v1
+``crosstl-native-deferred-compilation-request`` contract and the public project
+API:
+
+.. code-block:: python
+
+   from crosstl.project import (
+       build_native_deferred_compilation_dispatch_request,
+       build_native_deferred_compilation_request,
+       compile_native_deferred_compilation_request,
+       execute_native_deferred_compilation_request,
+   )
+
+   request = build_native_deferred_compilation_request(
+       source,
+       includes,
+       target,
+       variant,
+       expected_loader_descriptor,
+   )
+   compilation = compile_native_deferred_compilation_request(
+       request,
+       package_root,
+       cache_root,
+   )
+   dispatch = build_native_deferred_compilation_dispatch_request(
+       compilation,
+       input_values,
+       output_values,
+       {"workgroupCount": [1, 1, 1]},
+   )
+
+``source`` and every ``includes`` record carry a portable package path, source
+format, byte size, and SHA-256 digest. ``target`` fixes the backend, profile,
+compute entry point, and binary output format. ``variant`` carries the canonical
+runtime variant key, finite type and value arguments, compile definitions,
+specialization values, workgroup size, and optional subgroup width. The request
+also pins the expected native loader ABI descriptor by path, size, and digest.
+A canonical ``requestHash`` covers the complete closed-schema document.
+Unknown fields, arbitrary compiler flags, unresolved or non-finite values,
+source/target format mismatches, and inconsistent variant keys fail contract
+validation.
+
+Before a compiler is consulted,
+``materialize_native_deferred_compilation_inputs`` verifies the source, every
+include, and the loader descriptor against their recorded size and digest. It
+rejects symbolic links, path escapes, portable case collisions, non-regular
+files, undeclared or unreachable includes, ambiguous angle includes, and
+dynamic include operands. Only a complete literal include closure is copied
+into an isolated source tree; the compiler receives include directories derived
+from that verified closure.
+
+Compilation then validates the loader descriptor against the request, including
+target, stage, entry point, source identity, execution configuration, and exact
+specialization identity and value rules. It separately reflects the source and
+compares entry-point execution, bindings, scalar layout, constants, and the
+OpenGL specialization interface with the descriptor. Any drift fails before
+target compilation or dispatch. Source reflection currently evaluates the
+primary translation unit. Include files remain byte-verified compiler inputs,
+but declarations visible only after preprocessing an include are not folded
+into host-interface reflection in this path and therefore cannot satisfy the
+interface check.
+
+DirectX requests compile packaged HLSL compute source to DXIL with ``dxc``.
+OpenGL requests compile packaged GLSL compute source to SPIR-V with
+``glslangValidator``. Compiler commands are derived from the validated request;
+callers cannot append arbitrary flags. The schema-v1 compilation result records
+the tool name, reported version, executable hash, probe and compile commands,
+source and include provenance, compiler diagnostics, and the compiled output's
+format, size, and SHA-256 digest.
+
+Successful outputs use a deterministic cache key derived from the complete
+request hash and the toolchain name, version, and executable hash. Cache entries
+retain the expected interface identity and output identity, are published
+atomically, and are revalidated on lookup. The toolchain executable is also
+rechecked before a cached or newly compiled result is returned. Compiler
+failures, missing or malformed output, interface drift, and partial cache
+entries are never published as successful cache entries.
+
+``build_native_deferred_compilation_dispatch_request`` converts a successful
+compiled result into the same preflighted ``RuntimeExecutionRequest`` used by
+the native loader path. The result retains the normalized source request;
+dispatch revalidates its hash and rejects target, specialization, or descriptor
+provenance drift. It preserves exact binding, specialization, execution, and
+compiled-artifact identity. ``execute_native_deferred_compilation_request``
+performs compilation or exact cache reuse and then dispatches through the
+DirectX or OpenGL native runtime adapter. Callers still supply resource values
+and dispatch counts. An injected OpenGL context remains caller-owned when
+``OpenGLComputeRuntime`` is constructed with ``release_context=False``.
+
+This is a bounded compute compilation and dispatch contract. It does not
+generate arbitrary source, rewrite host applications or runtime frameworks,
+choose repository scheduling policy, or provide framework-specific runtime
+integration. It does not claim complete MLX kernel coverage, MLX runtime
+integration, or parity with the MLX test suite. The implemented scope is
+tracked in `GitHub issue #1854
+<https://github.com/CrossGL/crosstl/issues/1854>`_.
+
 Build deterministic host loader scaffold metadata from a runtime loader
 manifest:
 

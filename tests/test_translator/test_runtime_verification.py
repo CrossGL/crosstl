@@ -233,6 +233,35 @@ class FakeNativeRuntime:
         }
 
 
+class BinaryNativeRuntime:
+    name = "binary-native-runtime"
+
+    def __init__(self):
+        self.loaded_artifact = None
+        self.prepared = None
+
+    def is_available(self, adapter, request):
+        _ = adapter, request
+        return RuntimeExecutorAvailability(True)
+
+    def load_artifact(self, adapter, state, module_path):
+        _ = adapter, state
+        self.loaded_artifact = Path(module_path).read_bytes()
+        return self.loaded_artifact
+
+    def dispatch(self, adapter, state, prepared):
+        _ = adapter
+        assert state.loaded_artifact == self.loaded_artifact
+        self.prepared = prepared
+        return {
+            "out": {
+                "dtype": "float32",
+                "shape": [2],
+                "values": [11.0, 22.0],
+            }
+        }
+
+
 def test_load_runtime_verification_fixtures_from_json(tmp_path):
     fixture_path = tmp_path / "runtime-fixtures.json"
     fixture_path.write_text(
@@ -3263,6 +3292,53 @@ def test_runtime_parity_native_opengl_adapter_preserves_uniform_source_path(
     }
 
 
+def test_runtime_parity_native_opengl_adapter_loads_declared_spirv_binary(
+    tmp_path,
+):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    spirv_binary = b"\x03\x02#\x07" + (b"\x00" * 16)
+    artifact_path.write_bytes(spirv_binary)
+
+    def unexpected_command(command, *, input_text=None):
+        raise AssertionError(
+            f"compiled SPIR-V reached source validation: {command!r}, {input_text!r}"
+        )
+
+    runtime = BinaryNativeRuntime()
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=runtime,
+        tool_resolver=lambda _tool: None,
+        command_runner=unexpected_command,
+    )
+    artifact = _native_runtime_artifact(
+        artifactFormat="SPIR-V binary",
+        specializationConstants=[],
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [artifact]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    assert result["status"] == PASSED
+    assert runtime.loaded_artifact == spirv_binary
+    assert runtime.prepared.artifact["artifactFormat"] == "SPIR-V binary"
+    assert runtime.prepared.module_path.name == artifact_path.name
+    assert runtime.prepared.module_path.parent.name == "artifact-snapshot"
+    validation_steps = [
+        step
+        for step in result["executor"]["details"]["adapterSteps"]
+        if step["action"] == "validate-native-runtime-artifact"
+    ]
+    assert validation_steps[0]["details"] == {
+        "target": "opengl",
+        "commandCount": 0,
+    }
+
+
 def test_runtime_parity_native_adapter_skips_validation_tooling_when_disabled(
     tmp_path,
 ):
@@ -3526,6 +3602,55 @@ def test_runtime_parity_native_directx_adapter_compiles_hlsl(tmp_path):
     assert compiled_source.name == artifact_path.name
     assert compiled_source.parent.name == "artifact-snapshot"
     assert compiled_source != artifact_path.resolve()
+
+
+def test_runtime_parity_native_directx_adapter_inspects_declared_dxil_binary(
+    tmp_path,
+):
+    artifact_path = tmp_path / "out" / "directx" / "debug" / "add.hlsl"
+    artifact_path.parent.mkdir(parents=True)
+    dxil_binary = b"DXBC\x00\x01"
+    artifact_path.write_bytes(dxil_binary)
+    calls = []
+
+    def passing_command(command, *, input_text=None):
+        assert input_text is None
+        calls.append(command)
+        return {"returncode": 0, "stdout": "validated DXIL"}
+
+    runtime = BinaryNativeRuntime()
+    adapter = DirectXRuntimeParityAdapter(
+        runtime=runtime,
+        required_tools=(),
+        supported_platforms=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=passing_command,
+    )
+    artifact = _native_runtime_artifact(
+        path="out/directx/debug/add.hlsl",
+        target="directx",
+        artifactFormat="DXIL binary",
+        specializationConstants=[],
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [artifact]),
+        _native_runtime_manifest(target="directx"),
+        executors={"directx": adapter},
+    )
+
+    result = report["results"][0]
+    assert result["status"] == PASSED
+    assert calls[0][:-1] == ("/fake/dxc", "-dumpbin")
+    inspected_artifact = Path(calls[0][-1])
+    assert inspected_artifact.name == artifact_path.name
+    assert inspected_artifact.parent.name == "artifact-snapshot"
+    assert runtime.loaded_artifact == dxil_binary
+    assert runtime.prepared.module_path == inspected_artifact
+    assert any(
+        step["action"] == "inspect-dxil-for-directx-runtime"
+        for step in result["executor"]["details"]["adapterSteps"]
+    )
 
 
 def test_runtime_parity_native_directx_adapter_enables_native_16bit_hlsl(tmp_path):

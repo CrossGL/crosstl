@@ -424,6 +424,103 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     assert "continue-on-error" not in opengl
 
 
+def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispatch():
+    workflow = _workflow_texts().get("deferred-native-compilation.yml", "")
+    expected_trigger_paths = {
+        ".github/workflows/deferred-native-compilation.yml",
+        "crosstl/project/directx_toolchain.py",
+        "crosstl/project/host_reflection.py",
+        "crosstl/project/native_deferred_compilation*.py",
+        "crosstl/project/native_loader_abi.py",
+        "crosstl/project/native_loader_dispatch.py",
+        "crosstl/project/native_runtime_drivers.py",
+        "crosstl/project/pipeline.py",
+        "crosstl/project/runtime_verification.py",
+        "crosstl/project/__init__.py",
+        "setup.py",
+        "tests/test_translator/test_native_deferred_compilation*.py",
+        "tests/test_translator/test_native_loader_dispatch.py",
+        "tests/test_translator/test_native_runtime_drivers.py",
+        "tests/test_translator/test_project_translation.py",
+        "tests/test_translator/test_runtime_verification.py",
+        "tests/test_ci_workflows.py",
+    }
+
+    assert workflow, "deferred-native-compilation.yml must exist"
+    assert "name: Deferred Native Compilation" in workflow
+    assert re.search(r"\bpush\s*:", workflow)
+    assert re.search(r"\bpull_request\s*:", workflow)
+    assert workflow.count("branches: [main]") == 2
+    assert set(_workflow_event_paths(workflow, "push")) == expected_trigger_paths
+    assert (
+        set(_workflow_event_paths(workflow, "pull_request")) == expected_trigger_paths
+    )
+    assert "permissions:\n  contents: read" in workflow
+    assert "concurrency:" in workflow
+    assert (
+        "group: deferred-native-compilation-${{ github.workflow }}-${{ github.ref }}"
+        in workflow
+    )
+    assert "cancel-in-progress: true" in workflow
+    assert (
+        workflow.count(
+            "uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
+        )
+        == 3
+    )
+    assert (
+        workflow.count(
+            "uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+        )
+        == 3
+    )
+    assert workflow.count("persist-credentials: false") == 3
+    assert workflow.count("python -m pytest -q -n auto") == 3
+    assert "continue-on-error" not in workflow
+
+    contract = _workflow_job_section(workflow, "contract")
+    assert _matrix_values(contract, "os") == RUNNER_OSES
+    assert "runs-on: ${{ matrix.os }}" in contract
+    assert "timeout-minutes: 30" in contract
+    assert "test_native_deferred_compilation.py" in contract
+    assert "test_native_deferred_compilation_package.py" in contract
+    assert "test_native_deferred_compilation_cache.py" in contract
+    assert "test_native_deferred_compilation_runtime.py" in contract
+    assert "test_native_loader_dispatch.py" in contract
+    assert "test_native_runtime_drivers.py" in contract
+    assert "test_runtime_verification.py" in contract
+    assert "test_project_package_exposes_public_api_surface" in contract
+
+    directx = _workflow_job_section(workflow, "directx-runtime")
+    assert "name: Direct3D 12 deferred compile and dispatch" in directx
+    assert "runs-on: windows-latest" in directx
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in directx
+    assert "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4" in (
+        directx
+    )
+    assert "Get-FileHash -Path $archive -Algorithm SHA256" in directx
+    assert "CROSSTL_REQUIRE_DEFERRED_NATIVE_TARGET: directx" in directx
+    assert "test_real_deferred_compilation_dispatch[directx]" in directx
+
+    opengl = _workflow_job_section(workflow, "opengl-runtime")
+    assert "name: OpenGL deferred compile and dispatch" in opengl
+    assert "runs-on: ubuntu-latest" in opengl
+    for dependency in (
+        "glslang-tools",
+        "libegl1",
+        "libgl1-mesa-dri",
+        "moderngl==5.12.0",
+        "PyOpenGL==3.1.10",
+        "spirv-tools",
+    ):
+        assert dependency in opengl
+    assert "CROSSTL_REQUIRE_DEFERRED_NATIVE_TARGET: opengl" in opengl
+    assert "EGL_PLATFORM: surfaceless" in opengl
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl
+    assert "test_real_opengl_toolchain_compiles_and_validates_cached_output" in opengl
+    assert "test_real_deferred_compilation_dispatch[opengl]" in opengl
+
+
 def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     workflows = _workflow_texts()
     demo = workflows.get("demo.yml", "")

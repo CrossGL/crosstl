@@ -1145,9 +1145,10 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 reason=platform_details["message"],
                 details=platform_details,
             )
+        required_tools = self._required_tools_for_request(request)
         missing_tools = [
             tool
-            for tool in self.required_tools
+            for tool in required_tools
             if self.validate and self._resolve_tool(tool) is None
         ]
         if missing_tools:
@@ -1161,7 +1162,7 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                     "reasonKind": "tool-unavailable",
                     "target": self.target,
                     "missingTools": missing_tools,
-                    "requiredTools": list(self.required_tools),
+                    "requiredTools": list(required_tools),
                 },
             )
         missing_environment = [
@@ -1189,7 +1190,7 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
             details={
                 "reasonKind": "available",
                 "target": self.target,
-                "requiredTools": list(self.required_tools),
+                "requiredTools": list(required_tools),
                 **dict(runtime_availability.details),
             },
         )
@@ -1597,6 +1598,12 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
             return None
         return str(resolved)
 
+    def _required_tools_for_request(
+        self, request: RuntimeExecutionRequest
+    ) -> tuple[str, ...]:
+        _ = request
+        return self.required_tools
+
     def _tool_command(self, tool: str) -> str:
         resolved = self._resolve_tool(tool)
         if resolved is None:
@@ -1625,6 +1632,18 @@ class DirectXRuntimeParityAdapter(NativeRuntimeParityAdapter):
         *,
         temp_dir: Path,
     ) -> tuple[NativeRuntimeValidationCommand, ...]:
+        if _native_runtime_artifact_format(state.request) == "DXIL binary":
+            return (
+                NativeRuntimeValidationCommand(
+                    command=(
+                        self._tool_command("dxc"),
+                        "-dumpbin",
+                        str(artifact_path),
+                    ),
+                    action="inspect-dxil-for-directx-runtime",
+                    module_path=artifact_path,
+                ),
+            )
         entry_point = _native_entry_point_name(state)
         if entry_point is None:
             raise RuntimeAdapterSetupError(
@@ -1662,6 +1681,15 @@ class OpenGLRuntimeParityAdapter(NativeRuntimeParityAdapter):
     targets = ("opengl",)
     required_tools = ("glslangValidator",)
 
+    def _required_tools_for_request(
+        self, request: RuntimeExecutionRequest
+    ) -> tuple[str, ...]:
+        if _native_runtime_artifact_format(request) == "SPIR-V binary":
+            return tuple(
+                tool for tool in self.required_tools if tool != "glslangValidator"
+            )
+        return super()._required_tools_for_request(request)
+
     def validation_commands(
         self,
         state: RuntimeExecutionState,
@@ -1669,6 +1697,8 @@ class OpenGLRuntimeParityAdapter(NativeRuntimeParityAdapter):
         *,
         temp_dir: Path,
     ) -> tuple[NativeRuntimeValidationCommand, ...]:
+        if _native_runtime_artifact_format(state.request) == "SPIR-V binary":
+            return ()
         stage = _native_glsl_stage(state, artifact_path)
         if _opengl_runtime_specialization_bindings(state):
             if stage != "comp":
@@ -3868,6 +3898,16 @@ def _native_entry_point_name(state: RuntimeExecutionState) -> str | None:
         return contract.entry_points[0].name
     entry_point = state.request.artifact.get("entryPoint")
     return entry_point if isinstance(entry_point, str) and entry_point.strip() else None
+
+
+def _native_runtime_artifact_format(
+    request: RuntimeExecutionRequest,
+) -> str | None:
+    for field in ("artifactFormat", "format"):
+        artifact_format = request.artifact.get(field)
+        if isinstance(artifact_format, str) and artifact_format.strip():
+            return artifact_format.strip()
+    return None
 
 
 def _opengl_runtime_constant_is_specialization(

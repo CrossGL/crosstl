@@ -19,15 +19,30 @@ from crosstl.project.runtime_verification import (
 )
 
 
-def _write_descriptor(tmp_path, target="directx", *, constants=None):
-    extension = "hlsl" if target == "directx" else "comp"
+def _write_descriptor(
+    tmp_path,
+    target="directx",
+    *,
+    constants=None,
+    artifact_format=None,
+    artifact_bytes=None,
+):
     entry_point = "CSMain" if target == "directx" else "main"
-    artifact_format = "HLSL source" if target == "directx" else "GLSL source"
-    artifact_bytes = (
-        b"[numthreads(64, 1, 1)] void CSMain() {}\n"
-        if target == "directx"
-        else b"#version 430\nlayout(local_size_x = 64) in;\nvoid main() {}\n"
-    )
+    source_format = "HLSL source" if target == "directx" else "GLSL source"
+    if artifact_format is None:
+        artifact_format = source_format
+    if artifact_bytes is None:
+        artifact_bytes = (
+            b"[numthreads(64, 1, 1)] void CSMain() {}\n"
+            if target == "directx"
+            else b"#version 430\nlayout(local_size_x = 64) in;\nvoid main() {}\n"
+        )
+    extension = {
+        "HLSL source": "hlsl",
+        "DXIL binary": "dxil",
+        "GLSL source": "comp",
+        "SPIR-V binary": "spv",
+    }.get(artifact_format, "bin")
     package_path = f"artifacts/{target}/copy.{extension}"
     artifact_path = tmp_path / package_path
     artifact_path.parent.mkdir(parents=True)
@@ -163,16 +178,22 @@ def _build(tmp_path, target="directx", **overrides):
 
 
 @pytest.mark.parametrize(
-    ("target", "entry_point", "namespaces"),
+    ("target", "entry_point", "namespaces", "artifact_format"),
     [
-        ("directx", "CSMain", ["srv", "uav"]),
-        ("opengl", "main", ["storage-buffer", "storage-buffer"]),
+        ("directx", "CSMain", ["srv", "uav"], "HLSL source"),
+        (
+            "opengl",
+            "main",
+            ["storage-buffer", "storage-buffer"],
+            "GLSL source",
+        ),
     ],
 )
 def test_builds_preflighted_native_runtime_request(
-    tmp_path, target, entry_point, namespaces
+    tmp_path, target, entry_point, namespaces, artifact_format
 ):
     request = _build(tmp_path, target)
+    artifact_bytes = request.artifact_path.read_bytes()
 
     assert isinstance(request, RuntimeExecutionRequest)
     assert (
@@ -184,6 +205,15 @@ def test_builds_preflighted_native_runtime_request(
     )
     assert request.project_root == tmp_path.resolve()
     assert request.artifact["target"] == target
+    assert request.artifact["artifactFormat"] == artifact_format
+    assert request.artifact_identity is not None
+    assert request.artifact_identity.size_bytes == len(artifact_bytes)
+    assert (
+        request.artifact_identity.hash_value
+        == hashlib.sha256(artifact_bytes).hexdigest()
+    )
+    assert request.artifact_identity.hash_algorithm == "sha256"
+    assert request.artifact_identity.artifact_id == f"copy:{target}"
     assert request.fixture.entry_point == entry_point
     assert request.execution_plan is not None
     assert request.execution_plan.diagnostics == ()
@@ -208,6 +238,133 @@ def test_builds_preflighted_native_runtime_request(
         "input",
         "expectedOutput",
     ]
+
+
+@pytest.mark.parametrize(
+    ("target", "artifact_format", "extension", "artifact_bytes"),
+    [
+        (
+            "directx",
+            "DXIL binary",
+            "dxil",
+            b"DXBC" + bytes(range(32)) + b"DXIL",
+        ),
+        (
+            "opengl",
+            "SPIR-V binary",
+            "spv",
+            b"\x03\x02\x23\x07\x00\x00\x01\x00\x00\x00\x00\x00",
+        ),
+    ],
+)
+def test_builds_preflighted_compiled_native_runtime_request(
+    tmp_path, target, artifact_format, extension, artifact_bytes
+):
+    descriptor = _write_descriptor(
+        tmp_path,
+        target,
+        artifact_format=artifact_format,
+        artifact_bytes=artifact_bytes,
+    )
+    specialization_values = {3: 4} if target == "directx" else {3: 16}
+
+    request = _build(
+        tmp_path,
+        target,
+        descriptor=descriptor,
+        specialization_values=specialization_values,
+    )
+
+    digest = hashlib.sha256(artifact_bytes).hexdigest()
+    assert (
+        request.artifact_path
+        == (tmp_path / f"artifacts/{target}/copy.{extension}").resolve()
+    )
+    assert request.artifact["artifactFormat"] == artifact_format
+    assert request.artifact["sizeBytes"] == len(artifact_bytes)
+    assert request.artifact["hash"] == {
+        "algorithm": "sha256",
+        "value": digest,
+    }
+    assert request.artifact_identity is not None
+    assert request.artifact_identity.size_bytes == len(artifact_bytes)
+    assert request.artifact_identity.hash_value == digest
+    assert request.artifact_identity.hash_algorithm == "sha256"
+    assert request.artifact_identity.artifact_id == f"copy:{target}"
+    assert request.fixture.selector.path == f"artifacts/{target}/copy.{extension}"
+    assert request.execution_plan is not None
+    assert request.execution_plan.diagnostics == ()
+
+    constant = request.adapter_contract.specialization_constants[0]
+    assert constant.constant_id == 3
+    assert constant.value == specialization_values[3]
+    if target == "directx":
+        assert constant.kind == "compile-time-constant"
+        assert constant.metadata["mechanism"] == "compiled"
+    else:
+        assert constant.kind == "specialization-constant"
+
+
+@pytest.mark.parametrize(
+    ("target", "artifact_format"),
+    [
+        ("directx", "DXIL"),
+        ("directx", "SPIR-V binary"),
+        ("opengl", "DXIL binary"),
+        ("opengl", "SPIR-V assembly"),
+    ],
+)
+def test_rejects_other_compiled_artifact_formats(tmp_path, target, artifact_format):
+    descriptor = _write_descriptor(tmp_path, target)
+    descriptor["artifact"]["format"] = artifact_format
+
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, target, descriptor=descriptor)
+
+    assert caught.value.code.endswith(".artifact-format-unsupported")
+    assert caught.value.details["actualFormat"] == artifact_format
+
+
+def test_rejects_unmaterialized_directx_specialization_for_dxil(tmp_path):
+    descriptor = _write_descriptor(
+        tmp_path,
+        "directx",
+        artifact_format="DXIL binary",
+        artifact_bytes=b"DXBC" + bytes(range(32)) + b"DXIL",
+        constants=[
+            {
+                "id": 3,
+                "name": "vector_width",
+                "dtype": "uint32",
+                "required": True,
+                "default": 4,
+            }
+        ],
+    )
+
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, descriptor=descriptor)
+
+    assert caught.value.code.endswith(".specialization-unmaterialized")
+
+
+def test_rejects_non_numeric_opengl_specialization_id_for_spirv(tmp_path):
+    descriptor = _write_descriptor(
+        tmp_path,
+        "opengl",
+        artifact_format="SPIR-V binary",
+        artifact_bytes=b"\x03\x02\x23\x07\x00\x00\x01\x00\x00\x00\x00\x00",
+    )
+
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(
+            tmp_path,
+            "opengl",
+            descriptor=descriptor,
+            specialization_values={"3": 4},
+        )
+
+    assert caught.value.code.endswith(".specialization-id-invalid")
 
 
 def test_specialization_provenance_distinguishes_descriptor_default_and_explicit(
