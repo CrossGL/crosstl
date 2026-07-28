@@ -544,6 +544,20 @@ def _align_opengl_descriptor_with_reflection(fixture):
     _rewrite_descriptor(fixture, "opengl")
 
 
+def _align_directx_descriptor_with_reflection(fixture):
+    descriptor = fixture["descriptors"]["directx"]
+    types = ("StructuredBuffer<float>", "RWStructuredBuffer<float>")
+    accesses = ("read", "read_write")
+    for binding, type_name, access in zip(
+        descriptor["bindings"],
+        types,
+        accesses,
+    ):
+        binding["type"] = type_name
+        binding["access"] = access
+    _rewrite_descriptor(fixture, "directx")
+
+
 def test_runtime_variant_deferred_compilation_builder_is_public():
     import crosstl.project as project
 
@@ -1342,7 +1356,9 @@ def test_real_runtime_variant_deferred_compilation_dispatch(tmp_path, target):
         pytest.skip(message)
 
     fixture = _write_fixture(tmp_path, with_specializations=False)
-    if target == "opengl":
+    if target == "directx":
+        _align_directx_descriptor_with_reflection(fixture)
+    else:
         _align_opengl_descriptor_with_reflection(fixture)
     request = _build_deferred(fixture, target)
     context = None
