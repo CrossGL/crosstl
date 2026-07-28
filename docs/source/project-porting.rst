@@ -106,9 +106,9 @@ Use these report fields to decide the next action:
      - Confirm the expected unit, target, and named-variant artifact plan before
        translation, then identify missing or extra artifacts after translation.
    * - ``project.entryPointSelections`` and ``artifacts[].entryPoint``
-     - Confirm that a requested materialized source entry was packaged under its
-       deterministic entry path and identify the reflected target entry and
-       stage.
+     - Confirm that requested materialized source entries were each packaged
+       under deterministic entry paths and identify their reflected target
+       entries and stages.
    * - ``validation``
      - Check current source hashes and byte sizes, generated artifact hashes
        and byte sizes, source maps, source remaps, optional toolchain
@@ -255,8 +255,9 @@ host runtime integration or numerical parity.
 Entry-Scoped Compute Artifacts
 ------------------------------
 
-Repositories can request a standalone artifact for one materialized source
-entry by adding a repository-relative selector table to ``crosstl.toml``:
+Repositories can request standalone artifacts for one or more materialized
+source entries by adding a repository-relative selector table to
+``crosstl.toml``:
 
 .. code-block:: toml
 
@@ -267,27 +268,35 @@ entry by adding a repository-relative selector table to ``crosstl.toml``:
    output_dir = "crosstl-out"
 
    [project.entry_points]
-   "kernels/arange.metal" = "arangeuint32"
+   "kernels/arange.metal" = ["arangeuint32", "arangec64"]
 
-For DirectX compute output, the selected source entry is emitted as target entry
-``CSMain``. A source such as ``kernels/arange.metal`` produces
-``crosstl-out/directx/kernels/arange/arangeuint32.hlsl``. The standalone HLSL
-retains only the selected entry's reachable helpers, resources, constants, and
-execution contract. Explicit registers and spaces remain unchanged, while
+Each value may be one entry name or an ordered array of entry names. An array
+creates one independently checkpointed artifact per entry in the declared
+order. Empty arrays and duplicate names are rejected.
+
+For DirectX compute output, each selected source entry is emitted as target
+entry ``CSMain``. A source such as ``kernels/arange.metal`` produces
+``crosstl-out/directx/kernels/arange/arangeuint32.hlsl`` and
+``crosstl-out/directx/kernels/arange/arangec64.hlsl``. Each standalone HLSL
+artifact retains only that entry's reachable helpers, resources, constants,
+and execution contract. Explicit registers and spaces remain unchanged, while
 runtime-loader metadata records the selected ``cs_6_0`` entry profile.
 
-For OpenGL compute output, the same selection produces
-``crosstl-out/opengl/kernels/arange/arangeuint32.glsl`` with target entry
-``main``. For both targets, the portability report records the source entry,
-target entry, and reflected stage on the artifact; embedded validation records
-carry the same identity. Runtime artifact manifests then reflect only the
-selected stage interface from that standalone output.
+For OpenGL compute output, the same selection produces one ``.glsl`` artifact
+per entry with target entry ``main``. For both targets, the portability report
+records every source entry, target entry, and reflected stage; embedded
+validation records carry the same identities. Runtime artifact manifests then
+reflect only the selected stage interface from each standalone output.
 
 Selection is exact after source materialization. Missing or ambiguous entries
 fail with structured diagnostics and no target file. Targets that do not yet
 implement standalone entry generation also fail explicitly instead of pruning
 an aggregate artifact. When ``project.entry_points`` is absent, project
 translation keeps the existing aggregate output path and behavior.
+
+Entry selection scopes shader or kernel translation; it does not infer host
+dispatch dimensions, runtime bindings, or backend integration. Record those
+requirements through the corresponding dispatch and runtime contracts.
 
 Project Index-Range Assertions
 ------------------------------

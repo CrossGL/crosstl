@@ -2785,7 +2785,7 @@
     },
     {
       "category": "project",
-      "description": "Select one materialized source entry and emit an independently loadable artifact with deterministic identity, path, provenance, and reflected interface metadata.",
+      "description": "Select one or more materialized source entries and emit independently loadable artifacts with deterministic identities, paths, provenance, and reflected interface metadata.",
       "id": "project.entry_scoped_artifacts",
       "name": "Entry-scoped project artifacts",
       "support": {
@@ -2803,11 +2803,12 @@
             "tests/test_translator/test_directx_entry_packaging.py::def test_selected_directx_compute_is_standalone_and_replayable",
             "tests/test_translator/test_directx_entry_packaging.py::def test_directx_project_preserves_aggregate_output_without_selection",
             "tests/test_translator/test_directx_entry_packaging.py::def test_translate_project_cli_packages_materialized_directx_entry",
+            "tests/test_translator/test_directx_entry_packaging.py::def test_translate_project_emits_each_materialized_directx_entry",
             "tests/test_translator/test_directx_entry_packaging.py::def test_directx_entry_selection_failures_are_structured_and_write_no_file",
             "tests/test_translator/test_project_translation.py::def test_translate_project_allows_entry_scoped_workgroup_size_specialization",
             "tests/test_translator/test_native_runtime_drivers.py::def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device"
           ],
-          "notes": "Project configuration selects one materialized compute entry and emits an independently loadable HLSL artifact at a deterministic entry path. The artifact retains only reachable helpers, resources, constants, and execution state; preserves explicit registers and spaces; and records source-to-target entry identity, the selected execution contract, reflected interface, source maps, validation, profile, and entry-scoped provenance. The pinned MLX arangeuint32 proof compiles the standalone CSMain artifact with DXC and verifies exact Direct3D 12 readback on Windows CI.",
+          "notes": "Project configuration accepts a string or ordered list of materialized compute entries and emits one independently checkpointed HLSL artifact per entry at a deterministic path. Each artifact retains only reachable helpers, resources, constants, and execution state; preserves explicit registers and spaces; and records source-to-target entry identity, the selected execution contract, reflected interface, source maps, validation, profile, and entry-scoped provenance. The pinned MLX arangeuint32 proof compiles the standalone CSMain artifact with DXC and verifies exact Direct3D 12 readback on Windows CI.",
           "status": "supported"
         },
         "hip": {
@@ -2836,12 +2837,15 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_reports_available_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_emits_entry_scoped_opengl_artifact_and_reflection",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_emits_each_selected_opengl_entry",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_multiplies_variants_by_selected_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_keeps_aggregate_opengl_output_without_entry_selection",
             "tests/test_translator/test_project_translation.py::def test_translate_project_reports_missing_selected_opengl_entry",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_requires_configured_entry_point_metadata",
+            "tests/test_translator/test_project_translation_checkpoint.py::def test_translate_project_checkpoint_resumes_pending_entry_artifact",
             "tests/test_mlx_porting_harness.py::def test_arange_opengl_check_confirms_native_validation"
           ],
-          "notes": "Project configuration selects one materialized compute entry, emits a standalone GLSL main artifact at a deterministic entry path, retains only the selected stage interface and reachable helpers, records source-to-target entry identity in report and validation records, preserves provenance and source maps, and exposes an entry-scoped reflected runtime interface. Aggregate output remains unchanged when no entry is selected. The pinned MLX arangeuint32 proof compiles and executes through Mesa OpenGL with exact uint32 readback on Linux CI.",
+          "notes": "Project configuration accepts a string or ordered list of materialized compute entries and emits one independently checkpointed GLSL main artifact per entry at a deterministic path. Each artifact retains only the selected stage interface and reachable helpers, records source-to-target entry identity in report and validation records, preserves provenance and source maps, and exposes an entry-scoped reflected runtime interface. Aggregate output remains unchanged when no entry is selected. The pinned MLX arangeuint32 proof compiles and executes through Mesa OpenGL with exact uint32 readback on Linux CI.",
           "status": "supported"
         },
         "rust": {

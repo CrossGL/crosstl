@@ -3346,6 +3346,35 @@ def _as_non_empty_str_mapping(value: Any, *, field_name: str) -> dict[str, str]:
     return result
 
 
+def _as_entry_point_selection_mapping(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, str | tuple[str, ...]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+
+    result: dict[str, str | tuple[str, ...]] = {}
+    for pattern, selection in value.items():
+        if not isinstance(pattern, str) or not pattern.strip():
+            raise ValueError(f"{field_name} keys must be non-empty strings")
+        selection_path = _mapping_key_path(field_name, pattern)
+        entries = [
+            entry.strip()
+            for entry in _as_str_list(selection, field_name=selection_path)
+        ]
+        if not entries:
+            raise ValueError(f"{selection_path} must select at least one entry point")
+        if len(entries) != len(set(entries)):
+            raise ValueError(
+                f"{selection_path} must not contain duplicate entry points"
+            )
+        result[pattern] = entries[0] if isinstance(selection, str) else tuple(entries)
+    return result
+
+
 def _as_source_pattern_options(
     value: Any,
     *,
@@ -3891,6 +3920,15 @@ def _normalize_project_relative_path_mapping(
     return {
         _normalize_project_relative_path(path): backend
         for path, backend in paths.items()
+    }
+
+
+def _normalize_entry_point_selection_mapping(
+    selections: Mapping[str, str | tuple[str, ...]],
+) -> dict[str, str | tuple[str, ...]]:
+    return {
+        _normalize_project_relative_path(path): selection
+        for path, selection in selections.items()
     }
 
 
@@ -7428,7 +7466,7 @@ class ProjectConfig:
     targets: Sequence[str] | str = ()
     output_dir: str | os.PathLike[str] = DEFAULT_OUTPUT_DIR
     source_overrides: Mapping[str, str] = field(default_factory=dict)
-    entry_points: Mapping[str, str] = field(default_factory=dict)
+    entry_points: Mapping[str, str | Sequence[str]] = field(default_factory=dict)
     include_dirs: Sequence[str] | str = ()
     defines: Mapping[str, str] = field(default_factory=dict)
     source_options: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
@@ -7523,8 +7561,8 @@ class ProjectConfig:
         object.__setattr__(
             self,
             "entry_points",
-            _normalize_project_relative_path_mapping(
-                _as_non_empty_str_mapping(
+            _normalize_entry_point_selection_mapping(
+                _as_entry_point_selection_mapping(
                     self.entry_points,
                     field_name="ProjectConfig.entry_points",
                 )
@@ -8545,7 +8583,9 @@ class ProjectPortabilityReport:
                 "outputDir": str(self.config.output_path),
                 "sourceOverrides": dict(sorted(self.config.source_overrides.items())),
                 "sourceOverrideCount": len(self.config.source_overrides),
-                "entryPointSelections": dict(sorted(self.config.entry_points.items())),
+                "entryPointSelections": _entry_point_selections_payload(
+                    self.config.entry_points
+                ),
                 "entryPointSelectionCount": len(self.config.entry_points),
                 "sourceOptions": {
                     name: dict(sorted(options.items()))
@@ -8772,7 +8812,7 @@ def load_project_config(
         project.get("index_range_assertions"),
         field_name="crosstl.toml [project.index_range_assertions]",
     )
-    entry_points = _as_non_empty_str_mapping(
+    entry_points = _as_entry_point_selection_mapping(
         project.get("entry_points"),
         field_name="crosstl.toml [project.entry_points]",
     )
@@ -8843,7 +8883,7 @@ def load_project_config(
         targets=_as_str_list(project.get("targets"), field_name="project.targets"),
         output_dir=_normalize_project_relative_path(output_dir or DEFAULT_OUTPUT_DIR),
         source_overrides=_normalize_project_relative_path_mapping(sources),
-        entry_points=_normalize_project_relative_path_mapping(entry_points),
+        entry_points=_normalize_entry_point_selection_mapping(entry_points),
         include_dirs=_normalize_project_relative_paths(
             _as_str_list(project.get("include_dirs"), field_name="project.include_dirs")
         ),
@@ -8885,30 +8925,46 @@ def _entry_point_selector_priority(pattern: str, relative_path: str) -> tuple:
     )
 
 
-def _entry_point_from_mapping(
+def _entry_points_from_mapping(
     relative_path: str,
-    entry_points: Mapping[str, str],
-) -> str | None:
+    entry_points: Mapping[str, str | Sequence[str]],
+) -> tuple[str, ...]:
     normalized_path = _normalize_project_relative_path(relative_path)
     matches = [
-        (pattern, entry_point)
-        for pattern, entry_point in entry_points.items()
+        (pattern, selection)
+        for pattern, selection in entry_points.items()
         if fnmatch.fnmatch(
             normalized_path,
             _normalize_project_relative_path(pattern),
         )
     ]
     if not matches:
-        return None
-    _pattern, entry_point = max(
+        return ()
+    _pattern, selection = max(
         matches,
         key=lambda item: _entry_point_selector_priority(item[0], normalized_path),
     )
-    return entry_point
+    return (
+        (selection.strip(),)
+        if isinstance(selection, str)
+        else tuple(entry.strip() for entry in selection)
+    )
 
 
-def _entry_point_for_path(relative_path: str, config: ProjectConfig) -> str | None:
-    return _entry_point_from_mapping(relative_path, config.entry_points)
+def _entry_points_for_path(
+    relative_path: str,
+    config: ProjectConfig,
+) -> tuple[str, ...]:
+    return _entry_points_from_mapping(relative_path, config.entry_points)
+
+
+def _entry_point_selections_payload(
+    entry_points: Mapping[str, str | Sequence[str]],
+) -> dict[str, str | list[str]]:
+    return {
+        pattern: selection if isinstance(selection, str) else list(selection)
+        for pattern, selection in sorted(entry_points.items())
+    }
 
 
 def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
@@ -9472,7 +9528,9 @@ def _regular_project_translation_jobs(
     config: ProjectConfig,
     relative_path: str,
 ) -> list[_ProjectArtifactTranslationJob]:
-    entry_point = _entry_point_for_path(relative_path, config)
+    entry_points: tuple[str | None, ...] = _entry_points_for_path(
+        relative_path, config
+    ) or (None,)
     return [
         _ProjectArtifactTranslationJob(
             variant=variant,
@@ -9485,6 +9543,7 @@ def _regular_project_translation_jobs(
             ),
         )
         for variant, defines in _variant_jobs(config)
+        for entry_point in entry_points
     ]
 
 
@@ -9529,7 +9588,7 @@ def _dispatch_project_translation_jobs(
                 ],
             },
         )
-    configured_entry_point = _entry_point_for_path(relative_path, config)
+    configured_entry_points = _entry_points_for_path(relative_path, config)
     configured_workgroup_rule = _configured_workgroup_size_rule(config, relative_path)
     configured_subgroup_rule = _configured_subgroup_width_rule(config, relative_path)
     if config.workgroup_size is not None or configured_workgroup_rule is not None:
@@ -9545,22 +9604,20 @@ def _dispatch_project_translation_jobs(
             details={"source": relative_path},
         )
 
+    planned_entry_points = {artifact.entry_point for _index, artifact in artifacts}
+    if configured_entry_points and set(configured_entry_points) != planned_entry_points:
+        raise DispatchArtifactPlanError(
+            "dispatch-entry-point-config-conflict",
+            "Host dispatch artifact entry points conflict with project config.",
+            details={
+                "source": relative_path,
+                "configuredEntryPoints": list(configured_entry_points),
+                "dispatchEntryPoints": sorted(planned_entry_points),
+            },
+        )
+
     jobs = []
     for index, artifact in artifacts:
-        if (
-            configured_entry_point is not None
-            and configured_entry_point != artifact.entry_point
-        ):
-            raise DispatchArtifactPlanError(
-                "dispatch-entry-point-config-conflict",
-                "Host dispatch artifact entry point conflicts with project config.",
-                details={
-                    "source": relative_path,
-                    "configuredEntryPoint": configured_entry_point,
-                    "dispatchEntryPoint": artifact.entry_point,
-                    "artifactId": artifact.artifact_id,
-                },
-            )
         provenance = _dispatch_artifact_provenance(index, artifact)
         specialization_values = _variant_specialization_values(
             config,
@@ -9624,12 +9681,14 @@ def _project_translation_variants_by_source_target(
     for unit in units:
         for target in _normalized_targets(targets):
             variants[(unit.relative_path, target)] = tuple(
-                job.variant
-                for job in _project_translation_jobs_for_target(
-                    config,
-                    unit,
-                    target,
-                    dispatch_artifacts,
+                dict.fromkeys(
+                    job.variant
+                    for job in _project_translation_jobs_for_target(
+                        config,
+                        unit,
+                        target,
+                        dispatch_artifacts,
+                    )
                 )
             )
     return variants
@@ -11526,6 +11585,7 @@ def _artifact_matrix_report(
         variant_names,
         preserve_source_suffix,
         artifacts=artifacts,
+        entry_point_selections=config.entry_points,
         variants_by_source_target=variants_by_source_target,
     )
     payload["expectedArtifactCount"] = len(expected_identities)
@@ -40789,6 +40849,7 @@ def _inspection_artifact_matrix_identity_sets(
         variant_names,
         preserve_source_suffix,
         artifacts=artifact_records,
+        entry_point_selections=project.get("entryPointSelections"),
         variants_by_source_target=_report_translation_variants_by_source_target(
             project,
             units,
@@ -42954,7 +43015,7 @@ def _project_config_for_scan_validation(
         source_overrides
     ) or not _valid_string_mapping(defines):
         return None
-    if not _valid_non_empty_string_mapping(entry_point_selections):
+    if not _valid_entry_point_selection_mapping(entry_point_selections):
         return None
     if not _valid_source_options_mapping(source_options):
         return None
@@ -43043,7 +43104,12 @@ def _project_config_for_scan_validation(
         targets=tuple(targets),
         output_dir=_normalize_project_relative_path(output_dir),
         source_overrides=_normalize_project_relative_path_mapping(source_overrides),
-        entry_points=_normalize_project_relative_path_mapping(entry_point_selections),
+        entry_points=_normalize_entry_point_selection_mapping(
+            _as_entry_point_selection_mapping(
+                entry_point_selections,
+                field_name="project.entryPointSelections",
+            )
+        ),
         include_dirs=tuple(_normalize_project_relative_paths(include_dirs)),
         defines=dict(defines),
         source_options={
@@ -43240,22 +43306,33 @@ def _artifact_entry_point_source(record: Mapping[str, Any]) -> str | None:
     return str(source) if _is_non_empty_string(source) else None
 
 
-def _configured_entry_point_for_artifact(
+def _configured_entry_points_for_source(
+    source_path: str,
+    selections: Any,
+) -> tuple[str, ...]:
+    if not _is_non_empty_string(source_path) or not isinstance(selections, Mapping):
+        return ()
+    if not _valid_entry_point_selection_mapping(selections):
+        return ()
+    normalized = _as_entry_point_selection_mapping(
+        selections,
+        field_name="project.entryPointSelections",
+    )
+    return _entry_points_from_mapping(source_path, normalized)
+
+
+def _configured_entry_points_for_artifact(
     record: Mapping[str, Any],
     project: Mapping[str, Any] | None,
-) -> str | None:
+) -> tuple[str, ...]:
     source_path = record.get("source")
     selections = (
         project.get("entryPointSelections") if isinstance(project, Mapping) else None
     )
-    if not _is_non_empty_string(source_path) or not isinstance(selections, Mapping):
-        return None
-    valid_selections = {
-        str(pattern): str(value)
-        for pattern, value in selections.items()
-        if _is_non_empty_string(pattern) and _is_non_empty_string(value)
-    }
-    return _entry_point_from_mapping(str(source_path), valid_selections)
+    return _configured_entry_points_for_source(
+        str(source_path) if isinstance(source_path, str) else "",
+        selections,
+    )
 
 
 def _artifact_rule_execution_contract_reasons(
@@ -44126,9 +44203,9 @@ def _artifact_entry_point_contract_reasons(
     project: Mapping[str, Any] | None,
 ) -> list[str]:
     entry_point = record.get("entryPoint")
-    configured = _configured_entry_point_for_artifact(record, project)
+    configured = _configured_entry_points_for_artifact(record, project)
     if entry_point is None:
-        if configured is not None:
+        if configured:
             return [
                 f"{prefix}.entryPoint must be recorded when the source matches "
                 "project.entryPointSelections"
@@ -44145,7 +44222,7 @@ def _artifact_entry_point_contract_reasons(
     if "stage" in entry_point and not _is_non_empty_string(entry_point.get("stage")):
         reasons.append(f"{prefix}.entryPoint.stage must be a string")
 
-    if configured is not None and entry_point.get("source") != configured:
+    if configured and entry_point.get("source") not in configured:
         reasons.append(
             f"{prefix}.entryPoint.source must match project.entryPointSelections"
         )
@@ -44629,7 +44706,15 @@ def _expected_entry_points_from_artifacts(
     source: str,
     target: str,
     variant: str | None,
+    entry_point_selections: Any = None,
 ) -> tuple[str | None, ...]:
+    configured = _configured_entry_points_for_source(
+        source,
+        entry_point_selections,
+    )
+    if configured:
+        return configured
+
     entry_points = {
         entry_point
         for artifact in artifacts
@@ -44673,6 +44758,7 @@ def _expected_artifact_identities(
     preserve_source_suffix: set[tuple[str, str]],
     *,
     artifacts: Sequence[Mapping[str, Any]] = (),
+    entry_point_selections: Any = None,
     variants_by_source_target: (
         Mapping[tuple[str, str], Sequence[str | None]] | None
     ) = None,
@@ -44694,7 +44780,11 @@ def _expected_artifact_identities(
             )
             for variant in source_variants:
                 for entry_point in _expected_entry_points_from_artifacts(
-                    artifacts, source, target, variant
+                    artifacts,
+                    source,
+                    target,
+                    variant,
+                    entry_point_selections,
                 ):
                     for stage in _webgl_expected_stages_from_artifacts(
                         artifacts, source, target, variant
@@ -44989,6 +45079,7 @@ def _artifact_matrix_contract_reasons(
         variant_names,
         preserve_source_suffix,
         artifacts=[artifact for artifact in artifacts if isinstance(artifact, Mapping)],
+        entry_point_selections=project.get("entryPointSelections"),
         variants_by_source_target=variants_by_source_target,
     )
     reasons = []
@@ -45088,6 +45179,7 @@ def _expected_artifact_matrix_metadata(
                     for artifact in _record_sequence(artifacts)
                     if isinstance(artifact, Mapping)
                 ],
+                entry_point_selections=project.get("entryPointSelections"),
                 variants_by_source_target=variants_by_source_target,
             )
         )
@@ -46864,6 +46956,40 @@ def _non_empty_string_mapping_contract_reasons(prefix: str, value: Any) -> list[
     return []
 
 
+def _entry_point_selection_mapping_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    for pattern, selection in value.items():
+        if not _is_non_empty_string(pattern):
+            reasons.append(f"{prefix} keys must be non-empty strings")
+            selection_prefix = prefix
+        else:
+            selection_prefix = _mapping_key_path(prefix, pattern)
+        if isinstance(selection, str):
+            if not selection.strip():
+                reasons.append(f"{prefix} values must be non-empty strings")
+            continue
+        if not isinstance(selection, list) or not selection:
+            reasons.append(
+                f"{selection_prefix} must be a non-empty string or list of strings"
+            )
+            continue
+        if any(not _is_non_empty_string(entry) for entry in selection):
+            reasons.append(f"{selection_prefix} entries must be non-empty strings")
+            continue
+        normalized_selection = [entry.strip() for entry in selection]
+        if len(normalized_selection) != len(set(normalized_selection)):
+            reasons.append(
+                f"{selection_prefix} must not contain duplicate entry points"
+            )
+    return reasons
+
+
 def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
@@ -47202,6 +47328,13 @@ def _valid_string_mapping(value: Any) -> bool:
 
 def _valid_non_empty_string_mapping(value: Any) -> bool:
     return _valid_string_mapping(value) and all(item.strip() for item in value.values())
+
+
+def _valid_entry_point_selection_mapping(value: Any) -> bool:
+    return not _entry_point_selection_mapping_contract_reasons(
+        "entryPointSelections",
+        value,
+    )
 
 
 def _valid_source_options_mapping(value: Any) -> bool:
@@ -48173,7 +48306,7 @@ def _project_metadata_contract_reasons(
         project, "entryPointSelections", required=require_full_metadata
     ):
         reasons.extend(
-            _non_empty_string_mapping_contract_reasons(
+            _entry_point_selection_mapping_contract_reasons(
                 "project.entryPointSelections", entry_point_selections
             )
         )
