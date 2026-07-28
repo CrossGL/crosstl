@@ -112,7 +112,9 @@ def _rewrite_entry(hit, mutate):
 
 
 def _error_code(exc):
-    return exc.value.code.removeprefix("project.native-deferred-compilation-cache.")
+    prefix = "project.native-deferred-compilation-cache."
+    assert exc.value.code.startswith(prefix)
+    return exc.value.code[len(prefix) :]
 
 
 def test_cache_error_has_stable_json():

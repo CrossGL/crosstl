@@ -36,6 +36,14 @@ from crosstl.project.runtime_verification import (
 )
 
 
+def _is_relative_to(path, root):
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 def _hash(content):
     return {
         "algorithm": "sha256",
@@ -612,12 +620,12 @@ def test_compiler_receives_only_isolated_source_and_include_paths(tmp_path):
     resolved_package = package_root.resolve()
 
     assert len(include_paths) == 2
-    assert all(path.is_relative_to(resolved_workspace) for path in include_paths)
+    assert all(_is_relative_to(path, resolved_workspace) for path in include_paths)
     assert any(path.name == "vendor" for path in include_paths)
-    assert source_path.is_relative_to(resolved_workspace)
-    assert output_path.is_relative_to(resolved_workspace)
-    assert not source_path.is_relative_to(resolved_package)
-    assert all(not path.is_relative_to(resolved_package) for path in include_paths)
+    assert _is_relative_to(source_path, resolved_workspace)
+    assert _is_relative_to(output_path, resolved_workspace)
+    assert not _is_relative_to(source_path, resolved_package)
+    assert all(not _is_relative_to(path, resolved_package) for path in include_paths)
 
 
 def test_builds_compiled_native_loader_dispatch_request(tmp_path):
