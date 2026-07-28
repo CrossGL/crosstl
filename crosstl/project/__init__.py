@@ -252,6 +252,14 @@ from .test_runner import (
     inspect_project_test_runner_plan,
     write_project_test_runner_report,
 )
+from .translation_checkpoint import (
+    PROJECT_TRANSLATION_CHECKPOINT_KIND,
+    PROJECT_TRANSLATION_CHECKPOINT_VERSION,
+    ProjectTranslationCheckpointError,
+    ProjectTranslationCheckpointRecorder,
+    load_project_translation_checkpoint,
+    validate_project_translation_checkpoint,
+)
 
 __all__ = [
     "DISPATCH_ARTIFACT_PLAN_KIND",
@@ -393,6 +401,10 @@ __all__ = [
     "PROJECT_TEST_RUNNER_INSPECTION_KIND",
     "PROJECT_TEST_RUNNER_PLAN_KIND",
     "PROJECT_TEST_RUNNER_REPORT_KIND",
+    "PROJECT_TRANSLATION_CHECKPOINT_KIND",
+    "PROJECT_TRANSLATION_CHECKPOINT_VERSION",
+    "ProjectTranslationCheckpointError",
+    "ProjectTranslationCheckpointRecorder",
     "build_runtime_artifact_manifest",
     "build_runtime_binding_manifest",
     "build_native_deferred_compilation_dispatch_request",
@@ -431,6 +443,7 @@ __all__ = [
     "load_runtime_verification_fixtures",
     "load_runtime_test_manifest",
     "load_project_config",
+    "load_project_translation_checkpoint",
     "load_dispatch_contract",
     "lookup_native_deferred_compilation_cache",
     "lookup_runtime_variant",
@@ -460,6 +473,7 @@ __all__ = [
     "runtime_graph_package_inspection_json",
     "validate_runtime_execution_graph",
     "validate_project_report",
+    "validate_project_translation_checkpoint",
     "validate_native_deferred_compilation_request",
     "verify_runtime_fixtures",
     "verify_runtime_test_manifest",

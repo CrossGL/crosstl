@@ -66,6 +66,16 @@ def _non_negative_int(value):
     return parsed
 
 
+def _positive_int(value):
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def _project_define_arg(value):
     name, separator, define_value = value.partition("=")
     name = name.strip()
@@ -582,17 +592,33 @@ def _run_translate_project(args):
             file=sys.stderr,
         )
         return 2
+    checkpoint_path = getattr(args, "checkpoint", None)
+    resume = bool(getattr(args, "resume", False))
+    checkpoint_interval_jobs = getattr(args, "checkpoint_interval_jobs", 1)
+    if resume and checkpoint_path is None:
+        print("Error: --resume requires --checkpoint", file=sys.stderr)
+        return 2
+    if checkpoint_interval_jobs != 1 and checkpoint_path is None:
+        print(
+            "Error: --checkpoint-interval-jobs requires --checkpoint",
+            file=sys.stderr,
+        )
+        return 2
 
     config = _load_project_config_from_args(args)
-    report = translate_project(
-        config,
-        targets=_parse_project_targets(args.target),
-        output_dir=args.output_dir,
-        variants=args.variant,
-        format_output=not args.no_format,
-        validate=args.validate,
-        run_toolchains=args.run_toolchains,
-    )
+    translate_kwargs = {
+        "targets": _parse_project_targets(args.target),
+        "output_dir": args.output_dir,
+        "variants": args.variant,
+        "format_output": not args.no_format,
+        "validate": args.validate,
+        "run_toolchains": args.run_toolchains,
+    }
+    if checkpoint_path is not None:
+        translate_kwargs["checkpoint_path"] = checkpoint_path
+        translate_kwargs["resume"] = resume
+        translate_kwargs["checkpoint_interval_jobs"] = checkpoint_interval_jobs
+    report = translate_project(config, **translate_kwargs)
     payload = report.to_json()
     if args.report:
         _write_json_payload(payload, args.report)
@@ -6952,6 +6978,22 @@ def _build_parser():
     translate_project_parser.add_argument(
         "--report",
         help="Write project portability JSON report to this path; use '-' for stdout",
+    )
+    translate_project_parser.add_argument(
+        "--checkpoint",
+        type=_non_empty_project_arg("--checkpoint"),
+        help="Atomically write project translation progress to this path",
+    )
+    translate_project_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume verified completed jobs from --checkpoint",
+    )
+    translate_project_parser.add_argument(
+        "--checkpoint-interval-jobs",
+        type=_positive_int,
+        default=1,
+        help="Persist checkpoint progress after this many completed jobs",
     )
     translate_project_parser.add_argument(
         "--runtime-binding-manifest",

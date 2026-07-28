@@ -1971,7 +1971,6 @@
     ],
     "translation_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1376",
-      "https://github.com/CrossGL/crosstl/issues/1576",
       "https://github.com/CrossGL/crosstl/issues/1676",
       "https://github.com/CrossGL/crosstl/issues/1479",
       "https://github.com/CrossGL/crosstl/issues/1490",
@@ -2025,6 +2024,31 @@
         "https://github.com/CrossGL/crosstl/issues/1576"
       ]
     },
+    "checkpoint_probe": {
+      "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+      "targets": [
+        "directx",
+        "opengl"
+      ],
+      "job_count": 80,
+      "completed_count": 4,
+      "pending_count": 75,
+      "translated_artifact_count": 2,
+      "failed_artifact_count": 2,
+      "state": "interrupted",
+      "active_coordinate": {
+        "source": "mlx/backend/metal/kernels/binary.metal",
+        "target": "directx"
+      },
+      "last_completed_coordinate": {
+        "source": "mlx/backend/metal/kernels/arg_reduce.metal",
+        "target": "opengl"
+      },
+      "resume_verified": true,
+      "checkpoint_schema_validated": true,
+      "canonical_report_produced": false,
+      "runtime_parity_claimed": false
+    },
     "last_completed": {
       "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
       "snapshot_scope": "pre-canonical-fence-contract",
@@ -2057,7 +2081,6 @@
     "https://github.com/CrossGL/crosstl/issues/1793",
     "https://github.com/CrossGL/crosstl/issues/1786",
     "https://github.com/CrossGL/crosstl/issues/1376",
-    "https://github.com/CrossGL/crosstl/issues/1576",
     "https://github.com/CrossGL/crosstl/issues/1462",
     "https://github.com/CrossGL/crosstl/issues/1676",
     "https://github.com/CrossGL/crosstl/issues/1388",
@@ -2100,6 +2123,7 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1576",
     "https://github.com/CrossGL/crosstl/issues/1829",
     "https://github.com/CrossGL/crosstl/issues/1826",
     "https://github.com/CrossGL/crosstl/issues/1824",

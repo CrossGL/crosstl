@@ -324,6 +324,80 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
     }
 
 
+def _write_full_corpus_checkpoint(module, path, *, state="running"):
+    from crosstl.project import ProjectTranslationCheckpointRecorder
+
+    target_suffixes = {
+        "directx": "hlsl",
+        "opengl": "glsl",
+        "vulkan": "spvasm",
+    }
+    first_jobs = [
+        {
+            "source": module.MLX_ARANGE_SOURCE,
+            "target": target,
+            "path": (
+                f".crosstl-mlx-porting/out-full-corpus/{target}/"
+                f"mlx/backend/metal/kernels/arange.{target_suffixes[target]}"
+            ),
+        }
+        for target in module.FULL_CORPUS_TARGETS
+    ]
+    active = {
+        "source": module.MLX_ARG_REDUCE_SOURCE,
+        "target": "directx",
+        "path": (
+            ".crosstl-mlx-porting/out-full-corpus/directx/"
+            "mlx/backend/metal/kernels/arg_reduce.hlsl"
+        ),
+    }
+    jobs = [*first_jobs, active]
+    for index in range(
+        len(jobs),
+        module.FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
+    ):
+        target = module.FULL_CORPUS_TARGETS[index % len(module.FULL_CORPUS_TARGETS)]
+        jobs.append(
+            {
+                "source": f"mlx/backend/metal/kernels/pending_{index}.metal",
+                "target": target,
+                "path": (
+                    f".crosstl-mlx-porting/out-full-corpus/{target}/"
+                    f"mlx/backend/metal/kernels/pending_{index}."
+                    f"{target_suffixes[target]}"
+                ),
+            }
+        )
+    recorder = ProjectTranslationCheckpointRecorder(
+        path,
+        {"root": "/mlx", "targets": list(module.FULL_CORPUS_TARGETS)},
+        jobs,
+        started_at=100,
+        initial_diagnostics=[
+            {
+                "severity": "warning",
+                "code": "project.translate.progress",
+            }
+        ],
+    )
+    for job in first_jobs:
+        recorder.record_completion(
+            job,
+            [
+                {
+                    "source": job["source"],
+                    "target": job["target"],
+                    "path": job["path"],
+                    "status": "translated",
+                }
+            ],
+            [],
+        )
+    if state == "interrupted":
+        return recorder.write_interrupted(active, RuntimeError("timed out"))
+    return recorder.write_running(active)
+
+
 def _translated_arange_report(module, target):
     return {
         "kind": "crosstl-project-portability-report",
@@ -6876,6 +6950,8 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
             str(config_dir / "full-corpus.toml"),
             "--report",
             str(report_dir / "full-corpus.json"),
+            "--checkpoint",
+            str(report_dir / "full-corpus.checkpoint.json"),
             "--validate",
         ]
     ]
@@ -6899,6 +6975,80 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
     assert result["shaderArtifactsOnly"] is True
     assert result["runtimeIntegrationIncluded"] is False
     assert result["runtimeParityClaimed"] is False
+
+
+def test_full_corpus_mode_resumes_existing_progress_checkpoint(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+    checkpoint_path = report_dir / "full-corpus.checkpoint.json"
+    _write_full_corpus_checkpoint(
+        module,
+        checkpoint_path,
+        state="interrupted",
+    )
+    commands = []
+
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
+        commands.append(list(command))
+        (report_dir / "full-corpus.json").write_text(
+            json.dumps(_full_corpus_report(module, mlx_root, work_dir)),
+            encoding="utf-8",
+        )
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 1, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module._translate_full_corpus(
+        mlx_root,
+        work_dir,
+        config_dir,
+        report_dir,
+        log_dir,
+        "python",
+    )
+
+    assert commands[0][-1] == "--resume"
+    assert result["status"] == "passed-with-expected-fence-blockers"
+
+
+def test_full_corpus_mode_rejects_invalid_progress_checkpoint(
+    tmp_path,
+):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+    (report_dir / "full-corpus.checkpoint.json").write_text(
+        '{"state": "running"}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.PortingCheckError, match="checkpoint is invalid"):
+        module._translate_full_corpus(
+            mlx_root,
+            work_dir,
+            config_dir,
+            report_dir,
+            log_dir,
+            "python",
+        )
 
 
 def test_full_corpus_mode_rejects_untracked_translation_errors(tmp_path, monkeypatch):
@@ -7003,6 +7153,10 @@ def test_full_corpus_mode_reports_tracked_timeout_without_report(tmp_path, monke
         directory.mkdir(parents=True)
 
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
+        _write_full_corpus_checkpoint(
+            module,
+            report_dir / "full-corpus.checkpoint.json",
+        )
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
@@ -7018,6 +7172,20 @@ def test_full_corpus_mode_reports_tracked_timeout_without_report(tmp_path, monke
     assert result["status"] == "blocked-by-tracked-issues"
     assert result["reportProduced"] is False
     assert result["returncode"] == 124
+    assert result["checkpoint"]["produced"] is True
+    assert result["checkpoint"]["state"] == "running"
+    assert result["checkpoint"]["completedCount"] == 3
+    assert result["checkpoint"]["activeCoordinate"] == {
+        "source": module.MLX_ARG_REDUCE_SOURCE,
+        "target": "directx",
+        "path": (
+            ".crosstl-mlx-porting/out-full-corpus/directx/"
+            "mlx/backend/metal/kernels/arg_reduce.hlsl"
+        ),
+    }
+    assert result["checkpoint"]["lastCompletedCoordinate"]["source"] == (
+        module.MLX_ARANGE_SOURCE
+    )
     assert result["trackedTranslationIssues"] == [
         "https://github.com/CrossGL/crosstl/issues/1376"
     ]
@@ -7796,8 +7964,9 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert profile_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert workgroup_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert workgroup_issue in module.FULL_CORPUS_TRACKED_ISSUES
-    assert checkpoint_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
-    assert checkpoint_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert checkpoint_issue not in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert checkpoint_issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert checkpoint_issue in module.RESOLVED_FRONTIER_ISSUES
     assert module.FULL_CORPUS_VALIDATION_TRACKED_ISSUES == (profile_issue,)
     assert native_profile_issue not in module.FULL_CORPUS_TRACKED_ISSUES
     assert narrowing_issue not in module.FULL_CORPUS_TRACKED_ISSUES
@@ -7818,7 +7987,8 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert resource_issue in gaps["tracked_issues"]
     assert profile_issue in gaps["tracked_issues"]
     assert workgroup_issue in gaps["tracked_issues"]
-    assert checkpoint_issue in gaps["tracked_issues"]
+    assert checkpoint_issue not in gaps["tracked_issues"]
+    assert checkpoint_issue in gaps["resolved_issues"]
     assert native_profile_issue not in gaps["tracked_issues"]
     assert narrowing_issue not in gaps["tracked_issues"]
     assert arithmetic_conversion_issue not in gaps["tracked_issues"]
@@ -7835,7 +8005,7 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert resource_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert profile_issue in gaps["full_corpus_scout"]["validation_blocked_by"]
     assert workgroup_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
-    assert checkpoint_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert checkpoint_issue not in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert native_profile_issue not in gaps["full_corpus_scout"]["semantic_blocked_by"]
     assert narrowing_issue not in gaps["full_corpus_scout"]["semantic_blocked_by"]
     assert (
@@ -7877,6 +8047,38 @@ def test_latest_full_corpus_attempt_records_interruption_without_coordinate_clai
             "https://github.com/CrossGL/crosstl/issues/1376",
             "https://github.com/CrossGL/crosstl/issues/1576",
         ],
+    }
+
+
+def test_full_corpus_checkpoint_probe_records_verified_resume_coordinate():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert gaps["full_corpus_scout"]["checkpoint_probe"] == {
+        "commit": module.MLX_COMMIT,
+        "targets": ["directx", "opengl"],
+        "job_count": 80,
+        "completed_count": 4,
+        "pending_count": 75,
+        "translated_artifact_count": 2,
+        "failed_artifact_count": 2,
+        "state": "interrupted",
+        "active_coordinate": {
+            "source": "mlx/backend/metal/kernels/binary.metal",
+            "target": "directx",
+        },
+        "last_completed_coordinate": {
+            "source": module.MLX_ARG_REDUCE_SOURCE,
+            "target": "opengl",
+        },
+        "resume_verified": True,
+        "checkpoint_schema_validated": True,
+        "canonical_report_produced": False,
+        "runtime_parity_claimed": False,
     }
 
 
