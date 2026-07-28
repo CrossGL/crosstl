@@ -435,6 +435,7 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
         "crosstl/project/native_loader_dispatch.py",
         "crosstl/project/native_runtime_drivers.py",
         "crosstl/project/pipeline.py",
+        "crosstl/project/runtime_variant_dispatch.py",
         "crosstl/project/runtime_verification.py",
         "crosstl/project/__init__.py",
         "setup.py",
@@ -442,6 +443,7 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
         "tests/test_translator/test_native_loader_dispatch.py",
         "tests/test_translator/test_native_runtime_drivers.py",
         "tests/test_translator/test_project_translation.py",
+        "tests/test_translator/test_runtime_variant_dispatch.py",
         "tests/test_translator/test_runtime_verification.py",
         "tests/test_ci_workflows.py",
     }
@@ -488,6 +490,7 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
     assert "test_native_deferred_compilation_runtime.py" in contract
     assert "test_native_loader_dispatch.py" in contract
     assert "test_native_runtime_drivers.py" in contract
+    assert "test_runtime_variant_dispatch.py" in contract
     assert "test_runtime_verification.py" in contract
     assert "test_project_package_exposes_public_api_surface" in contract
 
@@ -501,6 +504,7 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
     assert "Get-FileHash -Path $archive -Algorithm SHA256" in directx
     assert "CROSSTL_REQUIRE_DEFERRED_NATIVE_TARGET: directx" in directx
     assert "test_real_deferred_compilation_dispatch[directx]" in directx
+    assert "test_real_runtime_variant_deferred_compilation_dispatch[directx]" in directx
 
     opengl = _workflow_job_section(workflow, "opengl-runtime")
     assert "name: OpenGL deferred compile and dispatch" in opengl
@@ -519,6 +523,8 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
     assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl
     assert "test_real_opengl_toolchain_compiles_and_validates_cached_output" in opengl
     assert "test_real_deferred_compilation_dispatch[opengl]" in opengl
+    assert "test_real_opengl_runtime_variant_deferred_request_compiles" in opengl
+    assert "test_real_runtime_variant_deferred_compilation_dispatch[opengl]" in opengl
 
 
 def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():

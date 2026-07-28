@@ -17,6 +17,7 @@ on:
       - "crosstl/project/native_loader_dispatch.py"
       - "crosstl/project/native_runtime_drivers.py"
       - "crosstl/project/pipeline.py"
+      - "crosstl/project/runtime_variant_dispatch.py"
       - "crosstl/project/runtime_verification.py"
       - "crosstl/project/__init__.py"
       - "setup.py"
@@ -24,6 +25,7 @@ on:
       - "tests/test_translator/test_native_loader_dispatch.py"
       - "tests/test_translator/test_native_runtime_drivers.py"
       - "tests/test_translator/test_project_translation.py"
+      - "tests/test_translator/test_runtime_variant_dispatch.py"
       - "tests/test_translator/test_runtime_verification.py"
       - "tests/test_ci_workflows.py"
   pull_request:
@@ -37,6 +39,7 @@ on:
       - "crosstl/project/native_loader_dispatch.py"
       - "crosstl/project/native_runtime_drivers.py"
       - "crosstl/project/pipeline.py"
+      - "crosstl/project/runtime_variant_dispatch.py"
       - "crosstl/project/runtime_verification.py"
       - "crosstl/project/__init__.py"
       - "setup.py"
@@ -44,6 +47,7 @@ on:
       - "tests/test_translator/test_native_loader_dispatch.py"
       - "tests/test_translator/test_native_runtime_drivers.py"
       - "tests/test_translator/test_project_translation.py"
+      - "tests/test_translator/test_runtime_variant_dispatch.py"
       - "tests/test_translator/test_runtime_verification.py"
       - "tests/test_ci_workflows.py"
   workflow_dispatch:
@@ -91,6 +95,7 @@ jobs:
           tests/test_translator/test_native_loader_dispatch.py
           tests/test_translator/test_native_runtime_drivers.py
           tests/test_translator/test_runtime_verification.py
+          tests/test_translator/test_runtime_variant_dispatch.py
           tests/test_translator/test_project_translation.py::test_project_package_exposes_public_api_surface
 
   directx-runtime:
@@ -154,6 +159,7 @@ jobs:
           dxc --version &&
           python -m pytest -q -n auto
           "tests/test_translator/test_native_deferred_compilation_runtime.py::test_real_deferred_compilation_dispatch[directx]"
+          "tests/test_translator/test_runtime_variant_dispatch.py::test_real_runtime_variant_deferred_compilation_dispatch[directx]"
 
   opengl-runtime:
     name: OpenGL deferred compile and dispatch
@@ -192,3 +198,5 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_native_deferred_compilation_runtime.py::test_real_opengl_toolchain_compiles_and_validates_cached_output
           "tests/test_translator/test_native_deferred_compilation_runtime.py::test_real_deferred_compilation_dispatch[opengl]"
+          tests/test_translator/test_runtime_variant_dispatch.py::test_real_opengl_runtime_variant_deferred_request_compiles
+          "tests/test_translator/test_runtime_variant_dispatch.py::test_real_runtime_variant_deferred_compilation_dispatch[opengl]"
