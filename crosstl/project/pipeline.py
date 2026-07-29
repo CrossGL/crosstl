@@ -9603,9 +9603,19 @@ class _ProjectArtifactTranslationPlanItem:
 
 
 @dataclass(frozen=True)
+class _DeferredProjectArtifactPublication:
+    staging_directory: Path
+    staged_output_path: Path
+    staged_artifact_paths: tuple[tuple[str, Path], ...]
+    artifact_paths: tuple[str, ...]
+    failure_artifact: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class _ProjectArtifactTranslationResult:
     artifacts: tuple[dict[str, Any], ...]
     diagnostics: tuple[ProjectDiagnostic, ...]
+    publications: tuple[_DeferredProjectArtifactPublication, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -9645,30 +9655,38 @@ def _run_project_translation_worker(
         units=(request.unit,),
         dispatch_artifact_plan=context.dispatch_artifact_plan,
     )
-    report = _translate_project_impl(
-        context.config,
-        targets=(request.target,),
-        output_dir=None,
-        variants=None,
-        format_output=context.format_output,
-        validate=False,
-        run_toolchains=False,
-        max_workers=1,
-        checkpoint_run=_ProjectTranslationCheckpointRun(
-            path=None,
-            resume=False,
-            write_interval_jobs=1,
-        ),
-        scan_override=worker_scan,
-        translation_job_override=request,
-        preserve_source_suffix_override=context.preserve_source_suffix,
-        suppress_forwarding_diagnostics=True,
-        suppress_target_diagnostics=True,
-        output_dir_blocked_override=context.output_dir_blocked,
-    )
+    deferred_publications: list[_DeferredProjectArtifactPublication] = []
+    try:
+        report = _translate_project_impl(
+            context.config,
+            targets=(request.target,),
+            output_dir=None,
+            variants=None,
+            format_output=context.format_output,
+            validate=False,
+            run_toolchains=False,
+            max_workers=1,
+            checkpoint_run=_ProjectTranslationCheckpointRun(
+                path=None,
+                resume=False,
+                write_interval_jobs=1,
+            ),
+            scan_override=worker_scan,
+            translation_job_override=request,
+            preserve_source_suffix_override=context.preserve_source_suffix,
+            suppress_forwarding_diagnostics=True,
+            suppress_target_diagnostics=True,
+            output_dir_blocked_override=context.output_dir_blocked,
+            deferred_publications=deferred_publications,
+        )
+    except BaseException:
+        for publication in deferred_publications:
+            _cleanup_deferred_project_artifact_publication(publication)
+        raise
     return _ProjectArtifactTranslationResult(
         artifacts=tuple(report.artifacts),
         diagnostics=tuple(report.diagnostics),
+        publications=tuple(deferred_publications),
     )
 
 
@@ -10088,6 +10106,87 @@ def _validate_project_artifact_translation_plan(
         paths[path] = coordinate
 
 
+def _cleanup_deferred_project_artifact_publication(
+    publication: _DeferredProjectArtifactPublication,
+) -> None:
+    shutil.rmtree(publication.staging_directory, ignore_errors=True)
+
+
+def _cleanup_project_artifact_translation_result(
+    result: _ProjectArtifactTranslationResult,
+) -> None:
+    for publication in result.publications:
+        _cleanup_deferred_project_artifact_publication(publication)
+
+
+def _publish_project_artifact_translation_result(
+    config: ProjectConfig,
+    request: _ProjectArtifactTranslationRequest,
+    result: _ProjectArtifactTranslationResult,
+) -> _ProjectArtifactTranslationResult:
+    if not result.publications:
+        return result
+
+    artifacts_by_path = {
+        str(artifact.get("path")): artifact
+        for artifact in result.artifacts
+        if isinstance(artifact.get("path"), str)
+    }
+    try:
+        for publication in result.publications:
+            publication_artifacts = [
+                artifacts_by_path[path] for path in publication.artifact_paths
+            ]
+            _publish_project_artifact_records(
+                config,
+                publication_artifacts,
+                publication.staged_output_path,
+                staged_artifact_paths=dict(publication.staged_artifact_paths),
+            )
+    except Exception as exc:  # noqa: BLE001
+        publication = result.publications[0]
+        failed_artifact = copy.deepcopy(dict(publication.failure_artifact))
+        failure_message = _translation_failure_message(
+            exc,
+            request.target,
+            request.unit,
+            failed_artifact.get("path"),
+        )
+        failed_artifact["status"] = "failed"
+        failed_artifact["error"] = failure_message
+        failed_artifact.pop("generatedHash", None)
+        failed_artifact.pop("generatedSizeBytes", None)
+        failed_artifact.pop("sourceMap", None)
+        failed_artifact.pop("sourceRemap", None)
+        failure_diagnostics = _translation_failure_project_diagnostics(
+            exc,
+            request.target,
+            request.unit,
+            request.job.variant,
+            failure_message,
+            failed_artifact.get("path"),
+        )
+        return _ProjectArtifactTranslationResult(
+            artifacts=(failed_artifact,),
+            diagnostics=(*result.diagnostics, *failure_diagnostics),
+        )
+    finally:
+        _cleanup_project_artifact_translation_result(result)
+
+    return replace(result, publications=())
+
+
+def _cleanup_unconsumed_project_translation_futures(
+    futures: Iterable[Future[_ProjectArtifactTranslationResult]],
+) -> None:
+    for future in futures:
+        try:
+            result = future.result()
+        except BaseException:
+            continue
+        _cleanup_project_artifact_translation_result(result)
+
+
 def _translate_project_jobs_concurrently(
     *,
     config: ProjectConfig,
@@ -10133,6 +10232,7 @@ def _translate_project_jobs_concurrently(
     )
     executor: ProcessPoolExecutor | None = None
     scheduled: deque[_ScheduledProjectArtifactTranslation] = deque()
+    unconsumed_futures: set[Future[_ProjectArtifactTranslationResult]] = set()
     plan_exhausted = False
 
     def schedule_available() -> None:
@@ -10167,14 +10267,13 @@ def _translate_project_jobs_concurrently(
                     initializer=_initialize_project_translation_worker,
                     initargs=(context,),
                 )
+            future = executor.submit(
+                _run_project_translation_worker,
+                item.request,
+            )
+            unconsumed_futures.add(future)
             scheduled.append(
-                _ScheduledProjectArtifactTranslation(
-                    item=item,
-                    future=executor.submit(
-                        _run_project_translation_worker,
-                        item.request,
-                    ),
-                )
+                _ScheduledProjectArtifactTranslation(item=item, future=future)
             )
 
     try:
@@ -10192,6 +10291,12 @@ def _translate_project_jobs_concurrently(
                     )
                 checkpoint_run.activate(item.request.coordinate)
                 result = future.result()
+                result = _publish_project_artifact_translation_result(
+                    config,
+                    item.request,
+                    result,
+                )
+                unconsumed_futures.discard(future)
                 checkpoint_run.complete(
                     item.request.coordinate,
                     result.artifacts,
@@ -10206,8 +10311,11 @@ def _translate_project_jobs_concurrently(
                 scheduled_item.future.cancel()
         raise
     finally:
-        if executor is not None:
-            executor.shutdown(wait=True)
+        try:
+            if executor is not None:
+                executor.shutdown(wait=True)
+        finally:
+            _cleanup_unconsumed_project_translation_futures(unconsumed_futures)
 
 
 def _validate_project_translation_checkpoint_path(
@@ -25422,6 +25530,7 @@ def _translate_project_impl(
     suppress_forwarding_diagnostics: bool = False,
     suppress_target_diagnostics: bool = False,
     output_dir_blocked_override: bool | None = None,
+    deferred_publications: list[_DeferredProjectArtifactPublication] | None = None,
 ) -> ProjectPortabilityReport:
     format_output = _bool_arg(format_output, field_name="format_output")
     validate = _bool_arg(validate, field_name="validate")
@@ -25801,20 +25910,23 @@ def _translate_project_impl(
                         continue
                 artifact_records = [artifact]
                 template_temp_dir: tempfile.TemporaryDirectory[str] | None = None
-                publication_temp_dir: tempfile.TemporaryDirectory[str] | None = None
+                publication_staging_directory: Path | None = None
+                publication_staging_retained = False
                 split_output_paths: list[Path] = []
                 staged_artifact_paths: dict[str, Path] = {}
                 generated_records_finalized = False
                 published_output_path = output_path
                 try:
                     published_output_path.parent.mkdir(parents=True, exist_ok=True)
-                    publication_temp_dir = tempfile.TemporaryDirectory(
-                        dir=published_output_path.parent,
-                        prefix=f".{published_output_path.name}.",
-                        suffix=".tmp",
+                    publication_staging_directory = Path(
+                        tempfile.mkdtemp(
+                            dir=published_output_path.parent,
+                            prefix=f".{published_output_path.name}.",
+                            suffix=".tmp",
+                        )
                     )
                     output_path = (
-                        Path(publication_temp_dir.name) / published_output_path.name
+                        publication_staging_directory / published_output_path.name
                     )
                     translation_input_path = unit.path
                     translation_source_backend = unit.source_backend
@@ -26283,12 +26395,36 @@ def _translate_project_impl(
                             }
                         )
                         diagnostics.extend(generated_diagnostics)
-                    _publish_project_artifact_records(
+                    if deferred_publications is None:
+                        _publish_project_artifact_records(
+                            config,
+                            artifact_records,
+                            output_path,
+                            staged_artifact_paths=staged_artifact_paths,
+                        )
+                    elif _project_output_publications(
                         config,
                         artifact_records,
                         output_path,
                         staged_artifact_paths=staged_artifact_paths,
-                    )
+                    ):
+                        deferred_publications.append(
+                            _DeferredProjectArtifactPublication(
+                                staging_directory=publication_staging_directory,
+                                staged_output_path=output_path,
+                                staged_artifact_paths=tuple(
+                                    sorted(staged_artifact_paths.items())
+                                ),
+                                artifact_paths=tuple(
+                                    str(record["path"])
+                                    for record in artifact_records
+                                    if record.get("status") == "translated"
+                                    and isinstance(record.get("path"), str)
+                                ),
+                                failure_artifact=copy.deepcopy(artifact),
+                            )
+                        )
+                        publication_staging_retained = True
                 except ProjectSpecializationError as exc:
                     failure_message = str(exc)
                     artifact["status"] = "failed"
@@ -26334,8 +26470,14 @@ def _translate_project_impl(
                 finally:
                     if template_temp_dir is not None:
                         template_temp_dir.cleanup()
-                    if publication_temp_dir is not None:
-                        publication_temp_dir.cleanup()
+                    if (
+                        publication_staging_directory is not None
+                        and not publication_staging_retained
+                    ):
+                        shutil.rmtree(
+                            publication_staging_directory,
+                            ignore_errors=True,
+                        )
                 artifacts.extend(artifact_records)
                 checkpoint_run.complete(
                     checkpoint_coordinate,

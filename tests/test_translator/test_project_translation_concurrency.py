@@ -349,6 +349,191 @@ def test_parallel_translation_bounds_submitted_work(tmp_path, monkeypatch):
     }
 
 
+def test_parallel_translation_publishes_only_when_results_are_consumed(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=2)
+    consumed_paths = []
+
+    class StagedFuture:
+        def __init__(self, request, result):
+            self._request = request
+            self._result = result
+
+        def result(self):
+            output_path = repo / self._request.coordinate["path"]
+            assert not output_path.exists()
+            assert self._result.publications
+            assert all(
+                publication.staging_directory.is_dir()
+                for publication in self._result.publications
+            )
+            consumed_paths.append(self._request.coordinate["path"])
+            return self._result
+
+        def cancel(self):
+            return False
+
+    class StagedExecutor:
+        def __init__(self, *, initializer, initargs, **_kwargs):
+            initializer(*initargs)
+
+        def submit(self, function, request):
+            return StagedFuture(request, function(request))
+
+        def shutdown(self, *, wait):
+            assert wait is True
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "ProcessPoolExecutor",
+        StagedExecutor,
+    )
+
+    payload = translate_project(
+        ProjectConfig(
+            root=repo,
+            targets=("directx",),
+            output_dir="translated",
+        ),
+        format_output=False,
+        max_workers=2,
+    ).to_json()
+
+    assert consumed_paths == [
+        "translated/directx/shader-0.hlsl",
+        "translated/directx/shader-1.hlsl",
+    ]
+    assert [artifact["path"] for artifact in payload["artifacts"]] == consumed_paths
+    assert all((repo / path).is_file() for path in consumed_paths)
+    assert list((repo / "translated" / "directx").glob(".*.tmp")) == []
+
+
+def test_parallel_worker_failure_removes_deferred_staging(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    staging_directory = repo / "translated" / ".shader.hlsl.test.tmp"
+    staging_directory.mkdir(parents=True)
+    publication = project_pipeline._DeferredProjectArtifactPublication(
+        staging_directory=staging_directory,
+        staged_output_path=staging_directory / "shader.hlsl",
+        staged_artifact_paths=(),
+        artifact_paths=(),
+        failure_artifact={},
+    )
+    context = project_pipeline._ProjectTranslationWorkerContext(
+        config=ProjectConfig(root=repo),
+        dispatch_artifact_plan=None,
+        preserve_source_suffix=frozenset(),
+        format_output=False,
+        output_dir_blocked=False,
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "_PROJECT_TRANSLATION_WORKER_CONTEXT",
+        context,
+    )
+
+    def fail_after_staging(*_args, deferred_publications, **_kwargs):
+        deferred_publications.append(publication)
+        raise RuntimeError("report assembly failed")
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "_translate_project_impl",
+        fail_after_staging,
+    )
+
+    request = SimpleNamespace(unit=SimpleNamespace(), target="directx")
+    with pytest.raises(RuntimeError, match="report assembly failed"):
+        project_pipeline._run_project_translation_worker(request)
+
+    assert not staging_directory.exists()
+
+
+def test_parallel_translation_interrupt_discards_unconsumed_staging(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=2)
+    output_dir = repo / "translated" / "directx"
+    output_dir.mkdir(parents=True)
+    previous_outputs = {}
+    for index in range(2):
+        artifact_path = output_dir / f"shader-{index}.hlsl"
+        remap_path = output_dir / f"shader-{index}.source-remap.json"
+        artifact_path.write_bytes(f"previous artifact {index}\n".encode())
+        remap_path.write_bytes(f'{{"previous": {index}}}\n'.encode())
+        previous_outputs[artifact_path] = artifact_path.read_bytes()
+        previous_outputs[remap_path] = remap_path.read_bytes()
+
+    checkpoint_path = tmp_path / "translation-checkpoint.json"
+    executor_state = {"submitted": 0, "shutdown": False}
+
+    class InterruptingFuture:
+        def __init__(self, result, *, interrupt):
+            self._result = result
+            self._interrupt = interrupt
+            self._result_calls = 0
+
+        def result(self):
+            self._result_calls += 1
+            if self._interrupt and self._result_calls == 1:
+                raise KeyboardInterrupt("translation interrupted")
+            assert executor_state["shutdown"] is True
+            return self._result
+
+        def cancel(self):
+            return False
+
+    class InterruptingExecutor:
+        def __init__(self, *, initializer, initargs, **_kwargs):
+            initializer(*initargs)
+
+        def submit(self, function, request):
+            executor_state["submitted"] += 1
+            return InterruptingFuture(
+                function(request),
+                interrupt=executor_state["submitted"] == 1,
+            )
+
+        def shutdown(self, *, wait):
+            assert wait is True
+            executor_state["shutdown"] = True
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "ProcessPoolExecutor",
+        InterruptingExecutor,
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="translation interrupted"):
+        translate_project(
+            ProjectConfig(
+                root=repo,
+                targets=("directx",),
+                output_dir="translated",
+            ),
+            format_output=False,
+            max_workers=2,
+            checkpoint_path=checkpoint_path,
+        )
+
+    assert executor_state == {"submitted": 2, "shutdown": True}
+    assert {path: path.read_bytes() for path in previous_outputs} == previous_outputs
+    assert list(output_dir.glob(".*.tmp")) == []
+    checkpoint = load_project_translation_checkpoint(checkpoint_path)
+    assert checkpoint["state"] == "interrupted"
+    assert checkpoint["plan"]["completedCount"] == 0
+    assert checkpoint["plan"]["active"]["path"] == ("translated/directx/shader-0.hlsl")
+
+
 def test_parallel_translation_streams_plan_with_bounded_lookahead(
     tmp_path,
     monkeypatch,
