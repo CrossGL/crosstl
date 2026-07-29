@@ -349,6 +349,85 @@ def test_parallel_translation_bounds_submitted_work(tmp_path, monkeypatch):
     }
 
 
+def test_parallel_translation_streams_plan_with_bounded_lookahead(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=6)
+    original_plan = project_pipeline._project_artifact_translation_plan
+    plan_state = {
+        "passes": 0,
+        "requested": 0,
+        "resolved": 0,
+        "maximum_ahead": 0,
+    }
+
+    def tracking_plan(*args, **kwargs):
+        plan_state["passes"] += 1
+        current_pass = plan_state["passes"]
+        for item in original_plan(*args, **kwargs):
+            if current_pass == 2:
+                plan_state["requested"] += 1
+                ahead = plan_state["requested"] - plan_state["resolved"]
+                plan_state["maximum_ahead"] = max(
+                    plan_state["maximum_ahead"],
+                    ahead,
+                )
+                assert ahead <= 2
+            yield item
+
+    class TrackingFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self):
+            plan_state["resolved"] += 1
+            return self._result
+
+        def cancel(self):
+            return False
+
+    class TrackingExecutor:
+        def __init__(self, *, initializer, initargs, **_kwargs):
+            initializer(*initargs)
+
+        def submit(self, function, *args):
+            return TrackingFuture(function(*args))
+
+        def shutdown(self, *, wait):
+            assert wait is True
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "_project_artifact_translation_plan",
+        tracking_plan,
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "ProcessPoolExecutor",
+        TrackingExecutor,
+    )
+
+    report = translate_project(
+        ProjectConfig(
+            root=repo,
+            targets=("directx",),
+            output_dir="translated",
+        ),
+        format_output=False,
+        max_workers=2,
+    ).to_json()
+
+    assert report["summary"]["translatedCount"] == 6
+    assert plan_state == {
+        "passes": 2,
+        "requested": 6,
+        "resolved": 6,
+        "maximum_ahead": 2,
+    }
+
+
 def test_parallel_translation_rejects_output_path_collisions(
     tmp_path,
     monkeypatch,
@@ -364,6 +443,16 @@ def test_parallel_translation_rejects_output_path_collisions(
         project_pipeline,
         "_project_translation_jobs_for_target",
         lambda *_args, **_kwargs: [job, job],
+    )
+
+    class UnexpectedExecutor:
+        def __init__(self, **_kwargs):
+            raise AssertionError("workers must not start before collision preflight")
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "ProcessPoolExecutor",
+        UnexpectedExecutor,
     )
 
     with pytest.raises(

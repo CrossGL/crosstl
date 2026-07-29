@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections import Counter
+from collections import Counter, deque
 from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
@@ -9609,6 +9609,13 @@ class _ProjectArtifactTranslationResult:
 
 
 @dataclass(frozen=True)
+class _ScheduledProjectArtifactTranslation:
+    item: _ProjectArtifactTranslationPlanItem
+    restored_result: _ProjectArtifactTranslationResult | None = None
+    future: Future[_ProjectArtifactTranslationResult] | None = None
+
+
+@dataclass(frozen=True)
 class _ProjectTranslationWorkerContext:
     config: ProjectConfig
     dispatch_artifact_plan: DispatchArtifactPlan | None
@@ -9772,24 +9779,22 @@ class _ProjectTranslationCheckpointRun:
 def _regular_project_translation_jobs(
     config: ProjectConfig,
     relative_path: str,
-) -> list[_ProjectArtifactTranslationJob]:
+) -> Iterator[_ProjectArtifactTranslationJob]:
     entry_points: tuple[str | None, ...] = _entry_points_for_path(
         relative_path, config
     ) or (None,)
-    return [
-        _ProjectArtifactTranslationJob(
-            variant=variant,
-            defines=defines,
-            entry_point=entry_point,
-            specialization_values=_variant_specialization_values(
-                config,
-                variant,
-                relative_path=relative_path,
-            ),
-        )
-        for variant, defines in _variant_jobs(config)
-        for entry_point in entry_points
-    ]
+    for variant, defines in _variant_jobs(config):
+        for entry_point in entry_points:
+            yield _ProjectArtifactTranslationJob(
+                variant=variant,
+                defines=defines,
+                entry_point=entry_point,
+                specialization_values=_variant_specialization_values(
+                    config,
+                    variant,
+                    relative_path=relative_path,
+                ),
+            )
 
 
 def _dispatch_artifacts_by_source(
@@ -9820,7 +9825,7 @@ def _dispatch_project_translation_jobs(
     config: ProjectConfig,
     relative_path: str,
     artifacts: Sequence[tuple[int, DispatchArtifactJob]],
-) -> list[_ProjectArtifactTranslationJob]:
+) -> Iterator[_ProjectArtifactTranslationJob]:
     if config.variants:
         raise DispatchArtifactPlanError(
             "dispatch-project-variant-conflict",
@@ -9861,7 +9866,6 @@ def _dispatch_project_translation_jobs(
             },
         )
 
-    jobs = []
     for index, artifact in artifacts:
         provenance = _dispatch_artifact_provenance(index, artifact)
         specialization_values = _variant_specialization_values(
@@ -9886,22 +9890,19 @@ def _dispatch_project_translation_jobs(
                     },
                 )
             specialization_values[selector] = (value, dict(provenance))
-        jobs.append(
-            _ProjectArtifactTranslationJob(
-                variant=artifact.variant_name,
-                defines=dict(config.defines),
-                entry_point=artifact.entry_point,
-                dispatch_artifact=artifact,
-                specialization_values=specialization_values,
-                configured_workgroup=(artifact.workgroup_size, provenance),
-                configured_subgroup=(
-                    (artifact.subgroup_width, provenance)
-                    if artifact.subgroup_width is not None
-                    else None
-                ),
-            )
+        yield _ProjectArtifactTranslationJob(
+            variant=artifact.variant_name,
+            defines=dict(config.defines),
+            entry_point=artifact.entry_point,
+            dispatch_artifact=artifact,
+            specialization_values=specialization_values,
+            configured_workgroup=(artifact.workgroup_size, provenance),
+            configured_subgroup=(
+                (artifact.subgroup_width, provenance)
+                if artifact.subgroup_width is not None
+                else None
+            ),
         )
-    return jobs
 
 
 def _project_translation_jobs_for_target(
@@ -9909,7 +9910,7 @@ def _project_translation_jobs_for_target(
     unit: ProjectTranslationUnit,
     target: str,
     dispatch_artifacts: Mapping[str, Sequence[tuple[int, DispatchArtifactJob]]],
-) -> list[_ProjectArtifactTranslationJob]:
+) -> Iterator[_ProjectArtifactTranslationJob]:
     artifacts = dispatch_artifacts.get(unit.relative_path, ())
     if target not in WORKGROUP_SIZE_SPECIALIZATION_TARGETS or not artifacts:
         return _regular_project_translation_jobs(config, unit.relative_path)
@@ -10004,7 +10005,7 @@ def _project_artifact_translation_plan(
     *,
     include_paths: Sequence[str],
     preserve_source_suffix: set[tuple[str, str]],
-) -> list[_ProjectArtifactTranslationPlanItem]:
+) -> Iterator[_ProjectArtifactTranslationPlanItem]:
     variant_jobs = _variant_jobs(config)
     max_define_count = max(
         (len(defines) for _variant, defines in variant_jobs),
@@ -10012,8 +10013,6 @@ def _project_artifact_translation_plan(
     )
     define_forwarding_diagnostics: set[str] = set()
     include_path_forwarding_diagnostics: set[str] = set()
-    plan: list[_ProjectArtifactTranslationPlanItem] = []
-
     for unit in units:
         setup_diagnostics: list[ProjectDiagnostic] = []
         source_supports_defines = _source_frontend_supports_lexer_keyword(
@@ -10061,25 +10060,20 @@ def _project_artifact_translation_plan(
                     job,
                     preserve_source_suffix=preserve_source_suffix,
                 )
-                plan.append(
-                    _ProjectArtifactTranslationPlanItem(
-                        request=_ProjectArtifactTranslationRequest(
-                            unit=unit,
-                            target=target,
-                            job=job,
-                            coordinate=coordinate,
-                        ),
-                        setup_diagnostics=(
-                            tuple(setup_diagnostics) if first_job else ()
-                        ),
-                    )
+                yield _ProjectArtifactTranslationPlanItem(
+                    request=_ProjectArtifactTranslationRequest(
+                        unit=unit,
+                        target=target,
+                        job=job,
+                        coordinate=coordinate,
+                    ),
+                    setup_diagnostics=tuple(setup_diagnostics) if first_job else (),
                 )
                 first_job = False
-    return plan
 
 
 def _validate_project_artifact_translation_plan(
-    plan: Sequence[_ProjectArtifactTranslationPlanItem],
+    plan: Iterable[_ProjectArtifactTranslationPlanItem],
 ) -> None:
     paths: dict[str, Mapping[str, Any]] = {}
     for item in plan:
@@ -10109,34 +10103,26 @@ def _translate_project_jobs_concurrently(
     artifacts: list[dict[str, Any]],
     diagnostics: list[ProjectDiagnostic],
 ) -> None:
-    plan = _project_artifact_translation_plan(
-        config,
-        scan.units,
-        targets,
-        dispatch_artifacts,
-        include_paths=include_paths,
-        preserve_source_suffix=preserve_source_suffix,
+    _validate_project_artifact_translation_plan(
+        _project_artifact_translation_plan(
+            config,
+            scan.units,
+            targets,
+            dispatch_artifacts,
+            include_paths=include_paths,
+            preserve_source_suffix=preserve_source_suffix,
+        )
     )
-    _validate_project_artifact_translation_plan(plan)
-    if not plan:
-        return
-
-    restored_results: dict[int, _ProjectArtifactTranslationResult] = {}
-    pending_indices: list[int] = []
-    for index, item in enumerate(plan):
-        restored_completion = checkpoint_run.restore(
-            item.request.coordinate,
-            config=config,
-            unit=item.request.unit,
+    plan = iter(
+        _project_artifact_translation_plan(
+            config,
+            scan.units,
+            targets,
+            dispatch_artifacts,
+            include_paths=include_paths,
+            preserve_source_suffix=preserve_source_suffix,
         )
-        if restored_completion is None:
-            pending_indices.append(index)
-            continue
-        restored_artifacts, restored_diagnostics = restored_completion
-        restored_results[index] = _ProjectArtifactTranslationResult(
-            artifacts=tuple(restored_artifacts),
-            diagnostics=tuple(restored_diagnostics),
-        )
+    )
 
     context = _ProjectTranslationWorkerContext(
         config=config,
@@ -10146,49 +10132,78 @@ def _translate_project_jobs_concurrently(
         output_dir_blocked=output_dir_blocked,
     )
     executor: ProcessPoolExecutor | None = None
-    futures: dict[int, Future[_ProjectArtifactTranslationResult]] = {}
-    next_pending = 0
+    scheduled: deque[_ScheduledProjectArtifactTranslation] = deque()
+    plan_exhausted = False
 
-    def submit_available() -> None:
-        nonlocal next_pending
-        if executor is None:
-            return
-        while len(futures) < max_workers and next_pending < len(pending_indices):
-            index = pending_indices[next_pending]
-            futures[index] = executor.submit(
-                _run_project_translation_worker,
-                plan[index].request,
+    def schedule_available() -> None:
+        nonlocal executor, plan_exhausted
+        while len(scheduled) < max_workers and not plan_exhausted:
+            try:
+                item = next(plan)
+            except StopIteration:
+                plan_exhausted = True
+                break
+            restored_completion = checkpoint_run.restore(
+                item.request.coordinate,
+                config=config,
+                unit=item.request.unit,
             )
-            next_pending += 1
-
-    if pending_indices:
-        executor = ProcessPoolExecutor(
-            max_workers=max_workers,
-            mp_context=get_context("spawn"),
-            initializer=_initialize_project_translation_worker,
-            initargs=(context,),
-        )
-        submit_available()
+            if restored_completion is not None:
+                restored_artifacts, restored_diagnostics = restored_completion
+                scheduled.append(
+                    _ScheduledProjectArtifactTranslation(
+                        item=item,
+                        restored_result=_ProjectArtifactTranslationResult(
+                            artifacts=tuple(restored_artifacts),
+                            diagnostics=tuple(restored_diagnostics),
+                        ),
+                    )
+                )
+                continue
+            if executor is None:
+                executor = ProcessPoolExecutor(
+                    max_workers=max_workers,
+                    mp_context=get_context("spawn"),
+                    initializer=_initialize_project_translation_worker,
+                    initargs=(context,),
+                )
+            scheduled.append(
+                _ScheduledProjectArtifactTranslation(
+                    item=item,
+                    future=executor.submit(
+                        _run_project_translation_worker,
+                        item.request,
+                    ),
+                )
+            )
 
     try:
-        for index, item in enumerate(plan):
+        schedule_available()
+        while scheduled:
+            scheduled_item = scheduled.popleft()
+            item = scheduled_item.item
             diagnostics.extend(item.setup_diagnostics)
-            result = restored_results.get(index)
+            result = scheduled_item.restored_result
             if result is None:
+                future = scheduled_item.future
+                if future is None:
+                    raise RuntimeError(
+                        "Scheduled project translation has no result or future"
+                    )
                 checkpoint_run.activate(item.request.coordinate)
-                future = futures.pop(index)
                 result = future.result()
                 checkpoint_run.complete(
                     item.request.coordinate,
                     result.artifacts,
                     result.diagnostics,
                 )
-                submit_available()
             artifacts.extend(result.artifacts)
             diagnostics.extend(result.diagnostics)
+            schedule_available()
     except BaseException:
-        for future in futures.values():
-            future.cancel()
+        for scheduled_item in scheduled:
+            if scheduled_item.future is not None:
+                scheduled_item.future.cancel()
         raise
     finally:
         if executor is not None:
