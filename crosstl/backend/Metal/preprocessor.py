@@ -19092,7 +19092,9 @@ _METAL_ENTRY_STAGE_PATTERNS = (
 )
 
 
-def _metal_entry_stage(preprocessor: MetalPreprocessor, declaration: str) -> str | None:
+def _metal_entry_stage(
+    preprocessor: MetalPreprocessor, declaration: str
+) -> Optional[str]:
     masked = preprocessor._mask_comments_and_literals(declaration)
     for pattern, stage in _METAL_ENTRY_STAGE_PATTERNS:
         if pattern.search(masked):
@@ -19192,11 +19194,11 @@ def _unresolved_metal_host_name_diagnostics(
 
 def discover_metal_entry_points(
     code: str,
-    file_path: str | None = None,
+    file_path: Optional[str] = None,
     *,
-    include_paths: Sequence[str] | None = None,
-    defines: Mapping[str, str] | None = None,
-    source_options: Mapping[str, Any] | None = None,
+    include_paths: Optional[Sequence[str]] = None,
+    defines: Optional[Mapping[str, str]] = None,
+    source_options: Optional[Mapping[str, Any]] = None,
 ):
     """Discover Metal entry points without materializing or translating kernels."""
     from crosstl.translator.entry_discovery import (
