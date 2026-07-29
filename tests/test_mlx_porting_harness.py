@@ -6952,6 +6952,8 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
             str(report_dir / "full-corpus.json"),
             "--checkpoint",
             str(report_dir / "full-corpus.checkpoint.json"),
+            "--job-timeout-seconds",
+            "120",
             "--validate",
         ]
     ]
@@ -6961,6 +6963,7 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
     assert result["translatedCount"] == 117
     assert result["failedCount"] == 3
     assert result["status"] == "passed-with-expected-fence-blockers"
+    assert result["jobTimeoutSeconds"] == 120
     assert result["targetCounts"] == {
         "directx": {"translatedCount": 39, "failedCount": 1},
         "opengl": {"translatedCount": 39, "failedCount": 1},
@@ -7172,6 +7175,7 @@ def test_full_corpus_mode_reports_tracked_timeout_without_report(tmp_path, monke
     assert result["status"] == "blocked-by-tracked-issues"
     assert result["reportProduced"] is False
     assert result["returncode"] == 124
+    assert result["jobTimeoutSeconds"] == 120
     assert result["checkpoint"]["produced"] is True
     assert result["checkpoint"]["state"] == "running"
     assert result["checkpoint"]["completedCount"] == 3
