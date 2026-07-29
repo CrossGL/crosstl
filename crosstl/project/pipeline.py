@@ -4514,9 +4514,19 @@ def _derived_line_source_map_mappings(
 
 
 def _artifact_report_path(path: Path, config: ProjectConfig) -> str:
-    return (
-        _relpath(path, config.root) if _is_relative_to(path, config.root) else str(path)
-    )
+    absolute_path = Path(os.path.abspath(path))
+    absolute_root = Path(os.path.abspath(config.root))
+    try:
+        return absolute_path.relative_to(absolute_root).as_posix()
+    except ValueError:
+        pass
+
+    resolved_path = Path(os.path.realpath(path))
+    resolved_root = Path(os.path.realpath(config.root))
+    try:
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except ValueError:
+        return str(path)
 
 
 def _diagnostic_counts(diagnostics: Sequence[ProjectDiagnostic]) -> dict[str, int]:

@@ -1,5 +1,6 @@
 import shutil
 import textwrap
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -109,6 +110,25 @@ def test_parallel_translation_matches_sequential_artifacts_and_order(tmp_path):
         ("shader-1.cgl", "opengl", "debug"),
         ("shader-1.cgl", "opengl", "release"),
     ]
+
+
+def test_artifact_report_path_does_not_resolve_unpublished_output(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = ProjectConfig(root=repo, output_dir="translated")
+    output_path = config.output_path / "directx" / "kernel.hlsl"
+
+    def fail_resolve(*_args, **_kwargs):
+        raise AssertionError("artifact report paths must not resolve the filesystem")
+
+    monkeypatch.setattr(Path, "resolve", fail_resolve)
+
+    assert project_pipeline._artifact_report_path(output_path, config) == (
+        "translated/directx/kernel.hlsl"
+    )
 
 
 def test_parallel_translation_preserves_failure_order(tmp_path):
