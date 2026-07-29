@@ -8,7 +8,11 @@ import pytest
 import crosstl._crosstl as crosstl_cli
 import crosstl.project as project_api
 import crosstl.project.pipeline as project_pipeline
-from crosstl.project import ProjectConfig, translate_project
+from crosstl.project import (
+    ProjectConfig,
+    ProjectTranslationWorkerError,
+    translate_project,
+)
 from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointRecorder,
     load_project_translation_checkpoint,
@@ -454,6 +458,115 @@ def test_parallel_worker_failure_removes_deferred_staging(
         project_pipeline._run_project_translation_worker(request)
 
     assert not staging_directory.exists()
+
+
+def test_worker_failure_error_reports_entry_point():
+    original_error = ValueError("worker result could not be decoded")
+    error = ProjectTranslationWorkerError(
+        {
+            "source": "kernels.metal",
+            "target": "directx",
+            "path": "translated/directx/kernels/copy.hlsl",
+            "entryPoint": "copy",
+        },
+        original_error,
+    )
+
+    assert error.original_error is original_error
+    assert "entry point 'copy'" in str(error)
+
+
+def test_parallel_worker_failure_reports_coordinate_and_checkpoint(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=2)
+    checkpoint_path = tmp_path / "translation-checkpoint.json"
+    executor_state = {
+        "submitted": 0,
+        "shutdown": False,
+        "pending_cancelled": False,
+    }
+
+    class FailingFuture:
+        def result(self):
+            raise RuntimeError("worker transport failed")
+
+        def cancel(self):
+            raise AssertionError("the active future must not be cancelled")
+
+    class PendingFuture:
+        def result(self):
+            assert executor_state["shutdown"] is True
+            return project_pipeline._ProjectArtifactTranslationResult((), ())
+
+        def cancel(self):
+            executor_state["pending_cancelled"] = True
+            return True
+
+    class FailingExecutor:
+        def __init__(self, *, initializer, initargs, **_kwargs):
+            initializer(*initargs)
+
+        def submit(self, _function, _request):
+            executor_state["submitted"] += 1
+            if executor_state["submitted"] == 1:
+                return FailingFuture()
+            return PendingFuture()
+
+        def shutdown(self, *, wait):
+            assert wait is True
+            executor_state["shutdown"] = True
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "ProcessPoolExecutor",
+        FailingExecutor,
+    )
+
+    with pytest.raises(ProjectTranslationWorkerError) as caught:
+        translate_project(
+            ProjectConfig(
+                root=repo,
+                targets=("directx",),
+                output_dir="translated",
+            ),
+            format_output=False,
+            max_workers=2,
+            checkpoint_path=checkpoint_path,
+        )
+
+    error = caught.value
+    expected_coordinate = {
+        "source": "shader-0.cgl",
+        "target": "directx",
+        "path": "translated/directx/shader-0.hlsl",
+    }
+    assert error.coordinate == expected_coordinate
+    assert error.error_type == "RuntimeError"
+    assert isinstance(error.original_error, RuntimeError)
+    assert str(error.original_error) == "worker transport failed"
+    assert error.__cause__ is error.original_error
+    assert str(error) == (
+        "Project translation worker failed for source 'shader-0.cgl', "
+        "target 'directx', artifact 'translated/directx/shader-0.hlsl': "
+        "RuntimeError: worker transport failed"
+    )
+    assert executor_state == {
+        "submitted": 2,
+        "shutdown": True,
+        "pending_cancelled": True,
+    }
+
+    checkpoint = load_project_translation_checkpoint(checkpoint_path)
+    assert checkpoint["state"] == "interrupted"
+    assert checkpoint["plan"]["completedCount"] == 0
+    assert checkpoint["plan"]["active"] == expected_coordinate
+    assert checkpoint["interruption"] == {
+        "type": "ProjectTranslationWorkerError",
+        "message": str(error),
+    }
 
 
 def test_parallel_translation_interrupt_discards_unconsumed_staging(
