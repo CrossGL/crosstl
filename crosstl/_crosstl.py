@@ -595,6 +595,7 @@ def _run_translate_project(args):
     checkpoint_path = getattr(args, "checkpoint", None)
     resume = bool(getattr(args, "resume", False))
     checkpoint_interval_jobs = getattr(args, "checkpoint_interval_jobs", 1)
+    max_workers = getattr(args, "workers", 1)
     if resume and checkpoint_path is None:
         print("Error: --resume requires --checkpoint", file=sys.stderr)
         return 2
@@ -618,6 +619,8 @@ def _run_translate_project(args):
         translate_kwargs["checkpoint_path"] = checkpoint_path
         translate_kwargs["resume"] = resume
         translate_kwargs["checkpoint_interval_jobs"] = checkpoint_interval_jobs
+    if max_workers != 1:
+        translate_kwargs["max_workers"] = max_workers
     report = translate_project(config, **translate_kwargs)
     payload = report.to_json()
     if args.report:
@@ -6994,6 +6997,12 @@ def _build_parser():
         type=_positive_int,
         default=1,
         help="Persist checkpoint progress after this many completed jobs",
+    )
+    translate_project_parser.add_argument(
+        "--workers",
+        type=_positive_int,
+        default=1,
+        help="Run up to this many artifact translations in isolated processes",
     )
     translate_project_parser.add_argument(
         "--runtime-binding-manifest",

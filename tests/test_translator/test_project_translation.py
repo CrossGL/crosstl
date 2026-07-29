@@ -19599,7 +19599,7 @@ def test_translate_project_batches_real_units_targets_and_variants(tmp_path):
         encoding="utf-8",
     )
 
-    report = translate_project(load_project_config(repo))
+    report = translate_project(load_project_config(repo), max_workers=2)
     payload = report.to_json()
     report_path = repo / "translated" / "portability-report.json"
     report.write_json(report_path)

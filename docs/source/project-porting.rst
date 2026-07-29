@@ -201,6 +201,44 @@ Vulkan smoke checks validate binary ``.spv`` artifacts with ``spirv-val`` and
 assemble textual ``.spvasm`` artifacts with ``spirv-as -o`` pointed at the
 platform null device.
 
+Bounded Translation Concurrency
+-------------------------------
+
+Project translation is sequential by default. Use ``--workers`` to run
+independent artifact jobs in isolated processes:
+
+.. code-block:: bash
+
+   python -m crosstl translate-project /path/to/repo \
+     --target directx \
+     --target opengl \
+     --output-dir crosstl-out \
+     --report crosstl-out/portability-report.json \
+     --workers 2
+
+Python callers use the corresponding ``max_workers`` argument to
+``translate_project``. The value must be a positive integer; ``1`` retains the
+sequential path.
+
+At most ``N`` jobs are submitted at once. Each worker translates one planned
+unit, target, variant, and selected entry combination in a separate process so
+mutable frontend and generator state is not shared between concurrent jobs.
+The parent process consumes results in the deterministic project plan order,
+writes checkpoint completions in that order, and assembles diagnostics,
+artifacts, and the artifact matrix with the same ordering as a sequential run.
+Artifact validation and optional toolchain smoke checks run only after all
+translation jobs have returned, avoiding nested toolchain concurrency.
+
+An interruption stops further submission, cancels work that has not started,
+waits for already running workers to finish, and leaves completed checkpoint
+records available for a verified resume. Outputs from an unrecorded interrupted
+job are not trusted by resume and may be replaced when that job runs again.
+
+Spawned workers independently load installed backends and plugins. A backend
+registered only in the current Python process is not inherited on every
+platform; use ``max_workers=1`` or install that backend through the supported
+plugin discovery mechanism.
+
 Checkpointing Long Runs
 -----------------------
 
