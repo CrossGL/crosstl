@@ -223,6 +223,10 @@ sequential path.
 At most ``N`` jobs are submitted at once. Each worker translates one planned
 unit, target, variant, and selected entry combination in a separate process so
 mutable frontend and generator state is not shared between concurrent jobs.
+Before workers start, the pipeline traverses the canonical plan once to reject
+output-path collisions. The execution pass then regenerates that plan lazily
+and retains at most ``N`` scheduled requests instead of retaining every
+unit, target, variant, and entry combination in memory.
 The parent process consumes results in the deterministic project plan order,
 writes checkpoint completions in that order, and assembles diagnostics,
 artifacts, and the artifact matrix with the same ordering as a sequential run.
