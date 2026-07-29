@@ -585,6 +585,7 @@ def test_project_package_exposes_public_api_surface():
         "ProjectScan",
         "ProjectTranslationCheckpointError",
         "ProjectTranslationCheckpointRecorder",
+        "ProjectTranslationWorkerError",
         "ProjectTranslationUnit",
         "PROJECT_TEST_RUNNER_INSPECTION_KIND",
         "PROJECT_TEST_RUNNER_PLAN_KIND",

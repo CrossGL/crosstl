@@ -8001,6 +8001,34 @@ class ProjectDiagnostic:
         return payload
 
 
+class ProjectTranslationWorkerError(RuntimeError):
+    """A concurrent project translation worker failed before returning a result."""
+
+    def __init__(
+        self,
+        coordinate: Mapping[str, Any],
+        error: Exception,
+    ) -> None:
+        self.coordinate = copy.deepcopy(dict(coordinate))
+        self.error_type = type(error).__name__
+        self.original_error = error
+        source = self.coordinate.get("source", "<unknown>")
+        target = self.coordinate.get("target", "<unknown>")
+        path = self.coordinate.get("path", "<unknown>")
+        entry_point = self.coordinate.get("entryPoint")
+        entry_context = (
+            f", entry point '{entry_point}'"
+            if isinstance(entry_point, str) and entry_point
+            else ""
+        )
+        detail = str(error).strip() or self.error_type
+        super().__init__(
+            "Project translation worker failed for "
+            f"source '{source}', target '{target}', artifact '{path}'"
+            f"{entry_context}: {self.error_type}: {detail}"
+        )
+
+
 @dataclass(frozen=True)
 class ProjectNativeDirective:
     source: str
@@ -10290,7 +10318,13 @@ def _translate_project_jobs_concurrently(
                         "Scheduled project translation has no result or future"
                     )
                 checkpoint_run.activate(item.request.coordinate)
-                result = future.result()
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    raise ProjectTranslationWorkerError(
+                        item.request.coordinate,
+                        exc,
+                    ) from exc
                 result = _publish_project_artifact_translation_result(
                     config,
                     item.request,

@@ -241,6 +241,10 @@ The coordinator removes staging for every unconsumed result, leaving previously
 published outputs unchanged. Completed checkpoint records remain available for
 a verified resume, and only coordinator-published results are recorded as
 complete.
+An ordinary worker failure raises ``ProjectTranslationWorkerError`` with the
+source, target, output path, optional entry point, original exception type, and
+original exception attached for programmatic inspection. An enabled checkpoint
+records the same active coordinate and typed interruption message.
 
 Spawned workers independently load installed backends and plugins. A backend
 registered only in the current Python process is not inherited on every
