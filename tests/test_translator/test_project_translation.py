@@ -2873,6 +2873,32 @@ def test_scan_report_records_runtime_reference_evidence(tmp_path):
     ]
 
 
+def test_runtime_reference_scan_prunes_output_directory_before_descent(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "host.cpp"
+    source_path.write_text("cudaMalloc(&buffer, 4);", encoding="utf-8")
+    config = project_pipeline.ProjectConfig(root=repo, output_dir="translated")
+
+    def controlled_walk(root, *, topdown, onerror, followlinks):
+        assert Path(root) == repo
+        assert topdown is True
+        assert followlinks is False
+        directories = ["translated", "src"]
+        yield str(repo), directories, []
+        assert directories == ["src"]
+        onerror(FileNotFoundError("staging directory disappeared"))
+        yield str(source_dir), [], ["host.cpp"]
+
+    monkeypatch.setattr(project_pipeline.os, "walk", controlled_walk)
+
+    assert project_pipeline._iter_runtime_reference_candidates(config) == [source_path]
+
+
 def test_scan_report_records_cuda_hip_async_memcpy_runtime_references(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -239,6 +239,23 @@ registered only in the current Python process is not inherited on every
 platform; use ``max_workers=1`` or install that backend through the supported
 plugin discovery mechanism.
 
+Artifact Publication
+--------------------
+
+Each translation job writes its generated artifact and source-remap sidecar to
+a temporary directory on the destination filesystem. The pipeline computes
+the reported hashes, byte sizes, source maps, and placeholder diagnostics from
+the staged files before publication. It then publishes the sidecar followed by
+the artifact with atomic file replacement, treating the artifact replacement
+as the pair's commit step.
+
+If generation or publication fails, temporary files are removed and any
+previously published artifact/remap pair is retained. If replacement has
+started, the pipeline restores both prior files before reporting the job
+failure. Consumers should still use the portability report as the authoritative
+result of the latest run; a retained pair represents the last successful
+translation, not the failed attempt.
+
 Checkpointing Long Runs
 -----------------------
 
