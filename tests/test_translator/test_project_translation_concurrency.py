@@ -1,3 +1,4 @@
+import json
 import shutil
 import textwrap
 from pathlib import Path
@@ -830,6 +831,266 @@ def test_parallel_translation_interrupt_discards_unconsumed_staging(
     assert checkpoint["plan"]["active"]["path"] == ("translated/directx/shader-0.hlsl")
 
 
+def test_job_timeout_records_failure_and_restarts_pending_work(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=2)
+    output_dir = repo / "translated" / "directx"
+    output_dir.mkdir(parents=True)
+    previous_artifact = output_dir / "shader-0.hlsl"
+    previous_remap = output_dir / "shader-0.source-remap.json"
+    previous_artifact.write_text("previous artifact\n", encoding="utf-8")
+    previous_remap.write_text('{"previous": true}\n', encoding="utf-8")
+    unrelated_staging = output_dir / ".shader-0.hlsl.unrelated.tmp"
+    unrelated_staging.mkdir()
+    checkpoint_path = tmp_path / "translation-checkpoint.json"
+    state = {
+        "generation": 0,
+        "terminated": set(),
+        "shutdown": [],
+        "cancelled": [],
+        "submitted": [],
+    }
+
+    class RestartFuture:
+        def __init__(self, request, result, *, generation, times_out):
+            self.request = request
+            self._result = result
+            self.generation = generation
+            self.times_out = times_out
+
+        def result(self, timeout=None):
+            if (
+                timeout is not None
+                and self.times_out
+                and self.generation not in state["terminated"]
+            ):
+                raise project_pipeline.FutureTimeoutError()
+            return self._result
+
+        def done(self):
+            return not self.times_out or self.generation in state["terminated"]
+
+        def cancel(self):
+            state["cancelled"].append(
+                (self.generation, self.request.coordinate["source"])
+            )
+            return True
+
+    class RestartExecutor:
+        def __init__(self, *, initializer, initargs, **_kwargs):
+            state["generation"] += 1
+            self.generation = state["generation"]
+            self.context = initargs[0]
+            initializer(*initargs)
+
+        def submit(self, function, request):
+            result = function(request)
+            assert result.publications
+            assert all(
+                f".{self.context.publication_staging_token}."
+                in publication.staging_directory.name
+                for publication in result.publications
+            )
+            state["submitted"].append((self.generation, request.coordinate["source"]))
+            return RestartFuture(
+                request,
+                result,
+                generation=self.generation,
+                times_out=(
+                    self.generation == 1
+                    and request.coordinate["source"] == "shader-0.cgl"
+                ),
+            )
+
+        def terminate_workers(self):
+            state["terminated"].add(self.generation)
+
+        def shutdown(self, *, wait):
+            assert wait is True
+            state["shutdown"].append(self.generation)
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "ProcessPoolExecutor",
+        RestartExecutor,
+    )
+
+    report = translate_project(
+        ProjectConfig(
+            root=repo,
+            targets=("directx",),
+            output_dir="translated",
+        ),
+        format_output=False,
+        max_workers=2,
+        job_timeout_seconds=5,
+        checkpoint_path=checkpoint_path,
+    )
+    payload = report.to_json()
+
+    assert [
+        (artifact["source"], artifact["status"]) for artifact in payload["artifacts"]
+    ] == [
+        ("shader-0.cgl", "failed"),
+        ("shader-1.cgl", "translated"),
+    ]
+    timeout_artifact = payload["artifacts"][0]
+    assert timeout_artifact["path"] == "translated/directx/shader-0.hlsl"
+    assert timeout_artifact["sourceHash"]
+    assert timeout_artifact["sourceSizeBytes"] > 0
+    timeout_diagnostics = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.timeout"
+    ]
+    assert timeout_diagnostics == [
+        {
+            "severity": "error",
+            "code": "project.translate.timeout",
+            "message": timeout_artifact["error"],
+            "location": {
+                "file": "shader-0.cgl",
+                "line": 1,
+                "column": 1,
+                "offset": 0,
+                "length": 0,
+                "endLine": 1,
+                "endColumn": 1,
+                "endOffset": 0,
+            },
+            "target": "directx",
+            "sourceBackend": "cgl",
+            "checkKind": "artifact",
+            "details": {
+                "timeoutSeconds": 5.0,
+                "coordinate": {
+                    "source": "shader-0.cgl",
+                    "target": "directx",
+                    "path": "translated/directx/shader-0.hlsl",
+                },
+            },
+        }
+    ]
+    assert state == {
+        "generation": 2,
+        "terminated": {1},
+        "shutdown": [1, 2],
+        "cancelled": [(1, "shader-1.cgl")],
+        "submitted": [
+            (1, "shader-0.cgl"),
+            (1, "shader-1.cgl"),
+            (2, "shader-1.cgl"),
+        ],
+    }
+    assert previous_artifact.read_text(encoding="utf-8") == "previous artifact\n"
+    assert previous_remap.read_text(encoding="utf-8") == '{"previous": true}\n'
+    assert unrelated_staging.is_dir()
+    assert list(output_dir.glob(".*.tmp")) == [unrelated_staging]
+
+    checkpoint = load_project_translation_checkpoint(checkpoint_path)
+    assert checkpoint["state"] == "complete"
+    assert checkpoint["plan"]["completedCount"] == 2
+    assert [
+        completion["coordinate"]["source"]
+        for completion in checkpoint["plan"]["completed"]
+    ] == ["shader-0.cgl", "shader-1.cgl"]
+
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+    validation = project_api.validate_project_report(report_path)
+    assert validation["success"] is False
+    assert not any(
+        diagnostic["code"] == "project.validate.invalid-report"
+        for diagnostic in validation["diagnostics"]
+    )
+
+
+def test_job_timeout_isolates_worker_limit_one(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=1)
+    state = {"constructed": 0, "result_timeout": None}
+    monotonic_values = iter((10.0, 50.0))
+    real_time = project_pipeline.time.time
+    monkeypatch.setattr(
+        project_pipeline,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: next(monotonic_values),
+            time=real_time,
+        ),
+    )
+
+    class ImmediateFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self, timeout=None):
+            state["result_timeout"] = timeout
+            return self._result
+
+        def cancel(self):
+            return False
+
+    class ImmediateExecutor:
+        def __init__(self, *, initializer, initargs, **_kwargs):
+            state["constructed"] += 1
+            initializer(*initargs)
+
+        def submit(self, function, request):
+            return ImmediateFuture(function(request))
+
+        def shutdown(self, *, wait):
+            assert wait is True
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "ProcessPoolExecutor",
+        ImmediateExecutor,
+    )
+
+    report = translate_project(
+        ProjectConfig(
+            root=repo,
+            targets=("directx",),
+            output_dir="translated",
+        ),
+        format_output=False,
+        max_workers=1,
+        job_timeout_seconds=30,
+    ).to_json()
+
+    assert report["summary"]["translatedCount"] == 1
+    assert state["constructed"] == 1
+    assert state["result_timeout"] == 0.0
+
+
+def test_real_process_job_timeout_returns_structured_report(tmp_path):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=1)
+
+    payload = translate_project(
+        ProjectConfig(
+            root=repo,
+            targets=("directx",),
+            output_dir="translated",
+        ),
+        format_output=False,
+        max_workers=1,
+        job_timeout_seconds=1e-9,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["artifacts"][0]["status"] == "failed"
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.timeout": 1,
+    }
+    assert not (repo / payload["artifacts"][0]["path"]).exists()
+
+
 def test_parallel_translation_streams_plan_with_bounded_lookahead(
     tmp_path,
     monkeypatch,
@@ -965,6 +1226,52 @@ def test_translate_project_rejects_invalid_max_workers(tmp_path, value):
         translate_project(repo, max_workers=value)
 
 
+@pytest.mark.parametrize(
+    "value",
+    (0, -1, True, float("inf"), float("-inf"), float("nan"), "30"),
+)
+def test_translate_project_rejects_invalid_job_timeout(tmp_path, value):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=1)
+
+    with pytest.raises(
+        ValueError,
+        match="job_timeout_seconds must be a positive finite number",
+    ):
+        translate_project(repo, job_timeout_seconds=value)
+
+
+def test_job_timeout_changes_checkpoint_invocation_identity(tmp_path):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=1)
+    scan = project_pipeline.scan_project(
+        ProjectConfig(
+            root=repo,
+            targets=("directx",),
+            output_dir="translated",
+        )
+    )
+
+    identity = project_pipeline._project_translation_checkpoint_identity(
+        scan,
+        ("directx",),
+        format_output=False,
+        validate=False,
+        run_toolchains=False,
+        job_timeout_seconds=30,
+    )
+    changed_identity = project_pipeline._project_translation_checkpoint_identity(
+        scan,
+        ("directx",),
+        format_output=False,
+        validate=False,
+        run_toolchains=False,
+        job_timeout_seconds=60,
+    )
+
+    assert identity["invocationHash"] != changed_identity["invocationHash"]
+
+
 def test_translate_project_cli_forwards_workers(tmp_path, monkeypatch, capsys):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -987,6 +1294,8 @@ def test_translate_project_cli_forwards_workers(tmp_path, monkeypatch, capsys):
             str(repo),
             "--workers",
             "3",
+            "--job-timeout-seconds",
+            "12.5",
         ]
     )
     capsys.readouterr()
@@ -994,3 +1303,4 @@ def test_translate_project_cli_forwards_workers(tmp_path, monkeypatch, capsys):
     assert exit_code == 0
     assert observed["root"] == repo.resolve()
     assert observed["max_workers"] == 3
+    assert observed["job_timeout_seconds"] == 12.5
