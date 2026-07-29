@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from collections import Counter, deque
 from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
@@ -9660,6 +9661,7 @@ class _ProjectTranslationWorkerContext:
     preserve_source_suffix: frozenset[tuple[str, str]]
     format_output: bool
     output_dir_blocked: bool
+    publication_staging_token: str
 
 
 _PROJECT_TRANSLATION_WORKER_CONTEXT: _ProjectTranslationWorkerContext | None = None
@@ -9706,6 +9708,7 @@ def _run_project_translation_worker(
             suppress_target_diagnostics=True,
             output_dir_blocked_override=context.output_dir_blocked,
             deferred_publications=deferred_publications,
+            publication_staging_token=context.publication_staging_token,
         )
     except BaseException:
         for publication in deferred_publications:
@@ -10147,6 +10150,56 @@ def _cleanup_project_artifact_translation_result(
         _cleanup_deferred_project_artifact_publication(publication)
 
 
+def _terminate_project_translation_executor(executor: ProcessPoolExecutor) -> None:
+    terminate_workers = getattr(executor, "terminate_workers", None)
+    if callable(terminate_workers):
+        terminate_workers()
+        executor.shutdown(wait=True)
+        return
+
+    # Python releases before 3.14 expose no public force-stop operation.
+    processes = getattr(executor, "_processes", None)
+    if isinstance(processes, Mapping):
+        for process in tuple(processes.values()):
+            try:
+                if process.is_alive():
+                    process.terminate()
+            except Exception:
+                continue
+    executor.shutdown(wait=True)
+
+
+def _cleanup_project_translation_staging_for_requests(
+    config: ProjectConfig,
+    requests: Iterable[_ProjectArtifactTranslationRequest],
+    *,
+    staging_token: str,
+) -> None:
+    searched: set[tuple[Path, str]] = set()
+    for request in requests:
+        report_path = request.coordinate.get("path")
+        if not isinstance(report_path, str) or not report_path:
+            continue
+        output_path = Path(report_path)
+        if not output_path.is_absolute():
+            output_path = config.root / output_path
+        key = (output_path.parent, output_path.name)
+        if key in searched:
+            continue
+        searched.add(key)
+        staging_prefix = f".{output_path.name}.{staging_token}."
+        try:
+            candidates = tuple(output_path.parent.iterdir())
+        except OSError:
+            continue
+        for staging_directory in candidates:
+            if not staging_directory.name.startswith(
+                staging_prefix
+            ) or not staging_directory.name.endswith(".tmp"):
+                continue
+            shutil.rmtree(staging_directory, ignore_errors=True)
+
+
 def _publish_project_artifact_translation_result(
     config: ProjectConfig,
     request: _ProjectArtifactTranslationRequest,
@@ -10257,10 +10310,14 @@ def _translate_project_jobs_concurrently(
         preserve_source_suffix=frozenset(preserve_source_suffix),
         format_output=format_output,
         output_dir_blocked=output_dir_blocked,
+        publication_staging_token=uuid.uuid4().hex,
     )
     executor: ProcessPoolExecutor | None = None
     scheduled: deque[_ScheduledProjectArtifactTranslation] = deque()
-    unconsumed_futures: set[Future[_ProjectArtifactTranslationResult]] = set()
+    unconsumed_futures: dict[
+        Future[_ProjectArtifactTranslationResult],
+        _ProjectArtifactTranslationRequest,
+    ] = {}
     plan_exhausted = False
 
     def schedule_available() -> None:
@@ -10299,7 +10356,7 @@ def _translate_project_jobs_concurrently(
                 _run_project_translation_worker,
                 item.request,
             )
-            unconsumed_futures.add(future)
+            unconsumed_futures[future] = item.request
             scheduled.append(
                 _ScheduledProjectArtifactTranslation(item=item, future=future)
             )
@@ -10330,7 +10387,7 @@ def _translate_project_jobs_concurrently(
                     item.request,
                     result,
                 )
-                unconsumed_futures.discard(future)
+                unconsumed_futures.pop(future, None)
                 checkpoint_run.complete(
                     item.request.coordinate,
                     result.artifacts,
@@ -10343,6 +10400,15 @@ def _translate_project_jobs_concurrently(
         for scheduled_item in scheduled:
             if scheduled_item.future is not None:
                 scheduled_item.future.cancel()
+        if executor is not None:
+            try:
+                _terminate_project_translation_executor(executor)
+            except Exception:
+                try:
+                    executor.shutdown(wait=True)
+                except Exception:
+                    pass
+            executor = None
         raise
     finally:
         try:
@@ -10350,6 +10416,11 @@ def _translate_project_jobs_concurrently(
                 executor.shutdown(wait=True)
         finally:
             _cleanup_unconsumed_project_translation_futures(unconsumed_futures)
+            _cleanup_project_translation_staging_for_requests(
+                config,
+                unconsumed_futures.values(),
+                staging_token=context.publication_staging_token,
+            )
 
 
 def _validate_project_translation_checkpoint_path(
@@ -25565,6 +25636,7 @@ def _translate_project_impl(
     suppress_target_diagnostics: bool = False,
     output_dir_blocked_override: bool | None = None,
     deferred_publications: list[_DeferredProjectArtifactPublication] | None = None,
+    publication_staging_token: str | None = None,
 ) -> ProjectPortabilityReport:
     format_output = _bool_arg(format_output, field_name="format_output")
     validate = _bool_arg(validate, field_name="validate")
@@ -25952,10 +26024,13 @@ def _translate_project_impl(
                 published_output_path = output_path
                 try:
                     published_output_path.parent.mkdir(parents=True, exist_ok=True)
+                    publication_staging_prefix = f".{published_output_path.name}."
+                    if publication_staging_token is not None:
+                        publication_staging_prefix += f"{publication_staging_token}."
                     publication_staging_directory = Path(
                         tempfile.mkdtemp(
                             dir=published_output_path.parent,
-                            prefix=f".{published_output_path.name}.",
+                            prefix=publication_staging_prefix,
                             suffix=".tmp",
                         )
                     )
