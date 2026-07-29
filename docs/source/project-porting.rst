@@ -228,15 +228,19 @@ output-path collisions. The execution pass then regenerates that plan lazily
 and retains at most ``N`` scheduled requests instead of retaining every
 unit, target, variant, and entry combination in memory.
 The parent process consumes results in the deterministic project plan order,
-writes checkpoint completions in that order, and assembles diagnostics,
-artifacts, and the artifact matrix with the same ordering as a sequential run.
+publishes each staged artifact/source-remap pair, writes the corresponding
+checkpoint completion, and assembles diagnostics, artifacts, and the artifact
+matrix with the same ordering as a sequential run. Workers do not replace
+published outputs directly.
 Artifact validation and optional toolchain smoke checks run only after all
 translation jobs have returned, avoiding nested toolchain concurrency.
 
 An interruption stops further submission, cancels work that has not started,
-waits for already running workers to finish, and leaves completed checkpoint
-records available for a verified resume. Outputs from an unrecorded interrupted
-job are not trusted by resume and may be replaced when that job runs again.
+and waits for already running workers to finish in their staging directories.
+The coordinator removes staging for every unconsumed result, leaving previously
+published outputs unchanged. Completed checkpoint records remain available for
+a verified resume, and only coordinator-published results are recorded as
+complete.
 
 Spawned workers independently load installed backends and plugins. A backend
 registered only in the current Python process is not inherited on every

@@ -1,5 +1,7 @@
 import textwrap
 
+import pytest
+
 import crosstl.project.pipeline as project_pipeline
 from crosstl.project import translate_project
 
@@ -127,9 +129,11 @@ def test_pre_generation_failure_preserves_previous_artifact_pair(
     assert _publication_directories(repo) == []
 
 
+@pytest.mark.parametrize("max_workers", (1, 2))
 def test_publication_failure_restores_previous_artifact_pair(
     tmp_path,
     monkeypatch,
+    max_workers,
 ):
     repo = tmp_path / "repo"
     _write_project(repo)
@@ -181,6 +185,7 @@ def test_publication_failure_restores_previous_artifact_pair(
         targets=["opengl"],
         output_dir="out",
         format_output=False,
+        max_workers=max_workers,
     ).to_json()
 
     assert failed is True
