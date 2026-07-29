@@ -12219,8 +12219,10 @@ def _artifact_source_map(
     unit: ProjectTranslationUnit,
     target: str,
     output_path: Path,
+    *,
+    report_output_path: Path | None = None,
 ) -> dict[str, Any]:
-    artifact_path = _artifact_report_path(output_path, config)
+    artifact_path = _artifact_report_path(report_output_path or output_path, config)
     source_span = _file_span(unit.path, unit.relative_path)
     generated_span = _file_span(output_path, artifact_path)
     line_mappings = _line_preserving_source_map_mappings(
@@ -12312,10 +12314,12 @@ def _artifact_source_remap(
     remap_path: Path,
     mapping_granularity: str,
     mapping_count: int,
+    *,
+    report_remap_path: Path | None = None,
 ) -> dict[str, Any]:
     return {
         "schemaVersion": SOURCE_REMAP_SCHEMA_VERSION,
-        "path": _artifact_report_path(remap_path, config),
+        "path": _artifact_report_path(report_remap_path or remap_path, config),
         "target": target,
         "generatedFile": artifact_path,
         "mappingGranularity": mapping_granularity,
@@ -12330,8 +12334,11 @@ def _attach_artifact_source_remap(
     target: str,
     artifact: dict[str, Any],
     output_path: Path,
+    *,
+    report_output_path: Path | None = None,
 ) -> None:
     remap_path = _source_remap_path(output_path)
+    report_remap_path = _source_remap_path(report_output_path or output_path)
     remap_payload = _source_remap_payload(artifact["sourceMap"])
     _write_source_remap_sidecar(remap_path, remap_payload)
     artifact["sourceRemap"] = _artifact_source_remap(
@@ -12341,6 +12348,7 @@ def _attach_artifact_source_remap(
         remap_path,
         str(artifact["sourceMap"]["mappingGranularity"]),
         len(remap_payload["mappings"]),
+        report_remap_path=report_remap_path,
     )
 
 
@@ -12349,6 +12357,8 @@ def _webgl_split_stage_artifacts(
     unit: ProjectTranslationUnit,
     artifact: Mapping[str, Any],
     output_path: Path,
+    *,
+    report_output_path: Path | None = None,
 ) -> list[dict[str, Any]] | None:
     if artifact.get("target") != "webgl":
         return None
@@ -12383,21 +12393,30 @@ def _webgl_split_stage_artifacts(
             continue
 
         stage_path = _webgl_stage_path(output_path, stage)
+        report_stage_path = _webgl_stage_path(
+            report_output_path or output_path,
+            stage,
+        )
         with stage_path.open("w", encoding="utf-8", newline="") as stage_file:
             stage_file.write(stage_source)
         stage_artifact = dict(artifact)
         stage_artifact["stage"] = stage_label
-        stage_artifact["path"] = _artifact_report_path(stage_path, config)
+        stage_artifact["path"] = _artifact_report_path(report_stage_path, config)
         stage_artifact["generatedHash"] = _source_hash(stage_path)
         stage_artifact["generatedSizeBytes"] = stage_path.stat().st_size
         stage_artifact["sourceMap"] = _artifact_source_map(
-            config, unit, str(artifact["target"]), stage_path
+            config,
+            unit,
+            str(artifact["target"]),
+            stage_path,
+            report_output_path=report_stage_path,
         )
         _attach_artifact_source_remap(
             config,
             str(artifact["target"]),
             stage_artifact,
             stage_path,
+            report_output_path=report_stage_path,
         )
         stage_artifacts.append(stage_artifact)
 
@@ -12409,6 +12428,155 @@ def _webgl_split_stage_artifacts(
     except OSError:
         pass
     return stage_artifacts
+
+
+@dataclass(frozen=True)
+class _ProjectOutputPublication:
+    staged_path: Path
+    published_path: Path
+
+
+def _staged_project_artifact_path(
+    staged_output_path: Path,
+    artifact: Mapping[str, Any],
+) -> Path:
+    stage_label = artifact.get("stage")
+    if artifact.get("target") == "webgl" and isinstance(stage_label, str):
+        stage = WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL.get(stage_label)
+        if stage is not None:
+            return _webgl_stage_path(staged_output_path, stage)
+    return staged_output_path
+
+
+def _replace_project_output_file(source: Path, destination: Path) -> None:
+    os.replace(source, destination)
+
+
+def _project_output_publications(
+    config: ProjectConfig,
+    artifacts: Sequence[Mapping[str, Any]],
+    staged_output_path: Path,
+    *,
+    staged_artifact_paths: Mapping[str, Path] | None = None,
+) -> list[_ProjectOutputPublication]:
+    publications: list[_ProjectOutputPublication] = []
+    published_identities: set[str] = set()
+    for artifact in artifacts:
+        if artifact.get("status") != "translated":
+            continue
+        artifact_path = artifact.get("path")
+        source_remap = artifact.get("sourceRemap")
+        remap_path = (
+            source_remap.get("path") if isinstance(source_remap, Mapping) else None
+        )
+        if not isinstance(artifact_path, str) or not isinstance(remap_path, str):
+            raise ValueError(
+                "Translated project artifacts require artifact and source-remap paths."
+            )
+
+        staged_artifact_path = (
+            staged_artifact_paths.get(artifact_path)
+            if staged_artifact_paths is not None
+            else None
+        ) or _staged_project_artifact_path(
+            staged_output_path,
+            artifact,
+        )
+        pairs = (
+            (
+                _source_remap_path(staged_artifact_path),
+                _resolve_report_path(config, remap_path),
+            ),
+            (
+                staged_artifact_path,
+                _resolve_report_path(config, artifact_path),
+            ),
+        )
+        for staged_path, published_path in pairs:
+            identity = os.path.normcase(os.path.abspath(published_path))
+            if identity in published_identities:
+                raise ValueError(
+                    "Project artifact publication paths must be unique: "
+                    f"{published_path}"
+                )
+            published_identities.add(identity)
+            publications.append(
+                _ProjectOutputPublication(
+                    staged_path=staged_path,
+                    published_path=published_path,
+                )
+            )
+    return publications
+
+
+def _publish_project_artifact_records(
+    config: ProjectConfig,
+    artifacts: Sequence[Mapping[str, Any]],
+    staged_output_path: Path,
+    *,
+    staged_artifact_paths: Mapping[str, Path] | None = None,
+) -> None:
+    publications = _project_output_publications(
+        config,
+        artifacts,
+        staged_output_path,
+        staged_artifact_paths=staged_artifact_paths,
+    )
+    if not publications:
+        return
+
+    for publication in publications:
+        if not publication.staged_path.is_file():
+            raise OSError(
+                "Staged project output is missing: " f"{publication.staged_path}"
+            )
+        with publication.staged_path.open("rb+") as staged_file:
+            os.fsync(staged_file.fileno())
+
+    backup_root = staged_output_path.parent / ".previous"
+    backup_root.mkdir()
+    backups: dict[Path, Path] = {}
+    published: list[Path] = []
+    try:
+        for index, publication in enumerate(publications):
+            destination = publication.published_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if not destination.exists() and not destination.is_symlink():
+                continue
+            if not destination.is_file() and not destination.is_symlink():
+                raise OSError(
+                    "Project output path cannot replace a directory: " f"{destination}"
+                )
+            backup_path = backup_root / str(index)
+            _replace_project_output_file(destination, backup_path)
+            backups[destination] = backup_path
+
+        for publication in publications:
+            _replace_project_output_file(
+                publication.staged_path,
+                publication.published_path,
+            )
+            published.append(publication.published_path)
+    except BaseException as exc:
+        rollback_errors = []
+        for destination in reversed(published):
+            if destination in backups:
+                continue
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        for destination, backup_path in reversed(tuple(backups.items())):
+            try:
+                _replace_project_output_file(backup_path, destination)
+            except OSError as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        if rollback_errors:
+            raise OSError(
+                "Project artifact publication failed and prior outputs could not "
+                f"be fully restored: {'; '.join(rollback_errors)}"
+            ) from exc
+        raise
 
 
 def _unsupported_mapping_field_reasons(
@@ -12524,18 +12692,40 @@ def _iter_runtime_reference_candidates(config: ProjectConfig) -> list[Path]:
     exclude_patterns = _repository_relative_globs(config.exclude_patterns)
     internal_exclude_patterns = _internal_exclude_patterns(config)
     candidates: list[Path] = []
-    for path in config.root.rglob("*"):
-        if not path.is_file() or not _is_runtime_reference_candidate(path):
-            continue
-        try:
-            relative_path = _relpath(path, config.root)
-        except ValueError:
-            continue
-        if _path_matches(relative_path, exclude_patterns):
-            continue
-        if _path_matches(relative_path, internal_exclude_patterns):
-            continue
-        candidates.append(path)
+    for directory, directory_names, file_names in os.walk(
+        config.root,
+        topdown=True,
+        onerror=lambda _error: None,
+        followlinks=False,
+    ):
+        directory_path = Path(directory)
+        retained_directories = []
+        for directory_name in sorted(directory_names):
+            path = directory_path / directory_name
+            try:
+                relative_path = _relpath(path, config.root)
+            except ValueError:
+                continue
+            if _path_matches(relative_path, exclude_patterns):
+                continue
+            if _path_matches(relative_path, internal_exclude_patterns):
+                continue
+            retained_directories.append(directory_name)
+        directory_names[:] = retained_directories
+
+        for file_name in sorted(file_names):
+            path = directory_path / file_name
+            if not path.is_file() or not _is_runtime_reference_candidate(path):
+                continue
+            try:
+                relative_path = _relpath(path, config.root)
+            except ValueError:
+                continue
+            if _path_matches(relative_path, exclude_patterns):
+                continue
+            if _path_matches(relative_path, internal_exclude_patterns):
+                continue
+            candidates.append(path)
     return sorted(candidates, key=lambda candidate: _relpath(candidate, config.root))
 
 
@@ -25005,7 +25195,9 @@ def _finalize_project_generated_artifact(
     output_path: Path,
     generated_source: str,
     source_entry_point: str | None = None,
+    report_output_path: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
+    report_output_path = report_output_path or output_path
     mojo_diagnostics = _mojo_unresolved_target_construct_diagnostics(
         artifact, generated_source
     )
@@ -25053,14 +25245,45 @@ def _finalize_project_generated_artifact(
             artifact["requiredCapabilities"] = sorted(required_capabilities)
     artifact["generatedHash"] = _source_hash(output_path)
     artifact["generatedSizeBytes"] = output_path.stat().st_size
-    artifact["sourceMap"] = _artifact_source_map(config, unit, target, output_path)
-    split_artifacts = _webgl_split_stage_artifacts(config, unit, artifact, output_path)
+    artifact["sourceMap"] = _artifact_source_map(
+        config,
+        unit,
+        target,
+        output_path,
+        report_output_path=report_output_path,
+    )
+    split_artifacts = _webgl_split_stage_artifacts(
+        config,
+        unit,
+        artifact,
+        output_path,
+        report_output_path=report_output_path,
+    )
     if split_artifacts is not None:
         records = split_artifacts
     else:
-        _attach_artifact_source_remap(config, target, artifact, output_path)
+        _attach_artifact_source_remap(
+            config,
+            target,
+            artifact,
+            output_path,
+            report_output_path=report_output_path,
+        )
         records = [artifact]
-    diagnostics.extend(_generated_placeholder_diagnostics(records, config))
+    diagnostics.extend(
+        _generated_placeholder_diagnostics(
+            records,
+            config,
+            artifact_paths={
+                str(record["path"]): _staged_project_artifact_path(
+                    output_path,
+                    record,
+                )
+                for record in records
+                if isinstance(record.get("path"), str)
+            },
+        )
+    )
     return records, diagnostics
 
 
@@ -25526,7 +25749,6 @@ def _translate_project_impl(
                     )
                     artifact["status"] = "failed"
                     artifact["error"] = failure_message
-                    _remove_artifact_output_files(output_path)
                     diagnostics.extend(
                         _translation_failure_project_diagnostics(
                             exc,
@@ -25555,7 +25777,6 @@ def _translate_project_impl(
                         artifact["error"] = template_materialization.error or (
                             "Template materialization failed."
                         )
-                        _remove_artifact_output_files(output_path)
                         artifacts.append(artifact)
                         checkpoint_run.complete(
                             checkpoint_coordinate,
@@ -25565,10 +25786,21 @@ def _translate_project_impl(
                         continue
                 artifact_records = [artifact]
                 template_temp_dir: tempfile.TemporaryDirectory[str] | None = None
+                publication_temp_dir: tempfile.TemporaryDirectory[str] | None = None
                 split_output_paths: list[Path] = []
+                staged_artifact_paths: dict[str, Path] = {}
                 generated_records_finalized = False
+                published_output_path = output_path
                 try:
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    published_output_path.parent.mkdir(parents=True, exist_ok=True)
+                    publication_temp_dir = tempfile.TemporaryDirectory(
+                        dir=published_output_path.parent,
+                        prefix=f".{published_output_path.name}.",
+                        suffix=".tmp",
+                    )
+                    output_path = (
+                        Path(publication_temp_dir.name) / published_output_path.name
+                    )
                     translation_input_path = unit.path
                     translation_source_backend = unit.source_backend
                     translation_defines: Mapping[str, str] = defines
@@ -25845,7 +26077,7 @@ def _translate_project_impl(
                                     materialized_entry,
                                     split_execution,
                                 ) in split_specs:
-                                    split_output_path = _artifact_path(
+                                    published_split_output_path = _artifact_path(
                                         config,
                                         unit,
                                         target,
@@ -25857,13 +26089,14 @@ def _translate_project_impl(
                                         in preserve_source_suffix,
                                         entry_point=source_entry,
                                     )
-                                    split_output_path.parent.mkdir(
-                                        parents=True, exist_ok=True
+                                    split_output_path = output_path.with_name(
+                                        published_split_output_path.name
                                     )
                                     split_output_paths.append(split_output_path)
                                     split_artifact = dict(artifact)
                                     split_artifact["path"] = _artifact_report_path(
-                                        split_output_path, config
+                                        published_split_output_path,
+                                        config,
                                     )
                                     split_artifact["provenance"] = {
                                         **dict(artifact["provenance"]),
@@ -25930,9 +26163,24 @@ def _translate_project_impl(
                                             output_path=split_output_path,
                                             generated_source=split_source,
                                             source_entry_point=source_entry,
+                                            report_output_path=(
+                                                published_split_output_path
+                                            ),
                                         )
                                     )
                                     artifact_records.extend(records)
+                                    staged_artifact_paths.update(
+                                        {
+                                            str(
+                                                record["path"]
+                                            ): _staged_project_artifact_path(
+                                                split_output_path,
+                                                record,
+                                            )
+                                            for record in records
+                                            if isinstance(record.get("path"), str)
+                                        }
+                                    )
                                     diagnostics.extend(split_diagnostics)
                                     generated_sources.append(split_source)
                                 generated_source = "\n".join(generated_sources)
@@ -26006,9 +26254,26 @@ def _translate_project_impl(
                                 output_path=output_path,
                                 generated_source=generated_source,
                                 source_entry_point=selected_entry_point,
+                                report_output_path=published_output_path,
                             )
                         )
+                        staged_artifact_paths.update(
+                            {
+                                str(record["path"]): _staged_project_artifact_path(
+                                    output_path,
+                                    record,
+                                )
+                                for record in artifact_records
+                                if isinstance(record.get("path"), str)
+                            }
+                        )
                         diagnostics.extend(generated_diagnostics)
+                    _publish_project_artifact_records(
+                        config,
+                        artifact_records,
+                        output_path,
+                        staged_artifact_paths=staged_artifact_paths,
+                    )
                 except ProjectSpecializationError as exc:
                     failure_message = str(exc)
                     artifact["status"] = "failed"
@@ -26054,6 +26319,8 @@ def _translate_project_impl(
                 finally:
                     if template_temp_dir is not None:
                         template_temp_dir.cleanup()
+                    if publication_temp_dir is not None:
+                        publication_temp_dir.cleanup()
                 artifacts.extend(artifact_records)
                 checkpoint_run.complete(
                     checkpoint_coordinate,
@@ -27083,7 +27350,10 @@ def _placeholder_marker_action(kind: str, target: str, action: str) -> str:
 
 
 def _generated_placeholder_diagnostics_for_artifact(
-    artifact: Mapping[str, Any], config: ProjectConfig
+    artifact: Mapping[str, Any],
+    config: ProjectConfig,
+    *,
+    artifact_path_override: Path | None = None,
 ) -> list[ProjectDiagnostic]:
     if artifact.get("status") != "translated":
         return []
@@ -27091,8 +27361,16 @@ def _generated_placeholder_diagnostics_for_artifact(
     if not _is_non_empty_string(artifact_path_value):
         return []
 
-    artifact_path = _resolve_report_path(config, artifact_path_value)
-    if not _is_relative_to(artifact_path, config.root) or not artifact_path.is_file():
+    artifact_path = artifact_path_override or _resolve_report_path(
+        config,
+        artifact_path_value,
+    )
+    if artifact_path_override is None and not _is_relative_to(
+        artifact_path,
+        config.root,
+    ):
+        return []
+    if not artifact_path.is_file():
         return []
 
     try:
@@ -27148,12 +27426,24 @@ def _generated_placeholder_diagnostics_for_artifact(
 
 
 def _generated_placeholder_diagnostics(
-    artifacts: Sequence[Mapping[str, Any]], config: ProjectConfig
+    artifacts: Sequence[Mapping[str, Any]],
+    config: ProjectConfig,
+    *,
+    artifact_paths: Mapping[str, Path] | None = None,
 ) -> list[ProjectDiagnostic]:
     diagnostics: list[ProjectDiagnostic] = []
     for artifact in artifacts:
+        artifact_path = artifact.get("path")
         diagnostics.extend(
-            _generated_placeholder_diagnostics_for_artifact(artifact, config)
+            _generated_placeholder_diagnostics_for_artifact(
+                artifact,
+                config,
+                artifact_path_override=(
+                    artifact_paths.get(artifact_path)
+                    if artifact_paths is not None and isinstance(artifact_path, str)
+                    else None
+                ),
+            )
         )
     return diagnostics
 
