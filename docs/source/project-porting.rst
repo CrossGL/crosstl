@@ -109,6 +109,10 @@ Use these report fields to decide the next action:
      - Confirm that requested materialized source entries were each packaged
        under deterministic entry paths and identify their reflected target
        entries and stages.
+   * - ``units[].entryDiscovery``
+     - Review source-frontend discovery availability, host-visible entry names,
+       stages, declaration provenance, and unresolved-name diagnostics before
+       constructing an entry-scoped artifact plan.
    * - ``validation``
      - Check current source hashes and byte sizes, generated artifact hashes
        and byte sizes, source maps, source remaps, optional toolchain
@@ -251,6 +255,54 @@ Python callers use the corresponding ``checkpoint_path``, ``resume``, and
 A progress checkpoint is not a final portability report. Only a ``complete``
 checkpoint contains the canonical final report, and neither state establishes
 host runtime integration or numerical parity.
+
+Source Entry Discovery
+----------------------
+
+Project scans record an ``entryDiscovery`` object on every translation unit.
+Its status distinguishes a frontend that supports discovery (``available``),
+a frontend that does not yet expose discovery (``unavailable``), and a
+frontend failure (``failed``). An available result contains ordered,
+deduplicated entry records with the exported name, canonical stage, source
+location, and declaration provenance. Discovery diagnostics are also promoted
+to the project diagnostic stream under the ``source-entry-discovery`` check
+kind.
+
+Metal discovery expands configured includes, defines, and active
+preprocessor branches without materializing template bodies or invoking a
+target generator. It reports concrete entry functions and explicit
+host-named template materializations. Commented examples, inactive branches,
+ordinary helpers whose surrounding comments mention kernels, and unresolved
+dynamic host names are not converted into entries. Locations currently use
+the ``preprocessed-source`` coordinate space, which is recorded explicitly in
+the report.
+
+The public ``ProjectScan.discovered_entry_points()`` method returns a
+repository-relative mapping compatible with ``ProjectConfig.entry_points``:
+
+.. code-block:: python
+
+   from dataclasses import replace
+
+   from crosstl.project import scan_project, translate_project
+
+   scan = scan_project("/path/to/repo")
+   config = replace(
+       scan.config,
+       entry_points=scan.discovered_entry_points(),
+       targets=("directx", "opengl"),
+   )
+   report = translate_project(config)
+
+Discovery does not change translation behavior by itself. This explicit step
+lets callers review or filter a potentially large entry set before scheduling
+artifacts. Source frontends without a discovery provider report
+``unavailable`` rather than returning an empty result that could be mistaken
+for a source file with no entries.
+
+Entry discovery identifies shader and kernel declarations only. It does not
+infer dispatch dimensions, resource bindings, host call sites, backend
+initialization, or numerical parity.
 
 Entry-Scoped Compute Artifacts
 ------------------------------

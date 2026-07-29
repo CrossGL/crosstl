@@ -179,6 +179,13 @@ jobs:
           git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
           git -C mlx-upstream checkout "$MLX_COMMIT"
 
+      - name: Enumerate pinned MLX Metal entry points
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/discover_entries.py \
+            --mlx-root mlx-upstream
+
       - name: Run MLX project-porting checks
         shell: bash
         run: |

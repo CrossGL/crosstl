@@ -82,8 +82,20 @@ from crosstl.translator.codegen.pointer_reinterpret import (
     validate_pointer_reinterpretation_target,
 )
 from crosstl.translator.default_arguments import lower_default_arguments
+from crosstl.translator.entry_discovery import (
+    ENTRY_DISCOVERY_FAILED,
+    ENTRY_DISCOVERY_STATUSES,
+    ENTRY_DISCOVERY_UNAVAILABLE,
+    SourceEntryDiscovery,
+    SourceEntryDiscoveryDiagnostic,
+    SourceEntryLocation,
+)
 from crosstl.translator.plugin_loader import discover_backend_plugins
-from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from crosstl.translator.source_registry import (
+    SOURCE_REGISTRY,
+    SourceSpec,
+    register_default_sources,
+)
 
 REPORT_KIND = "crosstl-project-portability-report"
 REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
@@ -1883,7 +1895,41 @@ REPORT_UNIT_FIELDS = frozenset(
         "sourceHash",
         "sourceSizeBytes",
         "includeDependencies",
+        "entryDiscovery",
     )
+)
+REPORT_ENTRY_DISCOVERY_FIELDS = frozenset(
+    (
+        "status",
+        "sourceBackend",
+        "sourcePath",
+        "entryCount",
+        "entries",
+        "diagnosticCount",
+        "diagnostics",
+    )
+)
+REPORT_ENTRY_DISCOVERY_ENTRY_FIELDS = frozenset(
+    ("name", "stage", "location", "provenance")
+)
+REPORT_ENTRY_DISCOVERY_LOCATION_FIELDS = frozenset(
+    ("line", "column", "offset", "length", "coordinateSpace")
+)
+REPORT_ENTRY_DISCOVERY_PROVENANCE_FIELDS = frozenset(
+    ("kind", "declaredName", "templateArguments")
+)
+REPORT_ENTRY_DISCOVERY_DIAGNOSTIC_FIELDS = frozenset(
+    (
+        "severity",
+        "code",
+        "message",
+        "location",
+        "missingCapabilities",
+        "details",
+    )
+)
+REPORT_ENTRY_DISCOVERY_PROVENANCE_KINDS = frozenset(
+    ("concrete", "host-named-materialization")
 )
 REPORT_INCLUDE_DEPENDENCY_FIELDS = frozenset(
     (
@@ -2005,7 +2051,11 @@ VALIDATION_TOOLCHAIN_RUN_FIELDS = frozenset(
 )
 VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS = frozenset(("artifact", "tool-availability"))
 PROJECT_REPORT_DIAGNOSTIC_CHECK_KINDS = frozenset(
-    (*VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS, "execution-specialization")
+    (
+        *VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS,
+        "execution-specialization",
+        "source-entry-discovery",
+    )
 )
 SOURCE_MAP_SPAN_FIELDS = (
     "file",
@@ -8436,6 +8486,7 @@ class ProjectTranslationUnit:
     source_size_bytes: int
     source_override: str | None = None
     include_dependencies: Sequence[Mapping[str, Any]] = ()
+    entry_discovery: SourceEntryDiscovery | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -8452,6 +8503,8 @@ class ProjectTranslationUnit:
             payload["includeDependencies"] = [
                 dict(dependency) for dependency in self.include_dependencies
             ]
+        if self.entry_discovery is not None:
+            payload["entryDiscovery"] = self.entry_discovery.to_json()
         return payload
 
 
@@ -8480,6 +8533,16 @@ class ProjectScan:
     native_directives: Sequence[ProjectNativeDirective] = ()
     diagnostics: Sequence[ProjectDiagnostic] = ()
     dispatch_artifact_plan: DispatchArtifactPlan | None = None
+
+    def discovered_entry_points(self) -> dict[str, tuple[str, ...]]:
+        """Return discovered entry names in artifact-selection configuration shape."""
+        return {
+            unit.relative_path: tuple(
+                entry.name for entry in unit.entry_discovery.entries
+            )
+            for unit in self.units
+            if unit.entry_discovery is not None and unit.entry_discovery.entries
+        }
 
     def to_report(
         self, targets: Sequence[str] | str | None = None
@@ -9098,6 +9161,91 @@ def _subgroup_width_rule_diagnostics(
     ]
 
 
+def _project_entry_discovery_diagnostic(
+    relative_path: str,
+    source_backend: str,
+    diagnostic: SourceEntryDiscoveryDiagnostic,
+) -> ProjectDiagnostic:
+    location = diagnostic.location
+    return ProjectDiagnostic(
+        severity=diagnostic.severity,
+        code=diagnostic.code,
+        message=diagnostic.message,
+        location=SourceLocation(
+            file=relative_path,
+            line=location.line,
+            column=location.column,
+            offset=location.offset,
+            length=location.length,
+            end_line=location.line,
+            end_column=location.column + location.length,
+            end_offset=location.offset + location.length,
+        ),
+        source_backend=source_backend,
+        check_kind="source-entry-discovery",
+        missing_capabilities=diagnostic.missing_capabilities,
+        details={
+            **dict(diagnostic.details),
+            "coordinateSpace": location.coordinate_space,
+        },
+    )
+
+
+def _discover_project_source_entries(
+    config: ProjectConfig,
+    path: Path,
+    relative_path: str,
+    source_spec: SourceSpec,
+) -> tuple[SourceEntryDiscovery, list[ProjectDiagnostic]]:
+    try:
+        source = path.read_text(encoding="utf-8")
+        discovery = source_spec.discover_entry_points(
+            source,
+            file_path=str(path),
+            include_paths=_frontend_include_dirs(config),
+            defines=config.defines,
+            source_options=_frontend_source_options(
+                _source_options_for_unit(
+                    config,
+                    source_spec.name,
+                    relative_path,
+                )
+            ),
+        )
+        discovery = replace(discovery, source_path=relative_path)
+    except Exception as exc:
+        location = SourceEntryLocation(
+            line=1,
+            column=1,
+            offset=0,
+            length=0,
+            coordinate_space="source",
+        )
+        diagnostic = SourceEntryDiscoveryDiagnostic(
+            severity="warning",
+            code="project.scan.entry-discovery-failed",
+            message=f"Entry-point discovery failed for {relative_path}: {exc}",
+            location=location,
+            missing_capabilities=("source.entry-point-discovery",),
+            details={"exceptionType": type(exc).__name__},
+        )
+        discovery = SourceEntryDiscovery(
+            source_backend=source_spec.name,
+            source_path=relative_path,
+            status=ENTRY_DISCOVERY_FAILED,
+            diagnostics=(diagnostic,),
+        )
+
+    return discovery, [
+        _project_entry_discovery_diagnostic(
+            relative_path,
+            source_spec.name,
+            diagnostic,
+        )
+        for diagnostic in discovery.diagnostics
+    ]
+
+
 def scan_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -9200,6 +9348,13 @@ def scan_project(
             config, path, relative_path, source_spec.name
         )
         diagnostics.extend(include_diagnostics)
+        entry_discovery, entry_discovery_diagnostics = _discover_project_source_entries(
+            config,
+            path,
+            relative_path,
+            source_spec,
+        )
+        diagnostics.extend(entry_discovery_diagnostics)
         units.append(
             ProjectTranslationUnit(
                 path=path,
@@ -9210,6 +9365,7 @@ def scan_project(
                 source_size_bytes=path.stat().st_size,
                 source_override=override,
                 include_dependencies=include_dependencies,
+                entry_discovery=entry_discovery,
             )
         )
 
@@ -46661,6 +46817,236 @@ def _unit_include_dependencies_contract_reasons(
     return reasons
 
 
+def _entry_discovery_location_contract_reasons(
+    prefix: str,
+    value: Any,
+    *,
+    require_closed_fields: bool,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix,
+            value,
+            REPORT_ENTRY_DISCOVERY_LOCATION_FIELDS,
+        )
+        if require_closed_fields
+        else []
+    )
+    for field_name in ("line", "column"):
+        field_value = value.get(field_name)
+        if (
+            not isinstance(field_value, int)
+            or isinstance(field_value, bool)
+            or field_value < 1
+        ):
+            reasons.append(f"{prefix}.{field_name} must be a positive integer")
+    for field_name in ("offset", "length"):
+        if not _is_non_negative_int(value.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a non-negative integer")
+    if not _is_non_empty_string(value.get("coordinateSpace")):
+        reasons.append(f"{prefix}.coordinateSpace must be a string")
+    return reasons
+
+
+def _entry_discovery_provenance_contract_reasons(
+    prefix: str,
+    value: Any,
+    *,
+    require_closed_fields: bool,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix,
+            value,
+            REPORT_ENTRY_DISCOVERY_PROVENANCE_FIELDS,
+        )
+        if require_closed_fields
+        else []
+    )
+    kind = value.get("kind")
+    if kind not in REPORT_ENTRY_DISCOVERY_PROVENANCE_KINDS:
+        reasons.append(
+            f"{prefix}.kind must be one of "
+            + ", ".join(sorted(REPORT_ENTRY_DISCOVERY_PROVENANCE_KINDS))
+        )
+    if not _is_non_empty_string(value.get("declaredName")):
+        reasons.append(f"{prefix}.declaredName must be a string")
+    if "templateArguments" in value:
+        arguments = value.get("templateArguments")
+        if not isinstance(arguments, list) or any(
+            not _is_non_empty_string(argument) for argument in arguments
+        ):
+            reasons.append(f"{prefix}.templateArguments must be a list of strings")
+    return reasons
+
+
+def _entry_discovery_diagnostic_contract_reasons(
+    prefix: str,
+    value: Any,
+    *,
+    require_closed_fields: bool,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix,
+            value,
+            REPORT_ENTRY_DISCOVERY_DIAGNOSTIC_FIELDS,
+        )
+        if require_closed_fields
+        else []
+    )
+    if value.get("severity") not in {"note", "warning", "error"}:
+        reasons.append(f"{prefix}.severity must be note, warning, or error")
+    for field_name in ("code", "message"):
+        if not _is_non_empty_string(value.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a string")
+    reasons.extend(
+        _entry_discovery_location_contract_reasons(
+            f"{prefix}.location",
+            value.get("location"),
+            require_closed_fields=require_closed_fields,
+        )
+    )
+    if "missingCapabilities" in value:
+        capabilities = value.get("missingCapabilities")
+        if not isinstance(capabilities, list) or any(
+            not _is_non_empty_string(capability) for capability in capabilities
+        ):
+            reasons.append(f"{prefix}.missingCapabilities must be a list of strings")
+    if "details" in value and not isinstance(value.get("details"), Mapping):
+        reasons.append(f"{prefix}.details must be an object")
+    return reasons
+
+
+def _unit_entry_discovery_contract_reasons(
+    index: int,
+    unit: Mapping[str, Any],
+    *,
+    require_closed_fields: bool,
+) -> list[str]:
+    if "entryDiscovery" not in unit:
+        return []
+    prefix = f"units[{index}].entryDiscovery"
+    discovery = unit.get("entryDiscovery")
+    if not isinstance(discovery, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix,
+            discovery,
+            REPORT_ENTRY_DISCOVERY_FIELDS,
+        )
+        if require_closed_fields
+        else []
+    )
+    status = discovery.get("status")
+    if status not in ENTRY_DISCOVERY_STATUSES:
+        reasons.append(
+            f"{prefix}.status must be one of "
+            + ", ".join(sorted(ENTRY_DISCOVERY_STATUSES))
+        )
+    source_backend = discovery.get("sourceBackend")
+    if source_backend != unit.get("sourceBackend"):
+        reasons.append(
+            f"{prefix}.sourceBackend must match units[{index}].sourceBackend"
+        )
+    source_path = discovery.get("sourcePath")
+    if source_path != unit.get("path"):
+        reasons.append(f"{prefix}.sourcePath must match units[{index}].path")
+
+    entries = discovery.get("entries")
+    if not isinstance(entries, list):
+        reasons.append(f"{prefix}.entries must be a list")
+        entries = []
+    entry_count = discovery.get("entryCount")
+    if not _is_non_negative_int(entry_count):
+        reasons.append(f"{prefix}.entryCount must be a non-negative integer")
+    elif entry_count != len(entries):
+        reasons.append(f"{prefix}.entryCount must match {prefix}.entries length")
+
+    names = set()
+    previous_offset = -1
+    for entry_index, entry in enumerate(entries):
+        entry_prefix = f"{prefix}.entries[{entry_index}]"
+        if not isinstance(entry, Mapping):
+            reasons.append(f"{entry_prefix} must be an object")
+            continue
+        if require_closed_fields:
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    entry_prefix,
+                    entry,
+                    REPORT_ENTRY_DISCOVERY_ENTRY_FIELDS,
+                )
+            )
+        name = entry.get("name")
+        if not _is_non_empty_string(name):
+            reasons.append(f"{entry_prefix}.name must be a string")
+        elif name in names:
+            reasons.append(f"{entry_prefix}.name must be unique within the unit")
+        else:
+            names.add(name)
+        if not _is_non_empty_string(entry.get("stage")):
+            reasons.append(f"{entry_prefix}.stage must be a string")
+        location = entry.get("location")
+        reasons.extend(
+            _entry_discovery_location_contract_reasons(
+                f"{entry_prefix}.location",
+                location,
+                require_closed_fields=require_closed_fields,
+            )
+        )
+        if isinstance(location, Mapping) and _is_non_negative_int(
+            location.get("offset")
+        ):
+            offset = location["offset"]
+            if offset < previous_offset:
+                reasons.append(
+                    f"{entry_prefix}.location.offset must preserve source order"
+                )
+            previous_offset = offset
+        reasons.extend(
+            _entry_discovery_provenance_contract_reasons(
+                f"{entry_prefix}.provenance",
+                entry.get("provenance"),
+                require_closed_fields=require_closed_fields,
+            )
+        )
+
+    diagnostics = discovery.get("diagnostics")
+    if not isinstance(diagnostics, list):
+        reasons.append(f"{prefix}.diagnostics must be a list")
+        diagnostics = []
+    diagnostic_count = discovery.get("diagnosticCount")
+    if not _is_non_negative_int(diagnostic_count):
+        reasons.append(f"{prefix}.diagnosticCount must be a non-negative integer")
+    elif diagnostic_count != len(diagnostics):
+        reasons.append(
+            f"{prefix}.diagnosticCount must match {prefix}.diagnostics length"
+        )
+    for diagnostic_index, diagnostic in enumerate(diagnostics):
+        reasons.extend(
+            _entry_discovery_diagnostic_contract_reasons(
+                f"{prefix}.diagnostics[{diagnostic_index}]",
+                diagnostic,
+                require_closed_fields=require_closed_fields,
+            )
+        )
+
+    if status == ENTRY_DISCOVERY_UNAVAILABLE and (entries or diagnostics):
+        reasons.append(
+            f"{prefix} cannot contain entries or diagnostics when unavailable"
+        )
+    return reasons
+
+
 def _unit_contract_reasons(
     index: int,
     unit: Any,
@@ -46738,6 +47124,13 @@ def _unit_contract_reasons(
             unit,
             root_path=root_path,
             project=project,
+            require_closed_fields=require_closed_fields,
+        )
+    )
+    reasons.extend(
+        _unit_entry_discovery_contract_reasons(
+            index,
+            unit,
             require_closed_fields=require_closed_fields,
         )
     )

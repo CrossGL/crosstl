@@ -1,6 +1,33 @@
 {
   "backlog": [
     {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "project",
+      "feature": "Source entry-point discovery",
+      "feature_id": "project.entry_point_discovery",
+      "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "project",
+      "feature": "Source entry-point discovery",
+      "feature_id": "project.entry_point_discovery",
+      "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "project",
+      "feature": "Source entry-point discovery",
+      "feature_id": "project.entry_point_discovery",
+      "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
+      "status": "partial"
+    },
+    {
       "backend": "Metal",
       "backend_id": "metal",
       "category": "project",
@@ -2461,6 +2488,44 @@
           ],
           "notes": "Project translation atomically checkpoints the deterministic job plan, scan and translation diagnostics, completed, active, and pending coordinates, and a partial artifact matrix. Resume verifies project and invocation identity, source identity, generated artifact hashes and sizes, and source-remap hashes and sizes before skipping work. Configurable job intervals bound checkpoint write frequency. Checkpoints record shader and kernel translation progress only; they do not establish runtime integration or semantic parity.",
           "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
+      "description": "Discover host-visible source entries during repository scanning with deterministic identity, stage, provenance, and diagnostics.",
+      "id": "project.entry_point_discovery",
+      "name": "Source entry-point discovery",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
+            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
+            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_backend/test_metal/test_entry_discovery.py::def test_discovers_direct_included_and_host_named_metal_entries",
+            "tests/test_translator/test_project_entry_discovery.py::def test_project_scan_reports_metal_entries_and_drives_artifact_jobs",
+            "tests/test_mlx_entry_discovery.py::def test_mlx_entry_discovery_tool_reports_deterministic_units",
+            "docs/source/project-porting.rst"
+          ],
+          "notes": "The source registry exposes a backend-neutral entry discovery contract. Metal discovery expands configured includes, defines, and active preprocessor branches without target generation, reports concrete entries and explicit host-named template materializations, rejects comment and inactive-branch false positives, and emits structured diagnostics for unresolved host names. Project reports preserve discovery availability, ordered entries, declaration provenance, and diagnostics; ProjectScan returns a mapping compatible with entry-scoped artifact configuration. Other source frontends currently report discovery as unavailable.",
+          "status": "partial"
         }
       }
     },
@@ -5286,27 +5351,29 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 3,
+      "backlog_count": 6,
       "by_backend": {
-        "metal": 3
+        "directx": 1,
+        "metal": 4,
+        "opengl": 1
       },
       "by_category": {
-        "project": 3
+        "project": 6
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 0,
+        "partial": 3,
         "supported": 0,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 0
       }
     },
-    "feature_count": 86,
+    "feature_count": 87,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
-        "partial": 0,
+        "partial": 1,
         "supported": 84,
         "unknown": 0,
         "unsupported": 0,
@@ -5314,7 +5381,7 @@
       },
       "metal": {
         "diagnostic": 4,
-        "partial": 0,
+        "partial": 1,
         "supported": 71,
         "unknown": 0,
         "unsupported": 3,
@@ -5322,7 +5389,7 @@
       },
       "opengl": {
         "diagnostic": 2,
-        "partial": 0,
+        "partial": 1,
         "supported": 83,
         "unknown": 0,
         "unsupported": 0,

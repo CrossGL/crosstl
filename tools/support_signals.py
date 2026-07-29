@@ -50,6 +50,13 @@ PROJECT_IMPLEMENTATION_PATHS = (
 )
 PROJECT_TEST_PATHS = ("tests/test_translator/test_project_translation.py",)
 PROJECT_FEATURE_IMPLEMENTATION_PATHS = {
+    "project.entry_point_discovery": (
+        "crosstl/translator/entry_discovery.py",
+        "crosstl/translator/source_registry.py",
+        "crosstl/backend/Metal/preprocessor.py",
+        "crosstl/project/pipeline.py",
+        "demos/integrations/mlx/discover_entries.py",
+    ),
     "project.host_dispatch_contract_import": (
         "crosstl/project/dispatch_contracts.py",
         "crosstl/project/pipeline.py",
@@ -57,6 +64,11 @@ PROJECT_FEATURE_IMPLEMENTATION_PATHS = {
     ),
 }
 PROJECT_FEATURE_TEST_PATHS = {
+    "project.entry_point_discovery": (
+        "tests/test_backend/test_metal/test_entry_discovery.py",
+        "tests/test_translator/test_project_entry_discovery.py",
+        "tests/test_mlx_entry_discovery.py",
+    ),
     "project.host_dispatch_contract_import": (
         "tests/test_translator/test_dispatch_contracts.py",
         "tests/test_translator/test_project_dispatch_contract_import.py",
