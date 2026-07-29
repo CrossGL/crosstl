@@ -9,6 +9,13 @@ from .cooperative_matrix import (
     has_cooperative_matrix_fragment_mapping,
     register_cooperative_matrix_fragment_mapping,
 )
+from .entry_discovery import (
+    SourceEntryDiscovery,
+    SourceEntryDiscoveryDiagnostic,
+    SourceEntryLocation,
+    SourceEntryPoint,
+    SourceEntryProvenance,
+)
 from .lexer import Lexer
 from .parser import Parser
 from .plugin_loader import discover_backend_plugins

@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
+from .entry_discovery import SourceEntryDiscovery
 from .lexer import Lexer as CglLexer
 from .parser import Parser as CglParser
 
@@ -86,6 +87,7 @@ class SourceSpec:
     native_directive_classifier: (
         Callable[[str, str], Mapping[str, Any] | None] | None
     ) = None
+    entry_point_discoverer: Callable[..., SourceEntryDiscovery] | None = None
 
     def parse(
         self,
@@ -159,6 +161,48 @@ class SourceSpec:
             _normalize_source_name(directive),
             payload.strip(),
         )
+
+    def discover_entry_points(
+        self,
+        code: str,
+        file_path: str | None = None,
+        *,
+        include_paths: Sequence[str] | None = None,
+        defines: Mapping[str, str] | None = None,
+        source_options: Mapping[str, Any] | None = None,
+    ) -> SourceEntryDiscovery:
+        """Discover host-visible entries without running target code generation."""
+        source_path = file_path or "<memory>"
+        if self.entry_point_discoverer is None:
+            return SourceEntryDiscovery.unavailable(
+                source_backend=_normalize_source_name(self.name),
+                source_path=source_path,
+            )
+
+        kwargs = {}
+        for name, value in (
+            ("file_path", file_path),
+            ("include_paths", include_paths),
+            ("defines", defines),
+            ("source_options", source_options),
+        ):
+            if value is not None and _accepts_keyword(
+                self.entry_point_discoverer, name
+            ):
+                kwargs[name] = value
+        result = self.entry_point_discoverer(code, **kwargs)
+        if not isinstance(result, SourceEntryDiscovery):
+            raise TypeError(
+                f"Source entry discoverer for '{self.name}' must return "
+                "SourceEntryDiscovery"
+            )
+        expected_backend = _normalize_source_name(self.name)
+        if result.source_backend != expected_backend:
+            raise ValueError(
+                f"Source entry discoverer for '{self.name}' returned backend "
+                f"'{result.source_backend}'"
+            )
+        return result
 
 
 class SourceRegistry:
@@ -369,6 +413,25 @@ def _load_metal():
     from crosstl.backend.Metal import MetalLexer, MetalParser
 
     return MetalLexer, MetalParser
+
+
+def _discover_metal_entry_points(
+    code: str,
+    file_path: str | None = None,
+    *,
+    include_paths: Sequence[str] | None = None,
+    defines: Mapping[str, str] | None = None,
+    source_options: Mapping[str, Any] | None = None,
+) -> SourceEntryDiscovery:
+    from crosstl.backend.Metal.preprocessor import discover_metal_entry_points
+
+    return discover_metal_entry_points(
+        code,
+        file_path=file_path,
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+    )
 
 
 def _classify_metal_native_directive(
@@ -634,6 +697,7 @@ def register_default_sources() -> None:
             reverse_codegen_factory=_reverse_metal,
             aliases=("metal", "msl"),
             native_directive_classifier=_classify_metal_native_directive,
+            entry_point_discoverer=_discover_metal_entry_points,
         )
     )
     _register(

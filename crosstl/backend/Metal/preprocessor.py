@@ -7,7 +7,18 @@ import re
 from bisect import bisect_right
 from dataclasses import dataclass, field, replace
 from heapq import heappop, heappush
-from typing import Dict, List, Optional, Set, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
@@ -743,6 +754,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         processed = self._materialize_explicit_template_function_calls(processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
+
+    def preprocess_for_entry_discovery(
+        self, code: str, file_path: Optional[str] = None
+    ) -> str:
+        """Expand active source directives without materializing templates."""
+        self._source_analysis_cache.clear()
+        self._containing_span_cache.clear()
+        self._lexical_scope_lookup_cache.clear()
+        code = self._strip_leading_compiler_diagnostics(code)
+        return super().preprocess(code, file_path=file_path)
 
     def _source_analysis(self, code: str) -> _MetalSourceAnalysis:
         cache = self._source_analysis_cache
@@ -19054,3 +19075,274 @@ class MetalPreprocessor(HLSLPreprocessor):
         if include_target.startswith("<") and include_target.endswith(">"):
             return f"{PRESERVED_INCLUDE_SENTINEL}{include_target}"
         return None
+
+
+_METAL_ENTRY_STAGE_PATTERNS = (
+    (re.compile(r"\[\[\s*kernel\s*\]\]|\b(?:kernel|compute)\b"), "compute"),
+    (re.compile(r"\bvertex\b"), "vertex"),
+    (re.compile(r"\bfragment\b"), "fragment"),
+    (re.compile(r"\bmesh\b"), "mesh"),
+    (re.compile(r"\bobject\b"), "object"),
+    (re.compile(r"\bamplification\b"), "amplification"),
+    (re.compile(r"\bintersection\b"), "ray_intersection"),
+    (re.compile(r"\banyhit\b"), "ray_any_hit"),
+    (re.compile(r"\bclosesthit\b"), "ray_closest_hit"),
+    (re.compile(r"\bmiss\b"), "ray_miss"),
+    (re.compile(r"\bcallable\b"), "ray_callable"),
+)
+
+
+def _metal_entry_stage(preprocessor: MetalPreprocessor, declaration: str) -> str | None:
+    masked = preprocessor._mask_comments_and_literals(declaration)
+    for pattern, stage in _METAL_ENTRY_STAGE_PATTERNS:
+        if pattern.search(masked):
+            return stage
+    return None
+
+
+def _source_entry_location(source: str, start: int, end: int):
+    from crosstl.translator.entry_discovery import SourceEntryLocation, source_position
+
+    line, column = source_position(source, start)
+    return SourceEntryLocation(
+        line=line,
+        column=column,
+        offset=start,
+        length=max(0, end - start),
+    )
+
+
+def _position_in_spans(position: int, spans: Sequence[Tuple[int, int]]) -> bool:
+    return any(start <= position < end for start, end in spans)
+
+
+def _static_metal_host_name(preprocessor: MetalPreprocessor, expression: str) -> str:
+    if (
+        re.fullmatch(
+            rf"\s*{METAL_STRING_EXPRESSION_PATTERN}\s*",
+            expression,
+            re.DOTALL,
+        )
+        is None
+    ):
+        return ""
+    return preprocessor._evaluate_metal_string_expression(expression)
+
+
+def _unresolved_metal_host_name_diagnostics(
+    preprocessor: MetalPreprocessor,
+    source: str,
+    excluded_spans: Sequence[Tuple[int, int]],
+):
+    from crosstl.translator.entry_discovery import SourceEntryDiscoveryDiagnostic
+
+    diagnostics = []
+    for match in re.finditer(r"\bhost_name\s*\(", source):
+        if _position_in_spans(match.start(), excluded_spans):
+            continue
+        open_paren = source.find("(", match.start(), match.end())
+        close_paren = preprocessor._find_matching_delimiter(
+            source, open_paren, "(", ")"
+        )
+        if close_paren is None:
+            continue
+        expression = source[open_paren + 1 : close_paren]
+        if _static_metal_host_name(preprocessor, expression):
+            continue
+        diagnostics.append(
+            SourceEntryDiscoveryDiagnostic(
+                severity="warning",
+                code="source.entry-discovery.unresolved-host-name",
+                message=(
+                    "Metal host_name expression cannot be resolved to a static "
+                    "entry-point name."
+                ),
+                location=_source_entry_location(source, match.start(), close_paren + 1),
+                missing_capabilities=("source.entry-point-name-resolution",),
+                details={"expression": expression.strip()},
+            )
+        )
+
+    for match in MLX_INSTANTIATE_KERNEL_RE.finditer(source):
+        if _position_in_spans(match.start(), excluded_spans):
+            continue
+        open_paren = source.find("(", match.start(), match.end())
+        arguments, consumed = preprocessor._parse_macro_args(source, open_paren)
+        if not consumed or not arguments:
+            continue
+        if _static_metal_host_name(preprocessor, arguments[0]):
+            continue
+        diagnostics.append(
+            SourceEntryDiscoveryDiagnostic(
+                severity="warning",
+                code="source.entry-discovery.unresolved-host-name",
+                message=(
+                    "Metal instantiate_kernel name cannot be resolved to a static "
+                    "entry-point name."
+                ),
+                location=_source_entry_location(
+                    source, match.start(), open_paren + consumed
+                ),
+                missing_capabilities=("source.entry-point-name-resolution",),
+                details={"expression": arguments[0].strip()},
+            )
+        )
+    return diagnostics
+
+
+def discover_metal_entry_points(
+    code: str,
+    file_path: str | None = None,
+    *,
+    include_paths: Sequence[str] | None = None,
+    defines: Mapping[str, str] | None = None,
+    source_options: Mapping[str, Any] | None = None,
+):
+    """Discover Metal entry points without materializing or translating kernels."""
+    from crosstl.translator.entry_discovery import (
+        ENTRY_DISCOVERY_AVAILABLE,
+        SourceEntryDiscovery,
+        SourceEntryDiscoveryDiagnostic,
+        SourceEntryPoint,
+        SourceEntryProvenance,
+    )
+
+    options = dict(source_options or {})
+    preprocessor = MetalPreprocessor(
+        include_paths=list(include_paths or ()),
+        defines=dict(defines or {}),
+        strict=bool(options.get("strict_preprocessor", False)),
+    )
+    source = code.lstrip("\ufeff")
+    if options.get("preprocess", True):
+        source = preprocessor.preprocess_for_entry_discovery(
+            source, file_path=file_path
+        )
+
+    comment_and_literal_spans = preprocessor._find_comment_and_literal_spans(source)
+    template_functions = preprocessor._find_template_functions(source)
+    template_entries = {
+        template.name: stage
+        for template in template_functions
+        if (stage := _metal_entry_stage(preprocessor, template.source)) is not None
+    }
+
+    candidates = []
+    for instantiation in preprocessor._find_project_template_instantiations(source):
+        if _position_in_spans(instantiation.span[0], comment_and_literal_spans):
+            continue
+        declaration = source[instantiation.span[0] : instantiation.span[1]]
+        if "host_name" in preprocessor._mask_comments_and_literals(
+            declaration
+        ) and not preprocessor._host_name_from_attributes(declaration):
+            continue
+        instantiate_match = MLX_INSTANTIATE_KERNEL_RE.search(declaration)
+        if instantiate_match is not None:
+            open_paren = declaration.find(
+                "(", instantiate_match.start(), instantiate_match.end()
+            )
+            arguments, consumed = preprocessor._parse_macro_args(
+                declaration, open_paren
+            )
+            if (
+                not consumed
+                or not arguments
+                or not _static_metal_host_name(preprocessor, arguments[0])
+            ):
+                continue
+        stage = _metal_entry_stage(preprocessor, declaration) or template_entries.get(
+            instantiation.function_name
+        )
+        if stage is None:
+            continue
+        candidates.append(
+            (
+                instantiation.span[0],
+                SourceEntryPoint(
+                    name=instantiation.host_name,
+                    stage=stage,
+                    location=_source_entry_location(source, *instantiation.span),
+                    provenance=SourceEntryProvenance(
+                        kind="host-named-materialization",
+                        declared_name=instantiation.function_name,
+                        template_arguments=tuple(instantiation.template_arguments),
+                    ),
+                ),
+            )
+        )
+
+    excluded_spans = list(preprocessor._find_template_declaration_spans(source))
+    excluded_spans.extend(
+        definition.span
+        for definition in preprocessor._find_concrete_struct_definitions(source)
+    )
+    excluded_spans.extend(comment_and_literal_spans)
+    for function in preprocessor._find_non_template_function_definitions(
+        source, sorted(excluded_spans)
+    ):
+        declaration_end = max(function.span[0], function.body_span[0] - 1)
+        declaration = source[function.span[0] : declaration_end]
+        stage = _metal_entry_stage(preprocessor, declaration)
+        if stage is None:
+            continue
+        host_name = preprocessor._host_name_from_attributes(declaration)
+        if "host_name" in preprocessor._mask_comments_and_literals(declaration):
+            if not host_name:
+                continue
+        candidates.append(
+            (
+                function.span[0],
+                SourceEntryPoint(
+                    name=host_name or function.name,
+                    stage=stage,
+                    location=_source_entry_location(source, *function.span),
+                    provenance=SourceEntryProvenance(
+                        kind="concrete",
+                        declared_name=function.name,
+                    ),
+                ),
+            )
+        )
+
+    entries = []
+    diagnostics = list(
+        _unresolved_metal_host_name_diagnostics(
+            preprocessor, source, comment_and_literal_spans
+        )
+    )
+    entries_by_name = {}
+    for _position, entry in sorted(
+        candidates, key=lambda item: (item[0], item[1].name)
+    ):
+        existing = entries_by_name.get(entry.name)
+        if existing is None:
+            entries_by_name[entry.name] = entry
+            entries.append(entry)
+            continue
+        if existing.stage == entry.stage and existing.provenance == entry.provenance:
+            continue
+        diagnostics.append(
+            SourceEntryDiscoveryDiagnostic(
+                severity="warning",
+                code="source.entry-discovery.duplicate-exported-name",
+                message=(
+                    f"Metal entry-point name '{entry.name}' is declared more than "
+                    "once; the first declaration is retained."
+                ),
+                location=entry.location,
+                missing_capabilities=("source.entry-point-identity",),
+                details={
+                    "entryPoint": entry.name,
+                    "firstOffset": existing.location.offset,
+                    "duplicateOffset": entry.location.offset,
+                },
+            )
+        )
+
+    return SourceEntryDiscovery(
+        source_backend="metal",
+        source_path=file_path or "<memory>",
+        status=ENTRY_DISCOVERY_AVAILABLE,
+        entries=tuple(entries),
+        diagnostics=tuple(diagnostics),
+    )
