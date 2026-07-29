@@ -18,8 +18,10 @@ import subprocess
 import tempfile
 import time
 from collections import Counter
+from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
+from multiprocessing import get_context
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
@@ -9576,6 +9578,83 @@ class _ProjectArtifactTranslationJob:
     configured_subgroup: tuple[int, Mapping[str, Any]] | None = None
 
 
+@dataclass(frozen=True)
+class _ProjectArtifactTranslationRequest:
+    unit: ProjectTranslationUnit
+    target: str
+    job: _ProjectArtifactTranslationJob
+    coordinate: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _ProjectArtifactTranslationPlanItem:
+    request: _ProjectArtifactTranslationRequest
+    setup_diagnostics: tuple[ProjectDiagnostic, ...] = ()
+
+
+@dataclass(frozen=True)
+class _ProjectArtifactTranslationResult:
+    artifacts: tuple[dict[str, Any], ...]
+    diagnostics: tuple[ProjectDiagnostic, ...]
+
+
+@dataclass(frozen=True)
+class _ProjectTranslationWorkerContext:
+    config: ProjectConfig
+    dispatch_artifact_plan: DispatchArtifactPlan | None
+    preserve_source_suffix: frozenset[tuple[str, str]]
+    format_output: bool
+    output_dir_blocked: bool
+
+
+_PROJECT_TRANSLATION_WORKER_CONTEXT: _ProjectTranslationWorkerContext | None = None
+
+
+def _initialize_project_translation_worker(
+    context: _ProjectTranslationWorkerContext,
+) -> None:
+    global _PROJECT_TRANSLATION_WORKER_CONTEXT
+    _PROJECT_TRANSLATION_WORKER_CONTEXT = context
+
+
+def _run_project_translation_worker(
+    request: _ProjectArtifactTranslationRequest,
+) -> _ProjectArtifactTranslationResult:
+    context = _PROJECT_TRANSLATION_WORKER_CONTEXT
+    if context is None:
+        raise RuntimeError("Project translation worker was not initialized")
+    worker_scan = ProjectScan(
+        config=context.config,
+        units=(request.unit,),
+        dispatch_artifact_plan=context.dispatch_artifact_plan,
+    )
+    report = _translate_project_impl(
+        context.config,
+        targets=(request.target,),
+        output_dir=None,
+        variants=None,
+        format_output=context.format_output,
+        validate=False,
+        run_toolchains=False,
+        max_workers=1,
+        checkpoint_run=_ProjectTranslationCheckpointRun(
+            path=None,
+            resume=False,
+            write_interval_jobs=1,
+        ),
+        scan_override=worker_scan,
+        translation_job_override=request,
+        preserve_source_suffix_override=context.preserve_source_suffix,
+        suppress_forwarding_diagnostics=True,
+        suppress_target_diagnostics=True,
+        output_dir_blocked_override=context.output_dir_blocked,
+    )
+    return _ProjectArtifactTranslationResult(
+        artifacts=tuple(report.artifacts),
+        diagnostics=tuple(report.diagnostics),
+    )
+
+
 @dataclass
 class _ProjectTranslationCheckpointRun:
     path: str | os.PathLike[str] | None
@@ -9905,6 +9984,205 @@ def _project_translation_checkpoint_jobs(
             dispatch_artifacts,
         )
     ]
+
+
+def _project_artifact_translation_plan(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+    targets: Sequence[str],
+    dispatch_artifacts: Mapping[str, Sequence[tuple[int, DispatchArtifactJob]]],
+    *,
+    include_paths: Sequence[str],
+    preserve_source_suffix: set[tuple[str, str]],
+) -> list[_ProjectArtifactTranslationPlanItem]:
+    variant_jobs = _variant_jobs(config)
+    max_define_count = max(
+        (len(defines) for _variant, defines in variant_jobs),
+        default=0,
+    )
+    define_forwarding_diagnostics: set[str] = set()
+    include_path_forwarding_diagnostics: set[str] = set()
+    plan: list[_ProjectArtifactTranslationPlanItem] = []
+
+    for unit in units:
+        setup_diagnostics: list[ProjectDiagnostic] = []
+        source_supports_defines = _source_frontend_supports_lexer_keyword(
+            unit.source_backend,
+            "defines",
+        )
+        source_supports_include_paths = _source_frontend_supports_lexer_keyword(
+            unit.source_backend,
+            "include_paths",
+        )
+        if (
+            max_define_count > 0
+            and not source_supports_defines
+            and unit.source_backend not in define_forwarding_diagnostics
+        ):
+            setup_diagnostics.append(
+                _frontend_define_forwarding_diagnostic(unit, max_define_count)
+            )
+            define_forwarding_diagnostics.add(unit.source_backend)
+        if (
+            include_paths
+            and not source_supports_include_paths
+            and unit.source_backend not in include_path_forwarding_diagnostics
+        ):
+            setup_diagnostics.append(
+                _frontend_include_path_forwarding_diagnostic(
+                    unit,
+                    len(include_paths),
+                )
+            )
+            include_path_forwarding_diagnostics.add(unit.source_backend)
+
+        first_job = True
+        for target in targets:
+            for job in _project_translation_jobs_for_target(
+                config,
+                unit,
+                target,
+                dispatch_artifacts,
+            ):
+                coordinate = _project_translation_checkpoint_coordinate(
+                    config,
+                    unit,
+                    target,
+                    job,
+                    preserve_source_suffix=preserve_source_suffix,
+                )
+                plan.append(
+                    _ProjectArtifactTranslationPlanItem(
+                        request=_ProjectArtifactTranslationRequest(
+                            unit=unit,
+                            target=target,
+                            job=job,
+                            coordinate=coordinate,
+                        ),
+                        setup_diagnostics=(
+                            tuple(setup_diagnostics) if first_job else ()
+                        ),
+                    )
+                )
+                first_job = False
+    return plan
+
+
+def _validate_project_artifact_translation_plan(
+    plan: Sequence[_ProjectArtifactTranslationPlanItem],
+) -> None:
+    paths: dict[str, Mapping[str, Any]] = {}
+    for item in plan:
+        coordinate = item.request.coordinate
+        path = str(coordinate["path"])
+        previous = paths.get(path)
+        if previous is not None:
+            raise ValueError(
+                "Project translation jobs resolve to the same artifact path "
+                f"'{path}': {dict(previous)} and {dict(coordinate)}"
+            )
+        paths[path] = coordinate
+
+
+def _translate_project_jobs_concurrently(
+    *,
+    config: ProjectConfig,
+    scan: ProjectScan,
+    targets: Sequence[str],
+    dispatch_artifacts: Mapping[str, Sequence[tuple[int, DispatchArtifactJob]]],
+    include_paths: Sequence[str],
+    preserve_source_suffix: set[tuple[str, str]],
+    format_output: bool,
+    output_dir_blocked: bool,
+    max_workers: int,
+    checkpoint_run: _ProjectTranslationCheckpointRun,
+    artifacts: list[dict[str, Any]],
+    diagnostics: list[ProjectDiagnostic],
+) -> None:
+    plan = _project_artifact_translation_plan(
+        config,
+        scan.units,
+        targets,
+        dispatch_artifacts,
+        include_paths=include_paths,
+        preserve_source_suffix=preserve_source_suffix,
+    )
+    _validate_project_artifact_translation_plan(plan)
+    if not plan:
+        return
+
+    restored_results: dict[int, _ProjectArtifactTranslationResult] = {}
+    pending_indices: list[int] = []
+    for index, item in enumerate(plan):
+        restored_completion = checkpoint_run.restore(
+            item.request.coordinate,
+            config=config,
+            unit=item.request.unit,
+        )
+        if restored_completion is None:
+            pending_indices.append(index)
+            continue
+        restored_artifacts, restored_diagnostics = restored_completion
+        restored_results[index] = _ProjectArtifactTranslationResult(
+            artifacts=tuple(restored_artifacts),
+            diagnostics=tuple(restored_diagnostics),
+        )
+
+    context = _ProjectTranslationWorkerContext(
+        config=config,
+        dispatch_artifact_plan=scan.dispatch_artifact_plan,
+        preserve_source_suffix=frozenset(preserve_source_suffix),
+        format_output=format_output,
+        output_dir_blocked=output_dir_blocked,
+    )
+    executor: ProcessPoolExecutor | None = None
+    futures: dict[int, Future[_ProjectArtifactTranslationResult]] = {}
+    next_pending = 0
+
+    def submit_available() -> None:
+        nonlocal next_pending
+        if executor is None:
+            return
+        while len(futures) < max_workers and next_pending < len(pending_indices):
+            index = pending_indices[next_pending]
+            futures[index] = executor.submit(
+                _run_project_translation_worker,
+                plan[index].request,
+            )
+            next_pending += 1
+
+    if pending_indices:
+        executor = ProcessPoolExecutor(
+            max_workers=max_workers,
+            mp_context=get_context("spawn"),
+            initializer=_initialize_project_translation_worker,
+            initargs=(context,),
+        )
+        submit_available()
+
+    try:
+        for index, item in enumerate(plan):
+            diagnostics.extend(item.setup_diagnostics)
+            result = restored_results.get(index)
+            if result is None:
+                checkpoint_run.activate(item.request.coordinate)
+                future = futures.pop(index)
+                result = future.result()
+                checkpoint_run.complete(
+                    item.request.coordinate,
+                    result.artifacts,
+                    result.diagnostics,
+                )
+                submit_available()
+            artifacts.extend(result.artifacts)
+            diagnostics.extend(result.diagnostics)
+    except BaseException:
+        for future in futures.values():
+            future.cancel()
+        raise
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
 
 
 def _validate_project_translation_checkpoint_path(
@@ -24776,6 +25054,54 @@ def _finalize_project_generated_artifact(
     return records, diagnostics
 
 
+def _finalize_project_translation(
+    *,
+    config: ProjectConfig,
+    scan: ProjectScan,
+    selected_targets: Sequence[str],
+    artifacts: Sequence[dict[str, Any]],
+    diagnostics: list[ProjectDiagnostic],
+    validate: bool,
+    run_toolchains: bool,
+    translation_variants: Mapping[tuple[str, str], Sequence[str | None]],
+) -> ProjectPortabilityReport:
+    validation = (
+        _validate_artifacts(artifacts, selected_targets, config)
+        if validate or run_toolchains
+        else {"toolchains": [], "artifacts": []}
+    )
+    if run_toolchains:
+        toolchain_runs = _run_toolchain_smoke(artifacts, config.root)
+        validation["toolchainRuns"] = toolchain_runs
+        validation["_diagnostics"].extend(_toolchain_run_diagnostics(toolchain_runs))
+    diagnostics.extend(validation.pop("_diagnostics", []))
+    return ProjectPortabilityReport(
+        config=config,
+        targets=selected_targets,
+        units=scan.units,
+        skipped=scan.skipped,
+        native_directives=scan.native_directives,
+        artifacts=artifacts,
+        diagnostics=diagnostics,
+        validation=validation,
+        migration_actions=_project_migration_actions(
+            config,
+            scan.units,
+            selected_targets,
+            artifacts,
+        ),
+        artifact_matrix=_artifact_matrix_report(
+            config,
+            scan.units,
+            selected_targets,
+            config.variants,
+            artifacts,
+            variants_by_source_target=translation_variants,
+        ),
+        dispatch_artifact_plan=scan.dispatch_artifact_plan,
+    )
+
+
 def translate_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -24788,6 +25114,7 @@ def translate_project(
     checkpoint_path: str | os.PathLike[str] | None = None,
     resume: bool = False,
     checkpoint_interval_jobs: int = 1,
+    max_workers: int = 1,
 ) -> ProjectPortabilityReport:
     """Translate all discovered project units to one or more target backends."""
     resume = _bool_arg(resume, field_name="resume")
@@ -24804,6 +25131,8 @@ def translate_project(
         raise ValueError("checkpoint_interval_jobs must be a positive integer")
     if checkpoint_path is None and checkpoint_interval_jobs != 1:
         raise ValueError("checkpoint_interval_jobs requires checkpoint_path")
+    if type(max_workers) is not int or max_workers <= 0:
+        raise ValueError("max_workers must be a positive integer")
     checkpoint_run = _ProjectTranslationCheckpointRun(
         path=checkpoint_path,
         resume=resume,
@@ -24818,6 +25147,7 @@ def translate_project(
             format_output=format_output,
             validate=validate,
             run_toolchains=run_toolchains,
+            max_workers=max_workers,
             checkpoint_run=checkpoint_run,
         )
         checkpoint_run.finish(report)
@@ -24836,7 +25166,14 @@ def _translate_project_impl(
     format_output: bool,
     validate: bool,
     run_toolchains: bool,
+    max_workers: int,
     checkpoint_run: _ProjectTranslationCheckpointRun,
+    scan_override: ProjectScan | None = None,
+    translation_job_override: _ProjectArtifactTranslationRequest | None = None,
+    preserve_source_suffix_override: frozenset[tuple[str, str]] | None = None,
+    suppress_forwarding_diagnostics: bool = False,
+    suppress_target_diagnostics: bool = False,
+    output_dir_blocked_override: bool | None = None,
 ) -> ProjectPortabilityReport:
     format_output = _bool_arg(format_output, field_name="format_output")
     validate = _bool_arg(validate, field_name="validate")
@@ -24884,30 +25221,46 @@ def _translate_project_impl(
     if not selected_targets:
         selected_targets = ["cgl"]
 
-    scan = scan_project(config)
+    scan = scan_override if scan_override is not None else scan_project(config)
     config = scan.config
     diagnostics: list[ProjectDiagnostic] = list(scan.diagnostics)
-    diagnostics.extend(_target_diagnostics(config, selected_targets))
+    if not suppress_target_diagnostics:
+        diagnostics.extend(_target_diagnostics(config, selected_targets))
     artifacts: list[dict[str, Any]] = []
     include_paths = _frontend_include_dirs(config)
-    output_dir_blocked = _has_error_diagnostic(
-        diagnostics, OUTPUT_DIR_OUTSIDE_PROJECT_CODE
+    output_dir_blocked = (
+        output_dir_blocked_override
+        if output_dir_blocked_override is not None
+        else _has_error_diagnostic(diagnostics, OUTPUT_DIR_OUTSIDE_PROJECT_CODE)
     )
 
     variant_jobs = _variant_jobs(config)
     dispatch_artifacts = _dispatch_artifacts_by_source(scan.dispatch_artifact_plan)
-    translation_variants = _project_translation_variants_by_source_target(
-        config,
-        scan.units,
-        selected_targets,
-        dispatch_artifacts,
+    translation_variants = (
+        {
+            (
+                translation_job_override.unit.relative_path,
+                translation_job_override.target,
+            ): (translation_job_override.job.variant,)
+        }
+        if translation_job_override is not None
+        else _project_translation_variants_by_source_target(
+            config,
+            scan.units,
+            selected_targets,
+            dispatch_artifacts,
+        )
     )
     max_define_count = max(
         (len(defines) for _variant, defines in variant_jobs), default=0
     )
     define_forwarding_diagnostics: set[str] = set()
     include_path_forwarding_diagnostics: set[str] = set()
-    preserve_source_suffix = _artifact_source_suffix_pairs(scan.units, selected_targets)
+    preserve_source_suffix = (
+        set(preserve_source_suffix_override)
+        if preserve_source_suffix_override is not None
+        else _artifact_source_suffix_pairs(scan.units, selected_targets)
+    )
     if checkpoint_run.path is not None:
         checkpoint_jobs = _project_translation_checkpoint_jobs(
             config,
@@ -24930,7 +25283,38 @@ def _translate_project_impl(
             diagnostics,
         )
 
-    for unit in scan.units:
+    if max_workers > 1 and translation_job_override is None:
+        _translate_project_jobs_concurrently(
+            config=config,
+            scan=scan,
+            targets=selected_targets,
+            dispatch_artifacts=dispatch_artifacts,
+            include_paths=include_paths,
+            preserve_source_suffix=preserve_source_suffix,
+            format_output=format_output,
+            output_dir_blocked=output_dir_blocked,
+            max_workers=max_workers,
+            checkpoint_run=checkpoint_run,
+            artifacts=artifacts,
+            diagnostics=diagnostics,
+        )
+        return _finalize_project_translation(
+            config=config,
+            scan=scan,
+            selected_targets=selected_targets,
+            artifacts=artifacts,
+            diagnostics=diagnostics,
+            validate=validate,
+            run_toolchains=run_toolchains,
+            translation_variants=translation_variants,
+        )
+
+    translation_units = (
+        (translation_job_override.unit,)
+        if translation_job_override is not None
+        else scan.units
+    )
+    for unit in translation_units:
         required_capabilities = _required_capabilities_for_unit(unit)
         source_supports_defines = _source_frontend_supports_lexer_keyword(
             unit.source_backend, "defines"
@@ -24939,7 +25323,8 @@ def _translate_project_impl(
             unit.source_backend, "include_paths"
         )
         if (
-            max_define_count > 0
+            not suppress_forwarding_diagnostics
+            and max_define_count > 0
             and not source_supports_defines
             and unit.source_backend not in define_forwarding_diagnostics
         ):
@@ -24948,7 +25333,8 @@ def _translate_project_impl(
             )
             define_forwarding_diagnostics.add(unit.source_backend)
         if (
-            include_paths
+            not suppress_forwarding_diagnostics
+            and include_paths
             and not source_supports_include_paths
             and unit.source_backend not in include_path_forwarding_diagnostics
         ):
@@ -24959,12 +25345,21 @@ def _translate_project_impl(
                 )
             )
             include_path_forwarding_diagnostics.add(unit.source_backend)
-        for target in selected_targets:
-            translation_jobs = _project_translation_jobs_for_target(
-                config,
-                unit,
-                target,
-                dispatch_artifacts,
+        translation_targets = (
+            (translation_job_override.target,)
+            if translation_job_override is not None
+            else selected_targets
+        )
+        for target in translation_targets:
+            translation_jobs = (
+                (translation_job_override.job,)
+                if translation_job_override is not None
+                else _project_translation_jobs_for_target(
+                    config,
+                    unit,
+                    target,
+                    dispatch_artifacts,
+                )
             )
             for translation_job in translation_jobs:
                 variant = translation_job.variant
@@ -25656,37 +26051,15 @@ def _translate_project_impl(
                     diagnostics[checkpoint_diagnostic_start:],
                 )
 
-    validation = (
-        _validate_artifacts(artifacts, selected_targets, config)
-        if validate or run_toolchains
-        else {"toolchains": [], "artifacts": []}
-    )
-    if run_toolchains:
-        toolchain_runs = _run_toolchain_smoke(artifacts, config.root)
-        validation["toolchainRuns"] = toolchain_runs
-        validation["_diagnostics"].extend(_toolchain_run_diagnostics(toolchain_runs))
-    diagnostics.extend(validation.pop("_diagnostics", []))
-    return ProjectPortabilityReport(
+    return _finalize_project_translation(
         config=config,
-        targets=selected_targets,
-        units=scan.units,
-        skipped=scan.skipped,
-        native_directives=scan.native_directives,
+        scan=scan,
+        selected_targets=selected_targets,
         artifacts=artifacts,
         diagnostics=diagnostics,
-        validation=validation,
-        migration_actions=_project_migration_actions(
-            config, scan.units, selected_targets, artifacts
-        ),
-        artifact_matrix=_artifact_matrix_report(
-            config,
-            scan.units,
-            selected_targets,
-            config.variants,
-            artifacts,
-            variants_by_source_target=translation_variants,
-        ),
-        dispatch_artifact_plan=scan.dispatch_artifact_plan,
+        validate=validate,
+        run_toolchains=run_toolchains,
+        translation_variants=translation_variants,
     )
 
 

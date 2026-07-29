@@ -1,5 +1,6 @@
 import copy
 import json
+import shutil
 import textwrap
 
 import pytest
@@ -228,6 +229,32 @@ def test_directx_and_opengl_generate_only_source_scoped_dispatch_artifacts(tmp_p
     report_path = root / "generated" / "report.json"
     report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True
+
+
+def test_parallel_dispatch_artifacts_match_sequential_translation(tmp_path):
+    root, config = _write_project(tmp_path)
+
+    sequential = translate_project(config, format_output=False).to_json()
+    sequential_sources = {
+        artifact["path"]: (root / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in sequential["artifacts"]
+    }
+    shutil.rmtree(root / "generated")
+
+    parallel = translate_project(
+        config,
+        format_output=False,
+        max_workers=2,
+    ).to_json()
+    parallel_sources = {
+        artifact["path"]: (root / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in parallel["artifacts"]
+    }
+
+    assert parallel["artifacts"] == sequential["artifacts"]
+    assert parallel["diagnostics"] == sequential["diagnostics"]
+    assert parallel["artifactMatrix"] == sequential["artifactMatrix"]
+    assert parallel_sources == sequential_sources
 
 
 def test_directx_dispatch_artifact_uses_entry_scoped_target_name(tmp_path):
