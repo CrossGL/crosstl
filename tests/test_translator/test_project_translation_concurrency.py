@@ -1091,6 +1091,70 @@ def test_real_process_job_timeout_returns_structured_report(tmp_path):
     assert not (repo / payload["artifacts"][0]["path"]).exists()
 
 
+def test_worker_raised_timeout_is_not_reported_as_job_timeout(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=1)
+    checkpoint_path = tmp_path / "translation-checkpoint.json"
+    state = {"terminated": False, "shutdown": False}
+
+    class WorkerTimeoutFuture:
+        def result(self, timeout=None):
+            raise project_pipeline.FutureTimeoutError("worker timeout")
+
+        def done(self):
+            return True
+
+        def cancel(self):
+            return False
+
+    class WorkerTimeoutExecutor:
+        def __init__(self, *, initializer, initargs, **_kwargs):
+            initializer(*initargs)
+
+        def submit(self, _function, _request):
+            return WorkerTimeoutFuture()
+
+        def terminate_workers(self):
+            state["terminated"] = True
+
+        def shutdown(self, *, wait):
+            assert wait is True
+            state["shutdown"] = True
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "ProcessPoolExecutor",
+        WorkerTimeoutExecutor,
+    )
+
+    with pytest.raises(ProjectTranslationWorkerError) as caught:
+        translate_project(
+            ProjectConfig(
+                root=repo,
+                targets=("directx",),
+                output_dir="translated",
+            ),
+            format_output=False,
+            max_workers=1,
+            job_timeout_seconds=5,
+            checkpoint_path=checkpoint_path,
+        )
+
+    error = caught.value
+    assert error.error_type == "TimeoutError"
+    assert str(error.original_error) == "worker timeout"
+    assert state == {"terminated": True, "shutdown": True}
+
+    checkpoint = load_project_translation_checkpoint(checkpoint_path)
+    assert checkpoint["state"] == "interrupted"
+    assert checkpoint["plan"]["completedCount"] == 0
+    assert checkpoint["interruption"]["type"] == "ProjectTranslationWorkerError"
+    assert "project.translate.timeout" not in checkpoint["interruption"]["message"]
+
+
 def test_parallel_translation_streams_plan_with_bounded_lookahead(
     tmp_path,
     monkeypatch,
