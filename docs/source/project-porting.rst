@@ -369,6 +369,43 @@ artifacts. Source frontends without a discovery provider report
 ``unavailable`` rather than returning an empty result that could be mistaken
 for a source file with no entries.
 
+For repositories where selected source files should expand automatically, add
+repository-relative source patterns to ``translate_discovered_entry_points``:
+
+.. code-block:: toml
+
+   [project]
+   translate_discovered_entry_points = [
+     "kernels/arange.metal",
+     "kernels/normalization/*.metal",
+   ]
+
+Only matching units whose discovery status is ``available`` and which contain
+concrete entries are expanded. Each discovered entry uses the existing
+entry-scoped artifact planner, output path, checkpoint coordinate, source map,
+provenance, and target behavior. Source and entry ordering remain the ordering
+recorded by the scan.
+
+An explicit exact or glob selector in ``project.entry_points`` takes
+precedence for every source it matches. Sources outside the configured
+``translate_discovered_entry_points`` patterns retain aggregate translation.
+This source-scoped contract avoids turning a repository-wide scan into an
+unbounded artifact matrix; choose broad patterns only after reviewing the
+discovered entry count in a scan report.
+
+The same selection can be added for one invocation with a repeatable CLI
+option:
+
+.. code-block:: console
+
+   python -m crosstl translate-project /path/to/repo \
+     --translate-discovered-entry-points "kernels/arange.metal" \
+     --target directx --target opengl
+
+Invalid or unmatched patterns and matching sources with unavailable, failed,
+or empty discovery produce structured configuration diagnostics. They are not
+reported as successful per-entry expansion.
+
 Entry discovery identifies shader and kernel declarations only. It does not
 infer dispatch dimensions, resource bindings, host call sites, backend
 initialization, or numerical parity.
