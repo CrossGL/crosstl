@@ -53,6 +53,7 @@ from crosstl.translator.ast import (
 )
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateConditionalError,
+    DirectXAggregateInitializerError,
     DirectXAtomicFenceLoweringError,
     DirectXBooleanCompoundAssignmentError,
     DirectXBooleanOrderedIntrinsicError,
@@ -2414,6 +2415,68 @@ def test_hlsl_codegen_lowers_array_literals_to_expected_vector_arguments():
 
     assert "elem_to_loc(int64_t3(1, 2, 3))" in generated
     assert "elem_to_loc({" not in generated
+
+
+def test_hlsl_codegen_expands_contextual_partial_fixed_array_initializer():
+    ast = ShaderNode(
+        "PartialFixedArrayInitializer",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "launch",
+                NamedType("void"),
+                [],
+                BlockNode(
+                    [
+                        VariableNode(
+                            "values",
+                            ArrayType(PrimitiveType("float"), 4),
+                            ArrayLiteralNode(
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                ]
+                            ),
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "float values[4] = {1.0, 2.0, float(0), float(0)};" in generated
+
+
+def test_hlsl_codegen_rejects_array_literal_without_contextual_shape():
+    literal = ArrayLiteralNode([LiteralNode(0, PrimitiveType("int"))])
+
+    with pytest.raises(DirectXAggregateInitializerError) as exc_info:
+        HLSLCodeGen().generate_expression(literal)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-aggregate-initializer-invalid"
+    )
+    assert diagnostic.reason == "expected-type-unresolved"
+    assert diagnostic.expected_type is None
+    assert diagnostic.element_count == 1
+
+
+def test_hlsl_codegen_preserves_contextual_scalar_and_vector_initializers():
+    codegen = HLSLCodeGen()
+    scalar = ArrayLiteralNode([LiteralNode(1.0, PrimitiveType("float"))])
+    vector = ArrayLiteralNode([LiteralNode(1.0, PrimitiveType("float"))])
+
+    assert (
+        codegen.generate_expression_with_expected(scalar, PrimitiveType("float"))
+        == "{1.0}"
+    )
+    assert (
+        codegen.generate_expression_with_expected(vector, NamedType("float2"))
+        == "float2(1.0, float(0))"
+    )
 
 
 def test_hlsl_codegen_pads_partial_vector_constructors_for_dxc():

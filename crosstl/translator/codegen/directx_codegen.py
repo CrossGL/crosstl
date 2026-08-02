@@ -8800,7 +8800,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         stmt, code
                     )
                 lifted_init = self.hlsl_typed_buffer_atomic_lifted_expression(
-                    initial_value
+                    initial_value, vtype
                 )
                 if lifted_init is not None:
                     lift_statements, init_expr = lifted_init
@@ -8959,7 +8959,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         code += f"{indent_str}return {return_expr};\n"
                         return code
                     lifted_return = self.hlsl_typed_buffer_atomic_lifted_expression(
-                        stmt.value
+                        stmt.value, self.current_function_return_type
                     )
                     if lifted_return is not None:
                         lift_statements, return_expr = lifted_return
@@ -14377,7 +14377,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if atomic_assignment is not None and op == "=":
             return atomic_assignment
 
-        lifted_value = self.hlsl_typed_buffer_atomic_lifted_expression(value)
+        lifted_value = self.hlsl_typed_buffer_atomic_lifted_expression(
+            value, target_type
+        )
         if lifted_value is not None:
             lift_statements, rhs = lifted_value
             lhs = self.generate_expression(target)
@@ -35241,7 +35243,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 expr, expected_type, indent
             )
 
-        lifted_atomic = self.hlsl_typed_buffer_atomic_lifted_expression(expr)
+        lifted_atomic = self.hlsl_typed_buffer_atomic_lifted_expression(
+            expr, expected_type
+        )
         if lifted_atomic is not None:
             statements, rendered = lifted_atomic
             return self.generate_statement_code("\n".join(statements), indent), rendered
@@ -36521,6 +36525,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_array_literal_expression(self, expr, expected_type=None):
         if expected_type is None:
             expected_type = self.current_expression_expected_type
+        if expected_type is None:
+            self.hlsl_aggregate_error(
+                expr,
+                expected_type=None,
+                reason="expected-type-unresolved",
+            )
         mapped_type = self.map_type(expected_type) if expected_type else None
         _base_type, array_suffix = split_array_type_suffix(str(mapped_type or ""))
         if array_suffix:
@@ -36742,7 +36752,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if rendered is not None:
             return rendered
 
-        lifted = self.hlsl_typed_buffer_atomic_lifted_expression(expr)
+        lifted = self.hlsl_typed_buffer_atomic_lifted_expression(expr, expected_type)
         if lifted is not None:
             lift_statements, rendered_expr = lifted
             code = self.generate_statement_code("\n".join(lift_statements), indent)
@@ -36917,15 +36927,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             expr, indent
         )
 
-    def hlsl_typed_buffer_atomic_lifted_expression(self, expr):
+    def hlsl_typed_buffer_atomic_lifted_expression(self, expr, expected_type=None):
+        if not self.hlsl_expression_contains_typed_buffer_atomic(expr):
+            return None
         statements, expression, changed = self.hlsl_typed_buffer_atomic_lift_expression(
-            expr
+            expr, expected_type
         )
         if not changed:
             return None
         return statements, expression
 
-    def hlsl_typed_buffer_atomic_lift_expression(self, expr):
+    def hlsl_typed_buffer_atomic_lift_expression(self, expr, expected_type=None):
         if expr is None:
             return [], "", False
 
@@ -36962,7 +36974,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     changed = False
                     for arg in args:
                         arg_statements, rendered_arg, arg_changed = (
-                            self.hlsl_typed_buffer_atomic_lift_expression(arg)
+                            self.hlsl_typed_buffer_atomic_lift_expression(
+                                arg, self.expression_result_type(arg)
+                            )
                         )
                         statements.extend(arg_statements)
                         rendered_args.append(rendered_arg)
@@ -36976,19 +36990,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             True,
                         )
 
-            return [], self.generate_expression(expr), False
+            return (
+                [],
+                self.generate_expression_with_expected(expr, expected_type),
+                False,
+            )
 
         if hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             left_statements, left, left_changed = (
-                self.hlsl_typed_buffer_atomic_lift_expression(getattr(expr, "left", ""))
+                self.hlsl_typed_buffer_atomic_lift_expression(
+                    getattr(expr, "left", ""),
+                    self.expression_result_type(getattr(expr, "left", "")),
+                )
             )
             right_statements, right, right_changed = (
                 self.hlsl_typed_buffer_atomic_lift_expression(
-                    getattr(expr, "right", "")
+                    getattr(expr, "right", ""),
+                    self.expression_result_type(getattr(expr, "right", "")),
                 )
             )
             if not left_changed and not right_changed:
-                return [], self.generate_expression(expr), False
+                return (
+                    [],
+                    self.generate_expression_with_expected(expr, expected_type),
+                    False,
+                )
             op = self.map_operator(getattr(expr, "operator", getattr(expr, "op", "+")))
             return (
                 [*left_statements, *right_statements],
@@ -36999,17 +37025,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             operand_statements, operand, changed = (
                 self.hlsl_typed_buffer_atomic_lift_expression(
-                    getattr(expr, "operand", "")
+                    getattr(expr, "operand", ""),
+                    self.expression_result_type(getattr(expr, "operand", "")),
                 )
             )
             if not changed:
-                return [], self.generate_expression(expr), False
+                return (
+                    [],
+                    self.generate_expression_with_expected(expr, expected_type),
+                    False,
+                )
             op = self.map_operator(getattr(expr, "operator", getattr(expr, "op", "+")))
             if getattr(expr, "is_postfix", False):
                 return operand_statements, f"{operand}{op}", True
             return operand_statements, f"{op}{operand}", True
 
-        return [], self.generate_expression(expr), False
+        return [], self.generate_expression_with_expected(expr, expected_type), False
 
     def generate_hlsl_typed_buffer_atomic_expression(self, func_name, args):
         parts = self.hlsl_typed_buffer_atomic_parts(func_name, args)
