@@ -353,6 +353,113 @@ def test_parallel_translation_bounds_submitted_work(tmp_path, monkeypatch):
     }
 
 
+def test_worker_limit_one_uses_sequential_execution(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=2)
+
+    class UnexpectedExecutor:
+        def __init__(self, **_kwargs):
+            raise AssertionError("max_workers=1 must not construct a worker pool")
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "ProcessPoolExecutor",
+        UnexpectedExecutor,
+    )
+
+    report = translate_project(
+        ProjectConfig(
+            root=repo,
+            targets=("directx",),
+            output_dir="translated",
+        ),
+        format_output=False,
+        max_workers=1,
+    ).to_json()
+
+    assert report["summary"]["translatedCount"] == 2
+
+
+def test_parallel_validation_starts_after_worker_pool_shutdown(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    _write_project(repo, unit_count=2)
+    executor_state = {"shutdown": False}
+    validation_state = {"artifacts": False, "toolchains": False}
+
+    class ImmediateFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self):
+            return self._result
+
+        def cancel(self):
+            return False
+
+    class ImmediateExecutor:
+        def __init__(self, *, initializer, initargs, **_kwargs):
+            initializer(*initargs)
+
+        def submit(self, function, request):
+            return ImmediateFuture(function(request))
+
+        def shutdown(self, *, wait):
+            assert wait is True
+            executor_state["shutdown"] = True
+
+    def validate_artifacts(_artifacts, _targets, _config):
+        assert executor_state["shutdown"] is True
+        validation_state["artifacts"] = True
+        return {
+            "toolchains": [],
+            "artifacts": [],
+            "_diagnostics": [],
+        }
+
+    def run_toolchains(_artifacts, _root):
+        assert executor_state["shutdown"] is True
+        validation_state["toolchains"] = True
+        return []
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "ProcessPoolExecutor",
+        ImmediateExecutor,
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "_validate_artifacts",
+        validate_artifacts,
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "_run_toolchain_smoke",
+        run_toolchains,
+    )
+
+    report = translate_project(
+        ProjectConfig(
+            root=repo,
+            targets=("directx",),
+            output_dir="translated",
+        ),
+        format_output=False,
+        validate=True,
+        run_toolchains=True,
+        max_workers=2,
+    ).to_json()
+
+    assert report["summary"]["translatedCount"] == 2
+    assert executor_state["shutdown"] is True
+    assert validation_state == {
+        "artifacts": True,
+        "toolchains": True,
+    }
+
+
 def test_parallel_translation_publishes_only_when_results_are_consumed(
     tmp_path,
     monkeypatch,
@@ -436,6 +543,7 @@ def test_parallel_worker_failure_removes_deferred_staging(
         preserve_source_suffix=frozenset(),
         format_output=False,
         output_dir_blocked=False,
+        publication_staging_token="test",
     )
     monkeypatch.setattr(
         project_pipeline,
@@ -474,6 +582,59 @@ def test_worker_failure_error_reports_entry_point():
 
     assert error.original_error is original_error
     assert "entry point 'copy'" in str(error)
+
+
+def test_executor_termination_uses_supported_pool_api():
+    state = {"terminated": False, "shutdown": False}
+
+    class Executor:
+        def terminate_workers(self):
+            state["terminated"] = True
+
+        def shutdown(self, *, wait):
+            assert wait is True
+            assert state["terminated"] is True
+            state["shutdown"] = True
+
+    project_pipeline._terminate_project_translation_executor(Executor())
+
+    assert state == {
+        "terminated": True,
+        "shutdown": True,
+    }
+
+
+def test_executor_termination_supports_legacy_pool_processes():
+    state = {"terminated": [], "shutdown": False}
+
+    class Process:
+        def __init__(self, name, *, alive):
+            self.name = name
+            self.alive = alive
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            state["terminated"].append(self.name)
+
+    class Executor:
+        def __init__(self):
+            self._processes = {
+                1: Process("active", alive=True),
+                2: Process("complete", alive=False),
+            }
+
+        def shutdown(self, *, wait):
+            assert wait is True
+            state["shutdown"] = True
+
+    project_pipeline._terminate_project_translation_executor(Executor())
+
+    assert state == {
+        "terminated": ["active"],
+        "shutdown": True,
+    }
 
 
 def test_parallel_worker_failure_reports_coordinate_and_checkpoint(
@@ -585,21 +746,26 @@ def test_parallel_translation_interrupt_discards_unconsumed_staging(
         remap_path.write_bytes(f'{{"previous": {index}}}\n'.encode())
         previous_outputs[artifact_path] = artifact_path.read_bytes()
         previous_outputs[remap_path] = remap_path.read_bytes()
+    unrelated_staging = output_dir / ".shader-0.hlsl.unrelated.tmp"
+    unrelated_staging.mkdir()
 
     checkpoint_path = tmp_path / "translation-checkpoint.json"
-    executor_state = {"submitted": 0, "shutdown": False}
+    executor_state = {
+        "submitted": 0,
+        "terminated": False,
+        "shutdown": False,
+    }
 
     class InterruptingFuture:
         def __init__(self, result, *, interrupt):
             self._result = result
             self._interrupt = interrupt
-            self._result_calls = 0
 
         def result(self):
-            self._result_calls += 1
-            if self._interrupt and self._result_calls == 1:
+            if self._interrupt and not executor_state["terminated"]:
                 raise KeyboardInterrupt("translation interrupted")
-            assert executor_state["shutdown"] is True
+            if executor_state["terminated"]:
+                raise RuntimeError("worker terminated")
             return self._result
 
         def cancel(self):
@@ -607,17 +773,29 @@ def test_parallel_translation_interrupt_discards_unconsumed_staging(
 
     class InterruptingExecutor:
         def __init__(self, *, initializer, initargs, **_kwargs):
+            self._context = initargs[0]
             initializer(*initargs)
 
         def submit(self, function, request):
             executor_state["submitted"] += 1
+            result = function(request)
+            assert result.publications
+            assert all(
+                f".{self._context.publication_staging_token}."
+                in publication.staging_directory.name
+                for publication in result.publications
+            )
             return InterruptingFuture(
-                function(request),
+                result,
                 interrupt=executor_state["submitted"] == 1,
             )
 
+        def terminate_workers(self):
+            executor_state["terminated"] = True
+
         def shutdown(self, *, wait):
             assert wait is True
+            assert executor_state["terminated"] is True
             executor_state["shutdown"] = True
 
     monkeypatch.setattr(
@@ -638,9 +816,14 @@ def test_parallel_translation_interrupt_discards_unconsumed_staging(
             checkpoint_path=checkpoint_path,
         )
 
-    assert executor_state == {"submitted": 2, "shutdown": True}
+    assert executor_state == {
+        "submitted": 2,
+        "terminated": True,
+        "shutdown": True,
+    }
     assert {path: path.read_bytes() for path in previous_outputs} == previous_outputs
-    assert list(output_dir.glob(".*.tmp")) == []
+    assert list(output_dir.glob(".*.tmp")) == [unrelated_staging]
+    assert unrelated_staging.is_dir()
     checkpoint = load_project_translation_checkpoint(checkpoint_path)
     assert checkpoint["state"] == "interrupted"
     assert checkpoint["plan"]["completedCount"] == 0

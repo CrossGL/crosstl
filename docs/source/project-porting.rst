@@ -236,11 +236,13 @@ Artifact validation and optional toolchain smoke checks run only after all
 translation jobs have returned, avoiding nested toolchain concurrency.
 
 An interruption stops further submission, cancels work that has not started,
-and waits for already running workers to finish in their staging directories.
-The coordinator removes staging for every unconsumed result, leaving previously
-published outputs unchanged. Completed checkpoint records remain available for
-a verified resume, and only coordinator-published results are recorded as
-complete.
+and terminates pool processes that are still translating. Each concurrent run
+adds a private token to its staging directories. After the pool settles, the
+coordinator removes unconsumed results and any token-owned staging left by a
+terminated process without touching another invocation's files. Previously
+published outputs remain unchanged. Completed checkpoint records remain
+available for a verified resume, and only coordinator-published results are
+recorded as complete.
 An ordinary worker failure raises ``ProjectTranslationWorkerError`` with the
 source, target, output path, optional entry point, original exception type, and
 original exception attached for programmatic inspection. An enabled checkpoint
