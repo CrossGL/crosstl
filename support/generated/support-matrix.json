@@ -152,7 +152,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 274,
+        "unsupported_marker_count": 285,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -220,6 +220,10 @@
           },
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
+            "text": "project_diagnostic_code = \"project.translate.opengl-trailing-zero-unsupported\""
+          },
+          {
+            "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "project_diagnostic_code = \"project.translate.opengl-complex-arithmetic-unsupported\""
           },
           {
@@ -229,10 +233,6 @@
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "project_diagnostic_code = \"project.translate.opengl-index-type-unsupported\""
-          },
-          {
-            "path": "crosstl/translator/codegen/GLSL_codegen.py",
-            "text": "project_diagnostic_code = \"project.translate.opengl-workgroup-pointer-unsupported\""
           }
         ]
       },
@@ -248,7 +248,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1504
+        "test_count": 1513
       },
       "translator_codegen": {
         "exists": true,
