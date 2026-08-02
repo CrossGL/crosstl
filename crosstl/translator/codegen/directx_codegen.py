@@ -35716,7 +35716,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         return list(member_types.items())
 
-    def hlsl_struct_initializer_rendered_args(self, type_name, args, named_args=None):
+    def hlsl_struct_initializer_rendered_args(
+        self,
+        type_name,
+        args,
+        named_args=None,
+        initializer_expr=None,
+    ):
         fields = self.hlsl_struct_constructor_fields(type_name)
         if fields is None:
             return None
@@ -35738,7 +35744,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 field_expr = named_args[field_name]
             else:
                 field_exprs.append(None)
-                rendered_args.append(default_value_expression(self, field_type))
+                mapped_field_type = self.map_type(field_type)
+                _base_type, array_suffix = split_array_type_suffix(mapped_field_type)
+                if (
+                    array_suffix
+                    or self.hlsl_struct_constructor_fields(mapped_field_type)
+                    is not None
+                ):
+                    rendered_args.append(
+                        self.hlsl_value_initialized_expression(
+                            initializer_expr,
+                            mapped_field_type,
+                        )
+                    )
+                else:
+                    rendered_args.append(default_value_expression(self, field_type))
                 continue
             field_exprs.append(field_expr)
             rendered_args.append(
@@ -35750,7 +35770,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         expected_type = self.type_name_string(expected_type)
         if isinstance(expr, ArrayLiteralNode):
             return self.hlsl_struct_initializer_rendered_args(
-                expected_type, getattr(expr, "elements", []) or []
+                expected_type,
+                getattr(expr, "elements", []) or [],
+                initializer_expr=expr,
             )
 
         if isinstance(expr, ConstructorNode):
@@ -35763,6 +35785,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 constructor_type,
                 getattr(expr, "arguments", []) or [],
                 getattr(expr, "named_arguments", {}) or {},
+                initializer_expr=expr,
             )
 
         if isinstance(expr, FunctionCallNode) or (
@@ -35775,6 +35798,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 func_name,
                 getattr(expr, "arguments", getattr(expr, "args", [])) or [],
                 getattr(expr, "named_arguments", {}) or {},
+                initializer_expr=expr,
             )
 
         return None
