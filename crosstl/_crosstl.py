@@ -459,6 +459,18 @@ def _parse_project_dispatch_contracts(values):
     return tuple(dispatch_contracts)
 
 
+def _parse_discovered_entry_point_patterns(values):
+    patterns = []
+    for value in values or []:
+        pattern = value.strip()
+        if not pattern:
+            raise ValueError(
+                "--translate-discovered-entry-points entries must be non-empty"
+            )
+        patterns.append(_normalize_project_cli_path(pattern))
+    return tuple(dict.fromkeys(patterns))
+
+
 def _parse_project_targets(values):
     if values is None:
         return None
@@ -488,12 +500,16 @@ def _load_project_config_from_args(args):
     dispatch_contract_overrides = _parse_project_dispatch_contracts(
         getattr(args, "dispatch_contract", None)
     )
+    discovered_entry_point_patterns = _parse_discovered_entry_point_patterns(
+        getattr(args, "translate_discovered_entry_points", None)
+    )
     if (
         not source_roots
         and include_dirs == tuple(config.include_dirs)
         and not define_overrides
         and not source_overrides
         and not dispatch_contract_overrides
+        and not discovered_entry_point_patterns
     ):
         return config
     replacements = {
@@ -502,6 +518,15 @@ def _load_project_config_from_args(args):
         "defines": {**dict(config.defines), **define_overrides},
         "source_overrides": {**dict(config.source_overrides), **source_overrides},
     }
+    if discovered_entry_point_patterns:
+        replacements["translate_discovered_entry_points"] = tuple(
+            dict.fromkeys(
+                (
+                    *tuple(config.translate_discovered_entry_points),
+                    *discovered_entry_point_patterns,
+                )
+            )
+        )
     if dispatch_contract_overrides:
         replacements["dispatch_contracts"] = tuple(
             dict.fromkeys(
@@ -6977,6 +7002,16 @@ def _build_parser():
         action="append",
         type=_non_empty_project_arg("--variant"),
         help="Named project variant to translate; repeatable",
+    )
+    translate_project_parser.add_argument(
+        "--translate-discovered-entry-points",
+        action="append",
+        type=_non_empty_project_arg("--translate-discovered-entry-points"),
+        metavar="SOURCE_PATTERN",
+        help=(
+            "Emit one artifact per available discovered entry for matching "
+            "repository-relative sources; repeatable"
+        ),
     )
     translate_project_parser.add_argument(
         "--report",
