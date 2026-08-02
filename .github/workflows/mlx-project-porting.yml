@@ -31,6 +31,7 @@ on:
       - "tests/test_translator/test_shared_native_allocations_runtime.py"
       - "tests/test_translator/test_native_loader_dispatch_integration.py"
       - "tests/test_translator/test_mlx_arange_native_loader.py"
+      - "tests/test_translator/test_mlx_binary_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
       - "tests/test_translator/test_project_translation.py"
       - "tests/test_translator/test_runtime_verification.py"
@@ -60,6 +61,7 @@ on:
       - "tests/test_translator/test_shared_native_allocations_runtime.py"
       - "tests/test_translator/test_native_loader_dispatch_integration.py"
       - "tests/test_translator/test_mlx_arange_native_loader.py"
+      - "tests/test_translator/test_mlx_binary_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
       - "tests/test_translator/test_project_translation.py"
       - "tests/test_translator/test_runtime_verification.py"
@@ -338,6 +340,15 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_arange_native_loader.py::test_pinned_mlx_arange_executes_through_directx_native_loader
 
+      - name: Prove pinned MLX binary add Direct3D native-loader execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_BINARY_DIRECTX_NATIVE_LOADER: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_binary_native_loader.py::test_pinned_mlx_binary_add_executes_through_directx_native_loader
+
       - name: Prove Direct3D local-struct byte-view native readback
         if: runner.os == 'Windows'
         env:
@@ -425,6 +436,18 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_arange_native_loader.py::test_pinned_mlx_arange_executes_through_opengl_native_loader
+
+      - name: Prove pinned MLX binary add OpenGL native-loader execution
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_BINARY_OPENGL_NATIVE_LOADER: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_binary_native_loader.py::test_pinned_mlx_binary_add_executes_through_opengl_native_loader
 
       - name: Validate generated OpenGL subgroup contract through Vulkan
         if: runner.os == 'Linux'
