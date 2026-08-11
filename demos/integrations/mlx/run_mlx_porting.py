@@ -488,6 +488,7 @@ FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT = (
 )
 FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072
+FULL_CORPUS_JOB_TIMEOUT_SECONDS = 120
 FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900
 GEMV_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
@@ -6567,6 +6568,8 @@ def _translate_full_corpus(
         str(report_path),
         "--checkpoint",
         str(checkpoint_path),
+        "--job-timeout-seconds",
+        str(FULL_CORPUS_JOB_TIMEOUT_SECONDS),
         "--validate",
     ]
     if resume_checkpoint:
@@ -6602,6 +6605,7 @@ def _translate_full_corpus(
             "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
             "targets": list(FULL_CORPUS_TARGETS),
             "returncode": result.returncode,
+            "jobTimeoutSeconds": FULL_CORPUS_JOB_TIMEOUT_SECONDS,
             "timeoutSeconds": FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS,
             "checkpoint": checkpoint_summary,
             "shaderArtifactsOnly": True,
@@ -6746,6 +6750,7 @@ def _translate_full_corpus(
             "runtimeIntegrationIncluded": False,
             "trackedTranslationIssues": list(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES),
             "checkpoint": checkpoint_summary,
+            "jobTimeoutSeconds": FULL_CORPUS_JOB_TIMEOUT_SECONDS,
             "maxTemplateSpecializations": FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS,
             "maxTemplateMaterializationWork": (
                 FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK
@@ -6773,6 +6778,7 @@ def _translate_full_corpus(
         "runtimeParityClaimed": False,
         "trackedTranslationIssues": list(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES),
         "checkpoint": checkpoint_summary,
+        "jobTimeoutSeconds": FULL_CORPUS_JOB_TIMEOUT_SECONDS,
         "maxTemplateSpecializations": FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS,
         "maxTemplateMaterializationWork": FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK,
     }
