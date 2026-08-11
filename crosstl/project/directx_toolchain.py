@@ -7,11 +7,16 @@ import re
 _HLSL_NATIVE_16_BIT_TYPE_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:float16_t|int16_t|uint16_t)(?:[1-4])?" r"(?![A-Za-z0-9_])"
 )
+_HLSL_EXACT_WAVE_SIZE_RE = re.compile(
+    r"\[\s*WaveSize\s*\(\s*[^,\]]+\s*\)\s*\]",
+    re.IGNORECASE,
+)
 _DXC_PROFILE_RE = re.compile(r"^(?P<stage>[a-z]+)_(?P<major>\d+)_(?P<minor>\d+)$")
 _DXC_NATIVE_16_BIT_MINIMUM_PROFILE = (6, 2)
+_DXC_EXACT_WAVE_SIZE_MINIMUM_PROFILE = (6, 6)
 _DXC_NATIVE_16_BIT_ARGUMENTS = ("-enable-16bit-types",)
 _DIRECTX_TARGET_PROFILES = ("directx-11", "directx-12")
-_DIRECTX_NATIVE_16_BIT_TARGET_PROFILES = ("directx-12",)
+_DIRECTX_12_TARGET_PROFILES = ("directx-12",)
 
 
 def _mask_hlsl_comments_and_literals(source: str) -> str:
@@ -84,17 +89,26 @@ def hlsl_requires_native_16bit_types(source: str) -> bool:
 
 
 def dxc_profile_for_source(profile: str, source: str) -> str:
-    """Raise a DXC profile to Shader Model 6.2 for native 16-bit types."""
+    """Raise a DXC profile to satisfy generated HLSL feature requirements."""
 
-    if not hlsl_requires_native_16bit_types(source):
+    code = _mask_hlsl_comments_and_literals(source)
+    minimum_profile = None
+    if _HLSL_NATIVE_16_BIT_TYPE_RE.search(code) is not None:
+        minimum_profile = _DXC_NATIVE_16_BIT_MINIMUM_PROFILE
+    if _HLSL_EXACT_WAVE_SIZE_RE.search(code) is not None:
+        minimum_profile = max(
+            minimum_profile or _DXC_EXACT_WAVE_SIZE_MINIMUM_PROFILE,
+            _DXC_EXACT_WAVE_SIZE_MINIMUM_PROFILE,
+        )
+    if minimum_profile is None:
         return profile
     match = _DXC_PROFILE_RE.fullmatch(str(profile or "").strip().lower())
     if match is None:
         return profile
     version = int(match.group("major")), int(match.group("minor"))
-    if version >= _DXC_NATIVE_16_BIT_MINIMUM_PROFILE:
+    if version >= minimum_profile:
         return profile
-    return f"{match.group('stage')}_6_2"
+    return f"{match.group('stage')}_{minimum_profile[0]}_{minimum_profile[1]}"
 
 
 def dxc_compiler_arguments_for_source(source: str) -> tuple[str, ...]:
@@ -108,6 +122,10 @@ def dxc_compiler_arguments_for_source(source: str) -> tuple[str, ...]:
 def directx_target_profiles_for_source(source: str) -> tuple[str, ...]:
     """Return DirectX API profiles compatible with the generated source."""
 
-    if hlsl_requires_native_16bit_types(source):
-        return _DIRECTX_NATIVE_16_BIT_TARGET_PROFILES
+    code = _mask_hlsl_comments_and_literals(source)
+    if (
+        _HLSL_NATIVE_16_BIT_TYPE_RE.search(code) is not None
+        or _HLSL_EXACT_WAVE_SIZE_RE.search(code) is not None
+    ):
+        return _DIRECTX_12_TARGET_PROFILES
     return _DIRECTX_TARGET_PROFILES

@@ -98,7 +98,8 @@ float qdot_float_16_2(
     return scale * accum + sum * bias;
 }}
 
-[numthreads(1, 1, 1)]
+[numthreads(32, 2, 1)]
+[WaveSize(32)]
 void CSMain(uint3 index : SV_DispatchThreadID) {{
     int64_t w_offset = 0;
     int64_t ws_offset = index.x;
@@ -210,6 +211,8 @@ def test_quantized_directx_proof_pins_revision_source_header_and_entry():
     assert module.MLX_QUANTIZED_GATHER_ENTRY_POINT == (
         "affine_gather_qmv_fast_float_gs_32_b_2"
     )
+    assert module.MLX_QUANTIZED_GATHER_WORKGROUP_SIZE == (32, 2, 1)
+    assert module.MLX_QUANTIZED_GATHER_SUBGROUP_WIDTH == 32
     assert set(module.ENTRY_CONTRACTS) == {
         module.MLX_QUANTIZED_ENTRY_POINT,
         module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
@@ -338,6 +341,10 @@ def test_quantized_directx_project_config_selects_one_directx_12_entry(tmp_path)
     assert gather_config.entry_points == {
         module.MLX_QUANTIZED_SOURCE: module.MLX_QUANTIZED_GATHER_ENTRY_POINT
     }
+    assert gather_config.workgroup_size_rules == {
+        module.MLX_QUANTIZED_SOURCE: ("32", "2", "1")
+    }
+    assert gather_config.subgroup_width_rules == {module.MLX_QUANTIZED_SOURCE: "32"}
 
 
 def test_quantized_directx_translation_uses_public_project_api(
@@ -478,6 +485,12 @@ def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
         "native16BitTypes": "not-required",
         "staticAssertions": "absent",
         "minimumPrecisionTypes": "absent",
+        "executionContract": {
+            "status": "passed",
+            "workgroupSize": [32, 2, 1],
+            "subgroupWidth": 32,
+            "subgroupWidthEnforcement": "WaveSize(32)",
+        },
         "privateArrayAliasing": {
             "status": "passed",
             "helper": "load_vector_float_float_16_2",
@@ -501,7 +514,7 @@ def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
     }
     assert compiler == {
         "entryPoint": "CSMain",
-        "profile": "cs_6_0",
+        "profile": "cs_6_6",
         "compilerArguments": [],
         "targetProfiles": ["directx-12"],
         "warningsAsErrors": True,
@@ -511,6 +524,8 @@ def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
 @pytest.mark.parametrize(
     ("old", "new", "message"),
     [
+        ("[numthreads(32, 2, 1)]", "[numthreads(1, 1, 1)]", "32x2x1"),
+        ("[WaveSize(32)]", "", "32-lane"),
         ("& 255u", "& 65535u", "unpack"),
         (
             "int64_t((((w_offset * 4) + "
@@ -635,6 +650,74 @@ def test_quantized_directx_fake_dxc_uses_derived_profile_and_flags(
     assert result["compiledArtifactCount"] == 1
     assert result["targetProfiles"] == ["directx-12"]
     assert result["compilerArguments"] == []
+
+
+def test_quantized_gather_directx_fake_dxc_requires_wave_size_profile(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_proof()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / "proof"
+    log_dir = work_dir / "logs"
+    artifact_path = work_dir / "artifacts" / "quantized-gather.hlsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(_generated_gather_hlsl(), encoding="utf-8")
+    _checks, contract = module._validate_generated_hlsl(
+        artifact_path,
+        entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    )
+    captured = {}
+
+    def run_command(name, command, *, log_dir, timeout_seconds=180):
+        del timeout_seconds
+        captured["command"] = list(command)
+        output_path = Path(command[command.index("-Fo") + 1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"DXIL")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return {
+            "name": name,
+            "command": list(command),
+            "returncode": 0,
+            "stdoutPath": stdout_path,
+            "stderrPath": stderr_path,
+        }
+
+    monkeypatch.setattr(module, "_run_command", run_command)
+    result = module._compile_directx_artifact(
+        artifact_path,
+        contract,
+        dxc="C:/tools/dxc.exe",
+        mlx_root=mlx_root,
+        work_dir=work_dir,
+        log_dir=log_dir,
+        required=True,
+        entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    )
+
+    assert captured["command"] == [
+        "C:/tools/dxc.exe",
+        "-WX",
+        "-T",
+        "cs_6_6",
+        "-E",
+        "CSMain",
+        str(artifact_path),
+        "-Fo",
+        str(
+            work_dir
+            / "native"
+            / "directx"
+            / f"{module.MLX_QUANTIZED_GATHER_ENTRY_POINT}.dxil"
+        ),
+    ]
+    assert result["status"] == "compiled"
+    assert result["profile"] == "cs_6_6"
 
 
 def test_quantized_directx_toolchain_requirement_and_output_fail_closed(

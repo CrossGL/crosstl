@@ -28,6 +28,8 @@ MLX_QUANTIZED_SOURCE = f"{MLX_KERNEL_ROOT}/quantized.metal"
 MLX_QUANTIZED_HEADER = f"{MLX_KERNEL_ROOT}/quantized.h"
 MLX_QUANTIZED_ENTRY_POINT = "affine_quantize_float_gs_32_b_2"
 MLX_QUANTIZED_GATHER_ENTRY_POINT = "affine_gather_qmv_fast_float_gs_32_b_2"
+MLX_QUANTIZED_GATHER_WORKGROUP_SIZE = (32, 2, 1)
+MLX_QUANTIZED_GATHER_SUBGROUP_WIDTH = 32
 
 PINNED_FILE_SHA256 = {
     MLX_QUANTIZED_SOURCE: (
@@ -61,6 +63,8 @@ ENTRY_CONTRACTS = {
         "concreteSpecializationCount": 7,
         "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
         "generatedContract": "gather-qmv-fast",
+        "workgroupSize": MLX_QUANTIZED_GATHER_WORKGROUP_SIZE,
+        "subgroupWidth": MLX_QUANTIZED_GATHER_SUBGROUP_WIDTH,
     },
 }
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/quantized-directx"
@@ -92,7 +96,15 @@ _MINIMUM_PRECISION_TYPE_RE = re.compile(
 )
 _STATIC_ASSERT_RE = re.compile(r"\bstatic_assert\s*\(")
 _COMPUTE_ENTRY_RE = re.compile(
-    r"\[\s*numthreads\s*\([^\]]+\)\s*\]\s*" r"void\s+CSMain\s*\(",
+    r"\[\s*numthreads\s*\([^\]]+\)\s*\]\s*"
+    r"(?:\[\s*WaveSize\s*\([^\]]+\)\s*\]\s*)?"
+    r"void\s+CSMain\s*\(",
+    flags=re.MULTILINE,
+)
+_GATHER_EXECUTION_ENTRY_RE = re.compile(
+    r"\[\s*numthreads\s*\(\s*32\s*,\s*2\s*,\s*1\s*\)\s*\]\s*"
+    r"\[\s*WaveSize\s*\(\s*32\s*\)\s*\]\s*"
+    r"void\s+CSMain\s*\(",
     flags=re.MULTILINE,
 )
 _GATHER_DIRECT_TYPED_BYTE_READ_RE = re.compile(
@@ -256,6 +268,9 @@ def _project_config(
     entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
 ) -> ProjectConfig:
     _require(entry_point in ENTRY_CONTRACTS, f"unsupported proof entry: {entry_point}")
+    entry_contract = ENTRY_CONTRACTS[entry_point]
+    workgroup_size = entry_contract.get("workgroupSize")
+    subgroup_width = entry_contract.get("subgroupWidth")
     return ProjectConfig(
         root=mlx_root,
         source_roots=(MLX_KERNEL_ROOT,),
@@ -271,6 +286,16 @@ def _project_config(
                 "max_template_materialization_work": MATERIALIZATION_WORK_LIMIT,
             }
         },
+        workgroup_size_rules=(
+            {MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup_size]}
+            if workgroup_size is not None
+            else {}
+        ),
+        subgroup_width_rules=(
+            {MLX_QUANTIZED_SOURCE: str(subgroup_width)}
+            if subgroup_width is not None
+            else {}
+        ),
     )
 
 
@@ -309,6 +334,98 @@ def _require_translation_summary(payload: Mapping[str, Any]) -> None:
     _require(
         payload.get("diagnostics") == [],
         "pinned quantized.metal translation emitted diagnostics",
+    )
+
+
+def _is_sha256_identity(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and value.get("algorithm") == "sha256"
+        and re.fullmatch(r"[0-9a-f]{64}", str(value.get("value", ""))) is not None
+    )
+
+
+def _validate_execution_report(
+    payload: Mapping[str, Any],
+    artifact: Mapping[str, Any],
+    *,
+    entry_point: str,
+    entry_contract: Mapping[str, Any],
+) -> None:
+    workgroup_size = entry_contract.get("workgroupSize")
+    subgroup_width = entry_contract.get("subgroupWidth")
+    if workgroup_size is None and subgroup_width is None:
+        return
+
+    _require(
+        workgroup_size is not None and subgroup_width is not None,
+        "quantized execution rules must define workgroup and subgroup together",
+    )
+    workgroup_size = list(workgroup_size)
+    workgroup_rule_path = f'project.workgroup_size_rules["{MLX_QUANTIZED_SOURCE}"]'
+    subgroup_rule_path = f'project.subgroup_width_rules["{MLX_QUANTIZED_SOURCE}"]'
+    expected_workgroup_rule = {
+        "components": [str(value) for value in workgroup_size],
+        "sourcePattern": MLX_QUANTIZED_SOURCE,
+        "path": workgroup_rule_path,
+    }
+    expected_subgroup_rule = {
+        "expression": str(subgroup_width),
+        "sourcePattern": MLX_QUANTIZED_SOURCE,
+        "path": subgroup_rule_path,
+    }
+    project = payload.get("project")
+    _require(
+        isinstance(project, Mapping)
+        and project.get("workgroupSize") is None
+        and project.get("workgroupSizeRules")
+        == {MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup_size]}
+        and project.get("workgroupSizeRuleCount") == 1
+        and project.get("subgroupWidthRules")
+        == {MLX_QUANTIZED_SOURCE: str(subgroup_width)}
+        and project.get("subgroupWidthRuleCount") == 1,
+        "quantized project report did not retain the pinned execution rules",
+    )
+
+    execution = artifact.get("execution")
+    entries = execution.get("entryPoints") if isinstance(execution, Mapping) else None
+    _require(
+        isinstance(execution, Mapping)
+        and execution.get("sourceEntryPoints") == [entry_point]
+        and execution.get("provenance")
+        == {"kind": "materialized-template-rule", "path": workgroup_rule_path}
+        and execution.get("subgroupWidthProvenance")
+        == {"kind": "materialized-template-rule", "path": subgroup_rule_path}
+        and execution.get("subgroupWidthEnforcement")
+        == {
+            "mechanism": "hlsl-wave-size-attribute",
+            "minimumShaderModel": "6.6",
+            "entryProfiles": [{"entryPoint": "CSMain", "profile": "cs_6_6"}],
+        }
+        and _is_sha256_identity(execution.get("identity"))
+        and isinstance(entries, list)
+        and len(entries) == 1
+        and isinstance(entries[0], Mapping),
+        "quantized artifact execution metadata changed",
+    )
+    execution_entry = entries[0]
+    _require(
+        execution_entry.get("sourceEntryPoint") == entry_point
+        and execution_entry.get("materializedEntryPoint") == entry_point
+        and execution_entry.get("targetEntryPoint") == "CSMain"
+        and execution_entry.get("workgroupSize") == workgroup_size
+        and execution_entry.get("rule") == expected_workgroup_rule
+        and execution_entry.get("subgroupWidth") == subgroup_width
+        and execution_entry.get("subgroupWidthRule") == expected_subgroup_rule
+        and execution_entry.get("materialization")
+        == {
+            "name": entry_contract["specializationName"],
+            "hostName": entry_point,
+            "materializedName": entry_point,
+        }
+        and execution_entry.get("parameters") == entry_contract["parameters"]
+        and _is_sha256_identity(execution_entry.get("identity")),
+        "quantized per-entry execution contract changed",
     )
 
 
@@ -356,6 +473,12 @@ def _translated_artifact(
             "stage": "compute",
         },
         "selected quantized entry-point identity was not preserved",
+    )
+    _validate_execution_report(
+        payload,
+        artifact,
+        entry_point=entry_point,
+        entry_contract=entry_contract,
     )
     materialization = artifact.get("templateMaterialization")
     specializations = (
@@ -490,7 +613,17 @@ def _validate_gather_generated_hlsl(generated: str) -> dict[str, Any]:
         _GATHER_DIRECT_TYPED_BYTE_READ_RE.search(generated) is None,
         "the qdot helper must not index packed uint8 weights as typed uint words",
     )
+    _require(
+        len(_GATHER_EXECUTION_ENTRY_RE.findall(generated)) == 1,
+        "the gather entry must enforce a 32x2x1 workgroup and 32-lane wave",
+    )
     return {
+        "executionContract": {
+            "status": "passed",
+            "workgroupSize": list(MLX_QUANTIZED_GATHER_WORKGROUP_SIZE),
+            "subgroupWidth": MLX_QUANTIZED_GATHER_SUBGROUP_WIDTH,
+            "subgroupWidthEnforcement": "WaveSize(32)",
+        },
         "privateArrayAliasing": {
             "status": "passed",
             "helper": "load_vector_float_float_16_2",
@@ -547,6 +680,11 @@ def _validate_generated_hlsl(
     compatible_target_profiles = directx_target_profiles_for_source(generated)
     profile = dxc_profile_for_source(DIRECTX_BASE_SHADER_PROFILE, generated)
     compiler_arguments = dxc_compiler_arguments_for_source(generated)
+    expected_profile = (
+        "cs_6_6"
+        if entry_contract.get("subgroupWidth") is not None
+        else DIRECTX_BASE_SHADER_PROFILE
+    )
     _require(
         not hlsl_requires_native_16bit_types(generated),
         "pinned quantized HLSL must not require native 16-bit types",
@@ -556,8 +694,8 @@ def _validate_generated_hlsl(
         "generated quantized HLSL must remain compatible with DirectX 12",
     )
     _require(
-        profile == DIRECTX_BASE_SHADER_PROFILE and compiler_arguments == (),
-        "generated quantized HLSL must compile without native 16-bit options",
+        profile == expected_profile and compiler_arguments == (),
+        "generated quantized HLSL compiler requirements must match its features",
     )
     checks = {
         "status": "passed",
@@ -696,6 +834,24 @@ def run_proof(
         required=require_directx_toolchain,
         entry_point=entry_point,
     )
+    entry_contract = ENTRY_CONTRACTS[entry_point]
+    translation_scope = {
+        "source": MLX_QUANTIZED_SOURCE,
+        "selectedEntryPoint": entry_point,
+        "sourceBackend": "metal",
+        "sourceOverride": "metal",
+        "includeDirectories": ["."],
+        "target": DIRECTX_TARGET_PROFILE,
+        "projectTranslationApi": "crosstl.project.translate_project",
+        "materializationLimits": {
+            "maxTemplateSpecializations": TEMPLATE_SPECIALIZATION_LIMIT,
+            "maxTemplateMaterializationWork": MATERIALIZATION_WORK_LIMIT,
+        },
+    }
+    if entry_contract.get("workgroupSize") is not None:
+        translation_scope["workgroupSize"] = list(entry_contract["workgroupSize"])
+    if entry_contract.get("subgroupWidth") is not None:
+        translation_scope["subgroupWidth"] = entry_contract["subgroupWidth"]
 
     summary = {
         "schema_version": 1,
@@ -706,19 +862,7 @@ def run_proof(
             "commit": MLX_COMMIT,
         },
         "scope": {
-            "translation": {
-                "source": MLX_QUANTIZED_SOURCE,
-                "selectedEntryPoint": entry_point,
-                "sourceBackend": "metal",
-                "sourceOverride": "metal",
-                "includeDirectories": ["."],
-                "target": DIRECTX_TARGET_PROFILE,
-                "projectTranslationApi": "crosstl.project.translate_project",
-                "materializationLimits": {
-                    "maxTemplateSpecializations": TEMPLATE_SPECIALIZATION_LIMIT,
-                    "maxTemplateMaterializationWork": MATERIALIZATION_WORK_LIMIT,
-                },
-            },
+            "translation": translation_scope,
             "compiler": {
                 "compiler": "dxc",
                 "required": require_directx_toolchain,
@@ -749,6 +893,11 @@ def run_proof(
             "requiredCapabilities": list(artifact["requiredCapabilities"]),
             "templateMaterialization": artifact["templateMaterialization"],
             "generatedChecks": generated_checks,
+            **(
+                {"execution": dict(artifact["execution"])}
+                if isinstance(artifact.get("execution"), Mapping)
+                else {}
+            ),
         },
         "compiler": compiler,
         "runtime": {

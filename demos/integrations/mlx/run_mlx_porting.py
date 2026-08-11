@@ -694,13 +694,26 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
             "wl_offset",
         ],
     },
+    "execution_contract": {
+        "status": "source-verified-and-emitted",
+        "workgroup_size": [32, 2, 1],
+        "subgroup_width": 32,
+        "subgroup_width_enforcement": "WaveSize(32)",
+        "minimum_shader_model": "6.6",
+        "host_dispatch_provenance": {
+            "source": "mlx/backend/metal/quantized.cpp",
+            "function": "gather_qmv",
+            "workgroup_expression": "MTL::Size group_dims(bk, 2, 1)",
+            "bk": 32,
+        },
+    },
     "generated_hlsl": {
-        "sha256": "1ab162e9215430b887ddeabf838a6f51153bdc8a24a63a2eb6d5bfe7a4914652",
-        "size_bytes": 14929,
+        "sha256": "411e8e9f781e580e5f0aa2d73f375303ef4f762c91f627c6a265301402dfc30d",
+        "size_bytes": 14945,
     },
     "compiler_validation": {
         "compiler": "dxc",
-        "profile": "cs_6_0",
+        "profile": "cs_6_6",
         "compiler_arguments": [],
         "warnings_as_errors": True,
         "status": "passed",
@@ -712,6 +725,7 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
     "tracked_by": [
         "https://github.com/CrossGL/crosstl/issues/1497",
         "https://github.com/CrossGL/crosstl/issues/1546",
+        "https://github.com/CrossGL/crosstl/issues/1786",
     ],
     "runtime_execution_attempted": False,
     "numerical_parity_claimed": False,

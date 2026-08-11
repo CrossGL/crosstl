@@ -7788,8 +7788,12 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`inout float[16]` plus a base offset" in normalized_readme
     assert "all four writes in each `i += 4` iteration" in normalized_readme
     assert "read-only `uint8_t` view over its `uint32_t`" in normalized_readme
-    assert "14,929 bytes" in normalized_readme
-    assert "DXC profile `cs_6_0` and `-WX`" in normalized_readme
+    assert "`gather_qmv` host dispatch" in normalized_readme
+    assert "`MTL::Size group_dims(bk, 2, 1)`" in normalized_readme
+    assert "`[numthreads(32, 2, 1)]`" in normalized_readme
+    assert "`[WaveSize(32)]`" in normalized_readme
+    assert "14,945 bytes" in normalized_readme
+    assert "DXC profile `cs_6_6` and `-WX`" in normalized_readme
     assert "does not dispatch the kernel through Direct3D" in normalized_readme
     assert "three source-qualified index-range assertions" in normalized_readme
     assert "`in_index + i`" in readme
@@ -7931,13 +7935,26 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
             "wl_offset",
         ],
     }
+    assert adjacent["execution_contract"] == {
+        "status": "source-verified-and-emitted",
+        "workgroup_size": [32, 2, 1],
+        "subgroup_width": 32,
+        "subgroup_width_enforcement": "WaveSize(32)",
+        "minimum_shader_model": "6.6",
+        "host_dispatch_provenance": {
+            "source": "mlx/backend/metal/quantized.cpp",
+            "function": "gather_qmv",
+            "workgroup_expression": "MTL::Size group_dims(bk, 2, 1)",
+            "bk": 32,
+        },
+    }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "1ab162e9215430b887ddeabf838a6f51153bdc8a24a63a2eb6d5bfe7a4914652",
-        "size_bytes": 14929,
+        "sha256": "411e8e9f781e580e5f0aa2d73f375303ef4f762c91f627c6a265301402dfc30d",
+        "size_bytes": 14945,
     }
     assert adjacent["compiler_validation"] == {
         "compiler": "dxc",
-        "profile": "cs_6_0",
+        "profile": "cs_6_6",
         "compiler_arguments": [],
         "warnings_as_errors": True,
         "status": "passed",
@@ -7949,6 +7966,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert adjacent["tracked_by"] == [
         "https://github.com/CrossGL/crosstl/issues/1497",
         "https://github.com/CrossGL/crosstl/issues/1546",
+        "https://github.com/CrossGL/crosstl/issues/1786",
     ]
     assert adjacent["runtime_execution_attempted"] is False
     assert adjacent["numerical_parity_claimed"] is False

@@ -505,15 +505,21 @@ base offset and proves all four writes in each `i += 4` iteration. The
 and the helper call composes the root word offset, byte-view offset, row offset,
 and local alias offset without treating bytes as typed 32-bit elements.
 
-The generated HLSL is 14,929 bytes with SHA-256
-`1ab162e9215430b887ddeabf838a6f51153bdc8a24a63a2eb6d5bfe7a4914652`.
-Windows CI compiles it with DXC profile `cs_6_0` and `-WX`. This is selected-entry
+The pinned `gather_qmv` host dispatch in `mlx/backend/metal/quantized.cpp` sets
+`bk = 32` and `MTL::Size group_dims(bk, 2, 1)`. The project rule therefore
+emits `[numthreads(32, 2, 1)]`. The kernel's simdgroup indices require a
+32-lane subgroup, so the generated HLSL also emits `[WaveSize(32)]` and requires
+Shader Model 6.6. The resulting artifact is 14,945 bytes with SHA-256
+`411e8e9f781e580e5f0aa2d73f375303ef4f762c91f627c6a265301402dfc30d`.
+Windows CI compiles it with DXC profile `cs_6_6` and `-WX`. This is selected-entry
 evidence for the fixed-array alias work tracked by
 [#1497](https://github.com/CrossGL/crosstl/issues/1497) and the read-only storage
-view work tracked by [#1546](https://github.com/CrossGL/crosstl/issues/1546).
-Those issues remain open for their broader cross-target, writable-view,
-alignment, and runtime acceptance criteria. This proof does not dispatch the
-kernel through Direct3D, run MLX tests, or claim numerical parity.
+view work tracked by [#1546](https://github.com/CrossGL/crosstl/issues/1546),
+with the broader subgroup contract tracked by
+[#1786](https://github.com/CrossGL/crosstl/issues/1786). Those issues remain
+open for their broader cross-target, writable-view, alignment, subgroup, and
+runtime acceptance criteria. This proof does not dispatch the kernel through
+Direct3D, run MLX tests, or claim numerical parity.
 
 The selected `affine_quantize_float_gs_32_b_2` entry also translates to a
 5,107-byte GLSL artifact with no project diagnostics. The project configuration
