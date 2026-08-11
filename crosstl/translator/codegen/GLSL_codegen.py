@@ -4198,7 +4198,9 @@ class GLSLCodeGen:
         )
         constants = list(getattr(ast, "constants", []) or [])
         self.glsl_constant_types = {
-            node.name: self.type_name_string(self.glsl_specialization_constant_type(node))
+            node.name: self.type_name_string(
+                self.glsl_specialization_constant_type(node)
+            )
             for node in constants
             if getattr(node, "name", None)
         }
@@ -21777,9 +21779,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_glsl_boolean_context(
-            getattr(node, "condition", None)
-        )
+        condition = self.generate_glsl_boolean_context(getattr(node, "condition", None))
 
         code = f"{indent_str}while ({condition}) {{\n"
         code += self.generate_scoped_statement_body(
@@ -21790,9 +21790,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_do_while(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_glsl_boolean_context(
-            getattr(node, "condition", None)
-        )
+        condition = self.generate_glsl_boolean_context(getattr(node, "condition", None))
 
         code = f"{indent_str}do {{\n"
         code += self.generate_scoped_statement_body(
