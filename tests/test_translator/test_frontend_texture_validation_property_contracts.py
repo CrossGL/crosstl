@@ -7,6 +7,7 @@ from hypothesis import strategies as st
 from crosstl.translator.ast import (
     ArrayAccessNode,
     BinaryOpNode,
+    FunctionCallNode,
     IdentifierNode,
     MemberAccessNode,
     UnaryOpNode,
@@ -282,4 +283,11 @@ def test_generated_expression_debug_names_are_source_like_for_nested_access(suff
             UnaryOpNode("++", IdentifierNode(f"index_{suffix}"), is_postfix=True)
         )
         == f"index_{suffix}++"
+    )
+    call = FunctionCallNode(
+        IdentifierNode(f"select_{suffix}"),
+        [IdentifierNode(f"index_{suffix}")],
+    )
+    assert expression_debug_name(MemberAccessNode(call, "x")) == (
+        f"select_{suffix}(index_{suffix}).x"
     )

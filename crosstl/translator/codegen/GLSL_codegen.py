@@ -5621,6 +5621,19 @@ class GLSLCodeGen:
             literal = self.literal_int_value(value, constants)
             if literal is not None:
                 intervals[name] = (literal, literal)
+        parameter_names = {
+            getattr(parameter, "name", None)
+            for parameter in (
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+        }
+        for name, values in self.literal_int_vector_constants.items():
+            if name in parameter_names:
+                continue
+            for component_index, value in enumerate(values):
+                key = self.glsl_index_component_interval_key(name, component_index)
+                if key is not None:
+                    intervals[key] = (value, value)
 
         local_size = getattr(function, "_glsl_workgroup_proof_local_size", None)
         if local_size is None:
@@ -5649,7 +5662,106 @@ class GLSLCodeGen:
                 intervals[parameter.name] = (0, invocation_count - 1)
         return intervals
 
-    def annotate_glsl_workgroup_proof_intervals(self, function):
+    def glsl_index_component_index(self, member):
+        return {
+            "x": 0,
+            "r": 0,
+            "s": 0,
+            "y": 1,
+            "g": 1,
+            "t": 1,
+            "z": 2,
+            "b": 2,
+            "p": 2,
+            "w": 3,
+            "a": 3,
+            "q": 3,
+        }.get(str(member))
+
+    def glsl_index_component_interval_key(self, expression, component_index):
+        name = (
+            expression
+            if isinstance(expression, str)
+            else expression_debug_name(expression)
+        )
+        if not name or component_index not in range(4):
+            return None
+        return f"{name}.{'xyzw'[component_index]}"
+
+    def glsl_clear_index_component_intervals(self, intervals, expression):
+        for component_index in range(4):
+            key = self.glsl_index_component_interval_key(
+                expression,
+                component_index,
+            )
+            if key is not None:
+                intervals.pop(key, None)
+
+    def glsl_static_integer_vector_component_intervals(
+        self,
+        expression,
+        vector_type,
+        intervals,
+        constants,
+    ):
+        info = self.glsl_value_type_info(vector_type)
+        if info is None or info["family"] not in {"int", "uint"} or info["width"] <= 1:
+            return None
+        width = info["width"]
+
+        literal = self.glsl_integer_vector_literal_value(
+            expression,
+            int_constants=constants,
+            vector_constants={},
+            vector_array_constants={},
+        )
+        if literal is not None and len(literal) == width:
+            return tuple((value, value) for value in literal)
+
+        source_name = expression_debug_name(expression)
+        inherited = tuple(
+            intervals.get(self.glsl_index_component_interval_key(source_name, index))
+            for index in range(width)
+        )
+        if all(interval is not None for interval in inherited):
+            return inherited
+
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            arguments = list(expression.arguments or [])
+        elif isinstance(expression, ConstructorNode):
+            function_name = self.type_name_string(expression.constructor_type)
+            arguments = list(expression.arguments or [])
+        else:
+            return None
+        constructor_info = self.glsl_value_type_info(function_name)
+        if constructor_info is None or constructor_info["width"] != width:
+            return None
+
+        if len(arguments) == 1:
+            scalar = self.glsl_private_pointer_interval(
+                arguments[0], intervals, constants
+            )
+            if scalar is not None:
+                return (scalar,) * width
+            source_name = expression_debug_name(arguments[0])
+            inherited = tuple(
+                intervals.get(
+                    self.glsl_index_component_interval_key(source_name, index)
+                )
+                for index in range(width)
+            )
+            return inherited if all(item is not None for item in inherited) else None
+
+        if len(arguments) != width:
+            return None
+        components = tuple(
+            self.glsl_private_pointer_interval(argument, intervals, constants)
+            for argument in arguments
+        )
+        return components if all(item is not None for item in components) else None
+
+    def annotate_glsl_control_flow_intervals(self, function):
         constants = self.initial_literal_int_constants(function)
 
         def merge_intervals(left, right):
@@ -5663,9 +5775,145 @@ class GLSLCodeGen:
 
         def annotate_expression(expression, intervals):
             if hasattr(expression, "__dict__"):
-                expression._glsl_workgroup_proof_intervals = dict(intervals)
+                expression._glsl_control_flow_intervals = dict(intervals)
+
+        def target_interval_keys(target):
+            if isinstance(target, ArrayAccessNode):
+                component_index = self.literal_int_value(target.index, constants)
+                if (
+                    isinstance(component_index, int)
+                    and not isinstance(component_index, bool)
+                    and component_index in range(4)
+                ):
+                    key = self.glsl_index_component_interval_key(
+                        target.array,
+                        component_index,
+                    )
+                    return {key} if key is not None else set()
+                return {
+                    key
+                    for component_index in range(4)
+                    if (
+                        key := self.glsl_index_component_interval_key(
+                            target.array,
+                            component_index,
+                        )
+                    )
+                    is not None
+                }
+            if isinstance(target, MemberAccessNode):
+                component_indices = tuple(
+                    self.glsl_index_component_index(component)
+                    for component in str(target.member)
+                )
+                if not component_indices or any(
+                    component_index is None for component_index in component_indices
+                ):
+                    return set()
+                return {
+                    key
+                    for component_index in component_indices
+                    if (
+                        key := self.glsl_index_component_interval_key(
+                            target.object,
+                            component_index,
+                        )
+                    )
+                    is not None
+                }
+            name = self.expression_name(target)
+            if not name:
+                return set()
+            keys = {name}
+            keys.update(
+                self.glsl_index_component_interval_key(name, component_index)
+                for component_index in range(4)
+            )
+            keys.discard(None)
+            return keys
+
+        def mutation_interval_keys(value):
+            mutated = set()
+
+            def collect(node):
+                if node is None or isinstance(node, (str, int, float, bool)):
+                    return
+                if isinstance(node, dict):
+                    for child in node.values():
+                        collect(child)
+                    return
+                if isinstance(node, (list, tuple, set)):
+                    for child in node:
+                        collect(child)
+                    return
+                if isinstance(node, AssignmentNode):
+                    target = getattr(
+                        node,
+                        "target",
+                        getattr(node, "left", None),
+                    )
+                    mutated.update(target_interval_keys(target))
+                elif isinstance(node, UnaryOpNode) and (
+                    self.map_operator(node.op) in {"++", "--"}
+                    or node.op
+                    in {
+                        "PRE_INCREMENT",
+                        "PRE_DECREMENT",
+                        "POST_INCREMENT",
+                        "POST_DECREMENT",
+                    }
+                ):
+                    mutated.update(target_interval_keys(node.operand))
+                elif isinstance(node, FunctionCallNode):
+                    function_name = self.function_call_name(node)
+                    candidates = list(
+                        self.glsl_function_overloads_by_name.get(function_name, ())
+                    )
+                    fallback = self.function_definitions.get(function_name)
+                    if fallback is not None and fallback not in candidates:
+                        candidates.append(fallback)
+                    for argument_index, argument in enumerate(node.arguments or []):
+                        if any(
+                            argument_index
+                            < len(
+                                parameters := list(
+                                    getattr(
+                                        candidate,
+                                        "parameters",
+                                        getattr(candidate, "params", []),
+                                    )
+                                    or []
+                                )
+                            )
+                            and set(
+                                self.glsl_parameter_qualifiers(
+                                    parameters[argument_index]
+                                )
+                            ).intersection({"out", "inout"})
+                            for candidate in candidates
+                        ):
+                            mutated.update(target_interval_keys(argument))
+                if hasattr(node, "child_nodes"):
+                    for child in node.child_nodes():
+                        collect(child)
+                    return
+                if hasattr(node, "__dict__"):
+                    for field, child in vars(node).items():
+                        if field not in {
+                            "annotations",
+                            "parent",
+                            "source_location",
+                            "_glsl_control_flow_intervals",
+                        }:
+                            collect(child)
+
+            collect(value)
+            return mutated
 
         def visit_sequence(value, intervals):
+            if isinstance(value, BlockNode):
+                visit(value, intervals)
+                return
             statements = getattr(value, "statements", value)
             if not isinstance(statements, (list, tuple)):
                 statements = [statements]
@@ -5689,6 +5937,7 @@ class GLSLCodeGen:
                 visit(initial_value, intervals)
                 name = getattr(value, "name", None)
                 if name:
+                    self.glsl_clear_index_component_intervals(intervals, name)
                     interval = self.glsl_private_pointer_interval(
                         initial_value, intervals, constants
                     )
@@ -5696,6 +5945,28 @@ class GLSLCodeGen:
                         intervals.pop(name, None)
                     else:
                         intervals[name] = interval
+                    variable_type = getattr(
+                        value,
+                        "var_type",
+                        getattr(value, "vtype", None),
+                    )
+                    component_intervals = (
+                        self.glsl_static_integer_vector_component_intervals(
+                            initial_value,
+                            variable_type,
+                            intervals,
+                            constants,
+                        )
+                    )
+                    for component_index, component_interval in enumerate(
+                        component_intervals or ()
+                    ):
+                        key = self.glsl_index_component_interval_key(
+                            name,
+                            component_index,
+                        )
+                        if key is not None:
+                            intervals[key] = component_interval
                 return
             if isinstance(value, AssignmentNode):
                 target = getattr(value, "target", getattr(value, "left", None))
@@ -5730,10 +6001,147 @@ class GLSLCodeGen:
                         intervals.pop(target_name, None)
                     else:
                         intervals[target_name] = replacement
+                    self.glsl_clear_index_component_intervals(
+                        intervals,
+                        target_name,
+                    )
+                elif isinstance(target, MemberAccessNode):
+                    for target_key in target_interval_keys(target):
+                        intervals.pop(target_key, None)
+                    component_index = self.glsl_index_component_index(target.member)
+                    key = self.glsl_index_component_interval_key(
+                        target.object,
+                        component_index,
+                    )
+                    if key is not None:
+                        assigned_interval = self.glsl_private_pointer_interval(
+                            assigned,
+                            intervals,
+                            constants,
+                        )
+                        operator = self.map_operator(
+                            getattr(value, "operator", getattr(value, "op", "="))
+                        )
+                        current = getattr(
+                            value,
+                            "_glsl_control_flow_intervals",
+                            {},
+                        ).get(key)
+                        if operator == "=":
+                            replacement = assigned_interval
+                        elif operator == "+=" and current and assigned_interval:
+                            replacement = (
+                                current[0] + assigned_interval[0],
+                                current[1] + assigned_interval[1],
+                            )
+                        elif operator == "-=" and current and assigned_interval:
+                            replacement = (
+                                current[0] - assigned_interval[1],
+                                current[1] - assigned_interval[0],
+                            )
+                        else:
+                            replacement = None
+                        if replacement is None:
+                            intervals.pop(key, None)
+                        else:
+                            intervals[key] = replacement
+                elif isinstance(target, ArrayAccessNode):
+                    for target_key in target_interval_keys(target):
+                        intervals.pop(target_key, None)
                 visit(target, intervals)
                 return
+            if isinstance(value, TernaryOpNode):
+                visit(value.condition, intervals)
+                true_intervals = dict(intervals)
+                false_intervals = dict(intervals)
+                visit(value.true_expr, true_intervals)
+                visit(value.false_expr, false_intervals)
+                intervals.clear()
+                intervals.update(merge_intervals(true_intervals, false_intervals))
+                return
+            if isinstance(value, BinaryOpNode) and self.map_operator(value.op) in {
+                "&&",
+                "||",
+            }:
+                visit(value.left, intervals)
+                left_intervals = dict(intervals)
+                right_intervals = dict(left_intervals)
+                visit(value.right, right_intervals)
+                intervals.clear()
+                intervals.update(merge_intervals(left_intervals, right_intervals))
+                return
+            if isinstance(value, FunctionCallNode):
+                function_expr = getattr(value, "function", None)
+                visit(function_expr, intervals)
+                arguments = list(value.arguments or [])
+                for argument in arguments:
+                    visit(argument, intervals)
+                function_name = self.function_call_name(value)
+                candidates = list(
+                    self.glsl_function_overloads_by_name.get(function_name, ())
+                )
+                fallback = self.function_definitions.get(function_name)
+                if fallback is not None and fallback not in candidates:
+                    candidates.append(fallback)
+                for argument_index, argument in enumerate(arguments):
+                    may_write = False
+                    for candidate in candidates:
+                        parameters = list(
+                            getattr(
+                                candidate,
+                                "parameters",
+                                getattr(candidate, "params", []),
+                            )
+                            or []
+                        )
+                        if argument_index >= len(parameters):
+                            continue
+                        qualifiers = set(
+                            self.glsl_parameter_qualifiers(parameters[argument_index])
+                        )
+                        if qualifiers.intersection({"out", "inout"}):
+                            may_write = True
+                            break
+                    if may_write:
+                        for key in target_interval_keys(argument):
+                            intervals.pop(key, None)
+                return
+            if isinstance(value, UnaryOpNode) and (
+                self.map_operator(value.op) in {"++", "--"}
+                or value.op
+                in {
+                    "PRE_INCREMENT",
+                    "PRE_DECREMENT",
+                    "POST_INCREMENT",
+                    "POST_DECREMENT",
+                }
+            ):
+                visit(value.operand, intervals)
+                for key in target_interval_keys(value.operand):
+                    intervals.pop(key, None)
+                return
             if isinstance(value, BlockNode):
-                visit_sequence(value, dict(intervals))
+                outer_keys = set(intervals)
+                block_intervals = dict(intervals)
+                shadowed_values = {}
+                statements = list(getattr(value, "statements", []) or [])
+                for statement in statements:
+                    if isinstance(statement, (VariableNode, ArrayNode)):
+                        name = getattr(statement, "name", None)
+                        if name:
+                            for key in outer_keys:
+                                if key == name or key.startswith(f"{name}."):
+                                    shadowed_values[key] = block_intervals.get(key)
+                    visit(statement, block_intervals)
+                for key in outer_keys:
+                    value_after_block = shadowed_values.get(
+                        key,
+                        block_intervals.get(key),
+                    )
+                    if value_after_block is not None:
+                        intervals[key] = value_after_block
+                    else:
+                        intervals.pop(key, None)
                 return
             if isinstance(value, IfNode):
                 condition = getattr(
@@ -5748,15 +6156,16 @@ class GLSLCodeGen:
                 then_intervals = dict(intervals)
                 visit_sequence(value.if_body, then_intervals)
                 branch_intervals.append(then_intervals)
+                fallthrough_intervals = dict(intervals)
                 for else_if_condition, else_if_body in zip(
                     getattr(value, "else_if_conditions", []) or [],
                     getattr(value, "else_if_bodies", []) or [],
                 ):
-                    candidate = dict(intervals)
-                    visit(else_if_condition, candidate)
+                    visit(else_if_condition, fallthrough_intervals)
+                    candidate = dict(fallthrough_intervals)
                     visit_sequence(else_if_body, candidate)
                     branch_intervals.append(candidate)
-                else_intervals = dict(intervals)
+                else_intervals = dict(fallthrough_intervals)
                 visit_sequence(getattr(value, "else_body", None), else_intervals)
                 branch_intervals.append(else_intervals)
                 merged = branch_intervals[0]
@@ -5765,12 +6174,48 @@ class GLSLCodeGen:
                 intervals.clear()
                 intervals.update(merged)
                 return
+            if isinstance(value, (SwitchNode, MatchNode)):
+                visit(getattr(value, "expression", None), intervals)
+                branches = list(
+                    getattr(value, "cases", getattr(value, "arms", [])) or []
+                )
+                default_case = getattr(value, "default_case", None)
+                mutated = mutation_interval_keys([branches, default_case])
+                branch_base = dict(intervals)
+                for key in mutated:
+                    branch_base.pop(key, None)
+                for branch in branches:
+                    branch_intervals = dict(branch_base)
+                    visit(branch, branch_intervals)
+                if default_case is not None:
+                    default_intervals = dict(branch_base)
+                    visit(default_case, default_intervals)
+                for key in mutated:
+                    intervals.pop(key, None)
+                return
             if isinstance(value, ForNode):
                 loop_intervals = dict(intervals)
+                mutated = mutation_interval_keys(
+                    [
+                        getattr(value, "init", None),
+                        getattr(value, "condition", None),
+                        getattr(value, "body", None),
+                        getattr(value, "update", None),
+                    ]
+                )
+                for key in mutated:
+                    loop_intervals.pop(key, None)
                 visit(getattr(value, "init", None), loop_intervals)
                 loop_name, loop_interval = self.glsl_private_pointer_loop_interval(
                     value, loop_intervals, constants
                 )
+                if loop_name in mutation_interval_keys(
+                    [
+                        getattr(value, "condition", None),
+                        getattr(value, "body", None),
+                    ]
+                ):
+                    loop_interval = None
                 if loop_name:
                     if loop_interval is None:
                         loop_intervals.pop(loop_name, None)
@@ -5779,9 +6224,19 @@ class GLSLCodeGen:
                 visit(getattr(value, "condition", None), loop_intervals)
                 visit_sequence(getattr(value, "body", None), loop_intervals)
                 visit(getattr(value, "update", None), loop_intervals)
+                for key in mutated:
+                    intervals.pop(key, None)
                 return
             if isinstance(value, ForInNode):
                 loop_intervals = dict(intervals)
+                mutated = mutation_interval_keys(
+                    [
+                        getattr(value, "iterable", None),
+                        getattr(value, "body", None),
+                    ]
+                )
+                for key in mutated:
+                    loop_intervals.pop(key, None)
                 iterable = getattr(value, "iterable", None)
                 start = self.glsl_private_pointer_interval(
                     getattr(iterable, "start", None), loop_intervals, constants
@@ -5796,11 +6251,29 @@ class GLSLCodeGen:
                     )
                     loop_intervals[pattern] = (start[0], maximum)
                 visit_sequence(getattr(value, "body", None), loop_intervals)
+                for key in mutated:
+                    intervals.pop(key, None)
                 return
             if isinstance(value, (WhileNode, DoWhileNode, LoopNode)):
                 loop_intervals = dict(intervals)
-                visit(getattr(value, "condition", None), loop_intervals)
-                visit_sequence(getattr(value, "body", None), loop_intervals)
+                mutated = mutation_interval_keys(
+                    [
+                        getattr(value, "condition", None),
+                        getattr(value, "body", None),
+                    ]
+                )
+                for key in mutated:
+                    loop_intervals.pop(key, None)
+                if isinstance(value, DoWhileNode):
+                    visit_sequence(getattr(value, "body", None), loop_intervals)
+                    visit(getattr(value, "condition", None), loop_intervals)
+                elif isinstance(value, WhileNode):
+                    visit(getattr(value, "condition", None), loop_intervals)
+                    visit_sequence(getattr(value, "body", None), loop_intervals)
+                else:
+                    visit_sequence(getattr(value, "body", None), loop_intervals)
+                for key in mutated:
+                    intervals.pop(key, None)
                 return
             if hasattr(value, "child_nodes"):
                 for child in value.child_nodes():
@@ -5812,7 +6285,7 @@ class GLSLCodeGen:
                         "annotations",
                         "parent",
                         "source_location",
-                        "_glsl_workgroup_proof_intervals",
+                        "_glsl_control_flow_intervals",
                     }:
                         visit(child, intervals)
 
@@ -5836,7 +6309,7 @@ class GLSLCodeGen:
                 )
 
         def scan_function(func, aliases):
-            self.annotate_glsl_workgroup_proof_intervals(func)
+            self.annotate_glsl_control_flow_intervals(func)
             aliases = self.glsl_function_resource_pointer_aliases(func, aliases)
             before = set(self.glsl_resource_function_specializations)
             self.collect_glsl_resource_specializations_from_body(
@@ -6678,7 +7151,7 @@ class GLSLCodeGen:
             name = getattr(parameter, "name", None)
             if not name or self.glsl_workgroup_pointer_element_type(parameter):
                 continue
-            source_intervals = getattr(argument, "_glsl_workgroup_proof_intervals", {})
+            source_intervals = getattr(argument, "_glsl_control_flow_intervals", {})
             interval = self.glsl_private_pointer_interval(
                 argument,
                 source_intervals,
@@ -7025,7 +7498,7 @@ class GLSLCodeGen:
         )
         offset_interval = self.glsl_workgroup_pointer_offset_interval(
             binding,
-            getattr(argument, "_glsl_workgroup_proof_intervals", {}),
+            getattr(argument, "_glsl_control_flow_intervals", {}),
         )
         rendered_offset = self.glsl_workgroup_pointer_offset_expression(binding)
         if offset_interval is not None and offset_interval[0] == offset_interval[1]:
@@ -14458,7 +14931,7 @@ class GLSLCodeGen:
         if expression is None:
             return None
         if intervals is None:
-            intervals = getattr(expression, "_glsl_workgroup_proof_intervals", None)
+            intervals = getattr(expression, "_glsl_control_flow_intervals", None)
 
         if isinstance(expression, ArrayAccessNode):
             binding = self.glsl_workgroup_pointer_binding(
@@ -23772,6 +24245,32 @@ complex64_t crossgl_complex64_mod_assign(
             f"source type {self.type_name_string(value_type)}",
         )
 
+    def glsl_index_flow_range(self, expression):
+        intervals = getattr(expression, "_glsl_control_flow_intervals", None)
+        if not intervals:
+            return None
+
+        if isinstance(expression, MemberAccessNode):
+            component_index = self.glsl_index_component_index(expression.member)
+            key = self.glsl_index_component_interval_key(
+                expression.object,
+                component_index,
+            )
+        else:
+            key = self.expression_name(expression)
+        interval = intervals.get(key) if key is not None else None
+        if interval is None:
+            return None
+
+        candidate = IntegerRange(
+            interval[0],
+            interval[1],
+            INDEX_RANGE_STATIC,
+            f"control-flow proof for {expression_debug_name(expression)}",
+        )
+        domain = self.glsl_integer_type_domain(expression, allow_wide=True)
+        return candidate if domain is None or candidate.is_within(domain) else None
+
     def glsl_index_value_range(self, expression, _active=None):
         if expression is None:
             return None
@@ -23795,23 +24294,12 @@ complex64_t crossgl_complex64_mod_assign(
             if asserted is not None:
                 return asserted
 
+            flow_range = self.glsl_index_flow_range(expression)
+            if flow_range is not None:
+                return flow_range
+
             if isinstance(expression, MemberAccessNode):
-                component = str(expression.member)
-                component_indices = {
-                    "x": 0,
-                    "r": 0,
-                    "s": 0,
-                    "y": 1,
-                    "g": 1,
-                    "t": 1,
-                    "z": 2,
-                    "b": 2,
-                    "p": 2,
-                    "w": 3,
-                    "a": 3,
-                    "q": 3,
-                }
-                component_index = component_indices.get(component)
+                component_index = self.glsl_index_component_index(expression.member)
                 if component_index is not None:
                     vector_value = self.glsl_integer_vector_literal_value(
                         expression.object
@@ -30712,12 +31200,77 @@ complex64_t crossgl_complex64_mod_assign(
             min(lower_clamped[1], upper[1]),
         )
 
+    def glsl_integer_cast_interval(
+        self,
+        function_name,
+        arguments,
+        intervals,
+        constants,
+        interval_resolver,
+    ):
+        if len(arguments) != 1:
+            return None
+        destination = self.glsl_value_type_info(function_name)
+        if (
+            destination is None
+            or destination["family"] not in {"int", "uint"}
+            or destination["width"] != 1
+        ):
+            return None
+        source_interval = interval_resolver(arguments[0], intervals, constants)
+        if source_interval is None:
+            return None
+        bits = (
+            destination["narrow"]["bits"]
+            if destination["narrow"] is not None
+            else destination["bits"]
+        )
+        if destination["family"] == "int":
+            domain = (-(1 << (bits - 1)), (1 << (bits - 1)) - 1)
+        else:
+            domain = (0, (1 << bits) - 1)
+        if source_interval[0] < domain[0] or source_interval[1] > domain[1]:
+            return None
+        return source_interval
+
+    def glsl_integer_scalar_cast_call(self, expression):
+        if not isinstance(expression, FunctionCallNode):
+            return None
+        function_name = self.function_call_name(expression)
+        arguments = list(
+            getattr(
+                expression,
+                "arguments",
+                getattr(expression, "args", []),
+            )
+            or []
+        )
+        destination = self.glsl_value_type_info(function_name)
+        if (
+            len(arguments) != 1
+            or destination is None
+            or destination["family"] not in {"int", "uint"}
+            or destination["width"] != 1
+        ):
+            return None
+        return function_name, arguments
+
     def glsl_private_pointer_affine_interval(self, expression, intervals, constants):
+        if expression is None:
+            return None
+        integer_cast = self.glsl_integer_scalar_cast_call(expression)
+        if integer_cast is not None:
+            function_name, arguments = integer_cast
+            return self.glsl_integer_cast_interval(
+                function_name,
+                arguments,
+                intervals,
+                constants,
+                self.glsl_private_pointer_affine_interval,
+            )
         value = self.literal_int_value(expression, constants)
         if value is not None:
             return value, value
-        if expression is None:
-            return None
         name = self.expression_name(expression)
         if name in intervals:
             return intervals[name]
@@ -30776,25 +31329,15 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 or []
             )
-            if (
-                function_name
-                in {
-                    "int",
-                    "uint",
-                    "short",
-                    "ushort",
-                    "int16",
-                    "uint16",
-                    "int32_t",
-                    "uint32_t",
-                    "size_t",
-                    "ptrdiff_t",
-                }
-                and len(arguments) == 1
-            ):
-                return self.glsl_private_pointer_affine_interval(
-                    arguments[0], intervals, constants
-                )
+            cast_interval = self.glsl_integer_cast_interval(
+                function_name,
+                arguments,
+                intervals,
+                constants,
+                self.glsl_private_pointer_affine_interval,
+            )
+            if cast_interval is not None:
+                return cast_interval
             return self.glsl_private_pointer_builtin_range_interval(
                 function_name,
                 arguments,
@@ -30805,11 +31348,21 @@ complex64_t crossgl_complex64_mod_assign(
         return None
 
     def glsl_private_pointer_interval(self, expression, intervals, constants):
+        if expression is None:
+            return None
+        integer_cast = self.glsl_integer_scalar_cast_call(expression)
+        if integer_cast is not None:
+            function_name, arguments = integer_cast
+            return self.glsl_integer_cast_interval(
+                function_name,
+                arguments,
+                intervals,
+                constants,
+                self.glsl_private_pointer_interval,
+            )
         value = self.literal_int_value(expression, constants)
         if value is not None:
             return value, value
-        if expression is None:
-            return None
         name = self.expression_name(expression)
         if name in intervals:
             return intervals[name]
@@ -30880,25 +31433,15 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 or []
             )
-            if (
-                function_name
-                in {
-                    "int",
-                    "uint",
-                    "short",
-                    "ushort",
-                    "int16",
-                    "uint16",
-                    "int32_t",
-                    "uint32_t",
-                    "size_t",
-                    "ptrdiff_t",
-                }
-                and len(arguments) == 1
-            ):
-                return self.glsl_private_pointer_interval(
-                    arguments[0], intervals, constants
-                )
+            cast_interval = self.glsl_integer_cast_interval(
+                function_name,
+                arguments,
+                intervals,
+                constants,
+                self.glsl_private_pointer_interval,
+            )
+            if cast_interval is not None:
+                return cast_interval
             return self.glsl_private_pointer_builtin_range_interval(
                 function_name,
                 arguments,
