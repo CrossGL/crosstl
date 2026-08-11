@@ -220,8 +220,13 @@ manually triggered CI also run the full-corpus artifact scout with finite Metal
 template materialization budgets.
 The generated full-corpus project config caps
 `max_template_specializations` at 4096 and
-`max_template_materialization_work` at 131072. The scout discovers all 40 pinned
-MLX Metal kernel units and attempts 120 DirectX, OpenGL, and Vulkan artifacts.
+`max_template_materialization_work` at 131072. Each artifact translation also
+has a 120-second limit. A timed-out artifact is recorded with a structured
+`project.translate.timeout` diagnostic, and the remaining canonical plan
+continues. The outer 900-second command limit remains an aggregate CI boundary;
+the durable checkpoint preserves every completed result before that boundary.
+The scout discovers all 40 pinned MLX Metal kernel units and attempts 120
+DirectX, OpenGL, and Vulkan artifacts.
 Its fence-aware success condition is 117 translated artifacts and three expected
 failed `fence.metal` records, one per target, with no fence target files emitted.
 That condition is a gate expectation, not a claim that the pinned full corpus
