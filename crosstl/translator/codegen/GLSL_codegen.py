@@ -1616,6 +1616,7 @@ class GLSLCodeGen:
         "tanh",
         "trunc",
     }
+    GLSL_COMPONENTWISE_BOOLEAN_FUNCTIONS = {"isinf", "isnan"}
     GLSL_BOOLEAN_REDUCTION_FUNCTIONS = {"all", "any"}
     GLSL_INT64_EXTENSION = "GL_ARB_gpu_shader_int64"
     GLSL_INT64_EXTENSION_LINE = "#extension GL_ARB_gpu_shader_int64 : require"
@@ -20770,6 +20771,11 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if trailing_zero_result_type is not None:
                 return trailing_zero_result_type
+            componentwise_boolean_type = (
+                self.glsl_componentwise_boolean_result_type(func_name, args)
+            )
+            if componentwise_boolean_type is not None:
+                return componentwise_boolean_type
             if (
                 func_name in self.GLSL_BITCAST_FUNCTIONS
                 and args
@@ -25847,6 +25853,30 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         return self.glsl_source_expression_type(arguments[0])
 
+    def glsl_componentwise_boolean_result_type(
+        self,
+        function_name,
+        arguments,
+        *,
+        source_type=False,
+    ):
+        if len(arguments) != 1:
+            return None
+        mapped_name = self.function_map.get(function_name, function_name)
+        if mapped_name not in self.GLSL_COMPONENTWISE_BOOLEAN_FUNCTIONS:
+            return None
+        argument_type = (
+            self.glsl_source_expression_type(arguments[0])
+            if source_type
+            else self.expression_result_type(arguments[0])
+        )
+        argument = self.glsl_value_type_info(argument_type)
+        if argument is None or argument["family"] != "float":
+            return None
+        if argument["width"] == 1:
+            return "bool"
+        return f"bvec{argument['width']}"
+
     def glsl_boolean_reduction_result_type(self, function_name, arguments):
         if len(arguments) != 1:
             return None
@@ -25979,6 +26009,15 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if componentwise_type is not None:
                 return componentwise_type
+            componentwise_boolean_type = (
+                self.glsl_componentwise_boolean_result_type(
+                    function_name,
+                    expression.arguments,
+                    source_type=True,
+                )
+            )
+            if componentwise_boolean_type is not None:
+                return componentwise_boolean_type
             boolean_reduction_type = self.glsl_boolean_reduction_result_type(
                 function_name, expression.arguments
             )

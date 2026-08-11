@@ -8133,6 +8133,47 @@ def test_opengl_normalizes_scalar_truthiness_in_all_boolean_contexts(tmp_path):
     )
 
 
+def test_opengl_preserves_componentwise_floating_predicate_result_types(tmp_path):
+    code = """
+    shader FloatingPredicates {
+        bool scalarInvalid(float value) {
+            return isnan(value) || isinf(value);
+        }
+
+        bvec3 vectorInvalid(vec3 value) {
+            return isnan(value);
+        }
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main() {
+                float value = float(gl_LocalInvocationID.x);
+                vec3 values = vec3(value);
+                if (isnan(value) || isinf(value)) {
+                    value = 0.0;
+                }
+                bool invalid = scalarInvalid(value) || any(vectorInvalid(values));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "return (isnan(value) || isinf(value));" in generated
+    assert "bvec3 vectorInvalid(vec3 value)" in generated
+    assert "return isnan(value);" in generated
+    assert "if ((isnan(value) || isinf(value)))" in generated
+    assert "scalarInvalid(value) || any(vectorInvalid(values))" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "componentwise_floating_predicates",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
 def test_opengl_rejects_vector_boolean_context():
     code = """
     shader VectorTruthiness {
