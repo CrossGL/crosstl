@@ -22,9 +22,9 @@ void foo(vec4 p[arraySize]) {
     color += dupUcol[2];
     size += dupArraySize;
     if (spDupBool) {
-        color *= dupScale;
+        color = (color * float(dupScale));
     }
-    color += float((spDupDouble / spDupFloat));
+    color += float((spDupDouble / double(spDupFloat)));
 }
 
 int builtin_spec_constant() {
@@ -36,9 +36,9 @@ void main() {
     color = ucol[2];
     size = arraySize;
     if (spBool) {
-        color *= scale;
+        color = (color * float(scale));
     }
-    color += float((spDouble / spFloat));
+    color += float((spDouble / double(spFloat)));
     foo(ucol);
     return;
 }

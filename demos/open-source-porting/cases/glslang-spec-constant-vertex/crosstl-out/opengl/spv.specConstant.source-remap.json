@@ -401,34 +401,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 26,
-        "endOffset": 899,
-        "file": "crosstl-out/opengl/spv.specConstant.glsl",
-        "length": 27,
-        "line": 25,
-        "offset": 872
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 44,
-        "endOffset": 1105,
-        "file": "spv.specConstant.vert",
-        "length": 27,
-        "line": 43,
-        "offset": 1078
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
         "endLine": 28,
-        "endOffset": 953,
+        "endOffset": 977,
         "file": "crosstl-out/opengl/spv.specConstant.glsl",
-        "length": 48,
+        "length": 56,
         "line": 27,
-        "offset": 905
+        "offset": 921
       },
       "original": {
         "column": 1,
@@ -446,11 +424,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 31,
-        "endOffset": 986,
+        "endOffset": 1010,
         "file": "crosstl-out/opengl/spv.specConstant.glsl",
         "length": 30,
         "line": 30,
-        "offset": 956
+        "offset": 980
       },
       "original": {
         "column": 1,
@@ -468,11 +446,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 32,
-        "endOffset": 1021,
+        "endOffset": 1045,
         "file": "crosstl-out/opengl/spv.specConstant.glsl",
         "length": 35,
         "line": 31,
-        "offset": 986
+        "offset": 1010
       },
       "original": {
         "column": 1,
@@ -490,11 +468,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 37,
-        "endOffset": 1078,
+        "endOffset": 1102,
         "file": "crosstl-out/opengl/spv.specConstant.glsl",
         "length": 21,
         "line": 36,
-        "offset": 1057
+        "offset": 1081
       },
       "original": {
         "column": 1,
@@ -512,11 +490,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 38,
-        "endOffset": 1100,
+        "endOffset": 1124,
         "file": "crosstl-out/opengl/spv.specConstant.glsl",
         "length": 22,
         "line": 37,
-        "offset": 1078
+        "offset": 1102
       },
       "original": {
         "column": 1,
@@ -533,34 +511,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 40,
-        "endOffset": 1142,
-        "file": "crosstl-out/opengl/spv.specConstant.glsl",
-        "length": 24,
-        "line": 39,
-        "offset": 1118
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 25,
-        "endOffset": 580,
-        "file": "spv.specConstant.vert",
-        "length": 24,
-        "line": 24,
-        "offset": 556
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
         "endLine": 42,
-        "endOffset": 1190,
+        "endOffset": 1238,
         "file": "crosstl-out/opengl/spv.specConstant.glsl",
-        "length": 42,
+        "length": 50,
         "line": 41,
-        "offset": 1148
+        "offset": 1188
       },
       "original": {
         "column": 1,
@@ -578,11 +534,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 43,
-        "endOffset": 1205,
+        "endOffset": 1253,
         "file": "crosstl-out/opengl/spv.specConstant.glsl",
         "length": 15,
         "line": 42,
-        "offset": 1190
+        "offset": 1238
       },
       "original": {
         "column": 1,
