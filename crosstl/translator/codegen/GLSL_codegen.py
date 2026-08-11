@@ -20771,8 +20771,8 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if trailing_zero_result_type is not None:
                 return trailing_zero_result_type
-            componentwise_boolean_type = (
-                self.glsl_componentwise_boolean_result_type(func_name, args)
+            componentwise_boolean_type = self.glsl_componentwise_boolean_result_type(
+                func_name, args
             )
             if componentwise_boolean_type is not None:
                 return componentwise_boolean_type
@@ -26009,12 +26009,10 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if componentwise_type is not None:
                 return componentwise_type
-            componentwise_boolean_type = (
-                self.glsl_componentwise_boolean_result_type(
-                    function_name,
-                    expression.arguments,
-                    source_type=True,
-                )
+            componentwise_boolean_type = self.glsl_componentwise_boolean_result_type(
+                function_name,
+                expression.arguments,
+                source_type=True,
             )
             if componentwise_boolean_type is not None:
                 return componentwise_boolean_type
