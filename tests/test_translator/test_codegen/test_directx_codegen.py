@@ -53,6 +53,7 @@ from crosstl.translator.ast import (
 )
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateConditionalError,
+    DirectXAggregateInitializerError,
     DirectXAtomicFenceLoweringError,
     DirectXBooleanCompoundAssignmentError,
     DirectXBooleanOrderedIntrinsicError,
@@ -2414,6 +2415,220 @@ def test_hlsl_codegen_lowers_array_literals_to_expected_vector_arguments():
 
     assert "elem_to_loc(int64_t3(1, 2, 3))" in generated
     assert "elem_to_loc({" not in generated
+
+
+def test_hlsl_codegen_expands_contextual_partial_fixed_array_initializer():
+    ast = ShaderNode(
+        "PartialFixedArrayInitializer",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "launch",
+                NamedType("void"),
+                [],
+                BlockNode(
+                    [
+                        VariableNode(
+                            "values",
+                            ArrayType(PrimitiveType("float"), 4),
+                            ArrayLiteralNode(
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                ]
+                            ),
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "float values[4] = {1.0, 2.0, float(0), float(0)};" in generated
+
+
+def test_hlsl_codegen_rejects_array_literal_without_contextual_shape():
+    literal = ArrayLiteralNode([LiteralNode(0, PrimitiveType("int"))])
+
+    with pytest.raises(DirectXAggregateInitializerError) as exc_info:
+        HLSLCodeGen().generate_expression(literal)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-aggregate-initializer-invalid"
+    )
+    assert diagnostic.reason == "expected-type-unresolved"
+    assert diagnostic.expected_type is None
+    assert diagnostic.element_count == 1
+
+
+def test_hlsl_codegen_preserves_contextual_scalar_and_vector_initializers():
+    codegen = HLSLCodeGen()
+    scalar = ArrayLiteralNode([LiteralNode(1.0, PrimitiveType("float"))])
+    vector = ArrayLiteralNode([LiteralNode(1.0, PrimitiveType("float"))])
+
+    assert (
+        codegen.generate_expression_with_expected(scalar, PrimitiveType("float"))
+        == "{1.0}"
+    )
+    assert (
+        codegen.generate_expression_with_expected(vector, NamedType("float2"))
+        == "float2(1.0, float(0))"
+    )
+
+
+def test_hlsl_codegen_recursively_expands_partial_fixed_array_initializers(
+    tmp_path,
+):
+    shader = """
+    shader RecursiveFixedArrayInitializers {
+        struct Pair {
+            float x;
+            float y;
+        };
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main() {
+                float zeroed[4] = {0};
+                float nested[2][3] = {{1.0}, {2.0, 3.0}};
+                Pair pairs[2] = {{4.0}};
+
+                float assigned[2][3];
+                assigned = {{5.0}, {6.0, 7.0}};
+                Pair assignedPairs[2];
+                assignedPairs = {{8.0}};
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float zeroed[4] = {float(0), float(0), float(0), float(0)};" in generated
+    assert (
+        "float nested[2][3] = {{1.0, float(0), float(0)}, "
+        "{2.0, 3.0, float(0)}};" in generated
+    )
+    assert "Pair pairs[2] = {{4.0, float(0)}, (Pair)0};" in generated
+    statements = [line.strip() for line in generated.splitlines()]
+    assert [line for line in statements if line.startswith("assigned[")] == [
+        "assigned[0][0] = 5.0;",
+        "assigned[0][1] = float(0);",
+        "assigned[0][2] = float(0);",
+        "assigned[1][0] = 6.0;",
+        "assigned[1][1] = 7.0;",
+        "assigned[1][2] = float(0);",
+    ]
+    assert [line for line in statements if line.startswith("assignedPairs[")] == [
+        "assignedPairs[0].x = 8.0;",
+        "assignedPairs[0].y = float(0);",
+        "assignedPairs[1].x = float(0);",
+        "assignedPairs[1].y = float(0);",
+    ]
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_codegen_recursively_expands_partial_fixed_array_returns():
+    ast = ShaderNode(
+        "PartialFixedArrayReturns",
+        ExecutionModel.COMPUTE_KERNEL,
+        structs=[
+            StructNode(
+                "Pair",
+                [
+                    StructMemberNode("x", PrimitiveType("float")),
+                    StructMemberNode("y", PrimitiveType("float")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "make_values",
+                ArrayType(PrimitiveType("float"), 4),
+                [],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            ArrayLiteralNode(
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                ]
+                            )
+                        )
+                    ]
+                ),
+            ),
+            FunctionNode(
+                "make_pairs",
+                ArrayType(NamedType("Pair"), 2),
+                [],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            ArrayLiteralNode(
+                                [
+                                    ArrayLiteralNode(
+                                        [LiteralNode(3.0, PrimitiveType("float"))]
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                ),
+            ),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "float4 make_values()" in generated
+    assert "return float4(1.0, 2.0, float(0), float(0));" in generated
+    assert "CrossGLFixedArray_Pair_2 make_pairs()" in generated
+    assert ".value0.x = 3.0;" in generated
+    assert ".value0.y = float(0);" in generated
+    assert ".value1 = (Pair)0;" in generated
+
+
+def test_hlsl_codegen_rejects_excess_fixed_array_initializer_elements():
+    ast = ShaderNode(
+        "ExcessFixedArrayInitializer",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "launch",
+                NamedType("void"),
+                [],
+                BlockNode(
+                    [
+                        VariableNode(
+                            "values",
+                            ArrayType(PrimitiveType("float"), 2),
+                            ArrayLiteralNode(
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                    LiteralNode(3.0, PrimitiveType("float")),
+                                ]
+                            ),
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(DirectXAggregateInitializerError) as exc_info:
+        generate_code(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "element-count-mismatch"
+    assert diagnostic.expected_type == "float[2]"
+    assert diagnostic.element_count == 3
+    assert diagnostic.expected_element_count == 2
 
 
 def test_hlsl_codegen_pads_partial_vector_constructors_for_dxc():
