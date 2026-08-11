@@ -7771,14 +7771,12 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         normalized_readme
     )
     assert "scoped to `directx-12`" in normalized_readme
-    assert "historical resolved evidence for this selected entry" in normalized_readme
-    assert "pinned frontier destination-conversion contract is resolved" in (
-        normalized_readme
-    )
+    assert "this selected `bits = 2` entry resolves" in normalized_readme
+    assert "source `uint32_t` and generated HLSL `uint`" in normalized_readme
     assert "cross-version compiler invariant" in normalized_readme
     assert "does not claim runtime execution or numerical parity" in normalized_readme
     assert (
-        "`out_[uint((out_index + 4))] = " "uint(((output & 1095216660480ull) >> 32));`"
+        "`out_[uint((out_index / writes_per_reduce))] = output;`"
     ) in normalized_readme
     assert "also emits one artifact with zero translation diagnostics" in (
         normalized_readme
@@ -7815,8 +7813,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["compiler_target_profiles"] == ["directx-12"]
     assert directx["required_capabilities"] == []
     assert directx["generated_hlsl"] == {
-        "sha256": "bcc7ba3b8fefe4ebe193f5736036da86a98f02c4f9ef0bb792a5b1f7ffaafc92",
-        "size_bytes": 5271,
+        "sha256": "52569209d98f1bf2ae7fa645f2e4858a420f3920368e14aecb98c2ba9939ac8f",
+        "size_bytes": 4357,
     }
     assert directx["materialization"] == {
         "reachable_specialization_count": 6,
@@ -7842,15 +7840,14 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "status": "passed",
         "observed_failure_count": 0,
         "contextual_narrowing": {
-            "status": "resolved-for-selected-entry",
+            "status": "not-required-for-selected-entry",
             "issue": "https://github.com/CrossGL/crosstl/issues/1801",
             "resource": "out_",
             "resource_element_type": "uint",
-            "value_type": "uint64_t",
-            "generated_store": (
-                "out_[uint((out_index + 4))] = "
-                "uint(((output & 1095216660480ull) >> 32));"
-            ),
+            "source_specialized_type": "uint32_t",
+            "generated_value_type": "uint",
+            "conversion": "not-required",
+            "generated_store": "out_[uint((out_index / writes_per_reduce))] = output;",
         },
     }
     assert directx["runtime_execution_attempted"] is False

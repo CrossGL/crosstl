@@ -52,8 +52,9 @@ RWStructuredBuffer<uint> out_ : register(u0);
 [numthreads(1, 1, 1)]
 void CSMain(uint3 index_dispatchThreadID : SV_DispatchThreadID) {
     uint64_t out_index = index_dispatchThreadID.x;
+    int writes_per_reduce = 4;
     uint output = 0;
-    out_[uint((out_index + 4))] = uint(((output & 1095216660480ull) >> 32));
+    out_[uint((out_index / writes_per_reduce))] = output;
 }
 """
 
@@ -452,12 +453,14 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
         "native16BitTypes": "not-required",
         "staticAssertions": "absent",
         "minimumPrecisionTypes": "absent",
-        "typedResourceStoreNarrowing": {
+        "typedResourceStore": {
             "status": "passed",
             "resource": "out_",
             "resourceElementType": "uint",
-            "sourceExpressionType": "uint64_t",
-            "generatedStore": module.NARROWED_RESOURCE_STORE,
+            "sourceSpecializedType": "uint32_t",
+            "generatedValueType": "uint",
+            "conversion": "not-required",
+            "generatedStore": module.PACKED_OUTPUT_STORE,
         },
     }
     assert compiler == {
@@ -566,11 +569,12 @@ def test_quantized_gather_directx_generated_contract_rejects_semantic_drift(
         (_generated_hlsl() + "\nstatic_assert(true);\n", "static_assert"),
         (_generated_hlsl() + "\nmin16uint minimum_width_marker;\n", "min16"),
         (
-            _generated_hlsl().replace(
-                "uint(((output & 1095216660480ull) >> 32))",
-                "((output & 1095216660480ull) >> 32)",
-            ),
-            "narrowed",
+            _generated_hlsl().replace("uint output = 0", "uint64_t output = 0"),
+            "uint32 type",
+        ),
+        (
+            _generated_hlsl().replace("= output;", "= uint64_t(output);"),
+            "width-changing conversion",
         ),
         (_generated_hlsl().replace("CSMain", "OtherMain"), "CSMain"),
         (_generated_hlsl() + "\nuint16_t native_width_marker;\n", "native 16-bit"),

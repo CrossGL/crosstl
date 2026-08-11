@@ -70,9 +70,7 @@ ENTRY_CONTRACTS = {
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/quantized-directx"
 SUMMARY_FILENAME = "summary.json"
 NATIVE_16_BIT_CAPABILITY = "directx.native-16bit-types"
-NARROWED_RESOURCE_STORE = (
-    "out_[uint((out_index + 4))] = " "uint(((output & 1095216660480ull) >> 32));"
-)
+PACKED_OUTPUT_STORE = "out_[uint((out_index / writes_per_reduce))] = output;"
 
 NON_RUNTIME_CLAIMS = {
     "runtimeExecution": False,
@@ -81,14 +79,12 @@ NON_RUNTIME_CLAIMS = {
     "fullMlxTestSuite": False,
 }
 
-_NARROWED_RESOURCE_STORE_RE = re.compile(
-    r"\bout_\s*\[\s*uint\s*\(\s*\(\s*out_index\s*\+\s*4\s*\)\s*\)\s*\]"
-    r"\s*=\s*uint\s*\(\s*\(\s*\(\s*output\s*&\s*1095216660480ull\s*\)"
-    r"\s*>>\s*32\s*\)\s*\)\s*;"
+_PACKED_OUTPUT_STORE_RE = re.compile(
+    r"\bout_\s*\[\s*uint\s*\(\s*\(\s*out_index\s*/\s*writes_per_reduce\s*\)"
+    r"\s*\)\s*\]\s*=\s*output\s*;"
 )
-_RESOURCE_STORE_WITH_64_BIT_MASK_RE = re.compile(
-    r"\bout_\s*\[[^;]*?\]\s*=\s*[^;]*?1095216660480ull[^;]*?;",
-    flags=re.DOTALL,
+_PACKED_OUTPUT_DECLARATION_RE = re.compile(
+    r"\buint\s+output\s*=\s*0\s*;",
 )
 _MINIMUM_PRECISION_TYPE_RE = re.compile(
     r"\bmin16(?:float|int|uint)(?:[1-4])?\b",
@@ -547,19 +543,23 @@ def _translated_artifact(
 
 
 def _validate_quantize_generated_hlsl(generated: str) -> dict[str, Any]:
-    candidate_stores = _RESOURCE_STORE_WITH_64_BIT_MASK_RE.findall(generated)
     _require(
-        len(candidate_stores) == 1
-        and _NARROWED_RESOURCE_STORE_RE.fullmatch(candidate_stores[0]) is not None,
-        "the 64-bit expression stored in out_ must be explicitly narrowed to uint",
+        len(_PACKED_OUTPUT_DECLARATION_RE.findall(generated)) == 1,
+        "the bits=2 packed output specialization must retain its uint32 type",
+    )
+    _require(
+        len(_PACKED_OUTPUT_STORE_RE.findall(generated)) == 1,
+        "the bits=2 packed output must be stored without a width-changing conversion",
     )
     return {
-        "typedResourceStoreNarrowing": {
+        "typedResourceStore": {
             "status": "passed",
             "resource": "out_",
             "resourceElementType": "uint",
-            "sourceExpressionType": "uint64_t",
-            "generatedStore": NARROWED_RESOURCE_STORE,
+            "sourceSpecializedType": "uint32_t",
+            "generatedValueType": "uint",
+            "conversion": "not-required",
+            "generatedStore": PACKED_OUTPUT_STORE,
         }
     }
 

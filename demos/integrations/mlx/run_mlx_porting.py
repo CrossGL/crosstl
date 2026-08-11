@@ -606,8 +606,8 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
     "translation_diagnostic_count": 0,
     "required_capabilities": [],
     "generated_hlsl": {
-        "sha256": "bcc7ba3b8fefe4ebe193f5736036da86a98f02c4f9ef0bb792a5b1f7ffaafc92",
-        "size_bytes": 5271,
+        "sha256": "52569209d98f1bf2ae7fa645f2e4858a420f3920368e14aecb98c2ba9939ac8f",
+        "size_bytes": 4357,
     },
     "materialization": {
         "reachable_specialization_count": 6,
@@ -633,15 +633,14 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
         "status": "passed",
         "observed_failure_count": 0,
         "contextual_narrowing": {
-            "status": "resolved-for-selected-entry",
+            "status": "not-required-for-selected-entry",
             "issue": "https://github.com/CrossGL/crosstl/issues/1801",
             "resource": "out_",
             "resource_element_type": "uint",
-            "value_type": "uint64_t",
-            "generated_store": (
-                "out_[uint((out_index + 4))] = "
-                "uint(((output & 1095216660480ull) >> 32));"
-            ),
+            "source_specialized_type": "uint32_t",
+            "generated_value_type": "uint",
+            "conversion": "not-required",
+            "generated_store": "out_[uint((out_index / writes_per_reduce))] = output;",
         },
     },
     "runtime_execution_attempted": False,
