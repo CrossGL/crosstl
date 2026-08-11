@@ -20,6 +20,7 @@ on:
       - "tests/test_mlx_dispatch_contract_fixture.py"
       - "tests/test_mlx_layer_norm_directx_proof.py"
       - "tests/test_mlx_quantized_directx_proof.py"
+      - "tests/test_mlx_quantized_opengl_proof.py"
       - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
       - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
@@ -50,6 +51,7 @@ on:
       - "tests/test_mlx_dispatch_contract_fixture.py"
       - "tests/test_mlx_layer_norm_directx_proof.py"
       - "tests/test_mlx_quantized_directx_proof.py"
+      - "tests/test_mlx_quantized_opengl_proof.py"
       - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
       - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
@@ -275,6 +277,16 @@ jobs:
           python demos/integrations/mlx/prove_copy_opengl.py \
             --mlx-root mlx-upstream \
             --work-dir .crosstl-mlx-porting/copy-opengl
+
+      - name: Prove pinned MLX quantized OpenGL lowering
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/prove_quantized_opengl.py \
+            --mlx-root mlx-upstream \
+            --work-dir .crosstl-mlx-porting/quantized-opengl \
+            --require-opengl-toolchain
 
       - name: Prove Direct3D immutable lookup numerical execution
         if: runner.os == 'Windows'

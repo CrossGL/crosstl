@@ -2039,8 +2039,13 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     opengl_quantized = expected_gaps["opengl_quantized_frontier_status"]
     assert opengl_quantized == module.MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE
-    assert opengl_quantized["artifact_emitted"] is False
-    assert opengl_quantized["native_validation_attempted"] is False
+    assert opengl_quantized["artifact_emitted"] is True
+    assert opengl_quantized["native_validation_attempted"] is True
+    assert opengl_quantized["native_validation_status"] == "passed"
+    assert opengl_quantized["generated_glsl"] == {
+        "sha256": "7808f9f35bab56c1f415dea1a669225c68447cb32f9147ab1c4b04b975543aa3",
+        "size_bytes": 5107,
+    }
 
     directx = expected_gaps["directx_toolchain_status"]
     assert directx["compiler"] == {"name": "dxc", "version": "v1.9.2602.24"}
@@ -7781,13 +7786,15 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`missing-fixed-array-extent`" in readme
     assert "`values_per_thread = 2`" in readme
     assert "No target artifact is emitted" in normalized_readme
-    assert "`project.translate.opengl-index-type-unsupported`" in readme
-    assert "`w[in_index + i]`" in readme
-    assert "source index is `uint64_t`" in normalized_readme
-    assert "legal target index is `uint`" in normalized_readme
-    assert "source range is unproven" in normalized_readme
-    assert "No OpenGL target artifact is emitted" in normalized_readme
-    assert "native validation is not run" in normalized_readme
+    assert "three source-qualified index-range assertions" in normalized_readme
+    assert "`in_index + i`" in readme
+    assert "`gindex`" in readme
+    assert "`out_index / writes_per_reduce`" in readme
+    assert "inclusive bounds `[0, 2147483647]`" in normalized_readme
+    assert "5,107-byte GLSL artifact" in normalized_readme
+    assert "OpenGL/SPIR-V 1.3" in normalized_readme
+    assert "`spirv-val`" in readme
+    assert "not inferred or enforced at runtime" in normalized_readme
     for issue in (1497, 1515, 1799, 1800, 1801, 1802):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
 
@@ -7839,6 +7846,39 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     }
     assert directx["runtime_execution_attempted"] is False
     assert directx["numerical_parity_claimed"] is False
+
+    opengl = module.MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE
+    assert opengl["status"] == "translated-glslang-spirv-val-validated"
+    assert opengl["project_translation"] == {
+        "unit_count": 1,
+        "artifact_record_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "emitted_target_file_count": 1,
+        "project_diagnostic_count": 0,
+    }
+    assert opengl["index_range_assertion_evidence"] == {
+        "assertion_count": 3,
+        "assertions": [
+            dict(assertion)
+            for assertion in module.MLX_OPENGL_QUANTIZED_INDEX_RANGE_ASSERTIONS
+        ],
+        "inclusive_bounds": {"minimum": 0, "maximum": 2147483647},
+        "contract_kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
+    }
+    assert opengl["toolchain_validation"] == {
+        "compiler": "glslangValidator",
+        "compiler_target": "OpenGL/SPIR-V 1.3",
+        "validator": "spirv-val",
+        "validator_target": "SPIR-V 1.3",
+        "status": "passed",
+        "observed_failure_count": 0,
+    }
+    assert opengl["resolved_by"] == [module.OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE]
+    assert opengl["runtime_execution_attempted"] is False
+    assert opengl["numerical_parity_claimed"] is False
 
     adjacent = module.MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE
     assert adjacent["selected_entry_point"] == (
@@ -7923,7 +7963,18 @@ def test_closed_project_blockers_are_recorded_as_resolved():
     )
     resolved_issues = {
         f"https://github.com/CrossGL/crosstl/issues/{number}"
-        for number in (1312, 1472, 1476, 1516, 1659, 1672, 1800, 1801, 1802)
+        for number in (
+            1312,
+            1472,
+            1476,
+            1515,
+            1516,
+            1659,
+            1672,
+            1800,
+            1801,
+            1802,
+        )
     }
 
     assert resolved_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
@@ -7961,7 +8012,7 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     arithmetic_conversion_issue = "https://github.com/CrossGL/crosstl/issues/1802"
     static_assertion_issue = "https://github.com/CrossGL/crosstl/issues/1800"
     private_pointer_issue = "https://github.com/CrossGL/crosstl/issues/1497"
-    opengl_index_issue = module.OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE
+    opengl_index_issue = module.OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE
 
     assert resource_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert resource_issue in module.FULL_CORPUS_TRACKED_ISSUES
@@ -7978,8 +8029,9 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert static_assertion_issue not in module.FULL_CORPUS_TRACKED_ISSUES
     assert private_pointer_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert private_pointer_issue in module.FULL_CORPUS_TRACKED_ISSUES
-    assert opengl_index_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
-    assert opengl_index_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert opengl_index_issue not in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert opengl_index_issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert opengl_index_issue in module.RESOLVED_FRONTIER_ISSUES
     assert resolved_frontier_issues <= set(module.RESOLVED_FRONTIER_ISSUES)
     assert resolved_frontier_issues.isdisjoint(module.FULL_CORPUS_TRACKED_ISSUES)
     assert resource_issue not in module.RESOLVED_FRONTIER_ISSUES
@@ -8003,7 +8055,8 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
     assert static_assertion_issue in module.RESOLVED_FRONTIER_ISSUES
     assert static_assertion_issue in gaps["resolved_issues"]
     assert private_pointer_issue in gaps["tracked_issues"]
-    assert opengl_index_issue in gaps["tracked_issues"]
+    assert opengl_index_issue not in gaps["tracked_issues"]
+    assert opengl_index_issue in gaps["resolved_issues"]
     assert resolved_frontier_issues <= set(gaps["resolved_issues"])
     assert resolved_frontier_issues.isdisjoint(gaps["tracked_issues"])
     assert resource_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
@@ -8020,7 +8073,7 @@ def test_new_pin_resource_profile_workgroup_and_validation_contracts_are_tracked
         profile_issue,
     ]
     assert private_pointer_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
-    assert opengl_index_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert opengl_index_issue not in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert resolved_frontier_issues.isdisjoint(
         gaps["full_corpus_scout"]["validation_blocked_by"]
     )

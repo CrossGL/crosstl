@@ -506,13 +506,20 @@ parameter `x_thread`. This is tracked by the cross-target fixed-array alias
 contract in [#1497](https://github.com/CrossGL/crosstl/issues/1497). No target
 artifact is emitted, so native validation is not run for this entry.
 
-A selected OpenGL replay of the same entry stops fail-closed with
-`project.translate.opengl-index-type-unsupported` at `w[in_index + i]`. The
-source index is `uint64_t`, the legal target index is `uint`, and the source
-range is unproven. [#1515](https://github.com/CrossGL/crosstl/issues/1515)
-tracks the generalized index-width normalization contract. No OpenGL target
-artifact is emitted and native validation is not run. Neither selected replay
-establishes runtime execution or numerical parity.
+The selected `affine_quantize_float_gs_32_b_2` entry also translates to a
+5,107-byte GLSL artifact with no project diagnostics. The project configuration
+supplies three source-qualified index-range assertions for `in_index + i`,
+`gindex`, and `out_index / writes_per_reduce`, each with inclusive bounds
+`[0, 2147483647]`.
+These are explicit host/runtime portability preconditions used to justify legal
+GLSL `uint` subscripts; they are not inferred or enforced at runtime. The
+generated artifact preserves the subgroup minimum, maximum, shuffle-down, and
+quantization operations. Linux CI compiles it for OpenGL/SPIR-V 1.3 with
+`glslangValidator` and validates the resulting module with `spirv-val`.
+[#1515](https://github.com/CrossGL/crosstl/issues/1515) records the completed
+general index-width normalization contract. This evidence establishes selected
+entry translation and native toolchain acceptance only. It does not establish
+OpenGL runtime integration, MLX test execution, or numerical parity.
 
 CrossGL/crosstl#1659 is complete; resource-register relocation no longer blocks
 the selected aggregate DirectX replay. The checked-in evidence also records

@@ -271,7 +271,7 @@
     "runtime_parity_claimed": false
   },
   "opengl_quantized_frontier_status": {
-    "status": "blocked-as-expected",
+    "status": "translated-glslang-spirv-val-validated",
     "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
     "source": "mlx/backend/metal/kernels/quantized.metal",
     "target": "opengl",
@@ -279,33 +279,63 @@
     "project_translation": {
       "unit_count": 1,
       "artifact_record_count": 1,
-      "translated_count": 0,
-      "failed_count": 1,
-      "emitted_target_file_count": 0,
-      "project_diagnostic_count": 1
+      "translated_count": 1,
+      "failed_count": 0,
+      "emitted_target_file_count": 1,
+      "project_diagnostic_count": 0
     },
     "materialization": {
       "reachable_specialization_count": 6,
       "concrete_specialization_count": 3,
       "pruned_candidate_count": 110861
     },
-    "diagnostic": {
-      "code": "project.translate.opengl-index-type-unsupported",
-      "missing_capability": "opengl.index-width-normalization",
-      "message": "OpenGL cannot preserve subscript index type 'uint64_t' for 'w': index range unproven",
-      "index_conversion": {
-        "indexed_value": "w",
-        "index_expression": "in_index + i",
-        "source_type": "uint64_t",
-        "target_type": "uint",
-        "range_status": "unproven",
-        "reason": "index-range-unproven"
-      }
+    "index_range_assertion_evidence": {
+      "assertion_count": 3,
+      "assertions": [
+        {
+          "source": "mlx/backend/metal/kernels/quantized.metal",
+          "expression": "in_index + i",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "source": "mlx/backend/metal/kernels/quantized.metal",
+          "expression": "gindex",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "source": "mlx/backend/metal/kernels/quantized.metal",
+          "expression": "out_index / writes_per_reduce",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      ],
+      "inclusive_bounds": {
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      "contract_kind": "explicit-host-runtime-portability-preconditions",
+      "inferred": false,
+      "runtime_enforced": false
     },
-    "artifact_emitted": false,
-    "native_validation_attempted": false,
-    "native_validation_status": "not-run-no-artifact",
-    "blocked_by": [
+    "generated_glsl": {
+      "sha256": "7808f9f35bab56c1f415dea1a669225c68447cb32f9147ab1c4b04b975543aa3",
+      "size_bytes": 5107
+    },
+    "required_capabilities": [],
+    "artifact_emitted": true,
+    "native_validation_attempted": true,
+    "native_validation_status": "passed",
+    "toolchain_validation": {
+      "compiler": "glslangValidator",
+      "compiler_target": "OpenGL/SPIR-V 1.3",
+      "validator": "spirv-val",
+      "validator_target": "SPIR-V 1.3",
+      "status": "passed",
+      "observed_failure_count": 0
+    },
+    "resolved_by": [
       "https://github.com/CrossGL/crosstl/issues/1515"
     ],
     "runtime_execution_attempted": false,
@@ -1975,7 +2005,6 @@
       "https://github.com/CrossGL/crosstl/issues/1479",
       "https://github.com/CrossGL/crosstl/issues/1490",
       "https://github.com/CrossGL/crosstl/issues/1497",
-      "https://github.com/CrossGL/crosstl/issues/1515",
       "https://github.com/CrossGL/crosstl/issues/1544",
       "https://github.com/CrossGL/crosstl/issues/1546",
       "https://github.com/CrossGL/crosstl/issues/1554",
@@ -2089,7 +2118,6 @@
     "https://github.com/CrossGL/crosstl/issues/1490",
     "https://github.com/CrossGL/crosstl/issues/1497",
     "https://github.com/CrossGL/crosstl/issues/1491",
-    "https://github.com/CrossGL/crosstl/issues/1515",
     "https://github.com/CrossGL/crosstl/issues/1517",
     "https://github.com/CrossGL/crosstl/issues/1518",
     "https://github.com/CrossGL/crosstl/issues/1519",
@@ -2123,6 +2151,7 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1515",
     "https://github.com/CrossGL/crosstl/issues/1576",
     "https://github.com/CrossGL/crosstl/issues/1829",
     "https://github.com/CrossGL/crosstl/issues/1826",

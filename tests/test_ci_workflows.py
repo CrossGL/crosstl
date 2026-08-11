@@ -2423,6 +2423,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     )
     assert '"tests/test_mlx_porting_harness.py"' in mlx_porting
     assert '"tests/test_mlx_quantized_directx_proof.py"' in mlx_porting
+    assert '"tests/test_mlx_quantized_opengl_proof.py"' in mlx_porting
     assert '"tests/test_translator/test_codegen/test_SPIRV_codegen.py"' in mlx_porting
     assert '"tests/test_translator/test_codegen/test_directx_codegen.py"' in mlx_porting
     assert (
@@ -2711,6 +2712,16 @@ def test_mlx_project_porting_workflow_runs_quantized_directx_proof_on_windows():
     assert "python demos/integrations/mlx/prove_quantized_directx.py" in mlx_porting
     assert "--work-dir .crosstl-mlx-porting/quantized-directx" in mlx_porting
     assert "--require-directx-toolchain" in mlx_porting
+
+
+def test_mlx_project_porting_workflow_runs_quantized_opengl_proof_on_linux():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+
+    assert "name: Prove pinned MLX quantized OpenGL lowering" in mlx_porting
+    assert "if: runner.os == 'Linux'" in mlx_porting
+    assert "python demos/integrations/mlx/prove_quantized_opengl.py" in mlx_porting
+    assert "--work-dir .crosstl-mlx-porting/quantized-opengl" in mlx_porting
+    assert "--require-opengl-toolchain" in mlx_porting
 
 
 def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
