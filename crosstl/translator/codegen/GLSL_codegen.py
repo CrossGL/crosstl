@@ -523,6 +523,9 @@ class OpenGLBooleanCompoundAssignmentError(ValueError):
         operator=None,
         target=None,
         target_type=None,
+        right_type=None,
+        operation_type=None,
+        context=None,
         reason=None,
         source_location=None,
     ):
@@ -530,6 +533,9 @@ class OpenGLBooleanCompoundAssignmentError(ValueError):
         self.operator = operator
         self.target = target
         self.target_type = target_type
+        self.right_type = right_type
+        self.operation_type = operation_type
+        self.context = context
         self.reason = reason
         self.source_location = source_location
 
@@ -554,6 +560,32 @@ class OpenGLBooleanOrderedIntrinsicError(ValueError):
         super().__init__(message)
         self.operation = operation
         self.operand_types = tuple(operand_types or ())
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLTrailingZeroBuiltinError(ValueError):
+    """Raised when a Clang trailing-zero builtin has no faithful GLSL lowering."""
+
+    project_diagnostic_code = "project.translate.opengl-trailing-zero-unsupported"
+    missing_capabilities = ("opengl.trailing-zero-builtin-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        builtin_name=None,
+        operand_type=None,
+        argument_count=None,
+        target_profile=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.builtin_name = builtin_name
+        self.operand_type = operand_type
+        self.argument_count = argument_count
+        self.target_profile = target_profile
         self.reason = reason
         self.source_location = source_location
 
@@ -1529,6 +1561,15 @@ class GLSLCodeGen:
         "^=": "^",
         "|=": "|",
     }
+    BOOLEAN_ARITHMETIC_COMPOUND_ASSIGNMENT_BINARY_OPERATORS = {
+        "+=": "+",
+        "-=": "-",
+        "*=": "*",
+        "/=": "/",
+        "%=": "%",
+        "<<=": "<<",
+        ">>=": ">>",
+    }
     GLSL_BFLOAT16_ALIASES = {"bfloat", "bfloat16", "bfloat16_t"}
     GLSL_COPYSIGN_NAMES = {
         "copysign",
@@ -1579,6 +1620,38 @@ class GLSLCodeGen:
     GLSL_INT64_EXTENSION = "GL_ARB_gpu_shader_int64"
     GLSL_INT64_EXTENSION_LINE = "#extension GL_ARB_gpu_shader_int64 : require"
     GLSL_INT64_SCALAR_TYPES = {"int64_t", "uint64_t"}
+    GLSL_CLANG_TRAILING_ZERO_BUILTINS = frozenset(
+        {"__builtin_ctz", "__builtin_ctzl", "__builtin_ctzll"}
+    )
+    GLSL_CLANG_TRAILING_ZERO_WIDTHS = {
+        "__builtin_ctz": 32,
+        "__builtin_ctzl": 64,
+        "__builtin_ctzll": 64,
+    }
+    GLSL_NARROW_INTEGER_TYPE_NAMES = frozenset(
+        {
+            "char",
+            "signed char",
+            "unsigned char",
+            "uchar",
+            "i8",
+            "u8",
+            "int8",
+            "uint8",
+            "int8_t",
+            "uint8_t",
+            "short",
+            "signed short",
+            "unsigned short",
+            "ushort",
+            "i16",
+            "u16",
+            "int16",
+            "uint16",
+            "int16_t",
+            "uint16_t",
+        }
+    )
     GLSL_INTERPOLATION_FUNCTIONS = {
         "interpolateAtCentroid": 1,
         "interpolateAtSample": 2,
@@ -2171,6 +2244,10 @@ class GLSLCodeGen:
         self.index_range_assertions = ()
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
+        self.required_glsl_trailing_zero_helpers = set()
+        self.glsl_trailing_zero_helper_names = {}
+        self.glsl_trailing_zero_reserved_names = set()
+        self.current_glsl_disabled_extensions = set()
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.struct_member_types = {}
@@ -4290,6 +4367,10 @@ class GLSLCodeGen:
         self.local_variable_source_types = {}
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
+        self.required_glsl_trailing_zero_helpers = set()
+        self.glsl_trailing_zero_helper_names = {}
+        self.glsl_trailing_zero_reserved_names = set()
+        self.current_glsl_disabled_extensions = set()
         self.glsl_cooperative_matrix_fragment_contracts = {}
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
         self.required_glsl_cooperative_matrix_helpers = set()
@@ -4470,6 +4551,7 @@ class GLSLCodeGen:
             identifier_functions,
             target_stage,
         )
+        self.prepare_glsl_trailing_zero_helper_names(functions)
         self.prepare_glsl_enum_identifier_names()
         self.prepare_glsl_mapped_function_overloads(
             identifier_functions,
@@ -4502,6 +4584,16 @@ class GLSLCodeGen:
         if version_line is None:
             version_line = self.default_glsl_version_line(ast, target_stage)
         self.current_glsl_version_line = version_line
+        self.current_glsl_disabled_extensions = {
+            match.group(1)
+            for line in extra_lines
+            if (
+                match := re.match(
+                    r"^\s*#extension\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*disable\b",
+                    line,
+                )
+            )
+        }
         self.current_glsl_resource_binding_layouts_supported = (
             self.glsl_resource_binding_layouts_supported(version_line)
         )
@@ -5404,7 +5496,8 @@ class GLSLCodeGen:
                     code += self.wrap_stage_guard(stage_code, stage_name)
 
         generated_helpers = (
-            self.generate_glsl_boolean_order_helpers()
+            self.generate_glsl_trailing_zero_helpers()
+            + self.generate_glsl_boolean_order_helpers()
             + self.generate_glsl_complex64_helpers()
         )
         if generated_helpers:
@@ -11714,6 +11807,34 @@ class GLSLCodeGen:
             reserved_names=self.glsl_preprocessor_identifier_names(ast),
         )
 
+    def prepare_glsl_trailing_zero_helper_names(self, functions):
+        reserved_names = set()
+        for function in functions or ():
+            for name in self.collect_glsl_function_local_identifier_names(function):
+                reserved_names.add(name)
+                reserved_names.add(self.glsl_sanitized_identifier_base(name))
+        self.glsl_trailing_zero_reserved_names = reserved_names
+        self.glsl_trailing_zero_helper_names = {}
+
+    def glsl_trailing_zero_helper_name(self, operand_type):
+        helper_name = self.glsl_trailing_zero_helper_names.get(operand_type)
+        if helper_name is not None:
+            return helper_name
+
+        used_names = set(self.glsl_module_used_identifier_names)
+        used_names.update(self.glsl_trailing_zero_reserved_names)
+        used_names.update(self.glsl_trailing_zero_helper_names.values())
+        helper_name = self.glsl_unique_identifier(
+            f"crossgl_ctz_{operand_type}",
+            used_names,
+        )
+        self.glsl_trailing_zero_helper_names[operand_type] = helper_name
+        self.glsl_module_used_identifier_names.add(helper_name)
+        self.glsl_module_generated_identifier_names[("trailing-zero", operand_type)] = (
+            helper_name
+        )
+        return helper_name
+
     def prepare_glsl_enum_identifier_names(self):
         self.enum_variant_constants = {
             path: self.glsl_generated_module_identifier(
@@ -13677,6 +13798,15 @@ class GLSLCodeGen:
 
         return None
 
+    def generate_glsl_statement_code(self, code, indent=0):
+        indent_str = "    " * indent
+        lines = [line.rstrip() for line in str(code).splitlines() if line.strip()]
+        result = ""
+        for line in lines:
+            terminator = "" if line.endswith((";", "}")) else ";"
+            result += f"{indent_str}{line}{terminator}\n"
+        return result
+
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as GLSL source."""
         indent_str = "    " * indent
@@ -13830,7 +13960,9 @@ class GLSLCodeGen:
             )
             if dynamic_assignment is not None:
                 return dynamic_assignment
-            return f"{indent_str}{self.generate_assignment(stmt)};\n"
+            return self.generate_glsl_statement_code(
+                self.generate_assignment(stmt, statement_context=True), indent
+            )
         elif isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
         elif isinstance(stmt, BreakNode):
@@ -13954,6 +14086,10 @@ class GLSLCodeGen:
                 )
                 if dynamic_assignment is not None:
                     return dynamic_assignment
+                return self.generate_glsl_statement_code(
+                    self.generate_assignment(expression, statement_context=True),
+                    indent,
+                )
             dynamic_resource_statement = (
                 self.generate_glsl_dynamic_resource_call_expression_statement(
                     expression,
@@ -17889,6 +18025,188 @@ class GLSLCodeGen:
         self.required_glsl_boolean_order_helpers.add((helper_name, func_name, width))
         return f"{helper_name}({left}, {right})"
 
+    def glsl_trailing_zero_builtin_is_shadowed(self, func_name):
+        return (
+            func_name in self.function_return_types
+            or func_name in self.local_variable_types
+            or func_name in self.global_variable_types
+        )
+
+    def glsl_trailing_zero_result_type(self, func_name, args):
+        if (
+            func_name not in self.GLSL_CLANG_TRAILING_ZERO_BUILTINS
+            or self.glsl_trailing_zero_builtin_is_shadowed(func_name)
+        ):
+            return None
+        return "int"
+
+    def opengl_trailing_zero_builtin_error(
+        self,
+        func_name,
+        *,
+        reason,
+        operand_type=None,
+        argument_count=None,
+        source_location=None,
+    ):
+        target_profile = getattr(self, "current_glsl_version_line", None)
+        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL":
+            target_profile = self.GLSL_TARGET_DISPLAY_NAME
+
+        if reason == "invalid-arity":
+            message = (
+                f"OpenGL trailing-zero builtin '{func_name}' requires exactly "
+                f"1 scalar integer operand, got {argument_count}"
+            )
+        elif reason == "unresolved-operand-type":
+            message = (
+                "OpenGL translation could not resolve source type metadata for "
+                f"the operand of trailing-zero builtin '{func_name}'"
+            )
+        elif reason == "unsupported-operand-shape":
+            message = (
+                f"OpenGL trailing-zero builtin '{func_name}' requires a scalar "
+                f"integer operand; got '{operand_type}'"
+            )
+        elif reason == "unsupported-integer-width":
+            message = (
+                f"OpenGL trailing-zero builtin '{func_name}' supports only 32-bit "
+                f"or 64-bit integer operands; got '{operand_type}'"
+            )
+        elif reason == "operand-narrowing-required":
+            message = (
+                f"OpenGL trailing-zero builtin '{func_name}' has a 32-bit operand "
+                f"contract and cannot consume '{operand_type}' without narrowing"
+            )
+        elif reason == "unsupported-profile":
+            message = (
+                f"OpenGL trailing-zero builtin '{func_name}' is unsupported for "
+                f"target profile '{target_profile or '<unknown>'}'"
+            )
+        else:
+            message = (
+                f"OpenGL trailing-zero builtin '{func_name}' requires a 32-bit "
+                f"or 64-bit integer operand; got '{operand_type}'"
+            )
+        return OpenGLTrailingZeroBuiltinError(
+            message,
+            builtin_name=func_name,
+            operand_type=operand_type,
+            argument_count=argument_count,
+            target_profile=target_profile,
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def validate_glsl_trailing_zero_profile(
+        self, func_name, required_width, *, source_location=None
+    ):
+        version_line = getattr(self, "current_glsl_version_line", None)
+        version_number = self.glsl_version_number(version_line)
+        unsupported = (
+            self.GLSL_TARGET_DISPLAY_NAME != "OpenGL"
+            or self.glsl_version_is_es(version_line)
+            or version_number is None
+            or version_number < 400
+            or (
+                required_width == 64
+                and self.GLSL_INT64_EXTENSION
+                in getattr(self, "current_glsl_disabled_extensions", set())
+            )
+        )
+        if unsupported:
+            raise self.opengl_trailing_zero_builtin_error(
+                func_name,
+                reason="unsupported-profile",
+                source_location=source_location,
+            )
+
+    def glsl_trailing_zero_operand_type_info(self, operand_type):
+        source_type = self.type_name_string(operand_type)
+        if not source_type:
+            return None
+        info = self.glsl_value_type_info(source_type)
+        if (
+            info is None
+            or info["width"] != 1
+            or info["family"] not in {"int", "uint"}
+            or info["narrow"] is not None
+            or info["bits"] not in {32, 64}
+        ):
+            return None
+        return info
+
+    def generate_glsl_trailing_zero_call(
+        self, func_name, args, *, source_location=None
+    ):
+        if (
+            func_name not in self.GLSL_CLANG_TRAILING_ZERO_BUILTINS
+            or self.glsl_trailing_zero_builtin_is_shadowed(func_name)
+        ):
+            return None
+        if len(args) != 1:
+            raise self.opengl_trailing_zero_builtin_error(
+                func_name,
+                reason="invalid-arity",
+                argument_count=len(args),
+                source_location=source_location,
+            )
+
+        required_width = self.GLSL_CLANG_TRAILING_ZERO_WIDTHS[func_name]
+        self.validate_glsl_trailing_zero_profile(
+            func_name,
+            required_width,
+            source_location=source_location,
+        )
+
+        argument = args[0]
+        operand_type = self.glsl_source_expression_type(argument)
+        if operand_type is None:
+            raise self.opengl_trailing_zero_builtin_error(
+                func_name,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        source_type = self.type_name_string(operand_type)
+        mapped_type = self.map_type(source_type)
+        type_info = self.glsl_trailing_zero_operand_type_info(source_type)
+        if type_info is None:
+            value_info = self.glsl_value_type_info(source_type)
+            if (value_info is not None and value_info["width"] != 1) or (
+                self.is_vector_value_type(mapped_type)
+                or self.is_matrix_value_type(mapped_type)
+            ):
+                reason = "unsupported-operand-shape"
+            elif source_type in self.GLSL_NARROW_INTEGER_TYPE_NAMES or (
+                value_info is not None and value_info["narrow"] is not None
+            ):
+                reason = "unsupported-integer-width"
+            else:
+                reason = "unsupported-operand-type"
+            raise self.opengl_trailing_zero_builtin_error(
+                func_name,
+                reason=reason,
+                operand_type=source_type,
+                source_location=source_location,
+            )
+
+        if type_info["bits"] > required_width:
+            raise self.opengl_trailing_zero_builtin_error(
+                func_name,
+                reason="operand-narrowing-required",
+                operand_type=source_type,
+                source_location=source_location,
+            )
+
+        unsigned_type = "uint64_t" if required_width == 64 else "uint"
+        helper_name = self.glsl_trailing_zero_helper_name(unsigned_type)
+        self.required_glsl_trailing_zero_helpers.add(unsigned_type)
+        argument_code = self.generate_expression_with_expected(argument, None)
+        if type_info["mapped"] != unsigned_type:
+            argument_code = f"{unsigned_type}({argument_code})"
+        return f"{helper_name}({argument_code})"
+
     def glsl_cooperative_matrix_error(
         self,
         message,
@@ -18435,6 +18753,29 @@ class GLSLCodeGen:
             lines.extend(["    return result;", "}"])
             blocks.append("\n".join(lines) + "\n")
         return ("\n".join(blocks) + "\n") if blocks else ""
+
+    def generate_glsl_trailing_zero_helpers(self):
+        helpers = []
+        for operand_type in sorted(self.required_glsl_trailing_zero_helpers):
+            helper_name = self.glsl_trailing_zero_helper_name(operand_type)
+            if operand_type == "uint":
+                helpers.append(f"""int {helper_name}(uint value) {{
+    // Use the canonical least-bit sentinel for Clang's undefined zero case.
+    return value == 0u ? -1 : findLSB(value);
+}}
+""")
+            elif operand_type == "uint64_t":
+                helpers.append(f"""int {helper_name}(uint64_t value) {{
+    uint low_bits = uint(value);
+    if (low_bits != 0u) {{
+        return findLSB(low_bits);
+    }}
+    uint high_bits = uint(value >> 32);
+    // Use the canonical least-bit sentinel for Clang's undefined zero case.
+    return high_bits == 0u ? -1 : (32 + findLSB(high_bits));
+}}
+""")
+        return "\n".join(helpers) + ("\n" if helpers else "")
 
     def generate_glsl_boolean_order_helpers(self):
         helpers = []
@@ -20424,6 +20765,11 @@ complex64_t crossgl_complex64_mod_assign(
                 and func_name not in self.function_return_types
             ):
                 return self.expression_result_type(args[0])
+            trailing_zero_result_type = self.glsl_trailing_zero_result_type(
+                func_name, args
+            )
+            if trailing_zero_result_type is not None:
+                return trailing_zero_result_type
             if (
                 func_name in self.GLSL_BITCAST_FUNCTIONS
                 and args
@@ -21224,6 +21570,262 @@ complex64_t crossgl_complex64_mod_assign(
             ) and self.glsl_side_effect_free_expression(expression.index)
         return False
 
+    def glsl_boolean_compound_assignment_error(
+        self,
+        node,
+        target,
+        operator,
+        target_type,
+        right_type,
+        *,
+        reason,
+        detail,
+        operation_type=None,
+    ):
+        raise self.GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR(
+            f"{self.GLSL_TARGET_DISPLAY_NAME} cannot lower boolean compound "
+            f"assignment '{operator}': {detail}",
+            operator=operator,
+            target=expression_debug_name(target),
+            target_type=self.type_name_string(target_type),
+            right_type=self.type_name_string(right_type),
+            operation_type=operation_type,
+            context="compound assignment",
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def glsl_boolean_compound_temporary(self, base_name, vtype):
+        name = self.glsl_synthetic_local_identifier(base_name)
+        self.local_variable_types[name] = vtype
+        self.local_variable_source_types[name] = vtype
+        return name
+
+    def glsl_stabilize_boolean_compound_lvalue(
+        self,
+        node,
+        target,
+        operator,
+        target_type,
+        right_type,
+    ):
+        def reject(reason, detail):
+            self.glsl_boolean_compound_assignment_error(
+                node,
+                target,
+                operator,
+                target_type,
+                right_type,
+                reason=reason,
+                detail=detail,
+            )
+
+        prefix = []
+        stabilized_target = deepcopy(target)
+
+        def stabilize(expression):
+            if isinstance(expression, (str, IdentifierNode, VariableNode)):
+                return expression
+
+            if isinstance(expression, MemberAccessNode):
+                owner = stabilize(
+                    getattr(
+                        expression, "object_expr", getattr(expression, "object", None)
+                    )
+                )
+                expression.object_expr = owner
+                expression.object = owner
+                return expression
+
+            if isinstance(expression, SwizzleNode):
+                expression.vector_expr = stabilize(expression.vector_expr)
+                return expression
+
+            if isinstance(expression, ArrayAccessNode):
+                array = stabilize(
+                    getattr(
+                        expression, "array_expr", getattr(expression, "array", None)
+                    )
+                )
+                expression.array_expr = array
+                expression.array = array
+                index = getattr(
+                    expression, "index_expr", getattr(expression, "index", None)
+                )
+                index_info = self.glsl_value_type_info(
+                    self.glsl_source_expression_type(index)
+                )
+                static_index = (
+                    isinstance(index, int)
+                    and not isinstance(index, bool)
+                    or isinstance(index, LiteralNode)
+                    and index_info is not None
+                    and index_info["family"] in {"int", "uint"}
+                    and index_info["width"] == 1
+                    and self.literal_int_value(index, {}) is not None
+                )
+                if static_index:
+                    return expression
+
+                if (
+                    index_info is None
+                    or index_info["family"] not in {"int", "uint"}
+                    or index_info["width"] != 1
+                ):
+                    reject(
+                        "unresolved-index-type",
+                        (
+                            "each dynamic lvalue index must resolve to a scalar "
+                            "integer type before it can be evaluated once"
+                        ),
+                    )
+                promoted_index_type = self.glsl_promoted_integer_type(index_info)
+                if promoted_index_type is None:
+                    reject(
+                        "unresolved-index-type",
+                        "the dynamic lvalue index has no representable promotion",
+                    )
+                rendered_index = self.generate_expression_with_expected(
+                    index, promoted_index_type
+                )
+                index_name = self.glsl_boolean_compound_temporary(
+                    "cgl_bool_compound_index", promoted_index_type
+                )
+                prefix.append(f"{promoted_index_type} {index_name} = {rendered_index}")
+                stable_index = IdentifierNode(
+                    index_name,
+                    source_location=getattr(index, "source_location", None),
+                )
+                expression.index_expr = stable_index
+                expression.index = stable_index
+                return expression
+
+            reject(
+                "unstable-assignment-target",
+                (
+                    "only identifier, member, swizzle, and indexed lvalues can be "
+                    "stabilized without changing evaluation semantics"
+                ),
+            )
+
+        return prefix, stabilize(stabilized_target)
+
+    def generate_glsl_boolean_arithmetic_compound_assignment(
+        self,
+        node,
+        target,
+        value,
+        operator,
+        target_type,
+        *,
+        statement_context,
+    ):
+        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL":
+            return None
+        binary_operator = (
+            self.BOOLEAN_ARITHMETIC_COMPOUND_ASSIGNMENT_BINARY_OPERATORS.get(operator)
+        )
+        target_info = self.glsl_value_type_info(target_type)
+        if (
+            binary_operator is None
+            or target_info is None
+            or target_info["family"] != "bool"
+        ):
+            return None
+
+        right_type = self.glsl_source_expression_type(value)
+
+        def reject(reason, detail, operation_type=None):
+            self.glsl_boolean_compound_assignment_error(
+                node,
+                target,
+                operator,
+                target_type,
+                right_type,
+                reason=reason,
+                detail=detail,
+                operation_type=operation_type,
+            )
+
+        try:
+            plan = self.glsl_arithmetic_conversion_plan(
+                target_type,
+                right_type,
+                binary_operator,
+                source_node=node,
+                fail_closed=True,
+            )
+        except self.GLSL_ARITHMETIC_CONVERSION_ERROR as error:
+            reject(
+                error.reason,
+                (
+                    "source operand promotion has no faithful target form "
+                    f"({error.reason.replace('-', ' ')})"
+                ),
+                error.attempted_common_type,
+            )
+        if plan is None:
+            reject(
+                "unresolved-promoted-operand-type",
+                (
+                    "the right operand must resolve to a scalar or vector arithmetic "
+                    "type before source promotion"
+                ),
+            )
+
+        result_info = self.glsl_value_type_info(plan.result_type)
+        if result_info is None or result_info["width"] != target_info["width"]:
+            reject(
+                "target-shape-unrepresentable",
+                (
+                    "the promoted result shape cannot be converted back to the "
+                    "boolean lvalue shape"
+                ),
+                plan.result_type,
+            )
+        if not statement_context:
+            reject(
+                "statement-context-required",
+                (
+                    "the promoted lvalue read, ordered right operand, and boolean "
+                    "writeback require statement temporaries"
+                ),
+                plan.result_type,
+            )
+
+        prefix, stable_target = self.glsl_stabilize_boolean_compound_lvalue(
+            node,
+            target,
+            operator,
+            target_type,
+            right_type,
+        )
+        left = self.generate_glsl_buffer_block_mutation_target(stable_target)
+        left_value = self.generate_expression_with_expected(
+            stable_target, plan.left_target_type
+        )
+        right_value = self.generate_expression_with_expected(
+            value, plan.right_target_type
+        )
+        left_name = self.glsl_boolean_compound_temporary(
+            "cgl_bool_compound_lhs", plan.left_target_type
+        )
+        right_name = self.glsl_boolean_compound_temporary(
+            "cgl_bool_compound_rhs", plan.right_target_type
+        )
+        operation = f"({left_name} {binary_operator} {right_name})"
+        writeback = self.glsl_bool_conversion_expression(
+            operation, result_info, target_info, node
+        )
+        return "\n".join(
+            [
+                *prefix,
+                f"{plan.left_target_type} {left_name} = {left_value}",
+                f"{plan.right_target_type} {right_name} = {right_value}",
+                f"{left} = {writeback}",
+            ]
+        )
+
     def glsl_narrow_update_value(
         self, target, value, binary_operator, expected_type, source_node
     ):
@@ -21246,7 +21848,15 @@ complex64_t crossgl_complex64_mod_assign(
         self, target, value, binary_operator, expected_type, source_node
     ):
         expected = self.glsl_value_type_info(expected_type)
-        if binary_operator is None or expected is None or expected["family"] != "bool":
+        if (
+            binary_operator is None
+            or (
+                self.GLSL_TARGET_DISPLAY_NAME == "OpenGL"
+                and binary_operator not in {"&", "|", "^"}
+            )
+            or expected is None
+            or expected["family"] != "bool"
+        ):
             return None
         if not self.glsl_stable_update_target(target):
             target_name = self.expression_name(target)
@@ -21342,7 +21952,7 @@ complex64_t crossgl_complex64_mod_assign(
         target = self.generate_glsl_buffer_block_mutation_target(expression.operand)
         return f"({target} = {value})"
 
-    def generate_assignment(self, node, is_main=False):
+    def generate_assignment(self, node, is_main=False, *, statement_context=False):
         left_node = getattr(node, "target", getattr(node, "left", None))
         right_node = getattr(node, "value", getattr(node, "right", None))
         op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
@@ -21380,8 +21990,20 @@ complex64_t crossgl_complex64_mod_assign(
             )
         else:
             expected_type = destination_type
-        left = self.generate_glsl_buffer_block_mutation_target(left_node)
         binary_operator = self.COMPOUND_ASSIGNMENT_BINARY_OPERATORS.get(op)
+        boolean_arithmetic_assignment = (
+            self.generate_glsl_boolean_arithmetic_compound_assignment(
+                node,
+                left_node,
+                right_node,
+                op,
+                expected_type,
+                statement_context=statement_context,
+            )
+        )
+        if boolean_arithmetic_assignment is not None:
+            return boolean_arithmetic_assignment
+        left = self.generate_glsl_buffer_block_mutation_target(left_node)
         if (
             binary_operator is not None
             and self.glsl_narrow_integer_contract(expected_type) is not None
@@ -22484,6 +23106,14 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if reciprocal_call is not None:
                 return reciprocal_call
+
+            trailing_zero_call = self.generate_glsl_trailing_zero_call(
+                original_func_name,
+                expr.args,
+                source_location=getattr(expr, "source_location", None),
+            )
+            if trailing_zero_call is not None:
+                return trailing_zero_call
 
             boolean_order_call = self.glsl_ordered_boolean_minmax_call(
                 original_func_name,
