@@ -27,6 +27,7 @@ MLX_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_QUANTIZED_SOURCE = f"{MLX_KERNEL_ROOT}/quantized.metal"
 MLX_QUANTIZED_HEADER = f"{MLX_KERNEL_ROOT}/quantized.h"
 MLX_QUANTIZED_ENTRY_POINT = "affine_quantize_float_gs_32_b_2"
+MLX_QUANTIZED_GATHER_ENTRY_POINT = "affine_gather_qmv_fast_float_gs_32_b_2"
 
 PINNED_FILE_SHA256 = {
     MLX_QUANTIZED_SOURCE: (
@@ -44,6 +45,24 @@ MATERIALIZATION_WORK_LIMIT = 4096
 REACHABLE_SPECIALIZATION_COUNT = 6
 CONCRETE_SPECIALIZATION_COUNT = 3
 PRUNED_CANDIDATE_COUNT = 110861
+ENTRY_CONTRACTS = {
+    MLX_QUANTIZED_ENTRY_POINT: {
+        "specializationName": "affine_quantize",
+        "parameters": {"T": "float", "bits": "2", "group_size": "32"},
+        "reachableSpecializationCount": REACHABLE_SPECIALIZATION_COUNT,
+        "concreteSpecializationCount": CONCRETE_SPECIALIZATION_COUNT,
+        "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
+        "generatedContract": "quantize",
+    },
+    MLX_QUANTIZED_GATHER_ENTRY_POINT: {
+        "specializationName": "affine_gather_qmv_fast",
+        "parameters": {"T": "float", "bits": "2", "group_size": "32"},
+        "reachableSpecializationCount": 10,
+        "concreteSpecializationCount": 7,
+        "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
+        "generatedContract": "gather-qmv-fast",
+    },
+}
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/quantized-directx"
 SUMMARY_FILENAME = "summary.json"
 NATIVE_16_BIT_CAPABILITY = "directx.native-16bit-types"
@@ -75,6 +94,9 @@ _STATIC_ASSERT_RE = re.compile(r"\bstatic_assert\s*\(")
 _COMPUTE_ENTRY_RE = re.compile(
     r"\[\s*numthreads\s*\([^\]]+\)\s*\]\s*" r"void\s+CSMain\s*\(",
     flags=re.MULTILINE,
+)
+_GATHER_DIRECT_TYPED_BYTE_READ_RE = re.compile(
+    r"\bw\s*\[\s*uint\s*\(\s*\(\s*w_offset\s*\+\s*i\s*\)\s*\)\s*\]"
 )
 
 
@@ -227,7 +249,13 @@ def _run_command(
     }
 
 
-def _project_config(mlx_root: Path, work_dir: Path) -> ProjectConfig:
+def _project_config(
+    mlx_root: Path,
+    work_dir: Path,
+    *,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
+) -> ProjectConfig:
+    _require(entry_point in ENTRY_CONTRACTS, f"unsupported proof entry: {entry_point}")
     return ProjectConfig(
         root=mlx_root,
         source_roots=(MLX_KERNEL_ROOT,),
@@ -235,7 +263,7 @@ def _project_config(mlx_root: Path, work_dir: Path) -> ProjectConfig:
         targets=(DIRECTX_TARGET_PROFILE,),
         output_dir=_relpath(work_dir / "artifacts", mlx_root),
         source_overrides={MLX_QUANTIZED_SOURCE: "metal"},
-        entry_points={MLX_QUANTIZED_SOURCE: MLX_QUANTIZED_ENTRY_POINT},
+        entry_points={MLX_QUANTIZED_SOURCE: entry_point},
         include_dirs=(".",),
         source_options={
             "metal": {
@@ -289,7 +317,10 @@ def _translated_artifact(
     *,
     mlx_root: Path,
     work_dir: Path,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
 ) -> tuple[Mapping[str, Any], Path]:
+    entry_contract = ENTRY_CONTRACTS.get(entry_point)
+    _require(entry_contract is not None, f"unsupported proof entry: {entry_point}")
     _require(
         payload.get("kind") == "crosstl-project-portability-report",
         "translation did not produce a project portability report",
@@ -320,7 +351,7 @@ def _translated_artifact(
     _require(
         artifact.get("entryPoint")
         == {
-            "source": MLX_QUANTIZED_ENTRY_POINT,
+            "source": entry_point,
             "target": "CSMain",
             "stage": "compute",
         },
@@ -340,30 +371,31 @@ def _translated_artifact(
     _require(
         isinstance(materialization, Mapping)
         and materialization.get("status") == "materialized"
-        and materialization.get("specializationCount") == CONCRETE_SPECIALIZATION_COUNT
+        and materialization.get("specializationCount")
+        == entry_contract["concreteSpecializationCount"]
         and materialization.get("unsupported") == []
         and isinstance(specializations, list)
-        and len(specializations) == CONCRETE_SPECIALIZATION_COUNT
+        and len(specializations) == entry_contract["concreteSpecializationCount"]
         and isinstance(accounting, Mapping)
         and accounting.get("reachableSpecializationCount")
-        == REACHABLE_SPECIALIZATION_COUNT
-        and accounting.get("prunedCandidateCount") == PRUNED_CANDIDATE_COUNT,
+        == entry_contract["reachableSpecializationCount"]
+        and accounting.get("prunedCandidateCount")
+        == entry_contract["prunedCandidateCount"],
         "quantized specialization accounting changed",
     )
     selected_specializations = [
         specialization
         for specialization in specializations
         if isinstance(specialization, Mapping)
-        and specialization.get("name") == "affine_quantize"
-        and specialization.get("hostName") == MLX_QUANTIZED_ENTRY_POINT
+        and specialization.get("name") == entry_contract["specializationName"]
+        and specialization.get("hostName") == entry_point
     ]
     _require(
         len(selected_specializations) == 1
-        and selected_specializations[0].get("materializedName")
-        == MLX_QUANTIZED_ENTRY_POINT
+        and selected_specializations[0].get("materializedName") == entry_point
         and selected_specializations[0].get("parameters")
-        == {"T": "float", "bits": "2", "group_size": "32"},
-        "selected affine_quantize<float, 32, 2> specialization changed",
+        == entry_contract["parameters"],
+        f"selected {entry_contract['specializationName']} specialization changed",
     )
 
     artifact_path = (mlx_root / str(artifact.get("path", ""))).resolve()
@@ -391,10 +423,105 @@ def _translated_artifact(
     return artifact, artifact_path
 
 
+def _validate_quantize_generated_hlsl(generated: str) -> dict[str, Any]:
+    candidate_stores = _RESOURCE_STORE_WITH_64_BIT_MASK_RE.findall(generated)
+    _require(
+        len(candidate_stores) == 1
+        and _NARROWED_RESOURCE_STORE_RE.fullmatch(candidate_stores[0]) is not None,
+        "the 64-bit expression stored in out_ must be explicitly narrowed to uint",
+    )
+    return {
+        "typedResourceStoreNarrowing": {
+            "status": "passed",
+            "resource": "out_",
+            "resourceElementType": "uint",
+            "sourceExpressionType": "uint64_t",
+            "generatedStore": NARROWED_RESOURCE_STORE,
+        }
+    }
+
+
+def _validate_gather_generated_hlsl(generated: str) -> dict[str, Any]:
+    normalized_generated = " ".join(generated.split())
+    normalized_generated = re.sub(r"\(\s+", "(", normalized_generated)
+    normalized_generated = re.sub(r"\s+\)", ")", normalized_generated)
+    load_signature = (
+        "float load_vector_float_float_16_2(StructuredBuffer<float> x, "
+        "int64_t x_offset, inout float x_thread[16], int x_thread_base)"
+    )
+    qdot_signature = (
+        "float qdot_float_16_2(StructuredBuffer<uint> w, int64_t w_offset, "
+        "inout float x_thread[16], int x_thread_base, float scale, float bias, "
+        "float sum)"
+    )
+    private_writes = (
+        "x_thread[(x_thread_base + i)] =",
+        "x_thread[(x_thread_base + (i + 1))] =",
+        "x_thread[(x_thread_base + (i + 2))] =",
+        "x_thread[(x_thread_base + (i + 3))] =",
+    )
+    byte_read = "w[uint(((w_offset + i)) / 4)]"
+    lane_shift = "uint((((w_offset + i)) % 4) * 8)"
+    call_offset = (
+        "int64_t((((w_offset * 4) + "
+        "(ws_offset + (row * in_vec_size_w))) + wl_offset))"
+    )
+    _require(
+        load_signature in normalized_generated, "the 16-element load helper changed"
+    )
+    _require(
+        qdot_signature in normalized_generated, "the 16-element qdot helper changed"
+    )
+    _require(
+        all(generated.count(write) == 1 for write in private_writes),
+        "the load helper must write all four values in each stepped iteration",
+    )
+    _require(
+        generated.count(byte_read) == 4
+        and generated.count(lane_shift) == 4
+        and generated.count("& 255u") >= 4,
+        "the qdot helper must unpack each uint8 weight from its 32-bit backing word",
+    )
+    _require(
+        call_offset in generated,
+        "the qdot call must compose root, byte-view, row, and local offsets",
+    )
+    _require(
+        _GATHER_DIRECT_TYPED_BYTE_READ_RE.search(generated) is None,
+        "the qdot helper must not index packed uint8 weights as typed uint words",
+    )
+    return {
+        "privateArrayAliasing": {
+            "status": "passed",
+            "helper": "load_vector_float_float_16_2",
+            "extent": 16,
+            "writeCountPerIteration": 4,
+            "callBaseOffset": 0,
+        },
+        "weightByteView": {
+            "status": "passed",
+            "helper": "qdot_float_16_2",
+            "backingElementType": "uint32_t",
+            "viewElementType": "uint8_t",
+            "laneReadCount": 4,
+            "composedOffsetTerms": [
+                "w_offset * 4",
+                "ws_offset",
+                "row * in_vec_size_w",
+                "wl_offset",
+            ],
+        },
+    }
+
+
 def _validate_generated_hlsl(
     artifact_path: Path,
+    *,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     generated = artifact_path.read_text(encoding="utf-8")
+    entry_contract = ENTRY_CONTRACTS.get(entry_point)
+    _require(entry_contract is not None, f"unsupported proof entry: {entry_point}")
     _require(
         len(_COMPUTE_ENTRY_RE.findall(generated)) == 1,
         "generated HLSL must define exactly one CSMain compute entry",
@@ -407,12 +534,15 @@ def _validate_generated_hlsl(
         _MINIMUM_PRECISION_TYPE_RE.search(generated) is None,
         "generated HLSL must not promote exact source types to min16 types",
     )
-    candidate_stores = _RESOURCE_STORE_WITH_64_BIT_MASK_RE.findall(generated)
-    _require(
-        len(candidate_stores) == 1
-        and _NARROWED_RESOURCE_STORE_RE.fullmatch(candidate_stores[0]) is not None,
-        "the 64-bit expression stored in out_ must be explicitly narrowed to uint",
-    )
+    generated_contract = entry_contract["generatedContract"]
+    if generated_contract == "quantize":
+        entry_checks = _validate_quantize_generated_hlsl(generated)
+    elif generated_contract == "gather-qmv-fast":
+        entry_checks = _validate_gather_generated_hlsl(generated)
+    else:
+        raise MlxQuantizedDirectXProofError(
+            f"unsupported generated contract: {generated_contract}"
+        )
 
     compatible_target_profiles = directx_target_profiles_for_source(generated)
     profile = dxc_profile_for_source(DIRECTX_BASE_SHADER_PROFILE, generated)
@@ -435,13 +565,7 @@ def _validate_generated_hlsl(
         "native16BitTypes": "not-required",
         "staticAssertions": "absent",
         "minimumPrecisionTypes": "absent",
-        "typedResourceStoreNarrowing": {
-            "status": "passed",
-            "resource": "out_",
-            "resourceElementType": "uint",
-            "sourceExpressionType": "uint64_t",
-            "generatedStore": NARROWED_RESOURCE_STORE,
-        },
+        **entry_checks,
     }
     compiler_contract = {
         "entryPoint": "CSMain",
@@ -462,6 +586,7 @@ def _compile_directx_artifact(
     work_dir: Path,
     log_dir: Path,
     required: bool,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
 ) -> dict[str, Any]:
     common = {
         "required": required,
@@ -485,9 +610,7 @@ def _compile_directx_artifact(
             "compiledArtifactCount": 0,
         }
 
-    output_path = (
-        work_dir / "native" / "directx" / (f"{MLX_QUANTIZED_ENTRY_POINT}.dxil")
-    )
+    output_path = work_dir / "native" / "directx" / f"{entry_point}.dxil"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.unlink(missing_ok=True)
     command = [
@@ -537,6 +660,7 @@ def run_proof(
     *,
     require_directx_toolchain: bool = False,
     clean: bool = True,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
 ) -> dict[str, Any]:
     root = mlx_root.resolve()
     resolved_work_dir = _resolve_work_dir(root, str(work_dir))
@@ -550,15 +674,18 @@ def run_proof(
 
     report_path = report_dir / "quantized-metal-selected-entry.json"
     payload = _translate_report(
-        _project_config(root, resolved_work_dir),
+        _project_config(root, resolved_work_dir, entry_point=entry_point),
         report_path=report_path,
     )
     artifact, artifact_path = _translated_artifact(
         payload,
         mlx_root=root,
         work_dir=resolved_work_dir,
+        entry_point=entry_point,
     )
-    generated_checks, compiler_contract = _validate_generated_hlsl(artifact_path)
+    generated_checks, compiler_contract = _validate_generated_hlsl(
+        artifact_path, entry_point=entry_point
+    )
     compiler = _compile_directx_artifact(
         artifact_path,
         compiler_contract,
@@ -567,6 +694,7 @@ def run_proof(
         work_dir=resolved_work_dir,
         log_dir=log_dir,
         required=require_directx_toolchain,
+        entry_point=entry_point,
     )
 
     summary = {
@@ -580,7 +708,7 @@ def run_proof(
         "scope": {
             "translation": {
                 "source": MLX_QUANTIZED_SOURCE,
-                "selectedEntryPoint": MLX_QUANTIZED_ENTRY_POINT,
+                "selectedEntryPoint": entry_point,
                 "sourceBackend": "metal",
                 "sourceOverride": "metal",
                 "includeDirectories": ["."],
@@ -637,7 +765,9 @@ def run_proof(
     return summary
 
 
-def _failure_summary(*, required: bool, error: str) -> dict[str, Any]:
+def _failure_summary(
+    *, required: bool, error: str, entry_point: str = MLX_QUANTIZED_ENTRY_POINT
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "kind": "crosstl-mlx-quantized-directx-toolchain-proof",
@@ -649,7 +779,7 @@ def _failure_summary(*, required: bool, error: str) -> dict[str, Any]:
         "scope": {
             "translation": {
                 "source": MLX_QUANTIZED_SOURCE,
-                "selectedEntryPoint": MLX_QUANTIZED_ENTRY_POINT,
+                "selectedEntryPoint": entry_point,
                 "target": DIRECTX_TARGET_PROFILE,
             },
             "compiler": {"compiler": "dxc", "required": required},
@@ -669,11 +799,17 @@ def _failure_summary(*, required: bool, error: str) -> dict[str, Any]:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Prove pinned MLX affine_quantize_float_gs_32_b_2 project "
-            "translation and optional required DXC compilation."
+            "Prove a pinned MLX quantized entry through project translation and "
+            "optional required DXC compilation."
         )
     )
     parser.add_argument("--mlx-root", required=True, help="Path to the MLX checkout")
+    parser.add_argument(
+        "--entry-point",
+        choices=tuple(ENTRY_CONTRACTS),
+        default=MLX_QUANTIZED_ENTRY_POINT,
+        help="Pinned quantized entry to translate and compile.",
+    )
     parser.add_argument(
         "--work-dir",
         help=(
@@ -710,6 +846,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             work_dir,
             require_directx_toolchain=args.require_directx_toolchain,
             clean=not args.no_clean,
+            entry_point=args.entry_point,
         )
     except MlxQuantizedDirectXProofError as exc:
         _write_json(
@@ -717,6 +854,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _failure_summary(
                 required=args.require_directx_toolchain,
                 error=str(exc),
+                entry_point=args.entry_point,
             ),
         )
         print(f"MLX quantized DirectX proof failed: {exc}", file=sys.stderr)

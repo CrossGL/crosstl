@@ -269,6 +269,17 @@ jobs:
             --work-dir .crosstl-mlx-porting/quantized-directx \
             --require-directx-toolchain
 
+      - name: Prove pinned MLX quantized gather DirectX lowering
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/prove_quantized_directx.py \
+            --mlx-root mlx-upstream \
+            --work-dir .crosstl-mlx-porting/quantized-gather-directx \
+            --entry-point affine_gather_qmv_fast_float_gs_32_b_2 \
+            --require-directx-toolchain
+
       - name: Prove pinned MLX complex copy OpenGL lowering
         if: runner.os == 'Linux'
         shell: bash

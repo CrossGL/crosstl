@@ -493,18 +493,27 @@ The locally generated DXIL was nonempty; its byte size is not treated as a
 cross-version compiler invariant. This evidence covers translation and compiler
 acceptance only; it does not claim runtime execution or numerical parity.
 
-The adjacent DirectX entry `affine_gather_qmv_fast_float_gs_32_b_2` now
-advances through the logical `static_assert` covered by
-[#1800](https://github.com/CrossGL/crosstl/issues/1800). Its next one-unit
-project record fails before artifact emission with
-`project.translate.directx-private-pointer-unsupported` and missing capability
-`directx.private-pointer-parameter-lowering`. The materialized helper
-`load_vector_float_float_values_per_thread_2` receives the caller's
-`thread U x_thread[values_per_thread]` array with `values_per_thread = 2`, but
-the DirectX private-pointer analysis reports `missing-fixed-array-extent` for
-parameter `x_thread`. This is tracked by the cross-target fixed-array alias
-contract in [#1497](https://github.com/CrossGL/crosstl/issues/1497). No target
-artifact is emitted, so native validation is not run for this entry.
+The adjacent DirectX entry `affine_gather_qmv_fast_float_gs_32_b_2` also emits
+one artifact with zero translation diagnostics. It materializes ten reachable
+specializations and seven concrete records while pruning 110,861 unreachable
+candidates. The specialized `load_vector_float_float_16_2` helper retains the
+caller's `thread U x_thread[values_per_thread]` storage with
+`values_per_thread = 16`; HLSL represents it as an `inout float[16]` plus a
+base offset and proves all four writes in each `i += 4` iteration. The
+`qdot_float_16_2` helper retains the read-only `uint8_t` view over its
+`uint32_t` storage resource. Each byte read selects the backing word and lane,
+and the helper call composes the root word offset, byte-view offset, row offset,
+and local alias offset without treating bytes as typed 32-bit elements.
+
+The generated HLSL is 14,929 bytes with SHA-256
+`1ab162e9215430b887ddeabf838a6f51153bdc8a24a63a2eb6d5bfe7a4914652`.
+Windows CI compiles it with DXC profile `cs_6_0` and `-WX`. This is selected-entry
+evidence for the fixed-array alias work tracked by
+[#1497](https://github.com/CrossGL/crosstl/issues/1497) and the read-only storage
+view work tracked by [#1546](https://github.com/CrossGL/crosstl/issues/1546).
+Those issues remain open for their broader cross-target, writable-view,
+alignment, and runtime acceptance criteria. This proof does not dispatch the
+kernel through Direct3D, run MLX tests, or claim numerical parity.
 
 The selected `affine_quantize_float_gs_32_b_2` entry also translates to a
 5,107-byte GLSL artifact with no project diagnostics. The project configuration

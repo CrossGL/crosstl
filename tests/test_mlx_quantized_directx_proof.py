@@ -58,6 +58,66 @@ void CSMain(uint3 index_dispatchThreadID : SV_DispatchThreadID) {
 """
 
 
+def _generated_gather_hlsl():
+    byte_read = (
+        "((w[uint(((w_offset + i)) / 4)] >> "
+        "uint((((w_offset + i)) % 4) * 8)) & 255u)"
+    )
+    return f"""
+StructuredBuffer<uint> w : register(t0);
+StructuredBuffer<float> x : register(t1);
+RWStructuredBuffer<float> output : register(u2);
+
+float load_vector_float_float_16_2(
+    StructuredBuffer<float> x,
+    int64_t x_offset,
+    inout float x_thread[16],
+    int x_thread_base) {{
+    for (int i = 0; i < 16; i += 4) {{
+        x_thread[(x_thread_base + i)] = x[uint(x_offset + i)];
+        x_thread[(x_thread_base + (i + 1))] = x[uint(x_offset + i + 1)];
+        x_thread[(x_thread_base + (i + 2))] = x[uint(x_offset + i + 2)];
+        x_thread[(x_thread_base + (i + 3))] = x[uint(x_offset + i + 3)];
+    }}
+    return 0.0;
+}}
+
+float qdot_float_16_2(
+    StructuredBuffer<uint> w,
+    int64_t w_offset,
+    inout float x_thread[16],
+    int x_thread_base,
+    float scale,
+    float bias,
+    float sum) {{
+    int i = 0;
+    float accum = x_thread[x_thread_base] * {byte_read};
+    accum += x_thread[x_thread_base + 1] * {byte_read};
+    accum += x_thread[x_thread_base + 2] * {byte_read};
+    accum += x_thread[x_thread_base + 3] * {byte_read};
+    return scale * accum + sum * bias;
+}}
+
+[numthreads(1, 1, 1)]
+void CSMain(uint3 index : SV_DispatchThreadID) {{
+    int64_t w_offset = 0;
+    int64_t ws_offset = index.x;
+    int row = 0;
+    int in_vec_size_w = 4;
+    int64_t wl_offset = 0;
+    float x_thread[16];
+    output[0] = qdot_float_16_2(
+        w,
+        int64_t((((w_offset * 4) + (ws_offset + (row * in_vec_size_w))) + wl_offset)),
+        x_thread,
+        0,
+        1.0,
+        0.0,
+        0.0);
+}}
+"""
+
+
 def _translated_payload(module, mlx_root, work_dir, generated=None):
     artifact_path = work_dir / "artifacts" / "directx" / "quantized.hlsl"
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +207,13 @@ def test_quantized_directx_proof_pins_revision_source_header_and_entry():
     assert module.MLX_COMMIT == "4367c73b60541ddd5a266ce4644fd93d20223b6e"
     assert module.PINNED_FILE_SHA256 == EXPECTED_PINNED_HASHES
     assert module.MLX_QUANTIZED_ENTRY_POINT == "affine_quantize_float_gs_32_b_2"
+    assert module.MLX_QUANTIZED_GATHER_ENTRY_POINT == (
+        "affine_gather_qmv_fast_float_gs_32_b_2"
+    )
+    assert set(module.ENTRY_CONTRACTS) == {
+        module.MLX_QUANTIZED_ENTRY_POINT,
+        module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    }
     assert module.DIRECTX_TARGET_PROFILE == "directx-12"
     assert module.TEMPLATE_SPECIALIZATION_LIMIT == 128
     assert module.MATERIALIZATION_WORK_LIMIT == 4096
@@ -261,6 +328,15 @@ def test_quantized_directx_project_config_selects_one_directx_12_entry(tmp_path)
             "max_template_specializations": 128,
             "max_template_materialization_work": 4096,
         }
+    }
+
+    gather_config = module._project_config(
+        mlx_root,
+        work_dir,
+        entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    )
+    assert gather_config.entry_points == {
+        module.MLX_QUANTIZED_SOURCE: module.MLX_QUANTIZED_GATHER_ENTRY_POINT
     }
 
 
@@ -384,6 +460,89 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
         "targetProfiles": ["directx-12"],
         "warningsAsErrors": True,
     }
+
+
+def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
+    module = _load_proof()
+    artifact_path = tmp_path / "quantized-gather.hlsl"
+    artifact_path.write_text(_generated_gather_hlsl(), encoding="utf-8")
+
+    checks, compiler = module._validate_generated_hlsl(
+        artifact_path,
+        entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    )
+
+    assert checks == {
+        "status": "passed",
+        "entryPoint": "CSMain",
+        "native16BitTypes": "not-required",
+        "staticAssertions": "absent",
+        "minimumPrecisionTypes": "absent",
+        "privateArrayAliasing": {
+            "status": "passed",
+            "helper": "load_vector_float_float_16_2",
+            "extent": 16,
+            "writeCountPerIteration": 4,
+            "callBaseOffset": 0,
+        },
+        "weightByteView": {
+            "status": "passed",
+            "helper": "qdot_float_16_2",
+            "backingElementType": "uint32_t",
+            "viewElementType": "uint8_t",
+            "laneReadCount": 4,
+            "composedOffsetTerms": [
+                "w_offset * 4",
+                "ws_offset",
+                "row * in_vec_size_w",
+                "wl_offset",
+            ],
+        },
+    }
+    assert compiler == {
+        "entryPoint": "CSMain",
+        "profile": "cs_6_0",
+        "compilerArguments": [],
+        "targetProfiles": ["directx-12"],
+        "warningsAsErrors": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ("& 255u", "& 65535u", "unpack"),
+        (
+            "int64_t((((w_offset * 4) + "
+            "(ws_offset + (row * in_vec_size_w))) + wl_offset))",
+            "int64_t(wl_offset)",
+            "compose",
+        ),
+        (
+            "w[uint(((w_offset + i)) / 4)]",
+            "w[uint((w_offset + i))]",
+            "unpack",
+        ),
+    ],
+)
+def test_quantized_gather_directx_generated_contract_rejects_semantic_drift(
+    tmp_path,
+    old,
+    new,
+    message,
+):
+    module = _load_proof()
+    artifact_path = tmp_path / "quantized-gather.hlsl"
+    artifact_path.write_text(
+        _generated_gather_hlsl().replace(old, new),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.MlxQuantizedDirectXProofError, match=message):
+        module._validate_generated_hlsl(
+            artifact_path,
+            entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+        )
 
 
 @pytest.mark.parametrize(
@@ -652,3 +811,14 @@ def test_quantized_directx_cli_exposes_required_toolchain_flag():
 
     assert args.require_directx_toolchain is True
     assert args.no_clean is True
+    assert args.entry_point == module.MLX_QUANTIZED_ENTRY_POINT
+
+    gather_args = module.parse_args(
+        [
+            "--mlx-root",
+            "/tmp/mlx",
+            "--entry-point",
+            module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+        ]
+    )
+    assert gather_args.entry_point == module.MLX_QUANTIZED_GATHER_ENTRY_POINT

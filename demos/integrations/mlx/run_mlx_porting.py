@@ -648,7 +648,7 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
     "numerical_parity_claimed": False,
 }
 MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
-    "status": "blocked-as-expected",
+    "status": "translated-dxc-validated",
     "commit": MLX_COMMIT,
     "source": MLX_QUANTIZED_SOURCE,
     "target": "directx",
@@ -656,34 +656,63 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
     "project_translation": {
         "unit_count": 1,
         "artifact_record_count": 1,
-        "translated_count": 0,
-        "failed_count": 1,
-        "emitted_target_file_count": 0,
-        "project_diagnostic_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "emitted_target_file_count": 1,
+        "project_diagnostic_count": 0,
     },
-    "diagnostic": {
-        "code": "project.translate.directx-private-pointer-unsupported",
-        "missing_capability": "directx.private-pointer-parameter-lowering",
-        "private_pointer": {
-            "function": "load_vector_float_float_values_per_thread_2",
-            "parameter": "x_thread",
-            "reason": "missing-fixed-array-extent",
-        },
-        "message": (
-            "DirectX private pointer parameter "
-            "'load_vector_float_float_values_per_thread_2.x_thread' has no "
-            "provable bounded span"
-        ),
+    "materialization": {
+        "reachable_specialization_count": 10,
+        "concrete_specialization_count": 7,
+        "pruned_candidate_count": 110861,
     },
     "source_contract": {
         "helper": "load_vector<T, U, values_per_thread, bits>",
         "caller_array": "thread U x_thread[values_per_thread]",
-        "specialized_extent": 2,
+        "specialized_extent": 16,
+        "loop_step": 4,
     },
-    "artifact_emitted": False,
-    "native_validation_attempted": False,
-    "native_validation_status": "not-run-no-artifact",
-    "blocked_by": ["https://github.com/CrossGL/crosstl/issues/1497"],
+    "private_array_aliasing": {
+        "status": "passed",
+        "helper": "load_vector_float_float_16_2",
+        "parameter_mode": "inout",
+        "base_offset_parameter": "x_thread_base",
+        "extent": 16,
+        "writes_per_iteration": 4,
+    },
+    "weight_byte_view": {
+        "status": "passed",
+        "helper": "qdot_float_16_2",
+        "backing_element_type": "uint32_t",
+        "view_element_type": "uint8_t",
+        "access": "read",
+        "lane_read_count": 4,
+        "composed_offset_terms": [
+            "w_offset * 4",
+            "ws_offset",
+            "row * in_vec_size_w",
+            "wl_offset",
+        ],
+    },
+    "generated_hlsl": {
+        "sha256": "1ab162e9215430b887ddeabf838a6f51153bdc8a24a63a2eb6d5bfe7a4914652",
+        "size_bytes": 14929,
+    },
+    "compiler_validation": {
+        "compiler": "dxc",
+        "profile": "cs_6_0",
+        "compiler_arguments": [],
+        "warnings_as_errors": True,
+        "status": "passed",
+        "observed_failure_count": 0,
+    },
+    "artifact_emitted": True,
+    "native_validation_attempted": True,
+    "native_validation_status": "passed",
+    "tracked_by": [
+        "https://github.com/CrossGL/crosstl/issues/1497",
+        "https://github.com/CrossGL/crosstl/issues/1546",
+    ],
     "runtime_execution_attempted": False,
     "numerical_parity_claimed": False,
 }

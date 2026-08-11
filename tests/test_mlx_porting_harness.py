@@ -7780,12 +7780,17 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert (
         "`out_[uint((out_index + 4))] = " "uint(((output & 1095216660480ull) >> 32));`"
     ) in normalized_readme
-    assert "advances through the logical `static_assert`" in normalized_readme
+    assert "also emits one artifact with zero translation diagnostics" in (
+        normalized_readme
+    )
     assert "`affine_gather_qmv_fast_float_gs_32_b_2`" in readme
-    assert "`directx.private-pointer-parameter-lowering`" in readme
-    assert "`missing-fixed-array-extent`" in readme
-    assert "`values_per_thread = 2`" in readme
-    assert "No target artifact is emitted" in normalized_readme
+    assert "`values_per_thread = 16`" in readme
+    assert "`inout float[16]` plus a base offset" in normalized_readme
+    assert "all four writes in each `i += 4` iteration" in normalized_readme
+    assert "read-only `uint8_t` view over its `uint32_t`" in normalized_readme
+    assert "14,929 bytes" in normalized_readme
+    assert "DXC profile `cs_6_0` and `-WX`" in normalized_readme
+    assert "does not dispatch the kernel through Direct3D" in normalized_readme
     assert "three source-qualified index-range assertions" in normalized_readme
     assert "`in_index + i`" in readme
     assert "`gindex`" in readme
@@ -7881,38 +7886,70 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert opengl["numerical_parity_claimed"] is False
 
     adjacent = module.MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE
+    assert adjacent["status"] == "translated-dxc-validated"
     assert adjacent["selected_entry_point"] == (
         "affine_gather_qmv_fast_float_gs_32_b_2"
     )
     assert adjacent["project_translation"] == {
         "unit_count": 1,
         "artifact_record_count": 1,
-        "translated_count": 0,
-        "failed_count": 1,
-        "emitted_target_file_count": 0,
-        "project_diagnostic_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "emitted_target_file_count": 1,
+        "project_diagnostic_count": 0,
     }
-    assert adjacent["diagnostic"] == {
-        "code": "project.translate.directx-private-pointer-unsupported",
-        "missing_capability": "directx.private-pointer-parameter-lowering",
-        "private_pointer": {
-            "function": "load_vector_float_float_values_per_thread_2",
-            "parameter": "x_thread",
-            "reason": "missing-fixed-array-extent",
-        },
-        "message": (
-            "DirectX private pointer parameter "
-            "'load_vector_float_float_values_per_thread_2.x_thread' has no "
-            "provable bounded span"
-        ),
+    assert adjacent["materialization"] == {
+        "reachable_specialization_count": 10,
+        "concrete_specialization_count": 7,
+        "pruned_candidate_count": 110861,
     }
     assert adjacent["source_contract"] == {
         "helper": "load_vector<T, U, values_per_thread, bits>",
         "caller_array": "thread U x_thread[values_per_thread]",
-        "specialized_extent": 2,
+        "specialized_extent": 16,
+        "loop_step": 4,
     }
-    assert adjacent["artifact_emitted"] is False
-    assert adjacent["native_validation_attempted"] is False
+    assert adjacent["private_array_aliasing"] == {
+        "status": "passed",
+        "helper": "load_vector_float_float_16_2",
+        "parameter_mode": "inout",
+        "base_offset_parameter": "x_thread_base",
+        "extent": 16,
+        "writes_per_iteration": 4,
+    }
+    assert adjacent["weight_byte_view"] == {
+        "status": "passed",
+        "helper": "qdot_float_16_2",
+        "backing_element_type": "uint32_t",
+        "view_element_type": "uint8_t",
+        "access": "read",
+        "lane_read_count": 4,
+        "composed_offset_terms": [
+            "w_offset * 4",
+            "ws_offset",
+            "row * in_vec_size_w",
+            "wl_offset",
+        ],
+    }
+    assert adjacent["generated_hlsl"] == {
+        "sha256": "1ab162e9215430b887ddeabf838a6f51153bdc8a24a63a2eb6d5bfe7a4914652",
+        "size_bytes": 14929,
+    }
+    assert adjacent["compiler_validation"] == {
+        "compiler": "dxc",
+        "profile": "cs_6_0",
+        "compiler_arguments": [],
+        "warnings_as_errors": True,
+        "status": "passed",
+        "observed_failure_count": 0,
+    }
+    assert adjacent["artifact_emitted"] is True
+    assert adjacent["native_validation_attempted"] is True
+    assert adjacent["native_validation_status"] == "passed"
+    assert adjacent["tracked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1497",
+        "https://github.com/CrossGL/crosstl/issues/1546",
+    ]
     assert adjacent["runtime_execution_attempted"] is False
     assert adjacent["numerical_parity_claimed"] is False
 
