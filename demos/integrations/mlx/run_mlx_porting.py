@@ -576,16 +576,22 @@ FFT_OPENGL_EXPECTED_POINTER_EVIDENCE = {
     "parameter": "crosstl_ptr_buf",
     "reason": "unprovable-view-access",
 }
-OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE = (
+OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE = (
     "https://github.com/CrossGL/crosstl/issues/1515"
 )
-OPENGL_QUANTIZED_EXPECTED_DIAGNOSTIC_CODE = (
-    "project.translate.opengl-index-type-unsupported"
+MLX_OPENGL_QUANTIZED_INDEX_RANGE_ASSERTION_EXPRESSIONS = (
+    "in_index + i",
+    "gindex",
+    "out_index / writes_per_reduce",
 )
-OPENGL_QUANTIZED_EXPECTED_MISSING_CAPABILITY = "opengl.index-width-normalization"
-OPENGL_QUANTIZED_EXPECTED_MESSAGE = (
-    "OpenGL cannot preserve subscript index type 'uint64_t' for 'w': "
-    "index range unproven"
+MLX_OPENGL_QUANTIZED_INDEX_RANGE_ASSERTIONS = tuple(
+    {
+        "source": MLX_QUANTIZED_SOURCE,
+        "expression": expression,
+        "minimum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+        "maximum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+    }
+    for expression in MLX_OPENGL_QUANTIZED_INDEX_RANGE_ASSERTION_EXPRESSIONS
 )
 MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
     "status": "translated-dxc-validated",
@@ -682,7 +688,7 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
     "numerical_parity_claimed": False,
 }
 MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
-    "status": "blocked-as-expected",
+    "status": "translated-glslang-spirv-val-validated",
     "commit": MLX_COMMIT,
     "source": MLX_QUANTIZED_SOURCE,
     "target": "opengl",
@@ -690,33 +696,46 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
     "project_translation": {
         "unit_count": 1,
         "artifact_record_count": 1,
-        "translated_count": 0,
-        "failed_count": 1,
-        "emitted_target_file_count": 0,
-        "project_diagnostic_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "emitted_target_file_count": 1,
+        "project_diagnostic_count": 0,
     },
     "materialization": {
         "reachable_specialization_count": 6,
         "concrete_specialization_count": 3,
         "pruned_candidate_count": 110861,
     },
-    "diagnostic": {
-        "code": OPENGL_QUANTIZED_EXPECTED_DIAGNOSTIC_CODE,
-        "missing_capability": OPENGL_QUANTIZED_EXPECTED_MISSING_CAPABILITY,
-        "message": OPENGL_QUANTIZED_EXPECTED_MESSAGE,
-        "index_conversion": {
-            "indexed_value": "w",
-            "index_expression": "in_index + i",
-            "source_type": "uint64_t",
-            "target_type": "uint",
-            "range_status": "unproven",
-            "reason": "index-range-unproven",
+    "index_range_assertion_evidence": {
+        "assertion_count": len(MLX_OPENGL_QUANTIZED_INDEX_RANGE_ASSERTIONS),
+        "assertions": [
+            dict(assertion) for assertion in MLX_OPENGL_QUANTIZED_INDEX_RANGE_ASSERTIONS
+        ],
+        "inclusive_bounds": {
+            "minimum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+            "maximum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
         },
+        "contract_kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
     },
-    "artifact_emitted": False,
-    "native_validation_attempted": False,
-    "native_validation_status": "not-run-no-artifact",
-    "blocked_by": [OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE],
+    "generated_glsl": {
+        "sha256": "7808f9f35bab56c1f415dea1a669225c68447cb32f9147ab1c4b04b975543aa3",
+        "size_bytes": 5107,
+    },
+    "required_capabilities": [],
+    "artifact_emitted": True,
+    "native_validation_attempted": True,
+    "native_validation_status": "passed",
+    "toolchain_validation": {
+        "compiler": "glslangValidator",
+        "compiler_target": "OpenGL/SPIR-V 1.3",
+        "validator": "spirv-val",
+        "validator_target": "SPIR-V 1.3",
+        "status": "passed",
+        "observed_failure_count": 0,
+    },
+    "resolved_by": [OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE],
     "runtime_execution_attempted": False,
     "numerical_parity_claimed": False,
 }
@@ -729,7 +748,6 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1479",
     "https://github.com/CrossGL/crosstl/issues/1490",
     "https://github.com/CrossGL/crosstl/issues/1497",
-    OPENGL_QUANTIZED_INDEX_TYPE_TRACKED_ISSUE,
     "https://github.com/CrossGL/crosstl/issues/1544",
     "https://github.com/CrossGL/crosstl/issues/1546",
     "https://github.com/CrossGL/crosstl/issues/1554",
@@ -820,6 +838,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE,
     "https://github.com/CrossGL/crosstl/issues/1576",
     "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1800",
