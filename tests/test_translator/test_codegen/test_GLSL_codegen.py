@@ -59,12 +59,14 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLScalarConversionError,
     OpenGLSpecializationConstantError,
     OpenGLStructConstructionError,
+    OpenGLTrailingZeroBuiltinError,
     OpenGLWorkgroupPointerError,
     OpenGLWorkgroupSizeError,
 )
 from crosstl.translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
 )
+from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -166,6 +168,306 @@ def glsl_expression_depends_on(generated_code, expression, expected_token):
         for identifier in re.findall(r"\b[A-Za-z_]\w*\b", candidate):
             pending.extend(initializers.get(identifier, ()))
     return False
+
+
+def test_glsl_clang_trailing_zero_builtins_preserve_width_and_signedness(
+    tmp_path,
+):
+    shader = """
+    shader OpenGLClangTrailingZeroBuiltins {
+        RWStructuredBuffer<int> output_values @ binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uint dynamic32 = gl_GlobalInvocationID.x | 8u;
+                int signed32 = int(dynamic32);
+                uint64_t dynamic64 = uint64_t(dynamic32) << 32;
+                int64_t signed64 = int64_t(dynamic64);
+                output_values[0] = __builtin_ctz(signed32);
+                output_values[1] = __builtin_ctz(dynamic32);
+                output_values[2] = __builtin_ctzl(signed64);
+                output_values[3] = __builtin_ctzll(dynamic64);
+                output_values[4] = __builtin_ctzll(4294967296);
+                output_values[5] = __builtin_ctz(0u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert generated.startswith(
+        "#version 450 core\n#extension GL_ARB_gpu_shader_int64 : require\n"
+    )
+    assert "int crossgl_ctz_uint(uint value)" in generated
+    assert "return value == 0u ? -1 : findLSB(value);" in generated
+    assert "int crossgl_ctz_uint64_t(uint64_t value)" in generated
+    assert "uint low_bits = uint(value);" in generated
+    assert "uint high_bits = uint(value >> 32);" in generated
+    assert "return high_bits == 0u ? -1 : (32 + findLSB(high_bits));" in generated
+    assert "crossgl_ctz_uint(uint(signed32))" in generated
+    assert "crossgl_ctz_uint(dynamic32)" in generated
+    assert "crossgl_ctz_uint64_t(uint64_t(signed64))" in generated
+    assert "crossgl_ctz_uint64_t(dynamic64)" in generated
+    assert "crossgl_ctz_uint64_t(uint64_t(4294967296ul))" in generated
+    assert "crossgl_ctz_uint(0u)" in generated
+    assert "__builtin_ctz" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "clang_trailing_zero_widths",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_clang_trailing_zero_builtins_respect_function_and_lexical_shadows():
+    shader = """
+    shader OpenGLClangTrailingZeroShadows {
+        int __builtin_ctz(uint value) {
+            return int(value) + 7;
+        }
+
+        int callFunction(uint value) {
+            return __builtin_ctz(value);
+        }
+
+        int callLexicalShadow(uint __builtin_ctzl, uint value) {
+            return __builtin_ctzl(value);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int builtin_ctz(uint value)" in generated
+    assert "return builtin_ctz(value);" in generated
+    assert "int callLexicalShadow(uint builtin_ctzl, uint value)" in generated
+    assert "return __builtin_ctzl(value);" in generated
+    assert "crossgl_ctz_" not in generated
+    assert "findLSB(" not in generated
+
+
+def test_glsl_clang_trailing_zero_helpers_avoid_user_identifier_collisions():
+    shader = """
+    shader OpenGLClangTrailingZeroHelperCollisions {
+        int crossgl_ctz_uint(uint value) {
+            return int(value) + 1;
+        }
+
+        int probe(uint value) {
+            int crossgl_ctz_uint64_t = 3;
+            return __builtin_ctz(value) + __builtin_ctzll(uint64_t(value))
+                + crossgl_ctz_uint64_t;
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int crossgl_ctz_uint(uint value)" in generated
+    assert "int crossgl_ctz_uint_2(uint value)" in generated
+    assert "int crossgl_ctz_uint64_t_2(uint64_t value)" in generated
+    assert "crossgl_ctz_uint_2(value)" in generated
+    assert "crossgl_ctz_uint64_t_2(uint64_t(value))" in generated
+
+
+@pytest.mark.parametrize(
+    ("operand_type", "diagnostic_type", "reason"),
+    [
+        pytest.param("float", "float", "unsupported-operand-type", id="float"),
+        pytest.param("uvec2", "uvec2", "unsupported-operand-shape", id="vector"),
+        pytest.param(
+            "ushort",
+            "ushort",
+            "unsupported-integer-width",
+            id="narrow",
+        ),
+        pytest.param(
+            "uint64_t",
+            "uint64_t",
+            "operand-narrowing-required",
+            id="wide",
+        ),
+    ],
+)
+def test_glsl_clang_trailing_zero_builtin_rejects_unsupported_operands(
+    operand_type, diagnostic_type, reason
+):
+    shader = f"""
+    shader OpenGLInvalidClangTrailingZeroOperand {{
+        int probe({operand_type} value) {{
+            return __builtin_ctz(value);
+        }}
+
+        compute {{
+            void main() {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLTrailingZeroBuiltinError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-trailing-zero-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.trailing-zero-builtin-lowering",)
+    assert diagnostic.builtin_name == "__builtin_ctz"
+    assert diagnostic.operand_type == diagnostic_type
+    assert diagnostic.reason == reason
+
+
+@pytest.mark.parametrize("arguments", ["", "left, right"], ids=["zero", "two"])
+def test_glsl_clang_trailing_zero_builtin_rejects_invalid_arity(arguments):
+    shader = f"""
+    shader OpenGLInvalidClangTrailingZeroArity {{
+        int probe(uint left, uint right) {{
+            return __builtin_ctz({arguments});
+        }}
+
+        compute {{
+            void main() {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLTrailingZeroBuiltinError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == "invalid-arity"
+    assert exc_info.value.argument_count in {0, 2}
+    assert "requires exactly 1 scalar integer operand" in str(exc_info.value)
+
+
+def test_glsl_clang_trailing_zero_unresolved_type_reports_source_location():
+    shader = """
+    shader OpenGLUnresolvedClangTrailingZeroOperand {
+        int probe() {
+            return __builtin_ctz(missingValue);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(OpenGLTrailingZeroBuiltinError) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "unresolved-operand-type"
+    assert diagnostic.operand_type is None
+    assert diagnostic.source_location == source_location
+    assert "could not resolve source type metadata" in str(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("preprocessor", "builtin", "operand_type"),
+    [
+        pytest.param("#version 330 core", "__builtin_ctz", "uint", id="legacy"),
+        pytest.param("#version 310 es", "__builtin_ctz", "uint", id="es"),
+        pytest.param(
+            "#version 450 core\n#extension GL_ARB_gpu_shader_int64 : disable",
+            "__builtin_ctzll",
+            "uint64_t",
+            id="int64-disabled",
+        ),
+    ],
+)
+def test_glsl_clang_trailing_zero_builtin_rejects_unsupported_profiles(
+    preprocessor, builtin, operand_type
+):
+    shader = f"""
+    {preprocessor}
+    shader OpenGLClangTrailingZeroUnsupportedProfile {{
+        int probe({operand_type} value) {{
+            return {builtin}(value);
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLTrailingZeroBuiltinError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "unsupported-profile"
+    assert diagnostic.target_profile == preprocessor.splitlines()[0]
+
+
+def test_webgl_clang_trailing_zero_builtin_fails_closed():
+    shader = """
+    shader WebGLClangTrailingZeroUnsupportedProfile {
+        int probe(uint value) {
+            return __builtin_ctz(value);
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLTrailingZeroBuiltinError) as exc_info:
+        WebGLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "unsupported-profile"
+    assert diagnostic.target_profile == "WebGL"
+
+
+def test_glsl_clang_trailing_zero_metal_proxy_validates_natively(tmp_path):
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void write_trailing_zero_counts(
+        device const ulong* input [[buffer(0)]],
+        device int* output [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+        uint dynamic32 = index | 8u;
+        ulong dynamic64 = input[index];
+        output[(index * 4u) + 0u] = __builtin_ctz(dynamic32);
+        output[(index * 4u) + 1u] = __builtin_ctzl(dynamic64);
+        output[(index * 4u) + 2u] = __builtin_ctzll(dynamic64);
+        output[(index * 4u) + 3u] = __builtin_ctz(8u);
+    }
+    """
+    shader_path = tmp_path / "clang_trailing_zero.metal"
+    shader_path.write_text(source, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "__builtin_ctz" not in generated
+    assert "crossgl_ctz_uint(dynamic32)" in generated
+    assert "crossgl_ctz_uint64_t(dynamic64)" in generated
+    assert "crossgl_ctz_uint(8u)" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "clang_trailing_zero_metal",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
 
 
 def test_glsl_rint_lowers_to_round_even(tmp_path):
