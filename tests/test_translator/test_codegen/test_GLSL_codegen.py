@@ -7772,6 +7772,128 @@ def test_glsl_boolean_ternary_preserves_boolean_branch_types():
     assert "? int(input_values[0])" not in generated
 
 
+def test_opengl_normalizes_scalar_truthiness_in_all_boolean_contexts(tmp_path):
+    code = """
+    shader ScalarTruthiness {
+        RWStructuredBuffer<uint> output @ binding(0);
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main() {
+                int signed_flag = int(gl_LocalInvocationID.x);
+                uint unsigned_flag = gl_LocalInvocationID.y;
+                float float_flag = float(gl_LocalInvocationID.z);
+                vec2 vector_flag = vec2(float_flag, -float_flag);
+                int64_t wide_flag = int64_t(gl_LocalInvocationID.x);
+                int8_t narrow_flag = int8_t(1);
+                int cursor = 1;
+                uint value = cursor-- ? 1u : 0u;
+                if (unsigned_flag) {
+                    value += 1u;
+                }
+                if (any(lessThan(vector_flag, vec2(0.0)))) {
+                    value += 1u;
+                }
+                for (int i = 0; float_flag; i++) {
+                    float_flag = 0.0;
+                }
+                while (wide_flag) {
+                    wide_flag = int64_t(0);
+                }
+                do {
+                    narrow_flag = int8_t(0);
+                } while (narrow_flag);
+                bool combined = signed_flag && !unsigned_flag;
+                buffer_store(output, 0u, value + uint(combined));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert generated.count("cursor--") == 1
+    assert "((cursor--) != 0) ? 1u : 0u" in generated
+    assert "if ((unsigned_flag != 0u))" in generated
+    assert "if (any(lessThan(vector_flag, vec2(0.0))))" in generated
+    assert "(float_flag != 0.0)" in generated
+    assert "while ((wide_flag != int64_t(0)))" in generated
+    assert "while ((narrow_flag != 0))" in generated
+    assert "((signed_flag != 0) && (!(unsigned_flag != 0u)))" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "scalar_truthiness_contexts",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_rejects_vector_boolean_context():
+    code = """
+    shader VectorTruthiness {
+        uint readValue(uvec2 condition) {
+            return condition ? 1u : 0u;
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLScalarConversionError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    diagnostic = exc_info.value
+    assert diagnostic.source_type == "uvec2"
+    assert diagnostic.target_type == "bool"
+    assert diagnostic.reason == "vector-to-scalar"
+
+
+def test_opengl_preserves_narrow_unresolved_intrinsic_initializers(tmp_path):
+    code = """
+    shader NarrowIntrinsicInitializer {
+        RWStructuredBuffer<uint> output @ binding(0);
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main() {
+                float scalar_input = float(gl_LocalInvocationID.x);
+                vec2 vector_input = vec2(scalar_input, scalar_input + 1.0);
+                uint8_t scalar_value = min(round(scalar_input), 255.0);
+                i8vec2 vector_value = min(round(vector_input), vec2(127.0));
+                uint8_t explicit_value = uint(min(round(scalar_input), 255.0));
+                buffer_store(
+                    output,
+                    0u,
+                    uint(scalar_value) + uint(vector_value.x) + uint(explicit_value)
+                );
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert (
+        "uint scalar_value = "
+        "bitfieldExtract(uint(min(round(scalar_input), 255.0)), 0, 8);"
+    ) in generated
+    assert (
+        "ivec2 vector_value = "
+        "bitfieldExtract(ivec2(min(round(vector_input), vec2(127.0))), 0, 8);"
+    ) in generated
+    assert (
+        "uint explicit_value = "
+        "bitfieldExtract(uint(min(round(scalar_input), 255.0)), 0, 8);"
+    ) in generated
+    assert "uint(uint(min(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "narrow-unresolved-intrinsic-initializers",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
 def assert_glsl_storage_pointer_syntax_is_lowered(generated_code, *resource_names):
     raw_syntax = re.search(
         r"\b(?:auto|constant|device|StructuredBuffer|RWStructuredBuffer)\b|"

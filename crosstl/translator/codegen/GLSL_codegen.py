@@ -1575,6 +1575,7 @@ class GLSLCodeGen:
         "tanh",
         "trunc",
     }
+    GLSL_BOOLEAN_REDUCTION_FUNCTIONS = {"all", "any"}
     GLSL_INT64_EXTENSION = "GL_ARB_gpu_shader_int64"
     GLSL_INT64_EXTENSION_LINE = "#extension GL_ARB_gpu_shader_int64 : require"
     GLSL_INT64_SCALAR_TYPES = {"int64_t", "uint64_t"}
@@ -2105,6 +2106,7 @@ class GLSLCodeGen:
         self.current_glsl_private_pointer_base_names = {}
         self.current_glsl_private_pointer_function_name = None
         self.literal_int_constants = {}
+        self.glsl_constant_types = {}
         self.glsl_specialization_constant_names = set()
         self.glsl_global_specialization_constants = []
         self.literal_int_vector_constants = {}
@@ -4195,6 +4197,11 @@ class GLSLCodeGen:
             self.collect_function_structured_buffer_access_requirements(functions)
         )
         constants = list(getattr(ast, "constants", []) or [])
+        self.glsl_constant_types = {
+            node.name: self.type_name_string(self.glsl_specialization_constant_type(node))
+            for node in constants
+            if getattr(node, "name", None)
+        }
         self.glsl_specialization_constant_names = {
             node.name
             for node in constants + list(getattr(ast, "global_variables", []) or [])
@@ -19283,6 +19290,31 @@ complex64_t crossgl_complex64_mod_assign(
             return generated
         return f"notEqual({generated}, {self.zero_value_expression(actual['mapped'])})"
 
+    def generate_glsl_boolean_context(self, expression):
+        if isinstance(expression, bool):
+            return self.generate_expression(expression)
+        source_type = self.glsl_source_expression_type(expression)
+        source = self.glsl_value_type_info(source_type)
+        if source is None:
+            self.glsl_scalar_conversion_error(
+                expression,
+                source_type or "<unresolved>",
+                "bool",
+                (
+                    "boolean-context-source-type-unresolved"
+                    if source_type is None
+                    else "boolean-context-source-type-unsupported"
+                ),
+            )
+        if source["family"] not in {"bool", "int", "uint", "float"}:
+            self.glsl_scalar_conversion_error(
+                expression,
+                source["source"],
+                "bool",
+                "boolean-context-source-type-unsupported",
+            )
+        return self.generate_expression_with_expected(expression, "bool")
+
     def glsl_is_explicit_type_constructor_expression(self, expression, target_type):
         prefix = f"{target_type}("
         if not expression.startswith(prefix) or not expression.endswith(")"):
@@ -19378,6 +19410,15 @@ complex64_t crossgl_complex64_mod_assign(
         actual_type = self.glsl_source_expression_type(expr)
         actual = self.glsl_value_type_info(actual_type)
         if actual is None:
+            if expected["narrow"] is not None:
+                converted = generated
+                if not self.glsl_is_explicit_type_constructor_expression(
+                    converted, expected["mapped"]
+                ):
+                    converted = f"{expected['mapped']}({converted})"
+                return self.glsl_apply_narrow_integer_contract(
+                    converted, expected["source"]
+                )
             return generated
 
         narrow = expected["narrow"]
@@ -21394,9 +21435,8 @@ complex64_t crossgl_complex64_mod_assign(
             code += f"{indent_str}}}\n"
             return code
 
-        condition = self.generate_expression_with_expected(
-            node.condition if hasattr(node, "condition") else node.if_condition,
-            "bool",
+        condition = self.generate_glsl_boolean_context(
+            node.condition if hasattr(node, "condition") else node.if_condition
         )
         code = f"{indent_str}if ({condition}) {{\n"
 
@@ -21409,9 +21449,7 @@ complex64_t crossgl_complex64_mod_assign(
             for else_if_condition, else_if_body in zip(
                 node.else_if_conditions, node.else_if_bodies
             ):
-                condition = self.generate_expression_with_expected(
-                    else_if_condition, "bool"
-                )
+                condition = self.generate_glsl_boolean_context(else_if_condition)
                 code += f" else if ({condition}) {{\n"
                 code += self.generate_scoped_statement_body(else_if_body, indent + 1)
                 code += f"{indent_str}}}"
@@ -21471,7 +21509,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.current_glsl_storage_pointer_aliases
             )
             condition = (
-                self.generate_expression(node.condition)
+                self.generate_glsl_boolean_context(node.condition)
                 if getattr(node, "condition", None)
                 else ""
             )
@@ -21739,7 +21777,9 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_expression(getattr(node, "condition", ""))
+        condition = self.generate_glsl_boolean_context(
+            getattr(node, "condition", None)
+        )
 
         code = f"{indent_str}while ({condition}) {{\n"
         code += self.generate_scoped_statement_body(
@@ -21750,7 +21790,9 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_do_while(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_expression(getattr(node, "condition", ""))
+        condition = self.generate_glsl_boolean_context(
+            getattr(node, "condition", None)
+        )
 
         code = f"{indent_str}do {{\n"
         code += self.generate_scoped_statement_body(
@@ -22185,6 +22227,10 @@ complex64_t crossgl_complex64_mod_assign(
             return str(expr.value)
         elif hasattr(expr, "__class__") and "BinaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
+            if op in {"&&", "||"}:
+                left = self.generate_glsl_boolean_context(expr.left)
+                right = self.generate_glsl_boolean_context(expr.right)
+                return f"({left} {op} {right})"
             option_none_comparison = self.generate_glsl_builtin_option_none_comparison(
                 expr.left, op, expr.right
             )
@@ -22292,6 +22338,8 @@ complex64_t crossgl_complex64_mod_assign(
                 if narrow_update is not None:
                     return narrow_update
                 operand = self.generate_glsl_buffer_block_mutation_target(expr.operand)
+            elif op == "!":
+                operand = self.generate_glsl_boolean_context(expr.operand)
             else:
                 operand = self.generate_expression_with_expected(
                     expr.operand,
@@ -22768,7 +22816,7 @@ complex64_t crossgl_complex64_mod_assign(
                 )
             return pointer_member
         elif hasattr(expr, "__class__") and "TernaryOpNode" in str(type(expr)):
-            condition = self.generate_expression(expr.condition)
+            condition = self.generate_glsl_boolean_context(expr.condition)
             true_type = self.glsl_source_expression_type(expr.true_expr)
             false_type = self.glsl_source_expression_type(expr.false_expr)
             plan = self.glsl_arithmetic_conversion_plan(
@@ -25171,6 +25219,14 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         return self.glsl_source_expression_type(arguments[0])
 
+    def glsl_boolean_reduction_result_type(self, function_name, arguments):
+        if len(arguments) != 1:
+            return None
+        mapped_name = self.function_map.get(function_name, function_name)
+        if mapped_name not in self.GLSL_BOOLEAN_REDUCTION_FUNCTIONS:
+            return None
+        return "bool"
+
     def glsl_source_expression_type(self, expression):
         if expression is None:
             return None
@@ -25182,6 +25238,7 @@ complex64_t crossgl_complex64_mod_assign(
             return (
                 self.local_variable_source_types.get(name)
                 or self.local_variable_types.get(name)
+                or self.glsl_constant_types.get(name)
                 or self.glsl_buffer_block_variable_types.get(name)
                 or self.global_variable_types.get(name)
                 or self.glsl_builtin_identifier_result_type(name)
@@ -25294,6 +25351,11 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if componentwise_type is not None:
                 return componentwise_type
+            boolean_reduction_type = self.glsl_boolean_reduction_result_type(
+                function_name, expression.arguments
+            )
+            if boolean_reduction_type is not None:
+                return boolean_reduction_type
         return self.expression_result_type(expression)
 
     def glsl_function_type_match_score(self, actual_type, parameter_type):
