@@ -971,6 +971,21 @@ def expression_debug_name(expr):
         if getattr(expr, "is_postfix", False):
             return f"{operand}{op}"
         return f"{op}{operand}"
+    if hasattr(expr, "function") and (
+        hasattr(expr, "arguments") or hasattr(expr, "args")
+    ):
+        function_name = expression_debug_name(getattr(expr, "function", None))
+        arguments = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+        rendered_arguments = ", ".join(
+            expression_debug_name(argument) for argument in arguments
+        )
+        return f"{function_name}({rendered_arguments})"
+    if hasattr(expr, "constructor_type") and hasattr(expr, "arguments"):
+        constructor_name = expression_debug_name(expr.constructor_type)
+        rendered_arguments = ", ".join(
+            expression_debug_name(argument) for argument in expr.arguments or []
+        )
+        return f"{constructor_name}({rendered_arguments})"
     name = getattr(expr, "name", None)
     if isinstance(name, str):
         return name
