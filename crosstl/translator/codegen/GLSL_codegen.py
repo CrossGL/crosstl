@@ -523,6 +523,9 @@ class OpenGLBooleanCompoundAssignmentError(ValueError):
         operator=None,
         target=None,
         target_type=None,
+        right_type=None,
+        operation_type=None,
+        context=None,
         reason=None,
         source_location=None,
     ):
@@ -530,6 +533,9 @@ class OpenGLBooleanCompoundAssignmentError(ValueError):
         self.operator = operator
         self.target = target
         self.target_type = target_type
+        self.right_type = right_type
+        self.operation_type = operation_type
+        self.context = context
         self.reason = reason
         self.source_location = source_location
 
@@ -1528,6 +1534,15 @@ class GLSLCodeGen:
         "&=": "&",
         "^=": "^",
         "|=": "|",
+    }
+    BOOLEAN_ARITHMETIC_COMPOUND_ASSIGNMENT_BINARY_OPERATORS = {
+        "+=": "+",
+        "-=": "-",
+        "*=": "*",
+        "/=": "/",
+        "%=": "%",
+        "<<=": "<<",
+        ">>=": ">>",
     }
     GLSL_BFLOAT16_ALIASES = {"bfloat", "bfloat16", "bfloat16_t"}
     GLSL_COPYSIGN_NAMES = {
@@ -13195,6 +13210,15 @@ class GLSLCodeGen:
 
         return None
 
+    def generate_glsl_statement_code(self, code, indent=0):
+        indent_str = "    " * indent
+        lines = [line.rstrip() for line in str(code).splitlines() if line.strip()]
+        result = ""
+        for line in lines:
+            terminator = "" if line.endswith((";", "}")) else ";"
+            result += f"{indent_str}{line}{terminator}\n"
+        return result
+
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as GLSL source."""
         indent_str = "    " * indent
@@ -13348,7 +13372,9 @@ class GLSLCodeGen:
             )
             if dynamic_assignment is not None:
                 return dynamic_assignment
-            return f"{indent_str}{self.generate_assignment(stmt)};\n"
+            return self.generate_glsl_statement_code(
+                self.generate_assignment(stmt, statement_context=True), indent
+            )
         elif isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
         elif isinstance(stmt, BreakNode):
@@ -13472,6 +13498,10 @@ class GLSLCodeGen:
                 )
                 if dynamic_assignment is not None:
                     return dynamic_assignment
+                return self.generate_glsl_statement_code(
+                    self.generate_assignment(expression, statement_context=True),
+                    indent,
+                )
             dynamic_resource_statement = (
                 self.generate_glsl_dynamic_resource_call_expression_statement(
                     expression,
@@ -20708,6 +20738,262 @@ complex64_t crossgl_complex64_mod_assign(
             ) and self.glsl_side_effect_free_expression(expression.index)
         return False
 
+    def glsl_boolean_compound_assignment_error(
+        self,
+        node,
+        target,
+        operator,
+        target_type,
+        right_type,
+        *,
+        reason,
+        detail,
+        operation_type=None,
+    ):
+        raise self.GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR(
+            f"{self.GLSL_TARGET_DISPLAY_NAME} cannot lower boolean compound "
+            f"assignment '{operator}': {detail}",
+            operator=operator,
+            target=expression_debug_name(target),
+            target_type=self.type_name_string(target_type),
+            right_type=self.type_name_string(right_type),
+            operation_type=operation_type,
+            context="compound assignment",
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def glsl_boolean_compound_temporary(self, base_name, vtype):
+        name = self.glsl_synthetic_local_identifier(base_name)
+        self.local_variable_types[name] = vtype
+        self.local_variable_source_types[name] = vtype
+        return name
+
+    def glsl_stabilize_boolean_compound_lvalue(
+        self,
+        node,
+        target,
+        operator,
+        target_type,
+        right_type,
+    ):
+        def reject(reason, detail):
+            self.glsl_boolean_compound_assignment_error(
+                node,
+                target,
+                operator,
+                target_type,
+                right_type,
+                reason=reason,
+                detail=detail,
+            )
+
+        prefix = []
+        stabilized_target = deepcopy(target)
+
+        def stabilize(expression):
+            if isinstance(expression, (str, IdentifierNode, VariableNode)):
+                return expression
+
+            if isinstance(expression, MemberAccessNode):
+                owner = stabilize(
+                    getattr(
+                        expression, "object_expr", getattr(expression, "object", None)
+                    )
+                )
+                expression.object_expr = owner
+                expression.object = owner
+                return expression
+
+            if isinstance(expression, SwizzleNode):
+                expression.vector_expr = stabilize(expression.vector_expr)
+                return expression
+
+            if isinstance(expression, ArrayAccessNode):
+                array = stabilize(
+                    getattr(
+                        expression, "array_expr", getattr(expression, "array", None)
+                    )
+                )
+                expression.array_expr = array
+                expression.array = array
+                index = getattr(
+                    expression, "index_expr", getattr(expression, "index", None)
+                )
+                index_info = self.glsl_value_type_info(
+                    self.glsl_source_expression_type(index)
+                )
+                static_index = (
+                    isinstance(index, int)
+                    and not isinstance(index, bool)
+                    or isinstance(index, LiteralNode)
+                    and index_info is not None
+                    and index_info["family"] in {"int", "uint"}
+                    and index_info["width"] == 1
+                    and self.literal_int_value(index, {}) is not None
+                )
+                if static_index:
+                    return expression
+
+                if (
+                    index_info is None
+                    or index_info["family"] not in {"int", "uint"}
+                    or index_info["width"] != 1
+                ):
+                    reject(
+                        "unresolved-index-type",
+                        (
+                            "each dynamic lvalue index must resolve to a scalar "
+                            "integer type before it can be evaluated once"
+                        ),
+                    )
+                promoted_index_type = self.glsl_promoted_integer_type(index_info)
+                if promoted_index_type is None:
+                    reject(
+                        "unresolved-index-type",
+                        "the dynamic lvalue index has no representable promotion",
+                    )
+                rendered_index = self.generate_expression_with_expected(
+                    index, promoted_index_type
+                )
+                index_name = self.glsl_boolean_compound_temporary(
+                    "cgl_bool_compound_index", promoted_index_type
+                )
+                prefix.append(f"{promoted_index_type} {index_name} = {rendered_index}")
+                stable_index = IdentifierNode(
+                    index_name,
+                    source_location=getattr(index, "source_location", None),
+                )
+                expression.index_expr = stable_index
+                expression.index = stable_index
+                return expression
+
+            reject(
+                "unstable-assignment-target",
+                (
+                    "only identifier, member, swizzle, and indexed lvalues can be "
+                    "stabilized without changing evaluation semantics"
+                ),
+            )
+
+        return prefix, stabilize(stabilized_target)
+
+    def generate_glsl_boolean_arithmetic_compound_assignment(
+        self,
+        node,
+        target,
+        value,
+        operator,
+        target_type,
+        *,
+        statement_context,
+    ):
+        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL":
+            return None
+        binary_operator = (
+            self.BOOLEAN_ARITHMETIC_COMPOUND_ASSIGNMENT_BINARY_OPERATORS.get(operator)
+        )
+        target_info = self.glsl_value_type_info(target_type)
+        if (
+            binary_operator is None
+            or target_info is None
+            or target_info["family"] != "bool"
+        ):
+            return None
+
+        right_type = self.glsl_source_expression_type(value)
+
+        def reject(reason, detail, operation_type=None):
+            self.glsl_boolean_compound_assignment_error(
+                node,
+                target,
+                operator,
+                target_type,
+                right_type,
+                reason=reason,
+                detail=detail,
+                operation_type=operation_type,
+            )
+
+        try:
+            plan = self.glsl_arithmetic_conversion_plan(
+                target_type,
+                right_type,
+                binary_operator,
+                source_node=node,
+                fail_closed=True,
+            )
+        except self.GLSL_ARITHMETIC_CONVERSION_ERROR as error:
+            reject(
+                error.reason,
+                (
+                    "source operand promotion has no faithful target form "
+                    f"({error.reason.replace('-', ' ')})"
+                ),
+                error.attempted_common_type,
+            )
+        if plan is None:
+            reject(
+                "unresolved-promoted-operand-type",
+                (
+                    "the right operand must resolve to a scalar or vector arithmetic "
+                    "type before source promotion"
+                ),
+            )
+
+        result_info = self.glsl_value_type_info(plan.result_type)
+        if result_info is None or result_info["width"] != target_info["width"]:
+            reject(
+                "target-shape-unrepresentable",
+                (
+                    "the promoted result shape cannot be converted back to the "
+                    "boolean lvalue shape"
+                ),
+                plan.result_type,
+            )
+        if not statement_context:
+            reject(
+                "statement-context-required",
+                (
+                    "the promoted lvalue read, ordered right operand, and boolean "
+                    "writeback require statement temporaries"
+                ),
+                plan.result_type,
+            )
+
+        prefix, stable_target = self.glsl_stabilize_boolean_compound_lvalue(
+            node,
+            target,
+            operator,
+            target_type,
+            right_type,
+        )
+        left = self.generate_glsl_buffer_block_mutation_target(stable_target)
+        left_value = self.generate_expression_with_expected(
+            stable_target, plan.left_target_type
+        )
+        right_value = self.generate_expression_with_expected(
+            value, plan.right_target_type
+        )
+        left_name = self.glsl_boolean_compound_temporary(
+            "cgl_bool_compound_lhs", plan.left_target_type
+        )
+        right_name = self.glsl_boolean_compound_temporary(
+            "cgl_bool_compound_rhs", plan.right_target_type
+        )
+        operation = f"({left_name} {binary_operator} {right_name})"
+        writeback = self.glsl_bool_conversion_expression(
+            operation, result_info, target_info, node
+        )
+        return "\n".join(
+            [
+                *prefix,
+                f"{plan.left_target_type} {left_name} = {left_value}",
+                f"{plan.right_target_type} {right_name} = {right_value}",
+                f"{left} = {writeback}",
+            ]
+        )
+
     def glsl_narrow_update_value(
         self, target, value, binary_operator, expected_type, source_node
     ):
@@ -20730,7 +21016,15 @@ complex64_t crossgl_complex64_mod_assign(
         self, target, value, binary_operator, expected_type, source_node
     ):
         expected = self.glsl_value_type_info(expected_type)
-        if binary_operator is None or expected is None or expected["family"] != "bool":
+        if (
+            binary_operator is None
+            or (
+                self.GLSL_TARGET_DISPLAY_NAME == "OpenGL"
+                and binary_operator not in {"&", "|", "^"}
+            )
+            or expected is None
+            or expected["family"] != "bool"
+        ):
             return None
         if not self.glsl_stable_update_target(target):
             target_name = self.expression_name(target)
@@ -20826,7 +21120,7 @@ complex64_t crossgl_complex64_mod_assign(
         target = self.generate_glsl_buffer_block_mutation_target(expression.operand)
         return f"({target} = {value})"
 
-    def generate_assignment(self, node, is_main=False):
+    def generate_assignment(self, node, is_main=False, *, statement_context=False):
         left_node = getattr(node, "target", getattr(node, "left", None))
         right_node = getattr(node, "value", getattr(node, "right", None))
         op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
@@ -20864,8 +21158,20 @@ complex64_t crossgl_complex64_mod_assign(
             )
         else:
             expected_type = destination_type
-        left = self.generate_glsl_buffer_block_mutation_target(left_node)
         binary_operator = self.COMPOUND_ASSIGNMENT_BINARY_OPERATORS.get(op)
+        boolean_arithmetic_assignment = (
+            self.generate_glsl_boolean_arithmetic_compound_assignment(
+                node,
+                left_node,
+                right_node,
+                op,
+                expected_type,
+                statement_context=statement_context,
+            )
+        )
+        if boolean_arithmetic_assignment is not None:
+            return boolean_arithmetic_assignment
+        left = self.generate_glsl_buffer_block_mutation_target(left_node)
         if (
             binary_operator is not None
             and self.glsl_narrow_integer_contract(expected_type) is not None
