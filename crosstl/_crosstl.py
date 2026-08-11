@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import inspect
 import json
+import math
 import os
 import sys
 from dataclasses import replace
@@ -73,6 +74,16 @@ def _positive_int(value):
         raise argparse.ArgumentTypeError("must be a positive integer") from exc
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def _positive_float(value):
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive finite number") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive finite number")
     return parsed
 
 
@@ -621,6 +632,7 @@ def _run_translate_project(args):
     resume = bool(getattr(args, "resume", False))
     checkpoint_interval_jobs = getattr(args, "checkpoint_interval_jobs", 1)
     max_workers = getattr(args, "workers", 1)
+    job_timeout_seconds = getattr(args, "job_timeout_seconds", None)
     if resume and checkpoint_path is None:
         print("Error: --resume requires --checkpoint", file=sys.stderr)
         return 2
@@ -646,6 +658,8 @@ def _run_translate_project(args):
         translate_kwargs["checkpoint_interval_jobs"] = checkpoint_interval_jobs
     if max_workers != 1:
         translate_kwargs["max_workers"] = max_workers
+    if job_timeout_seconds is not None:
+        translate_kwargs["job_timeout_seconds"] = job_timeout_seconds
     report = translate_project(config, **translate_kwargs)
     payload = report.to_json()
     if args.report:
@@ -7038,6 +7052,14 @@ def _build_parser():
         type=_positive_int,
         default=1,
         help="Run up to this many artifact translations in isolated processes",
+    )
+    translate_project_parser.add_argument(
+        "--job-timeout-seconds",
+        type=_positive_float,
+        help=(
+            "Fail an artifact translation after this many seconds and continue "
+            "the project plan"
+        ),
     )
     translate_project_parser.add_argument(
         "--runtime-binding-manifest",

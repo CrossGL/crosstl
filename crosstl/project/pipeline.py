@@ -20,6 +20,7 @@ import time
 import uuid
 from collections import Counter, deque
 from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
 from multiprocessing import get_context
@@ -9805,6 +9806,7 @@ class _ScheduledProjectArtifactTranslation:
     item: _ProjectArtifactTranslationPlanItem
     restored_result: _ProjectArtifactTranslationResult | None = None
     future: Future[_ProjectArtifactTranslationResult] | None = None
+    submitted_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -9850,6 +9852,7 @@ def _run_project_translation_worker(
             run_toolchains=False,
             max_workers=1,
             translate_discovered_entry_points=None,
+            job_timeout_seconds=None,
             checkpoint_run=_ProjectTranslationCheckpointRun(
                 path=None,
                 resume=False,
@@ -10422,6 +10425,133 @@ def _cleanup_unconsumed_project_translation_futures(
         _cleanup_project_artifact_translation_result(result)
 
 
+def _project_translation_artifact_record(
+    *,
+    config: ProjectConfig,
+    request: _ProjectArtifactTranslationRequest,
+    include_paths: Sequence[str],
+    preserve_source_suffix: set[tuple[str, str]],
+) -> tuple[dict[str, Any], Path]:
+    unit = request.unit
+    target = request.target
+    job = request.job
+    variant = job.variant
+    selected_entry_point = job.entry_point
+    source_supports_defines = _source_frontend_supports_lexer_keyword(
+        unit.source_backend,
+        "defines",
+    )
+    source_supports_include_paths = _source_frontend_supports_lexer_keyword(
+        unit.source_backend,
+        "include_paths",
+    )
+    artifact_include_dependencies = _include_dependencies_for_artifact(
+        unit.include_dependencies,
+        variant,
+    )
+    output_path = _artifact_path(
+        config,
+        unit,
+        target,
+        variant,
+        preserve_source_suffix=(unit.relative_path, target) in preserve_source_suffix,
+        entry_point=selected_entry_point,
+    )
+    artifact: dict[str, Any] = {
+        "source": unit.relative_path,
+        "sourceBackend": unit.source_backend,
+        "target": target,
+        "path": _artifact_report_path(output_path, config),
+        "status": "translated",
+        "defines": dict(sorted(job.defines.items())),
+        "defineProcessing": _artifact_define_processing(
+            unit.source_backend,
+            job.defines,
+            supports_defines=source_supports_defines,
+        ),
+        "includePathProcessing": _artifact_include_path_processing(
+            unit.source_backend,
+            include_paths,
+            supports_include_paths=source_supports_include_paths,
+        ),
+        "includeDependencyProcessing": _artifact_include_dependency_processing(
+            unit.source_backend,
+            artifact_include_dependencies,
+            supports_include_paths=source_supports_include_paths,
+        ),
+        "sourceHash": dict(unit.source_hash),
+        "sourceSizeBytes": unit.source_size_bytes,
+        "provenance": {
+            "pipeline": (
+                "entry-scoped-translate"
+                if selected_entry_point is not None
+                else "single-file-translate"
+            ),
+            "intermediate": (
+                "crossgl"
+                if unit.source_backend not in {"cgl", "crossgl"}
+                and target not in {"cgl", "crossgl"}
+                else None
+            ),
+        },
+        "requiredCapabilities": list(_required_capabilities_for_unit(unit)),
+    }
+    if selected_entry_point is not None:
+        artifact["entryPoint"] = {
+            "source": selected_entry_point,
+            "target": "main" if target == "opengl" else selected_entry_point,
+        }
+    if variant is not None:
+        artifact["variant"] = variant
+    if job.dispatch_artifact is not None:
+        artifact["dispatchArtifact"] = job.dispatch_artifact.to_json()
+    return artifact, output_path
+
+
+def _project_translation_timeout_result(
+    *,
+    config: ProjectConfig,
+    request: _ProjectArtifactTranslationRequest,
+    include_paths: Sequence[str],
+    preserve_source_suffix: set[tuple[str, str]],
+    timeout_seconds: float,
+) -> _ProjectArtifactTranslationResult:
+    artifact, _output_path = _project_translation_artifact_record(
+        config=config,
+        request=request,
+        include_paths=include_paths,
+        preserve_source_suffix=preserve_source_suffix,
+    )
+    display_timeout = f"{timeout_seconds:g}"
+    message = (
+        f"Translation of '{request.unit.relative_path}' to target "
+        f"'{request.target}' exceeded the configured per-artifact time limit "
+        f"of {display_timeout} seconds. Increase --job-timeout-seconds "
+        "(job_timeout_seconds for Python callers) for this project or reduce "
+        "the source translation scope."
+    )
+    artifact["status"] = "failed"
+    artifact["error"] = message
+    diagnostic = ProjectDiagnostic(
+        severity="error",
+        code="project.translate.timeout",
+        message=message,
+        location=SourceLocation(file=request.unit.relative_path),
+        target=request.target,
+        source_backend=request.unit.source_backend,
+        variant=request.job.variant,
+        check_kind="artifact",
+        details={
+            "timeoutSeconds": timeout_seconds,
+            "coordinate": copy.deepcopy(dict(request.coordinate)),
+        },
+    )
+    return _ProjectArtifactTranslationResult(
+        artifacts=(artifact,),
+        diagnostics=(diagnostic,),
+    )
+
+
 def _translate_project_jobs_concurrently(
     *,
     config: ProjectConfig,
@@ -10433,6 +10563,7 @@ def _translate_project_jobs_concurrently(
     format_output: bool,
     output_dir_blocked: bool,
     max_workers: int,
+    job_timeout_seconds: float | None,
     checkpoint_run: _ProjectTranslationCheckpointRun,
     artifacts: list[dict[str, Any]],
     diagnostics: list[ProjectDiagnostic],
@@ -10474,8 +10605,31 @@ def _translate_project_jobs_concurrently(
     ] = {}
     plan_exhausted = False
 
+    def submit_item(
+        item: _ProjectArtifactTranslationPlanItem,
+    ) -> _ScheduledProjectArtifactTranslation:
+        nonlocal executor
+        if executor is None:
+            executor = ProcessPoolExecutor(
+                max_workers=max_workers,
+                mp_context=get_context("spawn"),
+                initializer=_initialize_project_translation_worker,
+                initargs=(context,),
+            )
+        submitted_at = time.monotonic()
+        future = executor.submit(
+            _run_project_translation_worker,
+            item.request,
+        )
+        unconsumed_futures[future] = item.request
+        return _ScheduledProjectArtifactTranslation(
+            item=item,
+            future=future,
+            submitted_at=submitted_at,
+        )
+
     def schedule_available() -> None:
-        nonlocal executor, plan_exhausted
+        nonlocal plan_exhausted
         while len(scheduled) < max_workers and not plan_exhausted:
             try:
                 item = next(plan)
@@ -10499,21 +10653,47 @@ def _translate_project_jobs_concurrently(
                     )
                 )
                 continue
-            if executor is None:
-                executor = ProcessPoolExecutor(
-                    max_workers=max_workers,
-                    mp_context=get_context("spawn"),
-                    initializer=_initialize_project_translation_worker,
-                    initargs=(context,),
-                )
-            future = executor.submit(
-                _run_project_translation_worker,
-                item.request,
-            )
-            unconsumed_futures[future] = item.request
-            scheduled.append(
-                _ScheduledProjectArtifactTranslation(item=item, future=future)
-            )
+            scheduled.append(submit_item(item))
+
+    def terminate_executor(*, suppress_errors: bool) -> None:
+        nonlocal executor
+        if executor is None:
+            return
+        active_executor = executor
+        try:
+            _terminate_project_translation_executor(active_executor)
+        except Exception as termination_error:
+            try:
+                active_executor.shutdown(wait=True)
+            except Exception:
+                if not suppress_errors:
+                    raise termination_error
+        executor = None
+
+    def cleanup_unconsumed_generation() -> None:
+        generation_futures = tuple(unconsumed_futures)
+        generation_requests = tuple(unconsumed_futures.values())
+        _cleanup_unconsumed_project_translation_futures(generation_futures)
+        _cleanup_project_translation_staging_for_requests(
+            config,
+            generation_requests,
+            staging_token=context.publication_staging_token,
+        )
+        unconsumed_futures.clear()
+
+    def restart_after_timeout() -> None:
+        pending = tuple(scheduled)
+        for pending_item in pending:
+            if pending_item.future is not None:
+                pending_item.future.cancel()
+        terminate_executor(suppress_errors=False)
+        cleanup_unconsumed_generation()
+        scheduled.clear()
+        for pending_item in pending:
+            if pending_item.restored_result is not None:
+                scheduled.append(pending_item)
+            else:
+                scheduled.append(submit_item(pending_item.item))
 
     try:
         schedule_available()
@@ -10529,19 +10709,66 @@ def _translate_project_jobs_concurrently(
                         "Scheduled project translation has no result or future"
                     )
                 checkpoint_run.activate(item.request.coordinate)
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    raise ProjectTranslationWorkerError(
-                        item.request.coordinate,
-                        exc,
-                    ) from exc
-                result = _publish_project_artifact_translation_result(
-                    config,
-                    item.request,
-                    result,
-                )
-                unconsumed_futures.pop(future, None)
+                timed_out = False
+                if job_timeout_seconds is None:
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        raise ProjectTranslationWorkerError(
+                            item.request.coordinate,
+                            exc,
+                        ) from exc
+                else:
+                    submitted_at = scheduled_item.submitted_at
+                    if submitted_at is None:
+                        raise RuntimeError(
+                            "Scheduled project translation has no submission time"
+                        )
+                    remaining_seconds = max(
+                        0.0,
+                        job_timeout_seconds - (time.monotonic() - submitted_at),
+                    )
+                    try:
+                        result = future.result(timeout=remaining_seconds)
+                    except FutureTimeoutError:
+                        done = getattr(future, "done", None)
+                        future_completed = False
+                        if callable(done):
+                            try:
+                                future_completed = bool(done())
+                            except Exception:
+                                future_completed = False
+                        if future_completed:
+                            try:
+                                result = future.result()
+                            except Exception as exc:
+                                raise ProjectTranslationWorkerError(
+                                    item.request.coordinate,
+                                    exc,
+                                ) from exc
+                        else:
+                            timed_out = True
+                    except Exception as exc:
+                        raise ProjectTranslationWorkerError(
+                            item.request.coordinate,
+                            exc,
+                        ) from exc
+                if timed_out:
+                    restart_after_timeout()
+                    result = _project_translation_timeout_result(
+                        config=config,
+                        request=item.request,
+                        include_paths=include_paths,
+                        preserve_source_suffix=preserve_source_suffix,
+                        timeout_seconds=job_timeout_seconds,
+                    )
+                else:
+                    result = _publish_project_artifact_translation_result(
+                        config,
+                        item.request,
+                        result,
+                    )
+                    unconsumed_futures.pop(future, None)
                 checkpoint_run.complete(
                     item.request.coordinate,
                     result.artifacts,
@@ -10554,27 +10781,15 @@ def _translate_project_jobs_concurrently(
         for scheduled_item in scheduled:
             if scheduled_item.future is not None:
                 scheduled_item.future.cancel()
-        if executor is not None:
-            try:
-                _terminate_project_translation_executor(executor)
-            except Exception:
-                try:
-                    executor.shutdown(wait=True)
-                except Exception:
-                    pass
-            executor = None
+        terminate_executor(suppress_errors=True)
         raise
     finally:
         try:
             if executor is not None:
                 executor.shutdown(wait=True)
+                executor = None
         finally:
-            _cleanup_unconsumed_project_translation_futures(unconsumed_futures)
-            _cleanup_project_translation_staging_for_requests(
-                config,
-                unconsumed_futures.values(),
-                staging_token=context.publication_staging_token,
-            )
+            cleanup_unconsumed_generation()
 
 
 def _validate_project_translation_checkpoint_path(
@@ -10666,6 +10881,7 @@ def _project_translation_checkpoint_identity(
     format_output: bool,
     validate: bool,
     run_toolchains: bool,
+    job_timeout_seconds: float | None,
 ) -> dict[str, Any]:
     scan_payload = scan.to_report(targets=targets).to_json()
     project = scan_payload["project"]
@@ -10680,6 +10896,8 @@ def _project_translation_checkpoint_identity(
         "validate": validate,
         "runToolchains": run_toolchains,
     }
+    if job_timeout_seconds is not None:
+        invocation["jobTimeoutSeconds"] = job_timeout_seconds
     return {
         "root": str(scan.config.root),
         "configHash": _project_config_hash(scan.config),
@@ -25733,6 +25951,7 @@ def translate_project(
     checkpoint_interval_jobs: int = 1,
     max_workers: int = 1,
     translate_discovered_entry_points: Sequence[str] | str | None = None,
+    job_timeout_seconds: float | None = None,
 ) -> ProjectPortabilityReport:
     """Translate all discovered project units to one or more target backends."""
     resume = _bool_arg(resume, field_name="resume")
@@ -25758,6 +25977,15 @@ def translate_project(
                 field_name="translate_discovered_entry_points",
             )
         )
+    if job_timeout_seconds is not None:
+        if (
+            isinstance(job_timeout_seconds, bool)
+            or not isinstance(job_timeout_seconds, (int, float))
+            or not math.isfinite(float(job_timeout_seconds))
+            or job_timeout_seconds <= 0
+        ):
+            raise ValueError("job_timeout_seconds must be a positive finite number")
+        job_timeout_seconds = float(job_timeout_seconds)
     checkpoint_run = _ProjectTranslationCheckpointRun(
         path=checkpoint_path,
         resume=resume,
@@ -25774,6 +26002,7 @@ def translate_project(
             run_toolchains=run_toolchains,
             max_workers=max_workers,
             translate_discovered_entry_points=translate_discovered_entry_points,
+            job_timeout_seconds=job_timeout_seconds,
             checkpoint_run=checkpoint_run,
         )
         checkpoint_run.finish(report)
@@ -25794,6 +26023,7 @@ def _translate_project_impl(
     run_toolchains: bool,
     max_workers: int,
     translate_discovered_entry_points: Sequence[str] | None,
+    job_timeout_seconds: float | None,
     checkpoint_run: _ProjectTranslationCheckpointRun,
     scan_override: ProjectScan | None = None,
     translation_job_override: _ProjectArtifactTranslationRequest | None = None,
@@ -25915,12 +26145,15 @@ def _translate_project_impl(
                 format_output=format_output,
                 validate=validate,
                 run_toolchains=run_toolchains,
+                job_timeout_seconds=job_timeout_seconds,
             ),
             checkpoint_jobs,
             diagnostics,
         )
 
-    if max_workers > 1 and translation_job_override is None:
+    if (
+        max_workers > 1 or job_timeout_seconds is not None
+    ) and translation_job_override is None:
         _translate_project_jobs_concurrently(
             config=config,
             scan=scan,
@@ -25931,6 +26164,7 @@ def _translate_project_impl(
             format_output=format_output,
             output_dir_blocked=output_dir_blocked,
             max_workers=max_workers,
+            job_timeout_seconds=job_timeout_seconds,
             checkpoint_run=checkpoint_run,
             artifacts=artifacts,
             diagnostics=diagnostics,
@@ -25952,7 +26186,6 @@ def _translate_project_impl(
         else scan.units
     )
     for unit in translation_units:
-        required_capabilities = _required_capabilities_for_unit(unit)
         source_supports_defines = _source_frontend_supports_lexer_keyword(
             unit.source_backend, "defines"
         )
@@ -26002,78 +26235,22 @@ def _translate_project_impl(
                 variant = translation_job.variant
                 defines = translation_job.defines
                 selected_entry_point = translation_job.entry_point
-                artifact_include_dependencies = _include_dependencies_for_artifact(
-                    unit.include_dependencies,
-                    variant,
-                )
-                output_path = _artifact_path(
-                    config,
-                    unit,
-                    target,
-                    variant,
-                    preserve_source_suffix=(unit.relative_path, target)
-                    in preserve_source_suffix,
-                    entry_point=selected_entry_point,
-                )
-                artifact = {
-                    "source": unit.relative_path,
-                    "sourceBackend": unit.source_backend,
-                    "target": target,
-                    "path": _artifact_report_path(output_path, config),
-                    "status": "translated",
-                    "defines": dict(sorted(defines.items())),
-                    "defineProcessing": _artifact_define_processing(
-                        unit.source_backend,
-                        defines,
-                        supports_defines=source_supports_defines,
-                    ),
-                    "includePathProcessing": _artifact_include_path_processing(
-                        unit.source_backend,
-                        include_paths,
-                        supports_include_paths=source_supports_include_paths,
-                    ),
-                    "includeDependencyProcessing": (
-                        _artifact_include_dependency_processing(
-                            unit.source_backend,
-                            artifact_include_dependencies,
-                            supports_include_paths=source_supports_include_paths,
-                        )
-                    ),
-                    "sourceHash": dict(unit.source_hash),
-                    "sourceSizeBytes": unit.source_size_bytes,
-                    "provenance": {
-                        "pipeline": (
-                            "entry-scoped-translate"
-                            if selected_entry_point is not None
-                            else "single-file-translate"
-                        ),
-                        "intermediate": (
-                            "crossgl"
-                            if unit.source_backend not in {"cgl", "crossgl"}
-                            and target not in {"cgl", "crossgl"}
-                            else None
-                        ),
-                    },
-                    "requiredCapabilities": list(required_capabilities),
-                }
-                if selected_entry_point is not None:
-                    artifact["entryPoint"] = {
-                        "source": selected_entry_point,
-                        "target": (
-                            "main" if target == "opengl" else selected_entry_point
-                        ),
-                    }
-                if variant is not None:
-                    artifact["variant"] = variant
-                if translation_job.dispatch_artifact is not None:
-                    artifact["dispatchArtifact"] = (
-                        translation_job.dispatch_artifact.to_json()
-                    )
                 checkpoint_coordinate = _project_translation_checkpoint_coordinate(
                     config,
                     unit,
                     target,
                     translation_job,
+                    preserve_source_suffix=preserve_source_suffix,
+                )
+                artifact, output_path = _project_translation_artifact_record(
+                    config=config,
+                    request=_ProjectArtifactTranslationRequest(
+                        unit=unit,
+                        target=target,
+                        job=translation_job,
+                        coordinate=checkpoint_coordinate,
+                    ),
+                    include_paths=include_paths,
                     preserve_source_suffix=preserve_source_suffix,
                 )
                 restored_completion = checkpoint_run.restore(

@@ -235,6 +235,36 @@ published outputs directly.
 Artifact validation and optional toolchain smoke checks run only after all
 translation jobs have returned, avoiding nested toolchain concurrency.
 
+Use ``--job-timeout-seconds`` to place a finite wall-clock limit on each
+artifact job:
+
+.. code-block:: bash
+
+   python -m crosstl translate-project /path/to/repo \
+     --target directx \
+     --target opengl \
+     --output-dir crosstl-out \
+     --report crosstl-reports/portability-report.json \
+     --checkpoint crosstl-reports/translation-checkpoint.json \
+     --workers 2 \
+     --job-timeout-seconds 300
+
+Python callers use the corresponding ``job_timeout_seconds`` argument. The
+value must be a positive finite number. A configured timeout uses process
+isolation even when ``max_workers=1`` so the active translation can be stopped.
+The budget starts when a job is submitted. A result that has already completed
+is accepted even when its budget has elapsed before the coordinator reaches it.
+
+When a job exceeds its budget, the coordinator terminates that worker-pool
+generation, removes its private staging, and resubmits unaffected scheduled
+jobs in canonical order. The timed-out coordinate is retained as a failed
+artifact with a ``project.translate.timeout`` diagnostic and, when enabled, a
+completed checkpoint record. Previously published output for that coordinate
+is not replaced. Translation then continues so the final report describes the
+rest of the repository instead of relying on an outer process timeout.
+Changing the configured timeout changes checkpoint invocation identity and
+therefore requires a new run rather than an incompatible resume.
+
 An interruption stops further submission, cancels work that has not started,
 and terminates pool processes that are still translating. Each concurrent run
 adds a private token to its staging directories. After the pool settles, the
@@ -319,7 +349,8 @@ interval reduces write overhead, but an ungraceful termination may cause up to
 completions are trusted.
 
 Python callers use the corresponding ``checkpoint_path``, ``resume``, and
-``checkpoint_interval_jobs`` arguments to ``translate_project``.
+``checkpoint_interval_jobs`` arguments to ``translate_project``. Worker count
+does not affect checkpoint identity, but a configured per-job timeout does.
 
 A progress checkpoint is not a final portability report. Only a ``complete``
 checkpoint contains the canonical final report, and neither state establishes
