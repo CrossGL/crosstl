@@ -134,6 +134,16 @@ The current harness verifies:
   through the built-in Direct3D 12 adapter. Seven invocations use `start = 300`
   and `step = 17`; the required zero-tolerance readback is
   `[300, 317, 334, 351, 368, 385, 402]`;
+- Direct3D 12 and OpenGL 4.3 native-loader execution of the actual pinned
+  `mlx/backend/metal/kernels/binary.metal` source. The project request selects
+  `ss_Addfloat32`, packages one standalone target entry, and verifies the exact
+  upstream source hash, entry-scoped provenance, reflected resource bindings,
+  and scalar buffer layouts. Four invocations read `1.5` and `2.25` from the
+  two source buffers and must return `[3.75, 3.75, 3.75, 3.75]` from the
+  translated kernel. Windows runs the HLSL artifact through Direct3D 12; Linux
+  runs the GLSL artifact through a surfaceless Mesa OpenGL context. This proves
+  one real binary operator entry and does not claim coverage of the other
+  materialized binary variants or the upstream MLX host runtime;
 - Vulkan assembly and validator checks for the existing non-fence regression
   frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
   deferred; the separate `fence.metal` contract check prevents generated
@@ -196,10 +206,11 @@ The current harness verifies:
   reduced generated compute artifact. The native adapter compiles the GLSL to
   SPIR-V, applies numeric constant ID 7, and requires exact readback for two
   independently selected unsigned values;
-- on Windows CI, native Direct3D 12 execution and exact readback for both the
-  reduced file-scope immutable lookup fixture and one generated uint32 entry
-  from the pinned MLX `arange.metal` source. Neither proof executes the upstream
-  MLX host runtime.
+- on Windows CI, native Direct3D 12 execution and exact readback for the reduced
+  file-scope immutable lookup fixture, one generated uint32 entry from pinned
+  `arange.metal`, and one generated float addition entry from pinned
+  `binary.metal`. Linux CI executes the same binary entry through OpenGL. None
+  of these proofs executes the upstream MLX host runtime.
 
 Pull requests run the 12-source pinned reduced scope: 11 non-fence frontier sources
 and the explicitly blocked `fence.metal` contract source. They also run the
