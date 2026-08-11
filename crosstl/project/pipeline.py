@@ -87,6 +87,7 @@ from crosstl.translator.codegen.pointer_reinterpret import (
 )
 from crosstl.translator.default_arguments import lower_default_arguments
 from crosstl.translator.entry_discovery import (
+    ENTRY_DISCOVERY_AVAILABLE,
     ENTRY_DISCOVERY_FAILED,
     ENTRY_DISCOVERY_STATUSES,
     ENTRY_DISCOVERY_UNAVAILABLE,
@@ -1468,6 +1469,10 @@ REPORT_PROJECT_FIELDS = frozenset(
         "sourceOverrideCount",
         "entryPointSelections",
         "entryPointSelectionCount",
+        "translateDiscoveredEntryPoints",
+        "translateDiscoveredEntryPointPatternCount",
+        "resolvedEntryPointSelections",
+        "resolvedEntryPointSelectionCount",
         "sourceOptions",
         "sourceOptionCount",
         "indexRangeAssertions",
@@ -7552,6 +7557,7 @@ class ProjectConfig:
     dispatch_contracts: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
     index_range_assertions: Sequence[Any] = ()
+    translate_discovered_entry_points: Sequence[str] | str = ()
     _dispatch_contract_manifests: tuple[DispatchContractManifest, ...] = field(
         default=(), init=False, repr=False, compare=False
     )
@@ -7579,6 +7585,7 @@ class ProjectConfig:
             "exclude_patterns",
             "include_dirs",
             "dispatch_contracts",
+            "translate_discovered_entry_points",
         ):
             object.__setattr__(
                 self,
@@ -7590,6 +7597,13 @@ class ProjectConfig:
                         allow_pathlike=True,
                     )
                 ),
+            )
+        if len(set(self.translate_discovered_entry_points)) != len(
+            self.translate_discovered_entry_points
+        ):
+            raise ValueError(
+                "ProjectConfig.translate_discovered_entry_points must not contain "
+                "duplicate patterns"
             )
         for field_name in ("targets", "selected_variants"):
             object.__setattr__(
@@ -8439,6 +8453,21 @@ def _scan_pattern_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                 missing_capabilities=["artifact.entry-point-selection"],
             )
         )
+    for pattern in config.translate_discovered_entry_points:
+        if _is_repository_relative_glob(pattern):
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code=("project.config.discovered-entry-point-pattern-outside-project"),
+                message=(
+                    "Configured discovered entry-point pattern "
+                    f"'{pattern}' is not repository-relative."
+                ),
+                location=location,
+                missing_capabilities=["artifact.entry-point-selection"],
+            )
+        )
     for pattern in config.source_specialization_constants:
         if _is_repository_relative_glob(pattern):
             continue
@@ -8583,7 +8612,9 @@ class ProjectScan:
                 entry.name for entry in unit.entry_discovery.entries
             )
             for unit in self.units
-            if unit.entry_discovery is not None and unit.entry_discovery.entries
+            if unit.entry_discovery is not None
+            and unit.entry_discovery.status == ENTRY_DISCOVERY_AVAILABLE
+            and unit.entry_discovery.entries
         }
 
     def to_report(
@@ -8613,6 +8644,37 @@ class ProjectScan:
             ),
             dispatch_artifact_plan=self.dispatch_artifact_plan,
         )
+
+
+def _resolved_entry_point_selections(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+) -> dict[str, str | Sequence[str]]:
+    selections: dict[str, str | Sequence[str]] = dict(config.entry_points)
+    if not config.translate_discovered_entry_points:
+        return selections
+
+    discovered = ProjectScan(config=config, units=units).discovered_entry_points()
+    for relative_path, entry_points in discovered.items():
+        if not any(
+            fnmatch.fnmatch(relative_path, pattern)
+            for pattern in config.translate_discovered_entry_points
+        ):
+            continue
+        if _entry_points_from_mapping(relative_path, config.entry_points):
+            continue
+        selections[relative_path] = entry_points
+    return selections
+
+
+def _resolved_entry_points_for_unit(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+) -> tuple[str, ...]:
+    return _entry_points_from_mapping(
+        unit.relative_path,
+        _resolved_entry_point_selections(config, (unit,)),
+    )
 
 
 @dataclass(frozen=True)
@@ -8655,6 +8717,10 @@ class ProjectPortabilityReport:
             self.config, self.units, self.artifacts, self.targets
         )
         dispatch_contracts = _dispatch_contract_report_records(self.config)
+        resolved_entry_point_selections = _resolved_entry_point_selections(
+            self.config,
+            self.units,
+        )
         dispatch_artifact_plan = self.dispatch_artifact_plan or _dispatch_artifact_plan(
             self.config,
             self.units,
@@ -8692,6 +8758,18 @@ class ProjectPortabilityReport:
                     self.config.entry_points
                 ),
                 "entryPointSelectionCount": len(self.config.entry_points),
+                "translateDiscoveredEntryPoints": list(
+                    self.config.translate_discovered_entry_points
+                ),
+                "translateDiscoveredEntryPointPatternCount": len(
+                    self.config.translate_discovered_entry_points
+                ),
+                "resolvedEntryPointSelections": _entry_point_selections_payload(
+                    resolved_entry_point_selections
+                ),
+                "resolvedEntryPointSelectionCount": len(
+                    resolved_entry_point_selections
+                ),
                 "sourceOptions": {
                     name: dict(sorted(options.items()))
                     for name, options in sorted(self.config.source_options.items())
@@ -8921,6 +8999,12 @@ def load_project_config(
         project.get("entry_points"),
         field_name="crosstl.toml [project.entry_points]",
     )
+    translate_discovered_entry_points = _normalize_project_relative_paths(
+        _as_str_list(
+            project.get("translate_discovered_entry_points"),
+            field_name="project.translate_discovered_entry_points",
+        )
+    )
     variants = project.get("variants", {})
     if not isinstance(variants, Mapping):
         raise ValueError("crosstl.toml [project.variants] must be a table")
@@ -8989,6 +9073,7 @@ def load_project_config(
         output_dir=_normalize_project_relative_path(output_dir or DEFAULT_OUTPUT_DIR),
         source_overrides=_normalize_project_relative_path_mapping(sources),
         entry_points=_normalize_entry_point_selection_mapping(entry_points),
+        translate_discovered_entry_points=translate_discovered_entry_points,
         include_dirs=_normalize_project_relative_paths(
             _as_str_list(project.get("include_dirs"), field_name="project.include_dirs")
         ),
@@ -9155,6 +9240,71 @@ def _entry_point_selection_diagnostics(
         if _is_repository_relative_glob(pattern)
         and not any(fnmatch.fnmatch(path, pattern) for path in unit_paths)
     ]
+
+
+def _discovered_entry_point_selection_diagnostics(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+) -> list[ProjectDiagnostic]:
+    unit_paths = [unit.relative_path for unit in units]
+    diagnostics = [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.config.discovered-entry-point-pattern-unmatched",
+            message=(
+                f"Configured discovered entry-point pattern '{pattern}' does not "
+                "match a discovered translation unit."
+            ),
+            location=_config_location(config),
+            missing_capabilities=["artifact.entry-point-selection"],
+            details={"pattern": pattern},
+        )
+        for pattern in config.translate_discovered_entry_points
+        if _is_repository_relative_glob(pattern)
+        and not any(fnmatch.fnmatch(path, pattern) for path in unit_paths)
+    ]
+    for unit in units:
+        if not any(
+            fnmatch.fnmatch(unit.relative_path, pattern)
+            for pattern in config.translate_discovered_entry_points
+        ):
+            continue
+        if _entry_points_from_mapping(unit.relative_path, config.entry_points):
+            continue
+        discovery = unit.entry_discovery
+        if discovery is not None and discovery.status == ENTRY_DISCOVERY_AVAILABLE:
+            if discovery.entries:
+                continue
+            code = "project.config.discovered-entry-points-empty"
+            message = (
+                f"Entry-point discovery for '{unit.relative_path}' returned no "
+                "concrete entries, so discovered entry artifacts cannot be planned."
+            )
+        else:
+            status = discovery.status if discovery is not None else "unavailable"
+            code = "project.config.discovered-entry-points-unavailable"
+            message = (
+                f"Entry-point discovery for '{unit.relative_path}' is {status}; "
+                "discovered entry artifacts cannot be planned for this source."
+            )
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code=code,
+                message=message,
+                location=SourceLocation(file=unit.relative_path),
+                source_backend=unit.source_backend,
+                check_kind="source-entry-discovery",
+                missing_capabilities=["source.entry-point-discovery"],
+                details={
+                    "source": unit.relative_path,
+                    "status": (
+                        discovery.status if discovery is not None else "unavailable"
+                    ),
+                },
+            )
+        )
+    return diagnostics
 
 
 def _workgroup_size_rule_diagnostics(
@@ -9418,6 +9568,9 @@ def scan_project(
         _external_corpus_source_backend_mismatch_diagnostics(scan_config, units)
     )
     diagnostics.extend(_entry_point_selection_diagnostics(scan_config, units))
+    diagnostics.extend(
+        _discovered_entry_point_selection_diagnostics(scan_config, units)
+    )
     diagnostics.extend(_workgroup_size_rule_diagnostics(scan_config, units))
     diagnostics.extend(_subgroup_width_rule_diagnostics(scan_config, units))
     if not units:
@@ -9698,6 +9851,7 @@ def _run_project_translation_worker(
             validate=False,
             run_toolchains=False,
             max_workers=1,
+            translate_discovered_entry_points=None,
             job_timeout_seconds=None,
             checkpoint_run=_ProjectTranslationCheckpointRun(
                 path=None,
@@ -9830,10 +9984,10 @@ class _ProjectTranslationCheckpointRun:
 
 def _regular_project_translation_jobs(
     config: ProjectConfig,
-    relative_path: str,
+    unit: ProjectTranslationUnit,
 ) -> Iterator[_ProjectArtifactTranslationJob]:
-    entry_points: tuple[str | None, ...] = _entry_points_for_path(
-        relative_path, config
+    entry_points: tuple[str | None, ...] = _resolved_entry_points_for_unit(
+        config, unit
     ) or (None,)
     for variant, defines in _variant_jobs(config):
         for entry_point in entry_points:
@@ -9844,7 +9998,7 @@ def _regular_project_translation_jobs(
                 specialization_values=_variant_specialization_values(
                     config,
                     variant,
-                    relative_path=relative_path,
+                    relative_path=unit.relative_path,
                 ),
             )
 
@@ -9965,7 +10119,7 @@ def _project_translation_jobs_for_target(
 ) -> Iterator[_ProjectArtifactTranslationJob]:
     artifacts = dispatch_artifacts.get(unit.relative_path, ())
     if target not in WORKGROUP_SIZE_SPECIALIZATION_TARGETS or not artifacts:
-        return _regular_project_translation_jobs(config, unit.relative_path)
+        return _regular_project_translation_jobs(config, unit)
     return _dispatch_project_translation_jobs(config, unit.relative_path, artifacts)
 
 
@@ -12475,7 +12629,9 @@ def _artifact_matrix_report(
         variant_names,
         preserve_source_suffix,
         artifacts=artifacts,
-        entry_point_selections=config.entry_points,
+        entry_point_selections=_entry_point_selections_payload(
+            _resolved_entry_point_selections(config, units)
+        ),
         variants_by_source_target=variants_by_source_target,
     )
     payload["expectedArtifactCount"] = len(expected_identities)
@@ -25794,6 +25950,7 @@ def translate_project(
     resume: bool = False,
     checkpoint_interval_jobs: int = 1,
     max_workers: int = 1,
+    translate_discovered_entry_points: Sequence[str] | str | None = None,
     job_timeout_seconds: float | None = None,
 ) -> ProjectPortabilityReport:
     """Translate all discovered project units to one or more target backends."""
@@ -25813,6 +25970,13 @@ def translate_project(
         raise ValueError("checkpoint_interval_jobs requires checkpoint_path")
     if type(max_workers) is not int or max_workers <= 0:
         raise ValueError("max_workers must be a positive integer")
+    if translate_discovered_entry_points is not None:
+        translate_discovered_entry_points = _normalize_project_relative_paths(
+            _as_str_list(
+                translate_discovered_entry_points,
+                field_name="translate_discovered_entry_points",
+            )
+        )
     if job_timeout_seconds is not None:
         if (
             isinstance(job_timeout_seconds, bool)
@@ -25837,6 +26001,7 @@ def translate_project(
             validate=validate,
             run_toolchains=run_toolchains,
             max_workers=max_workers,
+            translate_discovered_entry_points=translate_discovered_entry_points,
             job_timeout_seconds=job_timeout_seconds,
             checkpoint_run=checkpoint_run,
         )
@@ -25857,6 +26022,7 @@ def _translate_project_impl(
     validate: bool,
     run_toolchains: bool,
     max_workers: int,
+    translate_discovered_entry_points: Sequence[str] | None,
     job_timeout_seconds: float | None,
     checkpoint_run: _ProjectTranslationCheckpointRun,
     scan_override: ProjectScan | None = None,
@@ -25876,6 +26042,11 @@ def _translate_project_impl(
         if isinstance(config_or_root, ProjectConfig)
         else load_project_config(config_or_root)
     )
+    if translate_discovered_entry_points is not None:
+        config = replace(
+            config,
+            translate_discovered_entry_points=translate_discovered_entry_points,
+        )
     if output_dir is not None:
         output_dir = _path_string_arg(output_dir, field_name="output_dir")
         if not output_dir.strip():
@@ -25890,6 +26061,9 @@ def _translate_project_impl(
             output_dir=output_dir,
             source_overrides=config.source_overrides,
             entry_points=config.entry_points,
+            translate_discovered_entry_points=(
+                config.translate_discovered_entry_points
+            ),
             include_dirs=config.include_dirs,
             defines=config.defines,
             source_options=config.source_options,
@@ -29090,11 +29264,10 @@ def _runtime_plan_project(project: Any) -> dict[str, Any]:
         ),
         "outputDir": project.get("outputDir"),
     }
-    entry_point_selections = project.get("entryPointSelections")
+    entry_point_selections = _report_entry_point_selections(project)
     if isinstance(entry_point_selections, Mapping):
         payload["entryPointSelections"] = dict(entry_point_selections)
-    if _is_non_negative_int(project.get("entryPointSelectionCount")):
-        payload["entryPointSelectionCount"] = project["entryPointSelectionCount"]
+        payload["entryPointSelectionCount"] = len(entry_point_selections)
     return payload
 
 
@@ -42121,7 +42294,7 @@ def _inspection_artifact_matrix_identity_sets(
         variant_names,
         preserve_source_suffix,
         artifacts=artifact_records,
-        entry_point_selections=project.get("entryPointSelections"),
+        entry_point_selections=_report_entry_point_selections(project),
         variants_by_source_target=_report_translation_variants_by_source_target(
             project,
             units,
@@ -44281,6 +44454,9 @@ def _project_config_for_scan_validation(
 
     source_overrides = project.get("sourceOverrides")
     entry_point_selections = project.get("entryPointSelections", {})
+    translate_discovered_entry_points = project.get(
+        "translateDiscoveredEntryPoints", []
+    )
     defines = project.get("defines")
     source_options = project.get("sourceOptions", {})
     if not _valid_non_empty_string_mapping(
@@ -44288,6 +44464,12 @@ def _project_config_for_scan_validation(
     ) or not _valid_string_mapping(defines):
         return None
     if not _valid_entry_point_selection_mapping(entry_point_selections):
+        return None
+    if not _is_string_sequence(translate_discovered_entry_points):
+        return None
+    if len(set(translate_discovered_entry_points)) != len(
+        translate_discovered_entry_points
+    ):
         return None
     if not _valid_source_options_mapping(source_options):
         return None
@@ -44382,6 +44564,9 @@ def _project_config_for_scan_validation(
                 field_name="project.entryPointSelections",
             )
         ),
+        translate_discovered_entry_points=tuple(
+            _normalize_project_relative_paths(translate_discovered_entry_points)
+        ),
         include_dirs=tuple(_normalize_project_relative_paths(include_dirs)),
         defines=dict(defines),
         source_options={
@@ -44408,6 +44593,72 @@ def _project_config_for_scan_validation(
         selected_variants=tuple(selected_variants),
         external_corpus_manifest=external_corpus_manifest,
     )
+
+
+def _resolved_entry_point_selection_metadata_reasons(
+    project: Mapping[str, Any],
+    units: Sequence[Any],
+) -> list[str]:
+    metadata_fields = (
+        "translateDiscoveredEntryPoints",
+        "translateDiscoveredEntryPointPatternCount",
+        "resolvedEntryPointSelections",
+        "resolvedEntryPointSelectionCount",
+    )
+    if not any(field_name in project for field_name in metadata_fields):
+        return []
+    missing = [
+        field_name for field_name in metadata_fields if field_name not in project
+    ]
+    if missing:
+        return [
+            "project discovered entry-point metadata requires " + ", ".join(missing)
+        ]
+
+    patterns = project.get("translateDiscoveredEntryPoints")
+    configured = project.get("entryPointSelections")
+    resolved = project.get("resolvedEntryPointSelections")
+    if not (
+        isinstance(patterns, list)
+        and all(_is_non_empty_string(pattern) for pattern in patterns)
+        and _valid_entry_point_selection_mapping(configured)
+        and _valid_entry_point_selection_mapping(resolved)
+    ):
+        return []
+
+    expected: dict[str, str | Sequence[str]] = dict(configured)
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            return []
+        source = unit.get("path")
+        discovery = unit.get("entryDiscovery")
+        if not _is_non_empty_string(source) or not isinstance(discovery, Mapping):
+            return []
+        if discovery.get("status") != ENTRY_DISCOVERY_AVAILABLE:
+            continue
+        entries = discovery.get("entries")
+        if not isinstance(entries, list):
+            return []
+        names = tuple(
+            entry.get("name")
+            for entry in entries
+            if isinstance(entry, Mapping) and _is_non_empty_string(entry.get("name"))
+        )
+        if len(names) != len(entries) or not names:
+            continue
+        if not any(fnmatch.fnmatch(str(source), pattern) for pattern in patterns):
+            continue
+        if _configured_entry_points_for_source(str(source), configured):
+            continue
+        expected[str(source)] = names
+
+    expected_payload = _entry_point_selections_payload(expected)
+    if resolved != expected_payload:
+        return [
+            "project.resolvedEntryPointSelections must match configured selectors "
+            "and available discovered entries"
+        ]
+    return []
 
 
 ProjectScanUnitIdentity = Tuple[str, str]
@@ -44593,13 +44844,22 @@ def _configured_entry_points_for_source(
     return _entry_points_from_mapping(source_path, normalized)
 
 
+def _report_entry_point_selections(project: Mapping[str, Any]) -> Any:
+    resolved = project.get("resolvedEntryPointSelections")
+    if _valid_entry_point_selection_mapping(resolved):
+        return resolved
+    return project.get("entryPointSelections")
+
+
 def _configured_entry_points_for_artifact(
     record: Mapping[str, Any],
     project: Mapping[str, Any] | None,
 ) -> tuple[str, ...]:
     source_path = record.get("source")
     selections = (
-        project.get("entryPointSelections") if isinstance(project, Mapping) else None
+        _report_entry_point_selections(project)
+        if isinstance(project, Mapping)
+        else None
     )
     return _configured_entry_points_for_source(
         str(source_path) if isinstance(source_path, str) else "",
@@ -46351,7 +46611,7 @@ def _artifact_matrix_contract_reasons(
         variant_names,
         preserve_source_suffix,
         artifacts=[artifact for artifact in artifacts if isinstance(artifact, Mapping)],
-        entry_point_selections=project.get("entryPointSelections"),
+        entry_point_selections=_report_entry_point_selections(project),
         variants_by_source_target=variants_by_source_target,
     )
     reasons = []
@@ -46451,7 +46711,7 @@ def _expected_artifact_matrix_metadata(
                     for artifact in _record_sequence(artifacts)
                     if isinstance(artifact, Mapping)
                 ],
-                entry_point_selections=project.get("entryPointSelections"),
+                entry_point_selections=_report_entry_point_selections(project),
                 variants_by_source_target=variants_by_source_target,
             )
         )
@@ -49836,6 +50096,75 @@ def _project_metadata_contract_reasons(
                 f"({_value_mismatch_context(count, len(entry_point_selections))})"
             )
 
+    translate_discovered_entry_points = project.get("translateDiscoveredEntryPoints")
+    translate_discovered_entry_points_are_list = isinstance(
+        translate_discovered_entry_points, list
+    ) and all(isinstance(pattern, str) for pattern in translate_discovered_entry_points)
+    if _optional_project_field(
+        project,
+        "translateDiscoveredEntryPoints",
+        required=False,
+    ):
+        reasons.extend(
+            _config_string_list_contract_reasons(
+                "project.translateDiscoveredEntryPoints",
+                translate_discovered_entry_points,
+            )
+        )
+        if translate_discovered_entry_points_are_list and len(
+            set(translate_discovered_entry_points)
+        ) != len(translate_discovered_entry_points):
+            reasons.append(
+                "project.translateDiscoveredEntryPoints must not contain "
+                "duplicate patterns"
+            )
+    if _optional_project_field(
+        project,
+        "translateDiscoveredEntryPointPatternCount",
+        required=False,
+    ):
+        count = project.get("translateDiscoveredEntryPointPatternCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.translateDiscoveredEntryPointPatternCount must be a "
+                "non-negative integer"
+            )
+        elif translate_discovered_entry_points_are_list and count != len(
+            translate_discovered_entry_points
+        ):
+            reasons.append(
+                "project.translateDiscoveredEntryPointPatternCount must match "
+                "project.translateDiscoveredEntryPoints"
+            )
+
+    resolved_entry_point_selections = project.get("resolvedEntryPointSelections")
+    resolved_entry_point_selections_are_mapping = isinstance(
+        resolved_entry_point_selections, Mapping
+    )
+    if _optional_project_field(project, "resolvedEntryPointSelections", required=False):
+        reasons.extend(
+            _entry_point_selection_mapping_contract_reasons(
+                "project.resolvedEntryPointSelections",
+                resolved_entry_point_selections,
+            )
+        )
+    if _optional_project_field(
+        project, "resolvedEntryPointSelectionCount", required=False
+    ):
+        count = project.get("resolvedEntryPointSelectionCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.resolvedEntryPointSelectionCount must be a "
+                "non-negative integer"
+            )
+        elif resolved_entry_point_selections_are_mapping and count != len(
+            resolved_entry_point_selections
+        ):
+            reasons.append(
+                "project.resolvedEntryPointSelectionCount must match "
+                "project.resolvedEntryPointSelections"
+            )
+
     source_options = project.get("sourceOptions")
     source_options_is_mapping = isinstance(source_options, Mapping)
     if _optional_project_field(
@@ -52863,6 +53192,10 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     )
                 )
             reasons.extend(_duplicate_path_contract_reasons("units", units))
+            if isinstance(project, Mapping):
+                reasons.extend(
+                    _resolved_entry_point_selection_metadata_reasons(project, units)
+                )
 
     if isinstance(project, Mapping):
         reasons.extend(
