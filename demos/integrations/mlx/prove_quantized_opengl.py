@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,8 @@ MLX_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_QUANTIZED_SOURCE = f"{MLX_KERNEL_ROOT}/quantized.metal"
 MLX_QUANTIZED_HEADER = f"{MLX_KERNEL_ROOT}/quantized.h"
 MLX_QUANTIZED_ENTRY_POINT = "affine_quantize_float_gs_32_b_2"
+MLX_QUANTIZED_GATHER_ENTRY_POINT = "affine_gather_qmv_fast_float_gs_32_b_2"
+MLX_QUANTIZED_GATHER_WORKGROUP_SIZE = (32, 2, 1)
 
 PINNED_FILE_SHA256 = {
     MLX_QUANTIZED_SOURCE: (
@@ -52,6 +55,42 @@ INDEX_RANGE_ASSERTIONS = tuple(
     }
     for expression in INDEX_RANGE_EXPRESSIONS
 )
+GATHER_INDEX_RANGE_EXPRESSIONS = (
+    "tid.z * lhs_strides[0]",
+    "tid.z * rhs_strides[0]",
+    "idx.x",
+    "idx.y",
+)
+GATHER_INDEX_RANGE_ASSERTIONS = tuple(
+    {
+        "source": MLX_QUANTIZED_SOURCE,
+        "expression": expression,
+        "minimum": INDEX_RANGE_MINIMUM,
+        "maximum": INDEX_RANGE_MAXIMUM,
+    }
+    for expression in GATHER_INDEX_RANGE_EXPRESSIONS
+)
+ENTRY_CONTRACTS = {
+    MLX_QUANTIZED_ENTRY_POINT: {
+        "specializationName": "affine_quantize",
+        "parameters": {"T": "float", "bits": "2", "group_size": "32"},
+        "reachableSpecializationCount": REACHABLE_SPECIALIZATION_COUNT,
+        "concreteSpecializationCount": CONCRETE_SPECIALIZATION_COUNT,
+        "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
+        "generatedContract": "quantize",
+        "indexRangeAssertions": INDEX_RANGE_ASSERTIONS,
+    },
+    MLX_QUANTIZED_GATHER_ENTRY_POINT: {
+        "specializationName": "affine_gather_qmv_fast",
+        "parameters": {"T": "float", "bits": "2", "group_size": "32"},
+        "reachableSpecializationCount": 11,
+        "concreteSpecializationCount": 8,
+        "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
+        "generatedContract": "gather-qmv-fast",
+        "indexRangeAssertions": GATHER_INDEX_RANGE_ASSERTIONS,
+        "workgroupSize": MLX_QUANTIZED_GATHER_WORKGROUP_SIZE,
+    },
+}
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/quantized-opengl"
 SUMMARY_FILENAME = "summary.json"
 
@@ -80,6 +119,33 @@ _GENERATED_INDEX_SENTINELS = {
         "out_[uint((out_index / uint64_t(writes_per_reduce)))]"
     ),
 }
+_GATHER_QDOT_DEFINITION_RE = re.compile(
+    r"\bfloat\s+qdot_float_16_2[A-Za-z0-9_]*\s*"
+    r"\([^)]*\bint\s+w_offset\s*,\s*\bint\s+w_byte_offset\s*\)\s*"
+    r"\{(?P<body>.*?)^\}",
+    re.MULTILINE | re.DOTALL,
+)
+_GATHER_QDOT_CALL_RE = re.compile(
+    r"\bqdot_float_16_2[A-Za-z0-9_]*\s*"
+    r"\([^;]*\bint\s*\(\s*wl_offset\s*\)\s*,\s*"
+    r"\bint\s*\(\s*\(\s*w_offset\s*\*\s*4\s*\)\s*\)\s*\)"
+)
+_GATHER_ADJUST_DEFINITION_RE = re.compile(
+    r"\bvoid\s+adjust_matrix_offsets_float[A-Za-z0-9_]*\s*"
+    r"\([^)]*\binout\s+int\s+x_offset\b"
+    r"[^)]*\binout\s+int\s+w_offset\b"
+    r"[^)]*\binout\s+int\s+scales_offset\b"
+    r"[^)]*\binout\s+int\s+biases_offset\b"
+    r"[^)]*\binout\s+int\s+y_offset\b",
+    re.DOTALL,
+)
+GATHER_MUTABLE_POINTER_OFFSETS = (
+    "x_offset",
+    "w_offset",
+    "scales_offset",
+    "biases_offset",
+    "y_offset",
+)
 
 
 class MlxQuantizedOpenGLProofError(RuntimeError):
@@ -231,7 +297,15 @@ def _run_command(
     }
 
 
-def _project_config(mlx_root: Path, work_dir: Path) -> ProjectConfig:
+def _project_config(
+    mlx_root: Path,
+    work_dir: Path,
+    *,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
+) -> ProjectConfig:
+    entry_contract = ENTRY_CONTRACTS.get(entry_point)
+    _require(entry_contract is not None, f"unsupported proof entry: {entry_point}")
+    workgroup_size = entry_contract.get("workgroupSize")
     return ProjectConfig(
         root=mlx_root,
         source_roots=(MLX_KERNEL_ROOT,),
@@ -239,7 +313,7 @@ def _project_config(mlx_root: Path, work_dir: Path) -> ProjectConfig:
         targets=(TARGET,),
         output_dir=_relpath(work_dir / "artifacts", mlx_root),
         source_overrides={MLX_QUANTIZED_SOURCE: "metal"},
-        entry_points={MLX_QUANTIZED_SOURCE: MLX_QUANTIZED_ENTRY_POINT},
+        entry_points={MLX_QUANTIZED_SOURCE: entry_point},
         include_dirs=(".",),
         source_options={
             "metal": {
@@ -247,7 +321,12 @@ def _project_config(mlx_root: Path, work_dir: Path) -> ProjectConfig:
                 "max_template_materialization_work": MATERIALIZATION_WORK_LIMIT,
             }
         },
-        index_range_assertions=INDEX_RANGE_ASSERTIONS,
+        workgroup_size_rules=(
+            {MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup_size]}
+            if workgroup_size is not None
+            else {}
+        ),
+        index_range_assertions=entry_contract["indexRangeAssertions"],
     )
 
 
@@ -288,9 +367,15 @@ def _require_translation_summary(payload: Mapping[str, Any]) -> None:
     )
 
 
-def _require_index_range_contract(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _require_index_range_contract(
+    payload: Mapping[str, Any],
+    *,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
+) -> dict[str, Any]:
+    entry_contract = ENTRY_CONTRACTS.get(entry_point)
+    _require(entry_contract is not None, f"unsupported proof entry: {entry_point}")
     project = payload.get("project")
-    expected = [dict(assertion) for assertion in INDEX_RANGE_ASSERTIONS]
+    expected = [dict(assertion) for assertion in entry_contract["indexRangeAssertions"]]
     _require(
         isinstance(project, Mapping)
         and project.get("indexRangeAssertionCount") == len(expected)
@@ -307,12 +392,85 @@ def _require_index_range_contract(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_sha256_identity(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and value.get("algorithm") == "sha256"
+        and re.fullmatch(r"[0-9a-f]{64}", str(value.get("value", ""))) is not None
+    )
+
+
+def _validate_execution_report(
+    payload: Mapping[str, Any],
+    artifact: Mapping[str, Any],
+    *,
+    entry_point: str,
+    entry_contract: Mapping[str, Any],
+) -> None:
+    workgroup_size = entry_contract.get("workgroupSize")
+    if workgroup_size is None:
+        return
+
+    workgroup_size = list(workgroup_size)
+    rule_path = f'project.workgroup_size_rules["{MLX_QUANTIZED_SOURCE}"]'
+    expected_rule = {
+        "components": [str(value) for value in workgroup_size],
+        "sourcePattern": MLX_QUANTIZED_SOURCE,
+        "path": rule_path,
+    }
+    project = payload.get("project")
+    _require(
+        isinstance(project, Mapping)
+        and project.get("workgroupSize") is None
+        and project.get("workgroupSizeRules")
+        == {MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup_size]}
+        and project.get("workgroupSizeRuleCount") == 1
+        and project.get("subgroupWidthRules") == {}
+        and project.get("subgroupWidthRuleCount") == 0,
+        "quantized OpenGL report did not retain the pinned workgroup rule",
+    )
+
+    execution = artifact.get("execution")
+    entries = execution.get("entryPoints") if isinstance(execution, Mapping) else None
+    _require(
+        isinstance(execution, Mapping)
+        and execution.get("sourceEntryPoints") == [entry_point]
+        and execution.get("provenance")
+        == {"kind": "materialized-template-rule", "path": rule_path}
+        and _is_sha256_identity(execution.get("identity"))
+        and isinstance(entries, list)
+        and len(entries) == 1
+        and isinstance(entries[0], Mapping),
+        "quantized OpenGL artifact execution metadata changed",
+    )
+    execution_entry = entries[0]
+    _require(
+        execution_entry.get("sourceEntryPoint") == entry_point
+        and execution_entry.get("materializedEntryPoint") == entry_point
+        and execution_entry.get("targetEntryPoint") == "main"
+        and execution_entry.get("workgroupSize") == workgroup_size
+        and execution_entry.get("rule") == expected_rule
+        and execution_entry.get("materialization")
+        == {
+            "name": entry_contract["specializationName"],
+            "hostName": entry_point,
+            "materializedName": entry_point,
+        }
+        and execution_entry.get("parameters") == entry_contract["parameters"]
+        and _is_sha256_identity(execution_entry.get("identity")),
+        "quantized OpenGL per-entry execution contract changed",
+    )
+
+
 def _translated_artifact(
     payload: Mapping[str, Any],
     *,
     mlx_root: Path,
     work_dir: Path,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
 ) -> tuple[Mapping[str, Any], Path]:
+    entry_contract = ENTRY_CONTRACTS.get(entry_point)
+    _require(entry_contract is not None, f"unsupported proof entry: {entry_point}")
     _require(
         payload.get("kind") == "crosstl-project-portability-report",
         "translation did not produce a project portability report",
@@ -344,11 +502,17 @@ def _translated_artifact(
     _require(
         artifact.get("entryPoint")
         == {
-            "source": MLX_QUANTIZED_ENTRY_POINT,
+            "source": entry_point,
             "target": "main",
             "stage": "compute",
         },
         "selected quantized entry-point identity was not preserved",
+    )
+    _validate_execution_report(
+        payload,
+        artifact,
+        entry_point=entry_point,
+        entry_contract=entry_contract,
     )
     materialization = artifact.get("templateMaterialization")
     specializations = (
@@ -364,30 +528,31 @@ def _translated_artifact(
     _require(
         isinstance(materialization, Mapping)
         and materialization.get("status") == "materialized"
-        and materialization.get("specializationCount") == CONCRETE_SPECIALIZATION_COUNT
+        and materialization.get("specializationCount")
+        == entry_contract["concreteSpecializationCount"]
         and materialization.get("unsupported") == []
         and isinstance(specializations, list)
-        and len(specializations) == CONCRETE_SPECIALIZATION_COUNT
+        and len(specializations) == entry_contract["concreteSpecializationCount"]
         and isinstance(accounting, Mapping)
         and accounting.get("reachableSpecializationCount")
-        == REACHABLE_SPECIALIZATION_COUNT
-        and accounting.get("prunedCandidateCount") == PRUNED_CANDIDATE_COUNT,
+        == entry_contract["reachableSpecializationCount"]
+        and accounting.get("prunedCandidateCount")
+        == entry_contract["prunedCandidateCount"],
         "quantized specialization accounting changed",
     )
     selected_specializations = [
         specialization
         for specialization in specializations
         if isinstance(specialization, Mapping)
-        and specialization.get("name") == "affine_quantize"
-        and specialization.get("hostName") == MLX_QUANTIZED_ENTRY_POINT
+        and specialization.get("name") == entry_contract["specializationName"]
+        and specialization.get("hostName") == entry_point
     ]
     _require(
         len(selected_specializations) == 1
-        and selected_specializations[0].get("materializedName")
-        == MLX_QUANTIZED_ENTRY_POINT
+        and selected_specializations[0].get("materializedName") == entry_point
         and selected_specializations[0].get("parameters")
-        == {"T": "float", "bits": "2", "group_size": "32"},
-        "selected affine_quantize<float, 32, 2> specialization changed",
+        == entry_contract["parameters"],
+        f"selected {entry_contract['specializationName']} specialization changed",
     )
 
     artifact_path = (mlx_root / str(artifact.get("path", ""))).resolve()
@@ -405,8 +570,7 @@ def _translated_artifact(
     return artifact, artifact_path
 
 
-def _validate_generated_glsl(artifact_path: Path) -> dict[str, Any]:
-    source = artifact_path.read_text(encoding="utf-8")
+def _validate_quantize_generated_glsl(source: str) -> dict[str, Any]:
     _require(
         source.count("#version 450 core") == 1
         and source.count("void main()") == 1
@@ -447,6 +611,90 @@ def _validate_generated_glsl(artifact_path: Path) -> dict[str, Any]:
     }
 
 
+def _validate_gather_generated_glsl(source: str) -> dict[str, Any]:
+    required_extensions = (
+        "GL_ARB_gpu_shader_int64",
+        "GL_KHR_shader_subgroup_basic",
+        "GL_KHR_shader_subgroup_arithmetic",
+    )
+    _require(
+        source.count("#version 450 core") == 1
+        and source.count("void main()") == 1
+        and (
+            "layout(local_size_x = 32, local_size_y = 2, "
+            "local_size_z = 1) in;" in source
+        ),
+        "generated gather GLSL compute entry-point contract is incomplete",
+    )
+    _require(
+        all(
+            f"#extension {extension} : require" in source
+            for extension in required_extensions
+        ),
+        "generated gather GLSL extension contract is incomplete",
+    )
+    _require(
+        _GATHER_ADJUST_DEFINITION_RE.search(source) is not None
+        and all(
+            f"int {name} = int(0);" in source and f"{name} += int" in source
+            for name in GATHER_MUTABLE_POINTER_OFFSETS
+        ),
+        "generated gather GLSL does not preserve mutable resource offsets",
+    )
+    _require(
+        source.count("inout float x_thread[16]") == 4
+        and "x_thread[(x_thread_base + int(i))] = x[(x_offset + i)];" in source
+        and "result[row] = subgroupAdd(result[row]);" in source,
+        "generated gather GLSL fixed-array or subgroup computation changed",
+    )
+
+    qdot = _GATHER_QDOT_DEFINITION_RE.search(source)
+    _require(qdot is not None, "generated gather GLSL qdot contract is missing")
+    qdot_body = qdot.group("body")
+    _require(
+        _GATHER_QDOT_CALL_RE.search(source) is not None
+        and "w_byte_offset + (w_offset + i)" in qdot_body
+        and "bitfieldExtract(w[int(" in qdot_body
+        and "out_row" not in qdot_body
+        and "in_vec_size_w" not in qdot_body
+        and "simd_lid" not in qdot_body,
+        "generated gather GLSL byte-address provenance changed",
+    )
+    _require(
+        "elem_to_loc_uint32_t" in source
+        and re.search(r"(?<![A-Za-z0-9_])elem_to_loc\s*\(", source) is None,
+        "generated gather GLSL index helper was not fully specialized",
+    )
+    return {
+        "status": "passed",
+        "entryPoint": "main",
+        "requiredExtensions": list(required_extensions),
+        "workgroupSize": list(MLX_QUANTIZED_GATHER_WORKGROUP_SIZE),
+        "privateArrayExtent": 16,
+        "mutablePointerOffsets": list(GATHER_MUTABLE_POINTER_OFFSETS),
+        "byteAddressBaseForwarding": "explicit-parameter",
+        "normalizedIndexExpressions": list(GATHER_INDEX_RANGE_EXPRESSIONS),
+    }
+
+
+def _validate_generated_glsl(
+    artifact_path: Path,
+    *,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
+) -> dict[str, Any]:
+    entry_contract = ENTRY_CONTRACTS.get(entry_point)
+    _require(entry_contract is not None, f"unsupported proof entry: {entry_point}")
+    source = artifact_path.read_text(encoding="utf-8")
+    generated_contract = entry_contract["generatedContract"]
+    if generated_contract == "quantize":
+        return _validate_quantize_generated_glsl(source)
+    if generated_contract == "gather-qmv-fast":
+        return _validate_gather_generated_glsl(source)
+    raise MlxQuantizedOpenGLProofError(
+        f"unsupported generated proof contract: {generated_contract}"
+    )
+
+
 def _compile_and_validate(
     artifact_path: Path,
     *,
@@ -456,6 +704,7 @@ def _compile_and_validate(
     work_dir: Path,
     log_dir: Path,
     required: bool,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
 ) -> dict[str, Any]:
     missing = [
         name
@@ -486,7 +735,7 @@ def _compile_and_validate(
             "compiledArtifactCount": 0,
         }
 
-    output_path = work_dir / "native" / "opengl" / f"{MLX_QUANTIZED_ENTRY_POINT}.spv"
+    output_path = work_dir / "native" / "opengl" / f"{entry_point}.spv"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.unlink(missing_ok=True)
     compile_result = _run_command(
@@ -553,7 +802,9 @@ def run_proof(
     *,
     require_opengl_toolchain: bool = False,
     clean: bool = True,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
 ) -> dict[str, Any]:
+    _require(entry_point in ENTRY_CONTRACTS, f"unsupported proof entry: {entry_point}")
     root = mlx_root.resolve()
     resolved_work_dir = _resolve_work_dir(root, str(work_dir))
     provenance = _verify_checkout(root)
@@ -566,16 +817,20 @@ def run_proof(
 
     report_path = report_dir / "quantized-metal-selected-entry.json"
     payload = _translate_report(
-        _project_config(root, resolved_work_dir),
+        _project_config(root, resolved_work_dir, entry_point=entry_point),
         report_path=report_path,
     )
-    index_ranges = _require_index_range_contract(payload)
+    index_ranges = _require_index_range_contract(payload, entry_point=entry_point)
     artifact, artifact_path = _translated_artifact(
         payload,
         mlx_root=root,
         work_dir=resolved_work_dir,
+        entry_point=entry_point,
     )
-    generated_checks = _validate_generated_glsl(artifact_path)
+    generated_checks = _validate_generated_glsl(
+        artifact_path,
+        entry_point=entry_point,
+    )
     toolchain = _compile_and_validate(
         artifact_path,
         glslang=shutil.which("glslangValidator"),
@@ -584,6 +839,7 @@ def run_proof(
         work_dir=resolved_work_dir,
         log_dir=log_dir,
         required=require_opengl_toolchain,
+        entry_point=entry_point,
     )
 
     summary = {
@@ -597,7 +853,7 @@ def run_proof(
         "scope": {
             "translation": {
                 "source": MLX_QUANTIZED_SOURCE,
-                "selectedEntryPoint": MLX_QUANTIZED_ENTRY_POINT,
+                "selectedEntryPoint": entry_point,
                 "sourceBackend": "metal",
                 "sourceOverride": "metal",
                 "includeDirectories": ["."],
@@ -658,7 +914,15 @@ def run_proof(
     return summary
 
 
-def _failure_summary(*, required: bool, error: str) -> dict[str, Any]:
+def _failure_summary(
+    *,
+    required: bool,
+    error: str,
+    entry_point: str = MLX_QUANTIZED_ENTRY_POINT,
+) -> dict[str, Any]:
+    entry_contract = ENTRY_CONTRACTS.get(
+        entry_point, ENTRY_CONTRACTS[MLX_QUANTIZED_ENTRY_POINT]
+    )
     return {
         "schema_version": 1,
         "kind": "crosstl-mlx-quantized-opengl-toolchain-proof",
@@ -670,10 +934,11 @@ def _failure_summary(*, required: bool, error: str) -> dict[str, Any]:
         "scope": {
             "translation": {
                 "source": MLX_QUANTIZED_SOURCE,
-                "selectedEntryPoint": MLX_QUANTIZED_ENTRY_POINT,
+                "selectedEntryPoint": entry_point,
                 "target": TARGET,
                 "indexRangeAssertions": [
-                    dict(assertion) for assertion in INDEX_RANGE_ASSERTIONS
+                    dict(assertion)
+                    for assertion in entry_contract["indexRangeAssertions"]
                 ],
             },
             "toolchain": {
@@ -698,11 +963,17 @@ def _failure_summary(*, required: bool, error: str) -> dict[str, Any]:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Prove pinned MLX affine_quantize_float_gs_32_b_2 project "
-            "translation and optional required OpenGL toolchain validation."
+            "Prove a pinned MLX quantized project entry through OpenGL "
+            "translation and optional required native toolchain validation."
         )
     )
     parser.add_argument("--mlx-root", required=True, help="Path to the MLX checkout")
+    parser.add_argument(
+        "--entry-point",
+        choices=tuple(ENTRY_CONTRACTS),
+        default=MLX_QUANTIZED_ENTRY_POINT,
+        help="Pinned quantized Metal entry point to translate.",
+    )
     parser.add_argument(
         "--work-dir",
         help=(
@@ -742,6 +1013,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             work_dir,
             require_opengl_toolchain=args.require_opengl_toolchain,
             clean=not args.no_clean,
+            entry_point=args.entry_point,
         )
     except MlxQuantizedOpenGLProofError as exc:
         _write_json(
@@ -749,6 +1021,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _failure_summary(
                 required=args.require_opengl_toolchain,
                 error=str(exc),
+                entry_point=args.entry_point,
             ),
         )
         print(f"MLX quantized OpenGL proof failed: {exc}", file=sys.stderr)

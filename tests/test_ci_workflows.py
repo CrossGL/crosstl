@@ -2721,9 +2721,12 @@ def test_mlx_project_porting_workflow_runs_quantized_opengl_proof_on_linux():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
 
     assert "name: Prove pinned MLX quantized OpenGL lowering" in mlx_porting
+    assert "name: Prove pinned MLX quantized gather OpenGL lowering" in mlx_porting
     assert "if: runner.os == 'Linux'" in mlx_porting
     assert "python demos/integrations/mlx/prove_quantized_opengl.py" in mlx_porting
     assert "--work-dir .crosstl-mlx-porting/quantized-opengl" in mlx_porting
+    assert "--work-dir .crosstl-mlx-porting/quantized-gather-opengl" in mlx_porting
+    assert "--entry-point affine_gather_qmv_fast_float_gs_32_b_2" in mlx_porting
     assert "--require-opengl-toolchain" in mlx_porting
 
 

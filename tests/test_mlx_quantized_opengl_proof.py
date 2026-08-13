@@ -67,6 +67,68 @@ void main() {
 """
 
 
+def _generated_gather_glsl():
+    return """#version 450 core
+#extension GL_ARB_gpu_shader_int64 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+void adjust_matrix_offsets_float_glsl(
+    inout int x_offset,
+    inout int w_offset,
+    inout int scales_offset,
+    inout int biases_offset,
+    inout int y_offset) {
+    x_offset += int(1);
+    w_offset += int(2);
+    scales_offset += int(3);
+    biases_offset += int(4);
+    y_offset += int(5);
+}
+float load_vector_float_float_16_2_glsl(
+    inout float x_thread[16], int x_thread_base, int x_offset);
+float qdot_float_16_2_glsl(
+    inout float x_thread[16], int x_thread_base, float scale, float bias,
+    float sum, int w_offset, int w_byte_offset);
+float load_vector_float_float_16_2_glsl(
+    inout float x_thread[16], int x_thread_base, int x_offset) {
+    int i = 0;
+    x_thread[(x_thread_base + int(i))] = x[(x_offset + i)];
+    return x_thread[x_thread_base];
+}
+float qdot_float_16_2_glsl(
+    inout float x_thread[16], int x_thread_base, float scale, float bias,
+    float sum, int w_offset, int w_byte_offset) {
+    int i = 0;
+    return float(bitfieldExtract(w[int(((w_byte_offset + (w_offset + i))) / 4)],
+        int((((w_byte_offset + (w_offset + i))) % 4) * 8), 8));
+}
+uint elem_to_loc_uint32_t_glsl(uint elem) {
+    return elem;
+}
+void qmv_fast_impl_float_32_2_glsl() {
+    float result[1];
+    int row = 0;
+    int wl_offset = 0;
+    int w_offset = 0;
+    float x_thread[16];
+    result[row] += qdot_float_16_2_glsl(
+        x_thread, 0, 1.0, 0.0, 0.0, int(wl_offset), int((w_offset * 4)));
+    result[row] = subgroupAdd(result[row]);
+}
+layout(local_size_x = 32, local_size_y = 2, local_size_z = 1) in;
+void main() {
+    int x_offset = int(0);
+    int w_offset = int(0);
+    int scales_offset = int(0);
+    int biases_offset = int(0);
+    int y_offset = int(0);
+    adjust_matrix_offsets_float_glsl(
+        x_offset, w_offset, scales_offset, biases_offset, y_offset);
+    qmv_fast_impl_float_32_2_glsl();
+}
+"""
+
+
 def _translated_payload(module, mlx_root, work_dir, generated=None):
     artifact_path = work_dir / "artifacts" / "opengl" / "quantized.glsl"
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,12 +217,141 @@ def _translated_payload(module, mlx_root, work_dir, generated=None):
     return payload, artifact_path
 
 
+def _translated_gather_payload(module, mlx_root, work_dir, generated=None):
+    artifact_path = work_dir / "artifacts" / "opengl" / "quantized-gather.glsl"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(generated or _generated_gather_glsl(), encoding="utf-8")
+    artifact_hash = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    entry_point = module.MLX_QUANTIZED_GATHER_ENTRY_POINT
+    workgroup = list(module.MLX_QUANTIZED_GATHER_WORKGROUP_SIZE)
+    rule_path = f'project.workgroup_size_rules["{module.MLX_QUANTIZED_SOURCE}"]'
+    specializations = [
+        {
+            "name": "affine_gather_qmv_fast",
+            "hostName": entry_point,
+            "materializedName": entry_point,
+            "parameters": {"T": "float", "bits": "2", "group_size": "32"},
+            "source": "source-instantiation",
+        }
+    ]
+    specializations.extend(
+        {
+            "name": f"gather_helper_{index}",
+            "materializedName": f"gather_helper_{index}",
+            "parameters": {},
+            "source": "call-site",
+        }
+        for index in range(7)
+    )
+    assertions = [dict(assertion) for assertion in module.GATHER_INDEX_RANGE_ASSERTIONS]
+    payload = {
+        "kind": "crosstl-project-portability-report",
+        "project": {
+            "indexRangeAssertionCount": 4,
+            "indexRangeAssertions": assertions,
+            "workgroupSize": None,
+            "workgroupSizeRules": {
+                module.MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup]
+            },
+            "workgroupSizeRuleCount": 1,
+            "subgroupWidthRules": {},
+            "subgroupWidthRuleCount": 0,
+        },
+        "summary": {
+            "unitCount": 1,
+            "targetCount": 1,
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+            "skippedCount": 0,
+            "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+        },
+        "diagnostics": [],
+        "artifacts": [
+            {
+                "source": module.MLX_QUANTIZED_SOURCE,
+                "sourceBackend": "metal",
+                "target": "opengl",
+                "status": "translated",
+                "path": artifact_path.relative_to(mlx_root).as_posix(),
+                "sourceHash": {
+                    "algorithm": "sha256",
+                    "value": module.PINNED_FILE_SHA256[module.MLX_QUANTIZED_SOURCE],
+                },
+                "provenance": {
+                    "pipeline": "entry-scoped-translate",
+                    "intermediate": "crossgl",
+                },
+                "requiredCapabilities": [],
+                "entryPoint": {
+                    "source": entry_point,
+                    "target": "main",
+                    "stage": "compute",
+                },
+                "templateMaterialization": {
+                    "status": "materialized",
+                    "specializationCount": 8,
+                    "specializations": specializations,
+                    "unsupported": [],
+                    "accounting": {
+                        "reachableSpecializationCount": 11,
+                        "prunedCandidateCount": 110861,
+                    },
+                },
+                "execution": {
+                    "sourceEntryPoints": [entry_point],
+                    "provenance": {
+                        "kind": "materialized-template-rule",
+                        "path": rule_path,
+                    },
+                    "identity": {"algorithm": "sha256", "value": "1" * 64},
+                    "entryPoints": [
+                        {
+                            "sourceEntryPoint": entry_point,
+                            "materializedEntryPoint": entry_point,
+                            "targetEntryPoint": "main",
+                            "workgroupSize": workgroup,
+                            "rule": {
+                                "components": [str(value) for value in workgroup],
+                                "sourcePattern": module.MLX_QUANTIZED_SOURCE,
+                                "path": rule_path,
+                            },
+                            "materialization": {
+                                "name": "affine_gather_qmv_fast",
+                                "hostName": entry_point,
+                                "materializedName": entry_point,
+                            },
+                            "parameters": {
+                                "T": "float",
+                                "bits": "2",
+                                "group_size": "32",
+                            },
+                            "identity": {
+                                "algorithm": "sha256",
+                                "value": "2" * 64,
+                            },
+                        }
+                    ],
+                },
+                "generatedHash": {"algorithm": "sha256", "value": artifact_hash},
+                "generatedSizeBytes": artifact_path.stat().st_size,
+            }
+        ],
+    }
+    return payload, artifact_path
+
+
 def test_quantized_opengl_proof_pins_revision_files_entry_and_ranges():
     module = _load_proof()
 
     assert module.MLX_COMMIT == "4367c73b60541ddd5a266ce4644fd93d20223b6e"
     assert module.PINNED_FILE_SHA256 == EXPECTED_PINNED_HASHES
     assert module.MLX_QUANTIZED_ENTRY_POINT == "affine_quantize_float_gs_32_b_2"
+    assert (
+        module.MLX_QUANTIZED_GATHER_ENTRY_POINT
+        == "affine_gather_qmv_fast_float_gs_32_b_2"
+    )
+    assert module.MLX_QUANTIZED_GATHER_WORKGROUP_SIZE == (32, 2, 1)
     assert module.INDEX_RANGE_EXPRESSIONS == (
         "in_index + i",
         "gindex",
@@ -174,6 +365,21 @@ def test_quantized_opengl_proof_pins_revision_files_entry_and_ranges():
             "maximum": 2147483647,
         }
         for expression in module.INDEX_RANGE_EXPRESSIONS
+    ]
+    assert module.GATHER_INDEX_RANGE_EXPRESSIONS == (
+        "tid.z * lhs_strides[0]",
+        "tid.z * rhs_strides[0]",
+        "idx.x",
+        "idx.y",
+    )
+    assert [dict(assertion) for assertion in module.GATHER_INDEX_RANGE_ASSERTIONS] == [
+        {
+            "source": module.MLX_QUANTIZED_SOURCE,
+            "expression": expression,
+            "minimum": 0,
+            "maximum": 2147483647,
+        }
+        for expression in module.GATHER_INDEX_RANGE_EXPRESSIONS
     ]
     assert module.NON_RUNTIME_CLAIMS == {
         "runtimeExecution": False,
@@ -262,6 +468,21 @@ def test_quantized_opengl_project_config_uses_public_entry_and_range_contract(tm
         dict(assertion) for assertion in module.INDEX_RANGE_ASSERTIONS
     ]
 
+    gather_config = module._project_config(
+        mlx_root,
+        mlx_root / "gather-proof",
+        entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    )
+    assert gather_config.entry_points == {
+        module.MLX_QUANTIZED_SOURCE: module.MLX_QUANTIZED_GATHER_ENTRY_POINT
+    }
+    assert gather_config.workgroup_size_rules == {
+        module.MLX_QUANTIZED_SOURCE: ("32", "2", "1")
+    }
+    assert [
+        assertion.to_json() for assertion in gather_config.index_range_assertions
+    ] == [dict(assertion) for assertion in module.GATHER_INDEX_RANGE_ASSERTIONS]
+
 
 def test_quantized_opengl_translation_uses_public_project_api(tmp_path, monkeypatch):
     module = _load_proof()
@@ -327,6 +548,86 @@ def test_quantized_opengl_artifact_and_index_contract_reject_report_drift(tmp_pa
             payload,
             mlx_root=mlx_root,
             work_dir=work_dir,
+        )
+
+
+def test_quantized_gather_opengl_artifact_execution_and_semantics_are_exact(tmp_path):
+    module = _load_proof()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / "proof"
+    payload, artifact_path = _translated_gather_payload(
+        module,
+        mlx_root,
+        work_dir,
+    )
+    entry_point = module.MLX_QUANTIZED_GATHER_ENTRY_POINT
+
+    index_contract = module._require_index_range_contract(
+        payload,
+        entry_point=entry_point,
+    )
+    artifact, resolved = module._translated_artifact(
+        payload,
+        mlx_root=mlx_root,
+        work_dir=work_dir,
+        entry_point=entry_point,
+    )
+    generated_checks = module._validate_generated_glsl(
+        artifact_path,
+        entry_point=entry_point,
+    )
+
+    assert index_contract["assertionCount"] == 4
+    assert artifact["requiredCapabilities"] == []
+    assert resolved == artifact_path
+    assert generated_checks["workgroupSize"] == [32, 2, 1]
+    assert generated_checks["privateArrayExtent"] == 16
+    assert generated_checks["byteAddressBaseForwarding"] == "explicit-parameter"
+
+    wrong_execution = copy.deepcopy(payload)
+    wrong_execution["artifacts"][0]["execution"]["entryPoints"][0]["workgroupSize"] = [
+        1,
+        1,
+        1,
+    ]
+    with pytest.raises(
+        module.MlxQuantizedOpenGLProofError,
+        match="per-entry execution contract",
+    ):
+        module._translated_artifact(
+            wrong_execution,
+            mlx_root=mlx_root,
+            work_dir=work_dir,
+            entry_point=entry_point,
+        )
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        (
+            "w_byte_offset + (w_offset + i)",
+            "(w_offset * 4) + (w_offset + i)",
+        ),
+        ("int w_offset, int w_byte_offset", "int w_offset"),
+    ],
+)
+def test_quantized_gather_opengl_generated_contract_rejects_pointer_drift(
+    tmp_path,
+    old,
+    new,
+):
+    module = _load_proof()
+    artifact_path = tmp_path / "quantized-gather.glsl"
+    artifact_path.write_text(
+        _generated_gather_glsl().replace(old, new),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.MlxQuantizedOpenGLProofError):
+        module._validate_generated_glsl(
+            artifact_path,
+            entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
         )
 
 
@@ -414,6 +715,28 @@ def test_quantized_opengl_toolchain_targets_opengl_spirv13(tmp_path, monkeypatch
     assert result["compiledArtifactCount"] == 1
     assert result["compilerTarget"] == "OpenGL/SPIR-V 1.3"
     assert result["validatorTarget"] == "SPIR-V 1.3"
+
+    commands.clear()
+    gather_entry = module.MLX_QUANTIZED_GATHER_ENTRY_POINT
+    gather_result = module._compile_and_validate(
+        artifact_path,
+        glslang="/tools/glslangValidator",
+        spirv_val="/tools/spirv-val",
+        mlx_root=mlx_root,
+        work_dir=work_dir,
+        log_dir=log_dir,
+        required=True,
+        entry_point=gather_entry,
+    )
+    gather_output = work_dir / "native" / "opengl" / f"{gather_entry}.spv"
+    assert commands[0][-2:] == ["-o", str(gather_output)]
+    assert commands[1] == [
+        "/tools/spirv-val",
+        "--target-env",
+        "spv1.3",
+        str(gather_output),
+    ]
+    assert gather_result["status"] == "compiled-and-validated"
 
 
 def test_quantized_opengl_toolchain_requirement_fails_closed(tmp_path):
@@ -544,3 +867,13 @@ def test_quantized_opengl_cli_exposes_required_toolchain_flag():
 
     assert args.require_opengl_toolchain is True
     assert args.no_clean is True
+
+    gather_args = module.parse_args(
+        [
+            "--mlx-root",
+            "/tmp/mlx",
+            "--entry-point",
+            module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+        ]
+    )
+    assert gather_args.entry_point == module.MLX_QUANTIZED_GATHER_ENTRY_POINT
