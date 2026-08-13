@@ -539,18 +539,22 @@ jobs:
               GEMV_REPORT_WORKGROUP_SIZE_RULE,
               GEMV_WORKGROUP_SIZE_RULE,
               MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE,
+              MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS,
+              MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+              MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT,
               MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
               MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
-              MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
               MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
               MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE,
               MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE,
-              MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS,
-              MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
-              MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
               MLX_GEMV_SHA256,
               MLX_GEMV_SOURCE,
               MLX_GEMV_SOURCE_SIZE_BYTES,
+              MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
+              MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY,
+              MLX_LAYER_NORM_DISPATCH_VARIANTS,
+              MLX_LAYER_NORM_SHA256,
+              MLX_LAYER_NORM_SOURCE,
               MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
               MLX_OPENGL_FRONTIER_SOURCES,
               MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS,
@@ -567,11 +571,13 @@ jobs:
           directx_entry_point_counts = dict(
               MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
           )
-          directx_frontier_count = len(directx_frontier_sources)
+          directx_artifact_count = MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT
           directx_entry_point_count = sum(directx_entry_point_counts.values())
-          directx_blocked_sources = set(MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES)
+          directx_blocked_sources = set(
+              MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+          )
           directx_blocked_entry_point_counts = dict(
-              MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS
+              MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS
           )
           directx_blocked_entry_point_count = sum(
               directx_blocked_entry_point_counts.values()
@@ -628,7 +634,9 @@ jobs:
               raise SystemExit("blocked frontier must track issue #1537")
           if (
               set(scope["directxTranslatedFrontierSources"])
-              != set(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES)
+              != directx_frontier_sources
+              or scope["directxTranslatedFrontierArtifactCount"]
+              != directx_artifact_count
               or set(scope["directxWorkgroupBlockedFrontierSources"])
               != directx_blocked_sources
               or set(scope["vulkanTranslatedFrontierSources"])
@@ -637,8 +645,8 @@ jobs:
               != set(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES)
               or set(scope["openglWorkgroupBlockedFrontierSources"])
               != opengl_blocked_sources
-              or scope["dynamicWorkgroupTrackedIssue"]
-              != MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE
+              or scope["hostDispatchImportResolvedIssue"]
+              != MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
           ):
               raise SystemExit("target-split frontier scope accounting is incomplete")
           check_records = payload.get("checks")
@@ -760,10 +768,12 @@ jobs:
           directx = checks["directx-frontier"]
           if (
               directx["status"]
-              != "passed-with-expected-workgroup-blockers"
+              != "passed-with-bounded-dispatch-and-pending-contracts"
               or set(directx["sources"]) != vulkan_frontier_sources
+              or directx["artifactCount"]
+              != directx_artifact_count + len(directx_blocked_sources)
               or set(directx["translatedSources"]) != directx_frontier_sources
-              or directx["translatedArtifactCount"] != directx_frontier_count
+              or directx["translatedArtifactCount"] != directx_artifact_count
               or set(directx["workgroupBlockedSources"])
               != directx_blocked_sources
               or directx["workgroupBlockedArtifactCount"]
@@ -771,11 +781,14 @@ jobs:
               or set(directx["directxToolchainSources"])
               != directx_frontier_sources
               or directx["directxToolchainArtifactCount"]
-              != directx_frontier_count
+              != directx_artifact_count
               or directx["directxToolchainExpectedEntryPointCounts"]
               != directx_entry_point_counts
               or directx["directxToolchainExpectedEntryPointCount"]
               != directx_entry_point_count
+              or directx["trackedIssues"] != []
+              or directx["resolvedIssues"]
+              != [MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE]
           ):
               raise SystemExit("DirectX frontier accounting is incomplete")
           if set(directx["dynamicWorkgroupDispatchEvidence"]) != directx_blocked_sources:
@@ -785,7 +798,8 @@ jobs:
               != MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE
           ):
               raise SystemExit("DirectX bfloat16 lowering evidence is incomplete")
-          for source, expected_evidence in MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE.items():
+          for source in directx_blocked_sources:
+              expected_evidence = MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source]
               observed_evidence = directx["dynamicWorkgroupDispatchEvidence"][source]
               if (
                   any(
@@ -804,14 +818,46 @@ jobs:
                   raise SystemExit(
                       f"DirectX workgroup blocker evidence changed for {source}"
                   )
-          if directx_blocked_entry_point_count != 106:
-              raise SystemExit("expected 106 fail-closed DirectX compute entries")
+          if directx_blocked_entry_point_count != 94:
+              raise SystemExit("expected 94 fail-closed DirectX compute entries")
+          layer_norm = directx["layerNormDispatchEvidence"]
+          expected_layer_norm_status = (
+              "translated-dxc-validated"
+              if os.environ["RUNNER_OS"] == "Windows"
+              else "translated"
+          )
+          expected_layer_norm_validated = (
+              len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+              if os.environ["RUNNER_OS"] == "Windows"
+              else 0
+          )
+          if (
+              layer_norm["status"] != expected_layer_norm_status
+              or layer_norm["source"] != MLX_LAYER_NORM_SOURCE
+              or layer_norm["sourceSha256"] != MLX_LAYER_NORM_SHA256
+              or layer_norm["target"] != "directx"
+              or layer_norm["dispatchContract"]["contentIdentity"]
+              != MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY
+              or layer_norm["dispatchContract"]["variantCount"]
+              != len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+              or layer_norm["dispatchContract"]["resolvedIssue"]
+              != MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
+              or layer_norm["artifactCount"]
+              != len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+              or set(layer_norm["variants"])
+              != set(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+              or layer_norm["dxcValidatedArtifactCount"]
+              != expected_layer_norm_validated
+              or layer_norm["runtimeExecutionAttempted"] is not False
+              or layer_norm["numericalParityClaimed"] is not False
+          ):
+              raise SystemExit("LayerNorm dispatch frontier evidence is incomplete")
           if os.environ["RUNNER_OS"] == "Windows":
               if (
                   directx["directxToolchainRequired"] is not True
                   or directx["directxValidationStatus"] != "validated"
                   or directx["directxToolchainValidatedArtifactCount"]
-                  != directx_frontier_count
+                  != directx_artifact_count
                   or set(directx["directxToolchainValidatedSources"])
                   != directx_frontier_sources
                   or directx["directxToolchainValidatedEntryPointCounts"]
@@ -1040,8 +1086,9 @@ jobs:
               != len(opengl_blocked_sources)
               or set(opengl["toolchainSources"])
               != opengl_toolchain_frontier_sources
-              or opengl["trackedIssues"]
-              != [MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE]
+              or opengl["trackedIssues"] != []
+              or opengl["resolvedIssues"]
+              != [MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE]
               or opengl["runtimeIntegrationIncluded"] is not False
           ):
               raise SystemExit(

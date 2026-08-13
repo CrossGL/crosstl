@@ -1,9 +1,11 @@
+import ast
 import copy
 import importlib.util
 import json
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2440,10 +2442,14 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "MLX checkout proof does not match the pinned revision" in mlx_porting
     assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
     assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
+    assert "MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT" in mlx_porting
     assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in mlx_porting
     assert "MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE" in mlx_porting
     assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in mlx_porting
-    assert "MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS" in mlx_porting
+    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS" in mlx_porting
+    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
+    assert "MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE" in mlx_porting
+    assert "MLX_LAYER_NORM_DISPATCH_VARIANTS" in mlx_porting
     assert 'checks["directx-frontier"]' in mlx_porting
     assert 'checks["vulkan-frontier"]' in mlx_porting
     assert 'directx["directxToolchainArtifactCount"]' in mlx_porting
@@ -2455,7 +2461,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'directx["bfloat16LoweringEvidence"]' in mlx_porting
     assert "DirectX bfloat16 lowering evidence is incomplete" in mlx_porting
     assert "DirectX workgroup blocker evidence changed" in mlx_porting
-    assert "expected 106 fail-closed DirectX compute entries" in mlx_porting
+    assert "expected 94 fail-closed DirectX compute entries" in mlx_porting
+    assert "LayerNorm dispatch frontier evidence is incomplete" in mlx_porting
     assert "matched-materialized-host-names" in mlx_porting
     assert "DirectX frontier toolchain must validate every configured" in mlx_porting
     assert "source artifact and compute entry" in mlx_porting
@@ -2661,6 +2668,31 @@ def test_mlx_platform_runtime_workflow_preserves_pinned_checkout():
     assert '"tests/test_ci_workflows.py"' in workflow
     assert '"tests/test_tools/test_ci_workflows.py"' not in workflow
     assert "continue-on-error" not in workflow
+
+
+def test_mlx_frontier_accounting_workflow_imports_available_harness_symbols():
+    workflow = _workflow_texts()["mlx-project-porting.yml"]
+    step_start = workflow.index("- name: Verify MLX frontier accounting")
+    command_marker = "          python - <<'PY'\n"
+    script_start = workflow.index(command_marker, step_start) + len(command_marker)
+    script_end = workflow.index("\n          PY", script_start)
+    script = textwrap.dedent(workflow[script_start:script_end])
+    tree = ast.parse(script)
+    harness_import = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "demos.integrations.mlx.run_mlx_porting"
+    )
+    harness = __import__(
+        "demos.integrations.mlx.run_mlx_porting",
+        fromlist=["run_mlx_porting"],
+    )
+
+    missing = sorted(
+        alias.name for alias in harness_import.names if not hasattr(harness, alias.name)
+    )
+    assert missing == []
 
 
 def test_mlx_platform_runtime_wires_directx_graph_device_proof():

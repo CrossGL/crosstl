@@ -65,9 +65,11 @@ The current harness verifies:
   `layer_norm.metal`, `logsumexp.metal`, `random.metal`, `rms_norm.metal`,
   `rope.metal`, `scaled_dot_product_attention.metal`, `softmax.metal`, and
   `ternary.metal`. Vulkan must translate and structurally validate all 11.
-  DirectX emits the five sources whose aggregate entries do not require a
-  runtime-selected workgroup size and records exact expected failures for the
-  other six. Each blocked report must retain the pinned total specialization
+  DirectX emits five aggregate artifacts whose entries do not require a
+  runtime-selected workgroup size, plus two entry-scoped `layer_norm.metal`
+  artifacts selected by the checked-in host dispatch contract. It records exact
+  expected failures for the other five sources. Each blocked report must retain
+  the pinned total specialization
   count and exactly match its diagnostic entry names to the materialized host
   names, with no additional diagnostics. Separate configs prevent DirectX
   workgroup contracts from being silently ignored by Vulkan, where project
@@ -88,10 +90,13 @@ The current harness verifies:
   dispatch uses runtime axis and pipeline-limit operands unavailable to source
   materialization;
 - DirectX HLSL compiler checks with official DXC v1.9.2602.24 on Windows CI for
-  the emitted five-source frontier: `arange.metal`, `binary_two.metal`,
-  `random.metal`, `rope.metal`, and `ternary.metal`. At the pinned revision the
-  gate compiles every generated compute entry: 11, 225, 2, 18, and 212 entries
-  respectively, for 468 generated compute entries in total. The
+  the seven-artifact frontier representing six pinned sources: `arange.metal`,
+  `binary_two.metal`, two bounded `layer_norm.metal` entries, `random.metal`,
+  `rope.metal`, and `ternary.metal`. At the pinned revision the gate compiles
+  11, 225, 2, 2, 18, and 212 entries respectively, for 470 generated compute
+  entries in total. Each LayerNorm entry is emitted independently with its
+  host-derived workgroup size, specialization constants, and exact subgroup
+  width. The
   pinned rope translation supplies required function constant IDs through the
   quoted `"1"`, `"2"`, and `"3"` selectors in
   `[project.specialization_constants]` and materializes the concrete DirectX
@@ -106,10 +111,10 @@ The current harness verifies:
   `random.metal` entries; broader union layouts remain tracked by
   [#1696](https://github.com/CrossGL/crosstl/issues/1696), and runtime dispatch
   metadata remains tracked by
-  [#1542](https://github.com/CrossGL/crosstl/issues/1542). The six excluded
-  aggregate sources cover 106 compute entries and are asserted as failed
-  artifacts until their host dispatch contracts can be imported under
-  [#1793](https://github.com/CrossGL/crosstl/issues/1793);
+  [#1542](https://github.com/CrossGL/crosstl/issues/1542). Host dispatch contract
+  import was completed under [#1793](https://github.com/CrossGL/crosstl/issues/1793).
+  The five pending aggregate sources cover 94 compute entries and are asserted
+  as failed artifacts until bounded dispatch manifests are supplied;
   no placeholder workgroup size is restored. `fence.metal` is
   excluded because its DirectX translation intentionally fails under
   [#1537](https://github.com/CrossGL/crosstl/issues/1537) before DXC. This gate
@@ -280,18 +285,18 @@ compile with DXC. Separate native tests translate and execute the reduced
 immutable lookup fixture and the pinned source's generated uint32 arange entry
 through Direct3D 12. The arange test is numerical evidence for that one source,
 entry, dtype, dispatch shape, and fixture only; it does not turn the frontier
-compiler gate into a general runtime-parity claim. The five emitted DirectX
+compiler gate into a general runtime-parity claim. The five aggregate DirectX
 frontier artifacts carry exact per-source bfloat16 report evidence. All five
 report `status=exact`, `approximationUsed=false`, a `uint-low-16-bits` register
-representation, and round-to-nearest, ties-to-even conversion. All five emitted
-sources require native `uint16` storage declarations and report the
+representation, and round-to-nearest, ties-to-even conversion. All five
+aggregate sources require native `uint16` storage declarations and report the
 `directx.native-16bit-types` capability. The harness compares each artifact's
 `bfloat16Lowering` and `requiredCapabilities` fields with this pinned contract
 and fails closed if either field is missing or changes. Native-profile bfloat
 helpers now use exact `uint16_t` boundaries, and the two selected
 `random.metal` entries compile without the promotion warnings tracked by
 [#1799](https://github.com/CrossGL/crosstl/issues/1799). DXC reports zero
-warnings across all 468 entry-point runs in the five-source emitted frontier.
+warnings across all 470 entry-point runs in the seven-artifact emitted frontier.
 The harness records this as a warning-clean contract and rejects any newly
 observed warning. Contextual destination conversion under
 [#1801](https://github.com/CrossGL/crosstl/issues/1801) is resolved for the
@@ -307,7 +312,7 @@ resolved for the pinned frontier. The float16 assignment is emitted as
 arangefloat16_step));`. All 11 arange entries compile without the
 destination-conversion warning previously tracked by #1801 and with DXC profile
 `cs_6_2`, `-enable-16bit-types`, and `-WX`. This preserves the resolved int16
-destination-conversion evidence. The aggregate five-source frontier therefore
+destination-conversion evidence. The five-source aggregate portion therefore
 has compiler acceptance and a warning-clean diagnostic contract. This is
 storage, conversion, report, and compiler evidence only; it does not execute a
 bfloat16 workload or establish runtime or numerical parity. On macOS CI, the
@@ -719,11 +724,12 @@ array aliases remain tracked in
 `arg_reduce.metal` materializes all 24 host-named entries. Vulkan emits the
 aggregate artifact, while DirectX and OpenGL full-source packaging fails closed
 with `project.translate.workgroup-size-entry-ambiguous` because the pinned host
-selects axis and pipeline limits at runtime. Importing that dispatch contract is
-tracked by [#1793](https://github.com/CrossGL/crosstl/issues/1793). Focused entry
-lowering preserves address-space pointer provenance, fixed private-array extents,
-and target dispatch dimensions, but does not establish an aggregate DirectX or
-OpenGL artifact frontier. Entry-scoped packaging remains tracked in
+selects axis and pipeline limits at runtime. Project dispatch contract import
+was completed under [#1793](https://github.com/CrossGL/crosstl/issues/1793), but
+no bounded `arg_reduce.metal` manifest is supplied by this integration. Focused
+entry lowering preserves address-space pointer provenance, fixed private-array
+extents, and target dispatch dimensions, but does not establish an aggregate
+DirectX or OpenGL artifact frontier. Entry-scoped packaging remains tracked in
 [#1523](https://github.com/CrossGL/crosstl/issues/1523).
 The reduced reference-accessor fixture covers three non-template paths. The
 mutable scalar call returns the direct `val_frags[i * width + j]` lvalue and
@@ -830,6 +836,15 @@ axis-size-8192 workload described above. Only the VJP record applies function
 constant `20` (`has_w=true`), matching the pinned host dispatch; the forward
 record carries no function constant. These records do not prove runtime
 execution, numerical parity, looped variants, or the full MLX test suite.
+
+The project-porting harness consumes this contract against the unchanged pinned
+`layer_norm.metal` source and requires two deterministic DirectX artifacts. It
+checks source and contract identities, entry-scoped execution provenance,
+host-derived workgroup sizes, function-constant values, exact subgroup-width
+enforcement, generated hashes, and artifact paths. Windows CI compiles both
+artifacts with DXC `cs_6_6` and warnings as errors. This extends the bounded
+proof into the repository-level project report; it does not add runtime
+execution or numerical parity.
 
 Validate the fixture schema, provenance, deterministic identities, and bounded
 evaluation with:
