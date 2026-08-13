@@ -562,8 +562,8 @@ entry translation and native toolchain acceptance only. It does not establish
 OpenGL runtime integration, MLX test execution, or numerical parity.
 
 The adjacent `affine_gather_qmv_fast_float_gs_32_b_2` entry now has the same
-selected-entry OpenGL gate. It emits a 16,075-byte GLSL artifact with SHA-256
-`770012fdd876310bfcc66538453a7cbfcd317db6e0465d367860af5a667fa335`, zero
+selected-entry OpenGL gate. It emits a 16,132-byte GLSL artifact with SHA-256
+`d765c7694d32be8a0cd31c0250a7ff7839e9fb2e11da9cb470344d16669ec8a6`, zero
 project diagnostics, 11 reachable specializations, and eight concrete
 materializations. The project report retains the pinned `32 x 2 x 1`
 workgroup rule and four explicit index-range preconditions for the gather

@@ -7653,6 +7653,27 @@ class GLSLCodeGen:
             source_location=getattr(argument, "source_location", None),
         )
 
+    @staticmethod
+    def glsl_storage_pointer_specialization_view_key(binding):
+        reinterpretation = binding.get("pointer_reinterpretation")
+        byte_offset = str(binding.get("byte_offset", "0"))
+        if reinterpretation is None:
+            return ("byte-offset",) if byte_offset not in {"0", "0u"} else ("direct",)
+
+        def layout_key(layout):
+            return (
+                layout.name,
+                layout.kind,
+                layout.bit_width,
+                layout.signed,
+            )
+
+        return (
+            "reinterpret",
+            layout_key(reinterpretation["source_layout"]),
+            layout_key(reinterpretation["target_layout"]),
+        )
+
     def glsl_resource_function_specialization_key(self, func_name, args, aliases):
         callee = self.glsl_resource_function_source(func_name, args)
         if callee is None:
@@ -7852,6 +7873,7 @@ class GLSLCodeGen:
                         storage_element_type,
                         required_access,
                         offset_direction,
+                        self.glsl_storage_pointer_specialization_view_key(binding),
                     )
                 )
                 continue
@@ -7894,6 +7916,7 @@ class GLSLCodeGen:
                             binding["root"],
                             storage_element_type,
                             required_access,
+                            self.glsl_storage_pointer_specialization_view_key(binding),
                         )
                     )
                     continue
@@ -8273,11 +8296,21 @@ class GLSLCodeGen:
                 )
                 continue
             if binding.get("kind") == "storage-pointer":
+                view_key = self.glsl_storage_pointer_specialization_view_key(binding)
+                view_suffix = ""
+                if view_key[0] == "reinterpret":
+                    view_suffix = "_view_{}_to_{}".format(
+                        sanitize_type_name(view_key[1][0]),
+                        sanitize_type_name(view_key[2][0]),
+                    )
+                elif view_key[0] == "byte-offset":
+                    view_suffix = "_byte_offset"
                 suffix_parts.append(
-                    "{}_{}_{}".format(
+                    "{}_{}_{}{}".format(
                         sanitize_type_name(param_name),
                         sanitize_type_name(binding["root"]),
                         sanitize_type_name(binding["element_type"]),
+                        view_suffix,
                     )
                 )
                 continue
