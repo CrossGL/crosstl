@@ -3240,9 +3240,7 @@ def test_opengl_resource_specialized_caller_preserves_local_private_array(tmp_pa
         re.MULTILINE | re.DOTALL,
     )
     assert specialized is not None, generated
-    assert "float values[3] = float[3](seed, 0.0, seed);" in specialized.group(
-        "body"
-    )
+    assert "float values[3] = float[3](seed, 0.0, seed);" in specialized.group("body")
     assert "update(values, 0);" in specialized.group("body")
     assert "output_[output_offset] = (values[0] + values[2]);" in generated
     assert_glsl_compute_validates_if_available(
@@ -7704,8 +7702,7 @@ def test_opengl_reinterpreted_storage_helper_forwards_byte_base_separately(tmp_p
     assert outer_helper is not None, generated
     assert re.search(r"\bint\s+values_offset\b", outer_helper.group("params"))
     nested_call = re.search(
-        rf"\b{re.escape(byte_helper.group('name'))}\s*"
-        r"\((?P<args>[^;\n]*)\)\s*;",
+        rf"\b{re.escape(byte_helper.group('name'))}\s*" r"\((?P<args>[^;\n]*)\)\s*;",
         outer_helper.group("body"),
     )
     assert nested_call is not None, generated
@@ -7950,9 +7947,7 @@ def test_glsl_metal_storage_byte_alias_reaches_storage_helper(tmp_path):
     assert "return words[int(" in generated
     assert "values_byte_offset + (values_offset * 4)" in generated
     assert "bytes_offset += int(((word_offset * 4) + 4));" in generated
-    assert (
-        "load_word_glsl_values_words_uint(int(0), int(bytes_offset))" in generated
-    )
+    assert "load_word_glsl_values_words_uint(int(0), int(bytes_offset))" in generated
     assert "uint values[" not in generated
     assert "values_base" not in generated
     assert "private-word-array-view" not in generated
