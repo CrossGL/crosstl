@@ -20,6 +20,7 @@ from crosstl.project import (
     build_project_test_runner_plan,
     build_runtime_artifact_manifest,
     execute_project_test_runner_plan,
+    load_dispatch_contract,
     load_project_translation_checkpoint,
     native_runtime_parity_adapters,
 )
@@ -48,6 +49,44 @@ MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
 MLX_GEMV_SHA256 = "c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f"
 MLX_GEMV_SOURCE_SIZE_BYTES = 5383
 MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
+MLX_LAYER_NORM_SHA256 = (
+    "2d243f5abea7353929f9bc838ceb5a98e52a452dfc29609ad4d5974447ea689f"
+)
+MLX_LAYER_NORM_DISPATCH_CONTRACT_SOURCE = (
+    Path(__file__).resolve().parent / "contracts" / "layer_norm.dispatch.json"
+)
+MLX_LAYER_NORM_DISPATCH_CONTRACT_SHA256 = (
+    "17924e1eb885da0b91bed4ac67df39a72ab2f9448a40988efef2efd1f0f1bc93"
+)
+MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:527140d8720a414ff5eaeb670ee9312571c5ca1a13460353d0c177193f5a8f98"
+)
+MLX_LAYER_NORM_DISPATCH_VARIANTS = {
+    "layer_normfloat32": {
+        "artifactId": (
+            "sha256:6c2a76fa651fc945ff5f320801d70b925a3b289c2927990ab4161535edc8d6bf"
+        ),
+        "dispatchVariantId": (
+            "sha256:9f67f3aa323b6a35566bcce84c678121ba050a49843e10187bd5abf4ab3dd01c"
+        ),
+        "workgroupSize": [544, 1, 1],
+        "subgroupWidth": 32,
+        "specializationConstants": {},
+        "specializationCount": 3,
+    },
+    "vjp_layer_normfloat32": {
+        "artifactId": (
+            "sha256:7f6bf28c1536b59c8bd51d9f55dc80cb337698f15e1433f378e1692625e45d54"
+        ),
+        "dispatchVariantId": (
+            "sha256:eed664cf712ef3aeb953e3539389a6f3adcd853d8374aa16da343055080edbf1"
+        ),
+        "workgroupSize": [1024, 1, 1],
+        "subgroupWidth": 32,
+        "specializationConstants": {"20": True},
+        "specializationCount": 4,
+    },
+}
 MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
 MLX_RANDOM_SOURCE = "mlx/backend/metal/kernels/random.metal"
@@ -102,6 +141,11 @@ MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = (
     MLX_RMS_NORM_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     MLX_SOFTMAX_SOURCE,
+)
+MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    if source != MLX_LAYER_NORM_SOURCE
 )
 MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES = tuple(
     source
@@ -224,16 +268,28 @@ MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS = {
     MLX_SOFTMAX_SOURCE: 10,
     MLX_TERNARY_SOURCE: 212,
 }
-# DXC compiles only sources whose pinned host dispatch does not require a runtime
-# workgroup-size variant. Dynamic sources remain explicit failed artifact records.
-MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+# Aggregate artifacts retain every source entry when one workgroup contract applies.
+# LayerNorm contributes two bounded, entry-scoped host-dispatch artifacts.
+MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    if source in MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+    or source == MLX_LAYER_NORM_SOURCE
+)
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
-    source: MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+    source: (
+        len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+        if source == MLX_LAYER_NORM_SOURCE
+        else MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+    )
     for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
 }
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT = sum(
     MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
 )
+MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT = len(
+    MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+) + len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
 MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS: tuple[dict[str, Any], ...] = ()
 DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES: tuple[str, ...] = ()
 MLX_DIRECTX_TOOLCHAIN_WARNING_EVIDENCE = {
@@ -315,6 +371,10 @@ MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS = {
     source: MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
     for source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
 }
+MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS = {
+    source: MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source]
+    for source in MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+}
 MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE = (
     "project.translate.workgroup-size-entry-ambiguous"
 )
@@ -323,7 +383,9 @@ MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE = (
     "emitted entry points do not declare a shared source size. Select one entry "
     "point or emit independently specialized artifacts."
 )
-MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues/1793"
+MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE = (
+    "https://github.com/CrossGL/crosstl/issues/1793"
+)
 MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
     MLX_ARG_REDUCE_SOURCE: {
         "specializationCount": 51,
@@ -886,7 +948,6 @@ RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES = frozenset(
 FULL_CORPUS_TRACKED_ISSUES = (
     *FRONTIER_VALIDATION_TRACKED_ISSUES,
     *DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES,
-    MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
     *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
     *FULL_CORPUS_VALIDATION_TRACKED_ISSUES,
     *OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES,
@@ -901,6 +962,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
 )
 RESOLVED_FRONTIER_ISSUES = (
     OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE,
+    MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
     "https://github.com/CrossGL/crosstl/issues/1576",
     "https://github.com/CrossGL/crosstl/issues/1799",
     "https://github.com/CrossGL/crosstl/issues/1800",
@@ -1285,6 +1347,7 @@ def _write_project_config(
     entry_points: Mapping[str, str] | None = None,
     workgroup_size_rules: Mapping[str, Sequence[str | int]] | None = None,
     index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
+    dispatch_contracts: Sequence[str] | None = None,
 ) -> None:
     include_values = [include] if isinstance(include, str) else list(include)
     include_list = ", ".join(json.dumps(value) for value in include_values)
@@ -1296,11 +1359,11 @@ def _write_project_config(
         'include_dirs = ["."]',
         f"targets = [{target_list}]",
         f'output_dir = "{output_dir}"',
-        "",
-        "[project.sources]",
-        '"**/*.metal" = "metal"',
-        "",
     ]
+    if dispatch_contracts:
+        contract_list = ", ".join(json.dumps(path) for path in dispatch_contracts)
+        lines.append(f"dispatch_contracts = [{contract_list}]")
+    lines.extend(("", "[project.sources]", '"**/*.metal" = "metal"', ""))
     for assertion in index_range_assertions or ():
         lines.append("[[project.index_range_assertions]]")
         for field in ("source", "function", "expression", "minimum", "maximum"):
@@ -1334,6 +1397,71 @@ def _write_project_config(
                 lines.append(f"{key} = {value}")
             lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _prepare_layer_norm_dispatch_contract(
+    mlx_root: Path,
+    work_dir: Path,
+) -> dict[str, Any]:
+    source_path = MLX_LAYER_NORM_DISPATCH_CONTRACT_SOURCE
+    _require(
+        source_path.is_file(), f"LayerNorm dispatch contract is missing: {source_path}"
+    )
+    _require(
+        _sha256(source_path) == MLX_LAYER_NORM_DISPATCH_CONTRACT_SHA256,
+        "LayerNorm dispatch contract content changed",
+    )
+    layer_norm_source = mlx_root / MLX_LAYER_NORM_SOURCE
+    _require(
+        layer_norm_source.is_file()
+        and _sha256(layer_norm_source) == MLX_LAYER_NORM_SHA256,
+        "pinned LayerNorm source identity changed",
+    )
+
+    manifest = load_dispatch_contract(source_path)
+    content_identity = manifest.content_identity.to_json()
+    expected_identity = {
+        "algorithm": "sha256",
+        "value": MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix("sha256:"),
+    }
+    _require(
+        content_identity == expected_identity,
+        "LayerNorm dispatch contract identity changed",
+    )
+    evaluation = manifest.evaluate().to_json()
+    variants = evaluation.get("variants")
+    variants_by_entry = {
+        variant.get("entryPoint"): variant
+        for variant in variants or []
+        if isinstance(variant, Mapping)
+    }
+    _require(
+        isinstance(variants, list)
+        and len(variants) == len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+        and set(variants_by_entry) == set(MLX_LAYER_NORM_DISPATCH_VARIANTS),
+        "LayerNorm dispatch contract variant set changed",
+    )
+    for entry_point, expected in MLX_LAYER_NORM_DISPATCH_VARIANTS.items():
+        variant = variants_by_entry[entry_point]
+        _require(
+            variant.get("artifactId") == expected["artifactId"]
+            and variant.get("variantId") == expected["dispatchVariantId"]
+            and variant.get("source") == MLX_LAYER_NORM_SOURCE
+            and variant.get("workgroupSize") == expected["workgroupSize"]
+            and variant.get("subgroupWidth") == expected["subgroupWidth"]
+            and variant.get("specializationConstants")
+            == expected["specializationConstants"],
+            f"LayerNorm dispatch contract changed for {entry_point}",
+        )
+
+    destination = work_dir / "contracts" / "layer_norm.dispatch.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_path, destination)
+    return {
+        "path": _relpath(destination, mlx_root),
+        "contentIdentity": content_identity,
+        "variantCount": len(variants),
+    }
 
 
 def _write_reference_accessor_project_config(path: Path, output_dir: str) -> None:
@@ -3367,6 +3495,310 @@ def _require_clean_frontier_report(
     return artifacts_by_source
 
 
+def _require_layer_norm_dispatch_frontier_report(
+    mlx_root: Path,
+    output_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    contract: Mapping[str, Any],
+    validated: bool,
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Any], list[Mapping[str, Any]]]:
+    project = payload.get("project")
+    contract_records = (
+        project.get("dispatchContracts") if isinstance(project, Mapping) else None
+    )
+    _require(
+        isinstance(project, Mapping)
+        and project.get("includePatterns") == [MLX_LAYER_NORM_SOURCE]
+        and project.get("targets") == ["directx"]
+        and project.get("dispatchContractFiles") == [contract["path"]]
+        and project.get("dispatchContractCount") == 1
+        and project.get("dispatchVariantCount") == len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+        and isinstance(contract_records, list)
+        and len(contract_records) == 1,
+        "LayerNorm dispatch frontier project metadata changed",
+    )
+    contract_record = contract_records[0]
+    expected_manifest_path = str((mlx_root / str(contract["path"])).resolve())
+    _require(
+        isinstance(contract_record, Mapping)
+        and contract_record.get("path") == contract["path"]
+        and contract_record.get("schemaVersion") == 1
+        and contract_record.get("contentIdentity") == contract["contentIdentity"]
+        and contract_record.get("manifest", {}).get("provenance", {}).get("commit")
+        == MLX_COMMIT
+        and contract_record.get("evaluation", {}).get("manifestSource")
+        == expected_manifest_path
+        and contract_record.get("evaluation", {}).get("variantCount")
+        == len(MLX_LAYER_NORM_DISPATCH_VARIANTS),
+        "LayerNorm dispatch frontier did not retain replayable manifest provenance",
+    )
+
+    summary = payload.get("summary")
+    artifact_count = len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == 1
+        and summary.get("artifactCount") == artifact_count
+        and summary.get("translatedCount") == artifact_count
+        and summary.get("failedCount") == 0
+        and summary.get("diagnosticCounts") == {"error": 0, "note": 0, "warning": 0}
+        and summary.get("artifactsByTarget", {}).get("directx")
+        == {
+            "artifactCount": artifact_count,
+            "translatedCount": artifact_count,
+            "failedCount": 0,
+        }
+        and payload.get("diagnostics") == [],
+        "LayerNorm dispatch frontier accounting changed",
+    )
+    units = payload.get("units")
+    _require(
+        isinstance(units, list)
+        and len(units) == 1
+        and units[0].get("path") == MLX_LAYER_NORM_SOURCE
+        and units[0].get("sourceBackend") == "metal"
+        and units[0].get("sourceHash")
+        == {"algorithm": "sha256", "value": MLX_LAYER_NORM_SHA256},
+        "LayerNorm dispatch frontier source identity changed",
+    )
+
+    dispatch_plan = project.get("dispatchArtifactPlan")
+    planned_artifacts = (
+        dispatch_plan.get("artifacts") if isinstance(dispatch_plan, Mapping) else None
+    )
+    _require(
+        isinstance(dispatch_plan, Mapping)
+        and dispatch_plan.get("kind") == "crosstl-dispatch-artifact-plan"
+        and dispatch_plan.get("schemaVersion") == 1
+        and dispatch_plan.get("sourceUnitCount") == 1
+        and dispatch_plan.get("artifactCount") == artifact_count
+        and dispatch_plan.get("dispatchVariantCount") == artifact_count
+        and isinstance(planned_artifacts, list)
+        and len(planned_artifacts) == artifact_count,
+        "LayerNorm dispatch artifact plan changed",
+    )
+    plan_by_entry = {
+        record.get("entryPoint"): record
+        for record in planned_artifacts
+        if isinstance(record, Mapping)
+    }
+    _require(
+        set(plan_by_entry) == set(MLX_LAYER_NORM_DISPATCH_VARIANTS),
+        "LayerNorm dispatch artifact plan entry set changed",
+    )
+
+    artifacts = payload.get("artifacts")
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == artifact_count,
+        "LayerNorm dispatch artifact records are incomplete",
+    )
+    output_root = output_dir.resolve()
+    artifacts_by_entry: dict[str, Mapping[str, Any]] = {}
+    generated_evidence: dict[str, Any] = {}
+    for artifact in artifacts:
+        entry = artifact.get("entryPoint") if isinstance(artifact, Mapping) else None
+        entry_point = entry.get("source") if isinstance(entry, Mapping) else None
+        _require(
+            isinstance(entry_point, str)
+            and entry_point in MLX_LAYER_NORM_DISPATCH_VARIANTS
+            and entry_point not in artifacts_by_entry,
+            "LayerNorm dispatch artifact entry identity changed",
+        )
+        expected = MLX_LAYER_NORM_DISPATCH_VARIANTS[entry_point]
+        plan = plan_by_entry[entry_point]
+        variant_name = "dispatch-" + expected["artifactId"].removeprefix("sha256:")
+        _require(
+            artifact.get("source") == MLX_LAYER_NORM_SOURCE
+            and artifact.get("sourceBackend") == "metal"
+            and artifact.get("sourceHash")
+            == {"algorithm": "sha256", "value": MLX_LAYER_NORM_SHA256}
+            and artifact.get("target") == "directx"
+            and artifact.get("status") == "translated"
+            and artifact.get("variant") == variant_name
+            and entry.get("target") == "CSMain"
+            and entry.get("stage") == "compute"
+            and artifact.get("dispatchArtifact") == plan
+            and plan.get("artifactId") == expected["artifactId"]
+            and plan.get("dispatchVariantIds") == [expected["dispatchVariantId"]]
+            and plan.get("manifestContentIdentities")
+            == [MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY]
+            and plan.get("source") == MLX_LAYER_NORM_SOURCE
+            and plan.get("workgroupSize") == expected["workgroupSize"]
+            and plan.get("subgroupWidth") == expected["subgroupWidth"]
+            and plan.get("specializationConstants")
+            == expected["specializationConstants"],
+            f"LayerNorm dispatch artifact contract changed for {entry_point}",
+        )
+
+        execution = artifact.get("execution")
+        execution_entries = (
+            execution.get("entryPoints") if isinstance(execution, Mapping) else None
+        )
+        _require(
+            isinstance(execution, Mapping)
+            and execution.get("sourceEntryPoints") == [entry_point]
+            and execution.get("provenance", {}).get("kind") == "host-dispatch-contract"
+            and execution.get("provenance", {}).get("artifactId")
+            == expected["artifactId"]
+            and execution.get("subgroupWidthProvenance", {}).get("kind")
+            == "host-dispatch-contract"
+            and execution.get("subgroupWidthEnforcement")
+            == {
+                "mechanism": "hlsl-wave-size-attribute",
+                "minimumShaderModel": "6.6",
+                "entryProfiles": [{"entryPoint": "CSMain", "profile": "cs_6_6"}],
+            }
+            and isinstance(execution_entries, list)
+            and len(execution_entries) == 1
+            and execution_entries[0].get("sourceEntryPoint") == entry_point
+            and execution_entries[0].get("materializedEntryPoint") == entry_point
+            and execution_entries[0].get("targetEntryPoint") == "CSMain"
+            and execution_entries[0].get("workgroupSize") == expected["workgroupSize"]
+            and execution_entries[0].get("subgroupWidth") == expected["subgroupWidth"],
+            f"LayerNorm execution metadata changed for {entry_point}",
+        )
+
+        constants = artifact.get("specializationConstants") or []
+        constants_by_id = {
+            str(record.get("id")): record
+            for record in constants
+            if isinstance(record, Mapping)
+        }
+        _require(
+            set(constants_by_id) == set(expected["specializationConstants"]),
+            f"LayerNorm specialization inputs changed for {entry_point}",
+        )
+        for constant_id, value in expected["specializationConstants"].items():
+            record = constants_by_id[constant_id]
+            _require(
+                record.get("concreteValue") is value
+                and record.get("deferred") is False
+                and record.get("valueProvenance", {}).get("kind")
+                == "host-dispatch-contract"
+                and record.get("valueProvenance", {}).get("artifactId")
+                == expected["artifactId"],
+                f"LayerNorm specialization provenance changed for {entry_point}",
+            )
+
+        materialization = artifact.get("templateMaterialization")
+        specializations = (
+            materialization.get("specializations")
+            if isinstance(materialization, Mapping)
+            else None
+        )
+        host_names = [
+            record.get("hostName")
+            for record in specializations or []
+            if isinstance(record, Mapping) and record.get("hostName") is not None
+        ]
+        _require(
+            isinstance(materialization, Mapping)
+            and materialization.get("status") == "materialized"
+            and materialization.get("specializationCount")
+            == expected["specializationCount"]
+            and isinstance(specializations, list)
+            and len(specializations) == expected["specializationCount"]
+            and materialization.get("unsupported") == []
+            and host_names == [entry_point],
+            f"LayerNorm materialization changed for {entry_point}",
+        )
+
+        artifact_path_value = artifact.get("path")
+        _require(
+            isinstance(artifact_path_value, str) and artifact_path_value,
+            f"LayerNorm artifact path is missing for {entry_point}",
+        )
+        artifact_path = (mlx_root / artifact_path_value).resolve()
+        _require(
+            _is_relative_to(artifact_path, output_root) and artifact_path.is_file(),
+            f"LayerNorm artifact is missing or escaped output for {entry_point}",
+        )
+        generated = artifact_path.read_text(encoding="utf-8")
+        generated_hash = _sha256(artifact_path)
+        _require(
+            artifact.get("generatedHash")
+            == {"algorithm": "sha256", "value": generated_hash}
+            and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size
+            and len(re.findall(r"\bvoid\s+CSMain\s*\(", generated)) == 1
+            and re.search(r"\[\s*WaveSize\s*\(\s*32\s*\)\s*\]", generated) is not None
+            and re.search(
+                r"\[\s*numthreads\s*\(\s*{}\s*,\s*1\s*,\s*1\s*\)\s*\]".format(
+                    expected["workgroupSize"][0]
+                ),
+                generated,
+            )
+            is not None,
+            f"LayerNorm generated HLSL contract changed for {entry_point}",
+        )
+        if expected["specializationConstants"]:
+            _require(
+                re.search(r"\bstatic\s+const\s+bool\s+has_w\s*=\s*true\s*;", generated)
+                is not None,
+                "LayerNorm VJP artifact did not materialize has_w=true",
+            )
+        else:
+            _require(
+                re.search(r"\bhas_w\b", generated) is None,
+                "LayerNorm forward artifact retained an unreachable function constant",
+            )
+        generated_evidence[entry_point] = {
+            "artifactId": expected["artifactId"],
+            "dispatchVariantId": expected["dispatchVariantId"],
+            "workgroupSize": list(expected["workgroupSize"]),
+            "subgroupWidth": expected["subgroupWidth"],
+            "specializationConstants": dict(expected["specializationConstants"]),
+            "generatedHlsl": {
+                "sha256": generated_hash,
+                "sizeBytes": artifact_path.stat().st_size,
+            },
+        }
+        artifacts_by_entry[entry_point] = artifact
+
+    toolchain_runs: list[Mapping[str, Any]] = []
+    if validated:
+        validation = payload.get("validation")
+        runs = (
+            validation.get("toolchainRuns") if isinstance(validation, Mapping) else None
+        )
+        _require(
+            isinstance(validation, Mapping)
+            and isinstance(validation.get("summary"), Mapping)
+            and validation["summary"].get("failedCount") == 0
+            and isinstance(runs, list),
+            "LayerNorm dispatch DXC validation changed",
+        )
+        toolchain_runs = [
+            run
+            for run in runs
+            if isinstance(run, Mapping) and run.get("target") == "directx"
+        ]
+        _require(
+            len(toolchain_runs) == artifact_count
+            and all(run.get("status") == "ok" for run in toolchain_runs),
+            "LayerNorm dispatch DXC did not validate both artifacts",
+        )
+
+    evidence = {
+        "status": "translated-dxc-validated" if validated else "translated",
+        "source": MLX_LAYER_NORM_SOURCE,
+        "sourceSha256": MLX_LAYER_NORM_SHA256,
+        "target": "directx",
+        "dispatchContract": {
+            "path": contract["path"],
+            "contentIdentity": MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY,
+            "variantCount": artifact_count,
+            "resolvedIssue": MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
+        },
+        "artifactCount": artifact_count,
+        "variants": generated_evidence,
+        "dxcValidatedArtifactCount": len(toolchain_runs),
+        "runtimeExecutionAttempted": False,
+        "numericalParityClaimed": False,
+    }
+    return artifacts_by_entry, evidence, toolchain_runs
+
+
 def _require_directx_bfloat16_lowering_evidence(
     artifacts_by_source: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
@@ -3653,6 +4085,7 @@ def _run_frontier_project(
     check: bool = True,
     specialization_constants: Mapping[str, bool | int | float] | None = None,
     index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
+    dispatch_contracts: Sequence[str] | None = None,
 ) -> tuple[CommandResult, dict[str, Any], Path, Path]:
     config_path = config_dir / f"{command_name}.toml"
     report_path = report_dir / f"{command_name}.json"
@@ -3666,6 +4099,7 @@ def _run_frontier_project(
         output_dir=_relpath(output_dir, mlx_root),
         specialization_constants=specialization_constants,
         index_range_assertions=index_range_assertions,
+        dispatch_contracts=dispatch_contracts,
     )
     command = [
         python,
@@ -3723,6 +4157,37 @@ def _translate_directx_frontier(
         clean_artifacts
     )
 
+    layer_norm_contract = _prepare_layer_norm_dispatch_contract(mlx_root, work_dir)
+    layer_norm_output_dir = work_dir / "out-directx-layer-norm-dispatch-frontier"
+    (
+        _layer_norm_result,
+        layer_norm_payload,
+        _layer_norm_config,
+        layer_norm_report_path,
+    ) = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+        command_name="directx-layer-norm-dispatch-frontier",
+        target="directx",
+        sources=(MLX_LAYER_NORM_SOURCE,),
+        output_dir=layer_norm_output_dir,
+        dispatch_contracts=(str(layer_norm_contract["path"]),),
+    )
+    (
+        layer_norm_artifacts,
+        layer_norm_evidence,
+        _layer_norm_runs,
+    ) = _require_layer_norm_dispatch_frontier_report(
+        mlx_root,
+        layer_norm_output_dir,
+        layer_norm_payload,
+        contract=layer_norm_contract,
+        validated=False,
+    )
+
     blocked_output_dir = work_dir / "out-directx-workgroup-frontier"
     blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
         _run_frontier_project(
@@ -3733,7 +4198,7 @@ def _translate_directx_frontier(
             python=python,
             command_name="directx-workgroup-frontier",
             target="directx",
-            sources=MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+            sources=MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
             output_dir=blocked_output_dir,
             validate=True,
             check=False,
@@ -3749,7 +4214,7 @@ def _translate_directx_frontier(
         blocked_output_dir,
         blocked_payload,
         target="directx",
-        sources=MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+        sources=MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
         validated=True,
     )
 
@@ -3765,7 +4230,7 @@ def _translate_directx_frontier(
                 python=python,
                 command_name="validate-directx-frontier-toolchain",
                 target="directx",
-                sources=MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+                sources=MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
                 output_dir=toolchain_output_dir,
                 run_toolchains=True,
                 specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
@@ -3776,7 +4241,7 @@ def _translate_directx_frontier(
             toolchain_output_dir,
             toolchain_payload,
             target="directx",
-            sources=MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+            sources=MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
         )
         _require_directx_bfloat16_lowering_evidence(artifacts)
         validation = toolchain_payload.get("validation")
@@ -3786,12 +4251,48 @@ def _translate_directx_frontier(
         _require(
             isinstance(runs, list), "DirectX frontier toolchainRuns must be a list"
         )
-        directx_runs = [
+        aggregate_runs = [
             run
             for run in runs
             if isinstance(run, Mapping) and run.get("target") == "directx"
         ]
-        artifact_paths = {artifact["path"] for artifact in artifacts.values()}
+        layer_norm_toolchain_output = (
+            work_dir / "out-directx-layer-norm-dispatch-toolchain"
+        )
+        (
+            _layer_norm_toolchain_result,
+            layer_norm_toolchain_payload,
+            _layer_norm_toolchain_config,
+            _layer_norm_toolchain_report,
+        ) = _run_frontier_project(
+            mlx_root=mlx_root,
+            config_dir=config_dir,
+            report_dir=report_dir,
+            log_dir=log_dir,
+            python=python,
+            command_name="validate-directx-layer-norm-dispatch-toolchain",
+            target="directx",
+            sources=(MLX_LAYER_NORM_SOURCE,),
+            output_dir=layer_norm_toolchain_output,
+            run_toolchains=True,
+            dispatch_contracts=(str(layer_norm_contract["path"]),),
+        )
+        (
+            layer_norm_artifacts,
+            layer_norm_evidence,
+            layer_norm_runs,
+        ) = _require_layer_norm_dispatch_frontier_report(
+            mlx_root,
+            layer_norm_toolchain_output,
+            layer_norm_toolchain_payload,
+            contract=layer_norm_contract,
+            validated=True,
+        )
+        directx_runs = [*aggregate_runs, *layer_norm_runs]
+        artifact_paths = {
+            *(artifact["path"] for artifact in artifacts.values()),
+            *(artifact["path"] for artifact in layer_norm_artifacts.values()),
+        }
         validated_paths = {
             run.get("path") for run in directx_runs if run.get("status") == "ok"
         }
@@ -3803,6 +4304,10 @@ def _translate_directx_frontier(
     directx_entry_points_by_source: dict[str, list[str]] = {
         source: [] for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     }
+    layer_norm_entry_by_path = {
+        artifact["path"]: entry_point
+        for entry_point, artifact in layer_norm_artifacts.items()
+    }
     for run in directx_runs:
         if run.get("status") != "ok":
             continue
@@ -3811,7 +4316,11 @@ def _translate_directx_frontier(
             source in directx_entry_points_by_source,
             f"DirectX toolchain validation reported an unexpected source: {source}",
         )
-        entry_point = _directx_toolchain_entry_point(run)
+        entry_point = (
+            layer_norm_entry_by_path.get(run.get("path"))
+            if source == MLX_LAYER_NORM_SOURCE
+            else _directx_toolchain_entry_point(run)
+        )
         _require(
             entry_point is not None,
             "DirectX toolchain validation did not record a compute entry command",
@@ -3847,22 +4356,29 @@ def _translate_directx_frontier(
     warning_evidence = _directx_toolchain_warning_evidence(directx_runs)
     return {
         "name": "directx-frontier",
-        "status": "passed-with-expected-workgroup-blockers",
+        "status": "passed-with-bounded-dispatch-and-pending-contracts",
         "scope": "target-split-frontier",
         "report": _relpath(report_path, mlx_root),
+        "layerNormDispatchReport": _relpath(layer_norm_report_path, mlx_root),
         "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
         "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
         "unitCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
-        "artifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
-        "translatedSources": list(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES),
-        "translatedArtifactCount": len(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES),
-        "workgroupBlockedSources": list(MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
-        "workgroupBlockedArtifactCount": len(MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "artifactCount": (
+            len(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES)
+            + len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+            + len(MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES)
+        ),
+        "translatedSources": list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
+        "translatedArtifactCount": MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT,
+        "workgroupBlockedSources": list(MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "workgroupBlockedArtifactCount": len(
+            MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        ),
         "target": "directx",
         "toolchainRuns": len(directx_runs),
         "directxToolchainRequired": require_directx_toolchain,
         "directxToolchainSources": list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
-        "directxToolchainArtifactCount": len(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
+        "directxToolchainArtifactCount": MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT,
         "directxToolchainExpectedEntryPointCounts": dict(
             MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
         ),
@@ -3870,7 +4386,9 @@ def _translate_directx_frontier(
             MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT
         ),
         "directxToolchainValidatedSources": directx_validated_sources,
-        "directxToolchainValidatedArtifactCount": len(directx_validated_sources),
+        "directxToolchainValidatedArtifactCount": (
+            MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT if directx_runs else 0
+        ),
         "directxToolchainValidatedEntryPointCounts": (
             directx_validated_entry_point_counts
         ),
@@ -3884,13 +4402,14 @@ def _translate_directx_frontier(
         "contextualNarrowingEvidence": MLX_DIRECTX_CONTEXTUAL_NARROWING_EVIDENCE,
         "native16BitArithmeticEvidence": MLX_DIRECTX_NATIVE_16_BIT_ARITHMETIC_EVIDENCE,
         "bfloat16LoweringEvidence": bfloat16_lowering_evidence,
+        "layerNormDispatchEvidence": layer_norm_evidence,
         "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
         "semanticReadinessStatus": "not-established",
         "trackedIssues": [
-            MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
             *FRONTIER_VALIDATION_TRACKED_ISSUES,
             *DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES,
         ],
+        "resolvedIssues": [MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE],
         "runtimeParityClaimed": False,
     }
 
@@ -4440,7 +4959,8 @@ def _check_opengl_frontier(
             "runtimeEnforced": False,
         },
         "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
-        "trackedIssues": [MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE],
+        "trackedIssues": [],
+        "resolvedIssues": [MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE],
         "runtimeIntegrationIncluded": False,
     }
 
@@ -7101,10 +7621,13 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "blockedFrontierSources": list(MLX_BLOCKED_REDUCED_FRONTIER_SOURCES),
             "blockedFrontierIssues": list(FENCE_CONTRACT_TRACKED_ISSUES),
             "directxTranslatedFrontierSources": list(
-                MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+                MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+            ),
+            "directxTranslatedFrontierArtifactCount": (
+                MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT
             ),
             "directxWorkgroupBlockedFrontierSources": list(
-                MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+                MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
             ),
             "vulkanTranslatedFrontierSources": list(
                 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
@@ -7115,7 +7638,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "openglWorkgroupBlockedFrontierSources": list(
                 MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
             ),
-            "dynamicWorkgroupTrackedIssue": MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
+            "hostDispatchImportResolvedIssue": MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
             "fullCorpusTargets": list(FULL_CORPUS_TARGETS),
             "fullCorpusExpectedUnitCount": EXPECTED_METAL_KERNEL_COUNT,
             "fullCorpusExpectedArtifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,

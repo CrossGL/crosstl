@@ -89,6 +89,69 @@ def test_project_config_writer_emits_general_index_range_assertions(tmp_path):
     ) == len(assertions)
 
 
+def test_project_config_writer_emits_dispatch_contracts(tmp_path):
+    from crosstl.project import load_project_config
+
+    module = _load_harness()
+    config_path = tmp_path / "frontier.toml"
+    contract_path = "contracts/layer_norm.dispatch.json"
+    installed_contract = tmp_path / contract_path
+    installed_contract.parent.mkdir(parents=True)
+    installed_contract.write_bytes(
+        module.MLX_LAYER_NORM_DISPATCH_CONTRACT_SOURCE.read_bytes()
+    )
+
+    module._write_project_config(
+        config_path,
+        include=module.MLX_LAYER_NORM_SOURCE,
+        targets=("directx",),
+        output_dir="generated",
+        dispatch_contracts=(contract_path,),
+    )
+
+    config = load_project_config(tmp_path, config_path)
+    assert config.dispatch_contracts == [contract_path]
+    assert f'dispatch_contracts = ["{contract_path}"]' in config_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_layer_norm_dispatch_contract_preparation_copies_verified_manifest(
+    tmp_path, monkeypatch
+):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    source_path = mlx_root / module.MLX_LAYER_NORM_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("kernel void layer_norm_fixture() {}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        module,
+        "MLX_LAYER_NORM_SHA256",
+        hashlib.sha256(source_path.read_bytes()).hexdigest(),
+    )
+
+    contract = module._prepare_layer_norm_dispatch_contract(
+        mlx_root,
+        mlx_root / ".crosstl-mlx-porting",
+    )
+
+    copied_path = mlx_root / contract["path"]
+    assert (
+        copied_path.read_bytes()
+        == module.MLX_LAYER_NORM_DISPATCH_CONTRACT_SOURCE.read_bytes()
+    )
+    assert contract == {
+        "path": ".crosstl-mlx-porting/contracts/layer_norm.dispatch.json",
+        "contentIdentity": {
+            "algorithm": "sha256",
+            "value": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix(
+                "sha256:"
+            ),
+        },
+        "variantCount": len(module.MLX_LAYER_NORM_DISPATCH_VARIANTS),
+    }
+
+
 def _load_rms_norm_fixture_metadata():
     return json.loads(
         (
@@ -1923,23 +1986,26 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     frontier = expected_gaps["frontier_status"]
     assert frontier["sources"] == len(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
-    assert frontier["artifacts"] == len(
-        module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-    ) * len(frontier["targets"])
-    assert frontier["status"] == "target-split-with-expected-workgroup-blockers"
+    assert frontier["artifacts"] == 23
+    assert frontier["status"] == (
+        "target-split-with-bounded-dispatch-and-pending-contracts"
+    )
     assert frontier["scope"] == "target-split-frontier"
-    assert frontier["translated_artifacts"] == 16
-    assert frontier["failed_artifacts"] == 6
+    assert frontier["translated_artifacts"] == 18
+    assert frontier["failed_artifacts"] == 5
     assert frontier["target_artifacts"] == {
-        "directx": {"translated": 5, "failed": 6},
+        "directx": {"translated": 7, "failed": 5},
         "vulkan": {"translated": 11, "failed": 0},
     }
     assert frontier["semantic_readiness_status"] == "not-established"
     assert frontier["workgroup_blocked_diagnostic"] == (
         module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE
     )
-    assert frontier["workgroup_blocked_by"] == (
-        module.MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE
+    assert frontier["host_dispatch_import_resolved_by"] == (
+        module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
+    )
+    assert frontier["pending_host_dispatch_sources"] == list(
+        module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
     assert frontier["excluded_blocked_sources"] == [module.MLX_FENCE_SOURCE]
     assert frontier["runtime_integration_included"] is False
@@ -1979,8 +2045,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert arg_reduce["workgroup_blocked_diagnostic"] == (
         module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE
     )
-    assert arg_reduce["workgroup_blocked_by"] == (
-        module.MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE
+    assert arg_reduce["host_dispatch_import_resolved_by"] == (
+        module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
     )
 
     opengl_frontier = expected_gaps["opengl_frontier_status"]
@@ -2118,6 +2184,22 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert "issues/1537" in directx_gaps[module.MLX_FENCE_SOURCE]
     assert "issues/1695" not in json.dumps(directx_gaps)
     assert "issues/1518" not in json.dumps(directx_gaps)
+    layer_norm = directx["layer_norm_dispatch_frontier"]
+    assert layer_norm["status"] == "translated-dxc-validated"
+    assert layer_norm["source"] == module.MLX_LAYER_NORM_SOURCE
+    assert layer_norm["source_sha256"] == module.MLX_LAYER_NORM_SHA256
+    assert layer_norm["dispatch_contract"] == {
+        "path": "demos/integrations/mlx/contracts/layer_norm.dispatch.json",
+        "sha256": module.MLX_LAYER_NORM_DISPATCH_CONTRACT_SHA256,
+        "content_identity": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY,
+        "variant_count": len(module.MLX_LAYER_NORM_DISPATCH_VARIANTS),
+        "resolved_issue": module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
+    }
+    assert layer_norm["artifact_count"] == len(module.MLX_LAYER_NORM_DISPATCH_VARIANTS)
+    assert set(layer_norm["variants"]) == set(module.MLX_LAYER_NORM_DISPATCH_VARIANTS)
+    assert layer_norm["dxc_validated_artifact_count"] == 2
+    assert layer_norm["runtime_execution_attempted"] is False
+    assert layer_norm["numerical_parity_claimed"] is False
     assert directx["native_runtime_executed"] is False
     assert directx["runtime_parity_claimed"] is False
 
@@ -4166,6 +4248,191 @@ def _write_clean_frontier_report(
             },
         },
         "units": units,
+        "artifacts": artifacts,
+        "diagnostics": [],
+        "validation": {
+            "summary": {"failedCount": 0},
+            "toolchainRuns": list(toolchain_runs),
+        },
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report
+
+
+def _write_layer_norm_dispatch_report(
+    module,
+    mlx_root,
+    output_dir,
+    report_path,
+    *,
+    contract,
+    toolchain_runs=(),
+):
+    unit = {
+        "id": module.MLX_LAYER_NORM_SOURCE,
+        "path": module.MLX_LAYER_NORM_SOURCE,
+        "sourceBackend": "metal",
+        "sourceHash": {
+            "algorithm": "sha256",
+            "value": module.MLX_LAYER_NORM_SHA256,
+        },
+        "sourceSizeBytes": 4096,
+    }
+    artifacts = []
+    planned_artifacts = []
+    for entry_point, expected in module.MLX_LAYER_NORM_DISPATCH_VARIANTS.items():
+        variant = "dispatch-" + expected["artifactId"].removeprefix("sha256:")
+        generated_path = (
+            output_dir
+            / "directx"
+            / variant
+            / "mlx/backend/metal/kernels/layer_norm"
+            / f"{entry_point}.hlsl"
+        )
+        generated_path.parent.mkdir(parents=True, exist_ok=True)
+        generated_lines = [
+            f"[numthreads({expected['workgroupSize'][0]}, 1, 1)]",
+            "[WaveSize(32)]",
+        ]
+        if expected["specializationConstants"]:
+            generated_lines.insert(0, "static const bool has_w = true;")
+        generated_lines.extend(("void CSMain() {", "}", ""))
+        generated_path.write_text("\n".join(generated_lines), encoding="utf-8")
+        generated_hash = hashlib.sha256(generated_path.read_bytes()).hexdigest()
+        plan = {
+            "artifactId": expected["artifactId"],
+            "dispatchVariantIds": [expected["dispatchVariantId"]],
+            "entryPoint": entry_point,
+            "manifestContentIdentities": [
+                module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY
+            ],
+            "source": module.MLX_LAYER_NORM_SOURCE,
+            "specializationConstants": dict(expected["specializationConstants"]),
+            "subgroupWidth": expected["subgroupWidth"],
+            "variant": variant,
+            "workgroupSize": list(expected["workgroupSize"]),
+        }
+        planned_artifacts.append(plan)
+        constants = [
+            {
+                "id": int(constant_id),
+                "concreteValue": value,
+                "deferred": False,
+                "valueProvenance": {
+                    "kind": "host-dispatch-contract",
+                    "artifactId": expected["artifactId"],
+                },
+            }
+            for constant_id, value in expected["specializationConstants"].items()
+        ]
+        specializations = [{"hostName": entry_point}]
+        specializations.extend(
+            {"materializedName": f"helper_{index}"}
+            for index in range(expected["specializationCount"] - 1)
+        )
+        artifacts.append(
+            {
+                "source": module.MLX_LAYER_NORM_SOURCE,
+                "sourceBackend": "metal",
+                "sourceHash": unit["sourceHash"],
+                "sourceSizeBytes": unit["sourceSizeBytes"],
+                "target": "directx",
+                "status": "translated",
+                "variant": variant,
+                "path": generated_path.relative_to(mlx_root).as_posix(),
+                "generatedHash": {
+                    "algorithm": "sha256",
+                    "value": generated_hash,
+                },
+                "generatedSizeBytes": generated_path.stat().st_size,
+                "entryPoint": {
+                    "source": entry_point,
+                    "target": "CSMain",
+                    "stage": "compute",
+                },
+                "dispatchArtifact": plan,
+                "execution": {
+                    "sourceEntryPoints": [entry_point],
+                    "provenance": {
+                        "kind": "host-dispatch-contract",
+                        "artifactId": expected["artifactId"],
+                    },
+                    "subgroupWidthProvenance": {
+                        "kind": "host-dispatch-contract",
+                    },
+                    "subgroupWidthEnforcement": {
+                        "mechanism": "hlsl-wave-size-attribute",
+                        "minimumShaderModel": "6.6",
+                        "entryProfiles": [
+                            {"entryPoint": "CSMain", "profile": "cs_6_6"}
+                        ],
+                    },
+                    "entryPoints": [
+                        {
+                            "sourceEntryPoint": entry_point,
+                            "materializedEntryPoint": entry_point,
+                            "targetEntryPoint": "CSMain",
+                            "workgroupSize": list(expected["workgroupSize"]),
+                            "subgroupWidth": expected["subgroupWidth"],
+                        }
+                    ],
+                },
+                "specializationConstants": constants,
+                "templateMaterialization": {
+                    "status": "materialized",
+                    "specializationCount": expected["specializationCount"],
+                    "specializations": specializations,
+                    "unsupported": [],
+                },
+            }
+        )
+
+    artifact_count = len(artifacts)
+    identity = contract["contentIdentity"]
+    report = {
+        "project": {
+            "includePatterns": [module.MLX_LAYER_NORM_SOURCE],
+            "targets": ["directx"],
+            "dispatchContractFiles": [contract["path"]],
+            "dispatchContractCount": 1,
+            "dispatchVariantCount": artifact_count,
+            "dispatchContracts": [
+                {
+                    "path": contract["path"],
+                    "schemaVersion": 1,
+                    "contentIdentity": identity,
+                    "manifest": {"provenance": {"commit": module.MLX_COMMIT}},
+                    "evaluation": {
+                        "manifestSource": str((mlx_root / contract["path"]).resolve()),
+                        "variantCount": artifact_count,
+                    },
+                }
+            ],
+            "dispatchArtifactPlan": {
+                "kind": "crosstl-dispatch-artifact-plan",
+                "schemaVersion": 1,
+                "sourceUnitCount": 1,
+                "artifactCount": artifact_count,
+                "dispatchVariantCount": artifact_count,
+                "artifacts": planned_artifacts,
+            },
+        },
+        "summary": {
+            "unitCount": 1,
+            "artifactCount": artifact_count,
+            "translatedCount": artifact_count,
+            "failedCount": 0,
+            "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+            "artifactsByTarget": {
+                "directx": {
+                    "artifactCount": artifact_count,
+                    "translatedCount": artifact_count,
+                    "failedCount": 0,
+                }
+            },
+        },
+        "units": [unit],
         "artifacts": artifacts,
         "diagnostics": [],
         "validation": {
@@ -7306,7 +7573,22 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     for directory in (config_dir, report_dir, log_dir):
         directory.mkdir(parents=True)
 
-    directx_toolchain_count = len(module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
+    directx_toolchain_count = module.MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT
+    layer_norm_contract = {
+        "path": ".crosstl-mlx-porting/contracts/layer_norm.dispatch.json",
+        "contentIdentity": {
+            "algorithm": "sha256",
+            "value": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix(
+                "sha256:"
+            ),
+        },
+        "variantCount": len(module.MLX_LAYER_NORM_DISPATCH_VARIANTS),
+    }
+    monkeypatch.setattr(
+        module,
+        "_prepare_layer_norm_dispatch_contract",
+        lambda *_args: layer_norm_contract,
+    )
     commands = []
 
     def warning_stderr(source, relative_path):
@@ -7338,10 +7620,51 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
                 mlx_root,
                 work_dir / "out-directx-workgroup-frontier",
                 target="directx",
-                sources=module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+                sources=module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
                 validated=True,
             )
             returncode = 1
+        elif "layer-norm-dispatch" in name:
+            is_toolchain = name.startswith("validate-")
+            output_dir = work_dir / (
+                "out-directx-layer-norm-dispatch-toolchain"
+                if is_toolchain
+                else "out-directx-layer-norm-dispatch-frontier"
+            )
+            report = _write_layer_norm_dispatch_report(
+                module,
+                mlx_root,
+                output_dir,
+                report_dir / f"{name}.json",
+                contract=layer_norm_contract,
+            )
+            if is_toolchain:
+                toolchain_runs = [
+                    {
+                        "source": module.MLX_LAYER_NORM_SOURCE,
+                        "target": "directx",
+                        "path": artifact["path"],
+                        "command": [
+                            "dxc",
+                            "-T",
+                            "cs_6_6",
+                            "-E",
+                            "CSMain",
+                            artifact["path"],
+                        ],
+                        "status": "ok",
+                        "stderr": "",
+                    }
+                    for artifact in report["artifacts"]
+                ]
+                _write_layer_norm_dispatch_report(
+                    module,
+                    mlx_root,
+                    output_dir,
+                    report_dir / f"{name}.json",
+                    contract=layer_norm_contract,
+                    toolchain_runs=toolchain_runs,
+                )
         else:
             is_toolchain = name == "validate-directx-frontier-toolchain"
             output_dir = (
@@ -7351,7 +7674,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
             )
             toolchain_runs = []
             if is_toolchain:
-                for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES:
+                for source in module.MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES:
                     artifact_path = (output_dir / "directx" / Path(source)).with_suffix(
                         ".hlsl"
                     )
@@ -7407,7 +7730,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     )
 
     assert result["toolchainRuns"] == (module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT)
-    assert result["status"] == "passed-with-expected-workgroup-blockers"
+    assert result["status"] == "passed-with-bounded-dispatch-and-pending-contracts"
     assert result["directxToolchainRequired"] is True
     assert result["directxToolchainSources"] == list(
         module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
@@ -7443,16 +7766,28 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     assert result["bfloat16LoweringEvidence"] == (
         module.MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE
     )
+    assert result["layerNormDispatchEvidence"]["status"] == ("translated-dxc-validated")
+    assert result["layerNormDispatchEvidence"]["artifactCount"] == 2
+    assert result["layerNormDispatchEvidence"]["dxcValidatedArtifactCount"] == 2
+    assert set(result["layerNormDispatchEvidence"]["variants"]) == set(
+        module.MLX_LAYER_NORM_DISPATCH_VARIANTS
+    )
     assert result["workgroupBlockedSources"] == list(
-        module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
     assert all(
         evidence["sourceEntryPointIdentityStatus"] == "matched-materialized-host-names"
         for evidence in result["dynamicWorkgroupDispatchEvidence"].values()
     )
-    assert commands[1][0] == "directx-workgroup-frontier"
-    assert commands[2][0] == "validate-directx-frontier-toolchain"
-    assert "--run-toolchains" in commands[2][1]
+    assert [name for name, _command in commands] == [
+        "directx-frontier",
+        "directx-layer-norm-dispatch-frontier",
+        "directx-workgroup-frontier",
+        "validate-directx-frontier-toolchain",
+        "validate-directx-layer-norm-dispatch-toolchain",
+    ]
+    assert "--run-toolchains" in commands[3][1]
+    assert "--run-toolchains" in commands[4][1]
     toolchain_config = (
         config_dir / "validate-directx-frontier-toolchain.toml"
     ).read_text(encoding="utf-8")
@@ -7460,8 +7795,14 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     assert "[project.specialization_constants]" in toolchain_config
     for selector, value in module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS.items():
         assert f"{json.dumps(selector)} = {json.dumps(value)}" in toolchain_config
-    for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES:
+    for source in module.MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES:
         assert source in toolchain_config
+    assert module.MLX_LAYER_NORM_SOURCE not in toolchain_config
+    layer_norm_config = (
+        config_dir / "validate-directx-layer-norm-dispatch-toolchain.toml"
+    ).read_text(encoding="utf-8")
+    assert module.MLX_LAYER_NORM_SOURCE in layer_norm_config
+    assert layer_norm_contract["path"] in layer_norm_config
 
 
 def test_directx_toolchain_warning_contract_rejects_new_warning():
@@ -7589,6 +7930,7 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
     expected_sources = (
         module.MLX_ARANGE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
+        module.MLX_LAYER_NORM_SOURCE,
         module.MLX_RANDOM_SOURCE,
         module.MLX_ROPE_SOURCE,
         module.MLX_TERNARY_SOURCE,
@@ -7602,6 +7944,7 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
     assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS == {
         module.MLX_ARANGE_SOURCE: 11,
         module.MLX_BINARY_TWO_SOURCE: 225,
+        module.MLX_LAYER_NORM_SOURCE: 2,
         module.MLX_RANDOM_SOURCE: 2,
         module.MLX_ROPE_SOURCE: 18,
         module.MLX_TERNARY_SOURCE: 212,
@@ -7614,11 +7957,12 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
         module.MLX_SOFTMAX_SOURCE: 10,
     }
-    assert len(expected_sources) == 5
+    assert len(expected_sources) == 6
     assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == sum(
         module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
     )
-    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == 468
+    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == 470
+    assert module.MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT == 7
     assert sum(module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS.values()) == 106
     assert {
         source: evidence["specializationCount"]
@@ -7643,25 +7987,29 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
     )
     assert directx_status["workgroup_blocked_sources"] == list(
-        module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
     assert directx_status["workgroup_blocked_entry_point_counts"] == (
-        module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS
+        module.MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS
     )
     assert directx_status["workgroup_blocked_diagnostic"] == (
         module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE
     )
-    assert directx_status["workgroup_blocked_by"] == (
-        module.MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE
+    assert directx_status["host_dispatch_import_resolved_by"] == (
+        module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
     )
     assert directx_status["dispatch_evidence"] == (
-        module.MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE
+        {
+            source: module.MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source]
+            for source in module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        }
     )
     assert module.MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
     ]["hostLines"].endswith("613-640,685-753")
     assert set(directx_status["directx_toolchain_gaps"]) == (
-        set(module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES) | {module.MLX_FENCE_SOURCE}
+        set(module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES)
+        | {module.MLX_FENCE_SOURCE}
     )
     assert {
         f"https://github.com/CrossGL/crosstl/issues/{issue}"
@@ -7690,13 +8038,12 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
     normalized_readme = " ".join(readme.split())
 
     assert "official DXC v1.9.2602.24 on Windows CI" in readme
-    assert (
-        "the emitted five-source frontier: `arange.metal`, `binary_two.metal`,"
-        in normalized_readme
+    assert "seven-artifact frontier representing six pinned sources" in (
+        normalized_readme
     )
-    assert "11, 225, 2, 18, and 212 entries respectively" in normalized_readme
-    assert "468 generated compute entries" in normalized_readme
-    assert "six excluded aggregate sources cover 106 compute entries" in (
+    assert "11, 225, 2, 2, 18, and 212 entries respectively" in normalized_readme
+    assert "470 generated compute entries" in normalized_readme
+    assert "five pending aggregate sources cover 94 compute entries" in (
         normalized_readme
     )
     assert "no placeholder workgroup size is restored" in normalized_readme
@@ -7705,7 +8052,7 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
     assert "`uint-low-16-bits` register representation" in normalized_readme
     assert "round-to-nearest, ties-to-even conversion" in normalized_readme
     assert "`directx.native-16bit-types` capability" in normalized_readme
-    assert "All five emitted sources require" in normalized_readme
+    assert "All five aggregate sources require" in normalized_readme
     assert "fails closed if either field is missing or changes" in normalized_readme
     assert "storage, conversion, report, and compiler evidence only" in (
         normalized_readme
@@ -7735,7 +8082,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "profile `cs_6_0`, no `-enable-16bit-types`, and `-WX` passes" in (
         normalized_readme
     )
-    assert "zero warnings across all 468 entry-point runs" in normalized_readme
+    assert "zero warnings across all 470 entry-point runs" in normalized_readme
     assert "records this as a warning-clean contract" in normalized_readme
     assert "rejects any newly observed warning" in normalized_readme
     assert "two selected `random.metal` entries compile without" in normalized_readme
@@ -8774,10 +9121,16 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "https://github.com/CrossGL/crosstl/issues/1537"
     ]
     assert result["scope"]["directxTranslatedFrontierSources"] == list(
-        module.MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+        module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+    )
+    assert result["scope"]["directxTranslatedFrontierArtifactCount"] == (
+        module.MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT
     )
     assert result["scope"]["directxWorkgroupBlockedFrontierSources"] == list(
-        module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
+    assert result["scope"]["hostDispatchImportResolvedIssue"] == (
+        module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
     )
     assert result["scope"]["vulkanTranslatedFrontierSources"] == list(
         module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
