@@ -152,6 +152,43 @@ def test_layer_norm_dispatch_contract_preparation_copies_verified_manifest(
     }
 
 
+def test_layer_norm_dispatch_contract_accepts_crlf_checkout(tmp_path, monkeypatch):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    source_path = mlx_root / module.MLX_LAYER_NORM_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("kernel void layer_norm_fixture() {}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        module,
+        "MLX_LAYER_NORM_SHA256",
+        hashlib.sha256(source_path.read_bytes()).hexdigest(),
+    )
+    contract_source = tmp_path / "layer_norm.dispatch.json"
+    normalized = module.MLX_LAYER_NORM_DISPATCH_CONTRACT_SOURCE.read_text(
+        encoding="utf-8"
+    )
+    contract_source.write_bytes(normalized.replace("\n", "\r\n").encode("utf-8"))
+    monkeypatch.setattr(
+        module,
+        "MLX_LAYER_NORM_DISPATCH_CONTRACT_SOURCE",
+        contract_source,
+    )
+
+    contract = module._prepare_layer_norm_dispatch_contract(
+        mlx_root,
+        mlx_root / ".crosstl-mlx-porting",
+    )
+
+    copied_path = mlx_root / contract["path"]
+    assert copied_path.read_bytes() == contract_source.read_bytes()
+    assert contract["contentIdentity"] == {
+        "algorithm": "sha256",
+        "value": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix(
+            "sha256:"
+        ),
+    }
+
+
 def _load_rms_norm_fixture_metadata():
     return json.loads(
         (
@@ -2190,7 +2227,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert layer_norm["source_sha256"] == module.MLX_LAYER_NORM_SHA256
     assert layer_norm["dispatch_contract"] == {
         "path": "demos/integrations/mlx/contracts/layer_norm.dispatch.json",
-        "sha256": module.MLX_LAYER_NORM_DISPATCH_CONTRACT_SHA256,
+        "normalized_sha256": module.MLX_LAYER_NORM_DISPATCH_NORMALIZED_SHA256,
         "content_identity": module.MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY,
         "variant_count": len(module.MLX_LAYER_NORM_DISPATCH_VARIANTS),
         "resolved_issue": module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,

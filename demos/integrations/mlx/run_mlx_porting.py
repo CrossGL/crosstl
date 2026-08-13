@@ -55,7 +55,7 @@ MLX_LAYER_NORM_SHA256 = (
 MLX_LAYER_NORM_DISPATCH_CONTRACT_SOURCE = (
     Path(__file__).resolve().parent / "contracts" / "layer_norm.dispatch.json"
 )
-MLX_LAYER_NORM_DISPATCH_CONTRACT_SHA256 = (
+MLX_LAYER_NORM_DISPATCH_NORMALIZED_SHA256 = (
     "17924e1eb885da0b91bed4ac67df39a72ab2f9448a40988efef2efd1f0f1bc93"
 )
 MLX_LAYER_NORM_DISPATCH_CONTENT_IDENTITY = (
@@ -1209,6 +1209,11 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _normalized_text_sha256(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _probe_native_metal_toolchain(
     mlx_root: Path,
     work_dir: Path,
@@ -1408,8 +1413,9 @@ def _prepare_layer_norm_dispatch_contract(
         source_path.is_file(), f"LayerNorm dispatch contract is missing: {source_path}"
     )
     _require(
-        _sha256(source_path) == MLX_LAYER_NORM_DISPATCH_CONTRACT_SHA256,
-        "LayerNorm dispatch contract content changed",
+        _normalized_text_sha256(source_path)
+        == MLX_LAYER_NORM_DISPATCH_NORMALIZED_SHA256,
+        "LayerNorm dispatch contract normalized content changed",
     )
     layer_norm_source = mlx_root / MLX_LAYER_NORM_SOURCE
     _require(

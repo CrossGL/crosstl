@@ -1724,7 +1724,7 @@
       "target": "directx",
       "dispatch_contract": {
         "path": "demos/integrations/mlx/contracts/layer_norm.dispatch.json",
-        "sha256": "17924e1eb885da0b91bed4ac67df39a72ab2f9448a40988efef2efd1f0f1bc93",
+        "normalized_sha256": "17924e1eb885da0b91bed4ac67df39a72ab2f9448a40988efef2efd1f0f1bc93",
         "content_identity": "sha256:527140d8720a414ff5eaeb670ee9312571c5ca1a13460353d0c177193f5a8f98",
         "variant_count": 2,
         "resolved_issue": "https://github.com/CrossGL/crosstl/issues/1793"
