@@ -14368,6 +14368,68 @@ def test_plain_metal_helper_materialization_deduces_threadgroup_array_decay():
     assert "gemm_loop_finalize_float_MatrixOp_TileLoader(" in materialized
 
 
+def test_plain_metal_helper_materialization_recovers_commented_function_boundary():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename IdxT = int64_t>
+        IdxT elem_to_loc(
+            IdxT elem,
+            constant const int* shape,
+            constant const int64_t* strides,
+            int ndim) {
+          return elem + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+        }
+
+        template <typename IdxT = int64_t>
+        IdxT elem_to_loc(
+            uint3 elem,
+            constant const int* shape,
+            constant const int64_t* strides,
+            int ndim) {
+          return IdxT(elem.x) + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+        }
+
+        kernel void launch(
+            device uint* output [[buffer(0)]],
+            constant const int* shape [[buffer(1)]],
+            constant const int64_t* strides [[buffer(2)]],
+            uint gid [[thread_position_in_grid]]) {
+          adjust_offsets(output, shape, strides, gid);
+        }
+
+        // Selected helper (scalar index); retain the deduced source width.
+        void adjust_offsets(
+            device uint* output,
+            constant const int* shape,
+            constant const int64_t* strides,
+            uint index) {
+          output[index] = elem_to_loc(index, shape, strides, 1);
+        }
+        """)
+
+    materialized, records, completed_names, _materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {"elem_to_loc"}
+    assert records == [
+        {
+            "name": "elem_to_loc",
+            "materializedName": "elem_to_loc_uint",
+            "parameters": {"IdxT": "uint"},
+            "parameterSources": {"IdxT": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    assert "elem_to_loc_uint(index, shape, strides, 1)" in materialized
+    assert "uint elem_to_loc_uint(" in materialized
+    assert "uint3 elem" not in materialized.split("uint elem_to_loc_uint(", 1)[1]
+
+
 def test_plain_metal_helper_materialization_retains_reachable_unbound_parameter():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 

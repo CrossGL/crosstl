@@ -64,10 +64,26 @@ def _generated_gather_hlsl():
         "((w[uint(((w_offset + i)) / 4)] >> "
         "uint((((w_offset + i)) % 4) * 8)) & 255u)"
     )
+    index_helper_call = (
+        "elem_to_loc_uint32_t(x_idx, x_shape, int64_t(x_shape_offset), "
+        "x_strides, int64_t(x_strides_offset), x_batch_ndims)"
+    )
     return f"""
 StructuredBuffer<uint> w : register(t0);
 StructuredBuffer<float> x : register(t1);
+StructuredBuffer<int> x_shape : register(t2);
+StructuredBuffer<int64_t> x_strides : register(t3);
 RWStructuredBuffer<float> output : register(u2);
+
+uint elem_to_loc_uint32_t(
+    uint elem,
+    StructuredBuffer<int> shape,
+    int64_t shape_offset,
+    StructuredBuffer<int64_t> strides,
+    int64_t strides_offset,
+    int ndim) {{
+    return elem + uint(shape[shape_offset]) + uint(strides[strides_offset]) + uint(ndim);
+}}
 
 float load_vector_float_float_16_2(
     StructuredBuffer<float> x,
@@ -107,7 +123,12 @@ void CSMain(uint3 index : SV_DispatchThreadID) {{
     int row = 0;
     int in_vec_size_w = 4;
     int64_t wl_offset = 0;
+    uint x_idx = index.x;
+    int64_t x_shape_offset = 0;
+    int64_t x_strides_offset = 0;
+    int x_batch_ndims = 1;
     float x_thread[16];
+    uint x_offset = {index_helper_call};
     output[0] = qdot_float_16_2(
         w,
         int64_t((((w_offset * 4) + (ws_offset + (row * in_vec_size_w))) + wl_offset)),
@@ -514,6 +535,13 @@ def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
                 "wl_offset",
             ],
         },
+        "indexHelperMaterialization": {
+            "status": "passed",
+            "helper": "elem_to_loc_uint32_t",
+            "sourceIndexType": "uint32_t",
+            "generatedIndexType": "uint",
+            "resourceOffsets": ["x_shape_offset", "x_strides_offset"],
+        },
     }
     assert compiler == {
         "entryPoint": "CSMain",
@@ -540,6 +568,12 @@ def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
             "w[uint(((w_offset + i)) / 4)]",
             "w[uint((w_offset + i))]",
             "unpack",
+        ),
+        (
+            "elem_to_loc_uint32_t(x_idx, x_shape, int64_t(x_shape_offset), "
+            "x_strides, int64_t(x_strides_offset), x_batch_ndims)",
+            "elem_to_loc(x_idx, x_shape, x_strides, x_batch_ndims)",
+            "scalar index helper",
         ),
     ],
 )

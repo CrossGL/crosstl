@@ -59,8 +59,8 @@ ENTRY_CONTRACTS = {
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
         "specializationName": "affine_gather_qmv_fast",
         "parameters": {"T": "float", "bits": "2", "group_size": "32"},
-        "reachableSpecializationCount": 10,
-        "concreteSpecializationCount": 7,
+        "reachableSpecializationCount": 11,
+        "concreteSpecializationCount": 8,
         "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
         "generatedContract": "gather-qmv-fast",
         "workgroupSize": MLX_QUANTIZED_GATHER_WORKGROUP_SIZE,
@@ -105,6 +105,19 @@ _GATHER_EXECUTION_ENTRY_RE = re.compile(
 )
 _GATHER_DIRECT_TYPED_BYTE_READ_RE = re.compile(
     r"\bw\s*\[\s*uint\s*\(\s*\(\s*w_offset\s*\+\s*i\s*\)\s*\)\s*\]"
+)
+_GATHER_UNMATERIALIZED_INDEX_HELPER_RE = re.compile(
+    r"(?<![A-Za-z0-9_])elem_to_loc\s*\("
+)
+_GATHER_INDEX_HELPER_DEFINITION_RE = re.compile(
+    r"\buint\s+elem_to_loc_uint32_t\s*\(\s*uint\s+elem\s*,\s*"
+    r"StructuredBuffer<int>\s+shape\s*,\s*int64_t\s+shape_offset\s*,\s*"
+    r"StructuredBuffer<int64_t>\s+strides\s*,\s*int64_t\s+strides_offset\s*,\s*"
+    r"int\s+ndim\s*\)\s*\{"
+)
+GATHER_INDEX_HELPER_CALL = (
+    "elem_to_loc_uint32_t(x_idx, x_shape, int64_t(x_shape_offset), "
+    "x_strides, int64_t(x_strides_offset), x_batch_ndims)"
 )
 
 
@@ -617,6 +630,12 @@ def _validate_gather_generated_hlsl(generated: str) -> dict[str, Any]:
         len(_GATHER_EXECUTION_ENTRY_RE.findall(generated)) == 1,
         "the gather entry must enforce a 32x2x1 workgroup and 32-lane wave",
     )
+    _require(
+        len(_GATHER_INDEX_HELPER_DEFINITION_RE.findall(generated)) == 1
+        and generated.count(GATHER_INDEX_HELPER_CALL) == 1
+        and _GATHER_UNMATERIALIZED_INDEX_HELPER_RE.search(generated) is None,
+        "the scalar index helper must be materialized with both resource offsets",
+    )
     return {
         "executionContract": {
             "status": "passed",
@@ -643,6 +662,13 @@ def _validate_gather_generated_hlsl(generated: str) -> dict[str, Any]:
                 "row * in_vec_size_w",
                 "wl_offset",
             ],
+        },
+        "indexHelperMaterialization": {
+            "status": "passed",
+            "helper": "elem_to_loc_uint32_t",
+            "sourceIndexType": "uint32_t",
+            "generatedIndexType": "uint",
+            "resourceOffsets": ["x_shape_offset", "x_strides_offset"],
         },
     }
 

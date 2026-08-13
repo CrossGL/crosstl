@@ -494,8 +494,8 @@ cross-version compiler invariant. This evidence covers translation and compiler
 acceptance only; it does not claim runtime execution or numerical parity.
 
 The adjacent DirectX entry `affine_gather_qmv_fast_float_gs_32_b_2` also emits
-one artifact with zero translation diagnostics. It materializes ten reachable
-specializations and seven concrete records while pruning 110,861 unreachable
+one artifact with zero translation diagnostics. It materializes 11 reachable
+specializations and eight concrete records while pruning 110,861 unreachable
 candidates. The specialized `load_vector_float_float_16_2` helper retains the
 caller's `thread U x_thread[values_per_thread]` storage with
 `values_per_thread = 16`; HLSL represents it as an `inout float[16]` plus a
@@ -505,12 +505,17 @@ base offset and proves all four writes in each `i += 4` iteration. The
 and the helper call composes the root word offset, byte-view offset, row offset,
 and local alias offset without treating bytes as typed 32-bit elements.
 
+The gather path also materializes the overloaded `elem_to_loc` helper as
+`elem_to_loc_uint32_t`, preserving the source `uint32_t` index type. Its HLSL
+call carries the independent shape and stride resource offsets, and no
+unresolved `elem_to_loc(...)` call remains in the artifact.
+
 The pinned `gather_qmv` host dispatch in `mlx/backend/metal/quantized.cpp` sets
 `bk = 32` and `MTL::Size group_dims(bk, 2, 1)`. The project rule therefore
 emits `[numthreads(32, 2, 1)]`. The kernel's simdgroup indices require a
 32-lane subgroup, so the generated HLSL also emits `[WaveSize(32)]` and requires
-Shader Model 6.6. The resulting artifact is 14,945 bytes with SHA-256
-`411e8e9f781e580e5f0aa2d73f375303ef4f762c91f627c6a265301402dfc30d`.
+Shader Model 6.6. The resulting artifact is 15,581 bytes with SHA-256
+`fa48af57ed3b50dde25889c40fc04bb8b45d6541cd5f7054d77f89689ae6d1d7`.
 Windows CI compiles it with DXC profile `cs_6_6` and `-WX`. This is selected-entry
 evidence for the fixed-array alias work tracked by
 [#1497](https://github.com/CrossGL/crosstl/issues/1497) and the read-only storage

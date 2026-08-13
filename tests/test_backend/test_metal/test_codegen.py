@@ -9913,13 +9913,16 @@ def test_mlx_random_auto_local_overload_matches_direct_and_project_opengl(
     artifact = payload["artifacts"][0]
     project = (repo / artifact["path"]).read_text(encoding="utf-8")
 
-    helper_pattern = r"int64_t (?:first|second) = ([A-Za-z_]\w*)\("
+    helper_pattern = r"uint (?:first|second) = ([A-Za-z_]\w*)\("
     direct_helpers = re.findall(helper_pattern, direct)
     project_helpers = re.findall(helper_pattern, project)
     assert len(direct_helpers) == len(project_helpers) == 2
     assert len(set(direct_helpers)) == len(set(project_helpers)) == 1
     assert direct_helpers[0] == project_helpers[0]
+    assert "elem_to_loc_uint" in direct_helpers[0]
     assert "metal_overload" not in direct_helpers[0]
+    assert "out_values[0] = int64_t(first);" in direct
+    assert "out_values[1] = int64_t(second);" in project
     assert_opengl_compute_validates_if_available(
         direct, tmp_path, "mlx-random-auto-local-overload"
     )

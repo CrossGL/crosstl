@@ -7790,7 +7790,9 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`MTL::Size group_dims(bk, 2, 1)`" in normalized_readme
     assert "`[numthreads(32, 2, 1)]`" in normalized_readme
     assert "`[WaveSize(32)]`" in normalized_readme
-    assert "14,945 bytes" in normalized_readme
+    assert "15,581 bytes" in normalized_readme
+    assert "materializes the overloaded `elem_to_loc` helper" in normalized_readme
+    assert "independent shape and stride resource offsets" in normalized_readme
     assert "DXC profile `cs_6_6` and `-WX`" in normalized_readme
     assert "does not dispatch the kernel through Direct3D" in normalized_readme
     assert "three source-qualified index-range assertions" in normalized_readme
@@ -7900,8 +7902,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "project_diagnostic_count": 0,
     }
     assert adjacent["materialization"] == {
-        "reachable_specialization_count": 10,
-        "concrete_specialization_count": 7,
+        "reachable_specialization_count": 11,
+        "concrete_specialization_count": 8,
         "pruned_candidate_count": 110861,
     }
     assert adjacent["source_contract"] == {
@@ -7932,6 +7934,13 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
             "wl_offset",
         ],
     }
+    assert adjacent["index_helper_materialization"] == {
+        "status": "passed",
+        "helper": "elem_to_loc_uint32_t",
+        "source_index_type": "uint32_t",
+        "generated_index_type": "uint",
+        "resource_offsets": ["x_shape_offset", "x_strides_offset"],
+    }
     assert adjacent["execution_contract"] == {
         "status": "source-verified-and-emitted",
         "workgroup_size": [32, 2, 1],
@@ -7946,8 +7955,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         },
     }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "411e8e9f781e580e5f0aa2d73f375303ef4f762c91f627c6a265301402dfc30d",
-        "size_bytes": 14945,
+        "sha256": "fa48af57ed3b50dde25889c40fc04bb8b45d6541cd5f7054d77f89689ae6d1d7",
+        "size_bytes": 15581,
     }
     assert adjacent["compiler_validation"] == {
         "compiler": "dxc",

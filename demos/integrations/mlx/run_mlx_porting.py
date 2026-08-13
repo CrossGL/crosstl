@@ -661,8 +661,8 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         "project_diagnostic_count": 0,
     },
     "materialization": {
-        "reachable_specialization_count": 10,
-        "concrete_specialization_count": 7,
+        "reachable_specialization_count": 11,
+        "concrete_specialization_count": 8,
         "pruned_candidate_count": 110861,
     },
     "source_contract": {
@@ -693,6 +693,13 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
             "wl_offset",
         ],
     },
+    "index_helper_materialization": {
+        "status": "passed",
+        "helper": "elem_to_loc_uint32_t",
+        "source_index_type": "uint32_t",
+        "generated_index_type": "uint",
+        "resource_offsets": ["x_shape_offset", "x_strides_offset"],
+    },
     "execution_contract": {
         "status": "source-verified-and-emitted",
         "workgroup_size": [32, 2, 1],
@@ -707,8 +714,8 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "411e8e9f781e580e5f0aa2d73f375303ef4f762c91f627c6a265301402dfc30d",
-        "size_bytes": 14945,
+        "sha256": "fa48af57ed3b50dde25889c40fc04bb8b45d6541cd5f7054d77f89689ae6d1d7",
+        "size_bytes": 15581,
     },
     "compiler_validation": {
         "compiler": "dxc",
