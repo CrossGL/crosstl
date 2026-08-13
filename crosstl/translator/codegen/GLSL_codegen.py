@@ -15408,6 +15408,13 @@ class GLSLCodeGen:
                 source_location=getattr(expression, "source_location", None),
             )
 
+        if target_layout == view_layout:
+            return {
+                **binding,
+                "element_type": self.map_type(target_type_name),
+                "view_element_type": target_type_name,
+            }
+
         rendered_offset = self.glsl_workgroup_pointer_offset_expression(binding)
         scaled_offset = rendered_offset
         if view_layout.byte_width != 1 and rendered_offset not in {"0", "0u"}:

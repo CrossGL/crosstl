@@ -7590,6 +7590,66 @@ def test_glsl_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
     )
 
 
+def test_opengl_same_view_storage_pointer_cast_preserves_forwarded_offset(tmp_path):
+    code = """
+    shader ReinterpretedStoragePointerForwarding {
+        uint readByte(const device uint8* values, uint index) {
+            return uint(values[index]);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<uint> words @binding(0),
+                RWStructuredBuffer<uint> output @binding(1),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                const device uint8* bytes = (uint8*)words;
+                bytes += int(tid.x) * 4;
+                const device uint8* cursor = (uint8*)(bytes + 1);
+                output[0] = readByte(cursor, 2u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    helper = re.search(
+        r"\buint\s+(?P<name>readByte[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert re.search(r"\bint\s+values_offset\b", helper.group("params")), generated
+    assert re.search(r"\btid\b", helper.group("body")) is None, generated
+    assert "gl_GlobalInvocationID" not in helper.group("body"), generated
+    assert re.search(r"\bvalues_offset\b", helper.group("body")), generated
+
+    cursor_assignment = re.search(
+        r"\bint\s+cursor_offset\s*=\s*int\((?P<value>[^;]+)\);", generated
+    )
+    assert cursor_assignment is not None, generated
+    assert glsl_expression_depends_on(
+        generated, cursor_assignment.group("value"), "bytes_offset"
+    ), generated
+
+    helper_calls = re.findall(
+        rf"\b{re.escape(helper.group('name'))}\s*\(([^;\n]*)\)\s*;", generated
+    )
+    main_call = next(
+        (arguments for arguments in helper_calls if "2u" in arguments), None
+    )
+    assert main_call is not None, generated
+    assert glsl_expression_depends_on(generated, main_call, "cursor_offset"), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "same_view_storage_pointer_cast"
+    )
+
+
 def test_glsl_metal_private_struct_byte_view_reads_packed_words(tmp_path):
     metal_source = tmp_path / "local_struct_byte_view.metal"
     metal_source.write_text(
