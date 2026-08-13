@@ -3205,6 +3205,51 @@ def test_opengl_resource_specialized_helper_preserves_private_pointer_extent(tmp
     )
 
 
+def test_opengl_resource_specialized_caller_preserves_local_private_array(tmp_path):
+    shader = """
+    shader SpecializedCallerPrivateArray {
+        void update(thread float* values) {
+            values[0] += 2.0;
+            values[2] += 3.0;
+        }
+
+        void accumulate(device float* output, float seed) {
+            float values[3] = {seed, 0.0, seed};
+            update(values);
+            output[0] = values[0] + values[2];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @binding(0)) {
+                accumulate(output, 5.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void update(inout float values[3], int values_base)" in generated
+    specialized = re.search(
+        r"\bvoid\s+accumulate_glsl_[A-Za-z0-9_]+\s*"
+        r"\(float seed, int output_offset\)\s*"
+        r"\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert specialized is not None, generated
+    assert "float values[3] = float[3](seed, 0.0, seed);" in specialized.group(
+        "body"
+    )
+    assert "update(values, 0);" in specialized.group("body")
+    assert "output_[output_offset] = (values[0] + values[2]);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "resource_specialized_caller_private_array"
+    )
+
+
 def test_opengl_resource_specialization_preserves_private_pointer_variant_order(
     tmp_path,
 ):

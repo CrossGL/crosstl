@@ -8129,6 +8129,9 @@ class GLSLCodeGen:
         target_name,
     ):
         source_key = self.glsl_function_declaration_name(source_func)
+        self.function_private_pointer_local_arrays[target_name] = (
+            self.glsl_private_pointer_local_arrays(clone)
+        )
         source_parameters = self.function_private_pointer_parameters.get(source_key)
         if not source_parameters:
             return
@@ -8176,9 +8179,6 @@ class GLSLCodeGen:
                 source_key,
                 getattr(source_func, "name", target_name),
             )
-        )
-        self.function_private_pointer_local_arrays[target_name] = (
-            self.glsl_private_pointer_local_arrays(clone)
         )
         self.function_private_pointer_full_span_parameters[target_name] = {
             name
