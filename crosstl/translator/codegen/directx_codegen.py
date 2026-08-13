@@ -7979,10 +7979,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 for parameter in param_list
                 if id(parameter) in self.hlsl_promoted_entry_scalar_constant_members
             )
+            mutable_resource_offsets = (
+                self.hlsl_mutable_resource_pointer_argument_names(func)
+            )
             self.apply_hlsl_promoted_entry_resource_parameter_aliases(
                 param_list,
                 promoted_entry_resource_parameter_ids,
                 func,
+                mutable_resource_offsets=mutable_resource_offsets,
+                parameter_prologue_statements=parameter_prologue_statements,
             )
         default_vertex_parameter_semantics = {}
         if effective_shader_type == "vertex":
@@ -8132,7 +8137,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 param_type = self.apply_hlsl_ray_parameter_direction(
                     param_type, ray_role
                 )
-            else:
+            elif resource_pointer_contract is None:
                 param_type = self.apply_hlsl_parameter_qualifiers(param_type, p)
                 param_type = f"{self.hlsl_interpolation_modifier_prefix(p)}{param_type}"
             declaration = format_c_style_array_declaration(
@@ -8166,22 +8171,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 offset_name = self.hlsl_unique_local_identifier(
                     f"{p.name}_offset", used_names
                 )
-                params.append(f"int64_t {offset_name}")
+                offset_direction = (
+                    self.hlsl_resource_pointer_offset_parameter_direction(p)
+                )
+                offset_declaration = f"int64_t {offset_name}"
+                if offset_direction is not None:
+                    offset_declaration = f"{offset_direction} {offset_declaration}"
+                params.append(offset_declaration)
                 emitted_param_names.add(offset_name)
                 self.current_identifier_reserved_names.add(offset_name)
                 self.local_variable_types[offset_name] = "int64_t"
-                self.current_hlsl_resource_pointer_aliases[p.name] = {
-                    "kind": "resource-pointer",
-                    "root": self.hlsl_declaration_identifier_name(p.name),
-                    "root_kind": "parameter",
-                    "offset": offset_name,
-                    "element_type": resource_pointer_contract["element_type"],
-                    "source_element_type": resource_pointer_contract["element_type"],
-                    "resource_type": resource_pointer_contract["resource_type"],
-                    "address_space": resource_pointer_contract["address_space"],
-                    "access": resource_pointer_contract["access"],
-                    "is_pointer_alias": True,
-                }
+                self.current_hlsl_resource_pointer_aliases[p.name] = (
+                    self.hlsl_resource_pointer_parameter_alias_binding(
+                        resource_pointer_contract,
+                        root=self.hlsl_declaration_identifier_name(p.name),
+                        offset=offset_name,
+                    )
+                )
             if is_private_pointer_parameter(
                 p
             ) and p.name not in self.function_private_pointer_scalar_parameters.get(
@@ -12406,15 +12412,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             str(qualifier).lower()
             for qualifier in getattr(parameter, "qualifiers", []) or []
         }
-        if qualifiers.intersection({"read_write", "readwrite", "inout"}):
-            return "read_write"
-        if qualifiers.intersection({"write", "writeonly", "out"}):
-            return "write"
         if qualifiers.intersection({"const", "constant", "read", "readonly", "in"}):
             return "read"
+        if qualifiers.intersection({"write", "writeonly"}):
+            return "write"
+        if qualifiers.intersection({"read_write", "readwrite", "inout"}):
+            return "read_write"
+        if "out" in qualifiers:
+            return "write"
         if pointer_type is not None and not getattr(pointer_type, "is_mutable", True):
             return "read"
         return "read_write"
+
+    def hlsl_resource_pointer_offset_parameter_direction(self, parameter):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        if "inout" in qualifiers or "read_write" in qualifiers:
+            return "inout"
+        if "out" in qualifiers or "writeonly" in qualifiers:
+            return "out"
+        return None
 
     def hlsl_resource_pointer_parameter_contract(self, parameter, function_name=None):
         if not self.hlsl_resource_pointer_parameter(parameter):
@@ -12464,6 +12483,46 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "resource_type": f"{resource_name}<{mapped_element_type}>",
         }
 
+    def hlsl_resource_pointer_parameter_alias_binding(self, contract, *, root, offset):
+        logical_element_type = contract["element_type"]
+        physical_element_type = self.hlsl_resource_pointer_element_type(
+            contract["resource_type"]
+        )
+        binding = {
+            "kind": "resource-pointer",
+            "root": root,
+            "root_kind": "parameter",
+            "offset": offset,
+            "element_type": logical_element_type,
+            "source_element_type": logical_element_type,
+            "resource_type": contract["resource_type"],
+            "address_space": contract["address_space"],
+            "access": contract["access"],
+            "is_pointer_alias": True,
+        }
+        source_layout = scalar_storage_layout(physical_element_type)
+        target_layout = scalar_storage_layout(logical_element_type)
+        if (
+            source_layout is not None
+            and target_layout is not None
+            and source_layout != target_layout
+            and source_layout.bit_width == 32
+            and target_layout.bit_width in {8, 16, 32}
+            and not (target_layout.kind == "floating" and target_layout.bit_width != 32)
+        ):
+            binding.update(
+                {
+                    "byte_offset": "0",
+                    "view_element_type": logical_element_type,
+                    "source_element_type": physical_element_type,
+                    "pointer_reinterpretation": {
+                        "source_layout": source_layout,
+                        "target_layout": target_layout,
+                    },
+                }
+            )
+        return binding
+
     def collect_hlsl_resource_pointer_parameters(self, functions):
         parameters_by_function = {}
         indices_by_function = {}
@@ -12486,6 +12545,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 indices_by_function[function_name] = pointer_indices
         self.function_hlsl_resource_pointer_parameters = parameters_by_function
         self.function_hlsl_resource_pointer_parameter_indices = indices_by_function
+
+    def hlsl_mutable_resource_pointer_argument_names(self, function):
+        names = set()
+        for node in self.walk_ast(getattr(function, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            function_name = self.function_call_name(node)
+            arguments = list(
+                getattr(node, "arguments", getattr(node, "args", [])) or []
+            )
+            for index, argument in enumerate(arguments):
+                parameter, _materialized_name = (
+                    self.hlsl_resource_pointer_parameter_for_call(
+                        function_name,
+                        index,
+                    )
+                )
+                if (
+                    parameter is None
+                    or self.hlsl_resource_pointer_offset_parameter_direction(parameter)
+                    not in {"out", "inout"}
+                ):
+                    continue
+                if isinstance(argument, (IdentifierNode, VariableNode)):
+                    names.add(argument.name)
+        return names
 
     def hlsl_resource_pointer_parameter_indices_for_function(self, function_name):
         indices = self.function_hlsl_resource_pointer_parameter_indices.get(
@@ -12608,7 +12693,77 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reason="access-mismatch",
                 source_location=getattr(argument, "source_location", None),
             )
+        expected_view_layout = scalar_storage_layout(contract["element_type"])
+        actual_view_layout = scalar_storage_layout(
+            binding.get("view_element_type") or binding.get("element_type")
+        )
+        if (
+            expected_view_layout is not None
+            and actual_view_layout is not None
+            and expected_view_layout != actual_view_layout
+        ):
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer argument for "
+                f"'{materialized_name}.{parameter_name}' changes logical element "
+                f"type from {actual_view_layout.name} to {expected_view_layout.name}",
+                function_name=materialized_name,
+                parameter_name=parameter_name,
+                address_space=contract["address_space"],
+                expected_access=contract["access"],
+                actual_access=actual_access,
+                reason="element-type-mismatch",
+                source_location=getattr(argument, "source_location", None),
+            )
+        binding["call_element_type"] = contract["element_type"]
+        binding["call_offset_direction"] = (
+            self.hlsl_resource_pointer_offset_parameter_direction(parameter)
+        )
+        if binding["call_offset_direction"] is not None:
+            call_offset = self.hlsl_resource_pointer_call_offset(binding)
+            if not self.hlsl_resource_pointer_offset_lvalue(call_offset):
+                raise DirectXResourcePointerParameterError(
+                    "DirectX mutable storage pointer argument for "
+                    f"'{materialized_name}.{parameter_name}' has no assignable "
+                    "logical offset",
+                    function_name=materialized_name,
+                    parameter_name=parameter_name,
+                    address_space=contract["address_space"],
+                    expected_access=contract["access"],
+                    actual_access=actual_access,
+                    reason="mutable-offset-lvalue-unresolved",
+                    source_location=getattr(argument, "source_location", None),
+                )
         return binding
+
+    @staticmethod
+    def hlsl_resource_pointer_offset_lvalue(offset):
+        text = str(offset or "").strip()
+        return re.fullmatch(r"[A-Za-z_]\w*(?:\s*\[[^\]]+\])?", text) is not None
+
+    def hlsl_resource_pointer_call_offset(self, binding):
+        element_offset = str(binding.get("offset", "0"))
+        reinterpretation = binding.get("pointer_reinterpretation")
+        if reinterpretation is None:
+            return element_offset
+
+        view_layout = reinterpretation["target_layout"]
+        parameter_layout = scalar_storage_layout(binding.get("call_element_type"))
+        if parameter_layout is None or parameter_layout != view_layout:
+            return element_offset
+
+        byte_offset = str(binding.get("byte_offset", "0"))
+        element_bytes = element_offset
+        if view_layout.byte_width != 1 and element_offset not in {"0", "0u"}:
+            element_bytes = f"({element_offset} * {view_layout.byte_width})"
+        if byte_offset in {"0", "0u"}:
+            total_bytes = element_bytes
+        elif element_bytes in {"0", "0u"}:
+            total_bytes = byte_offset
+        else:
+            total_bytes = f"({byte_offset} + {element_bytes})"
+        if view_layout.byte_width == 1:
+            return total_bytes
+        return f"(({total_bytes}) / {view_layout.byte_width})"
 
     def hlsl_workgroup_pointer_call_argument_binding(
         self, function_name, argument_index, argument
@@ -14542,6 +14697,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         condition = getattr(node, "condition", getattr(node, "if_condition", None))
         then_body = getattr(node, "then_branch", getattr(node, "if_body", []))
         else_body = getattr(node, "else_branch", getattr(node, "else_body", []))
+
+        literal_condition = self.literal_int_value(condition, {})
+        if literal_condition is not None and (
+            literal_condition != 0 or not getattr(node, "else_if_conditions", None)
+        ):
+            selected_body = then_body if literal_condition != 0 else else_body
+            if not selected_body:
+                return ""
+            if isinstance(selected_body, IfNode):
+                return self.generate_if(selected_body, indent)
+            if isinstance(selected_body, BlockNode):
+                return self.generate_block(selected_body, indent)
+            code = f"{indent_str}{{\n"
+            code += self.generate_scoped_statement_body(selected_body, indent + 1)
+            return code + f"{indent_str}}}\n"
 
         code = f"{indent_str}if ({self.hlsl_condition_expression(condition)}) {{\n"
 
@@ -19841,8 +20011,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return candidate
 
     def apply_hlsl_promoted_entry_resource_parameter_aliases(
-        self, param_list, promoted_parameter_ids, func
+        self,
+        param_list,
+        promoted_parameter_ids,
+        func,
+        *,
+        mutable_resource_offsets=None,
+        parameter_prologue_statements=None,
     ):
+        mutable_resource_offsets = set(mutable_resource_offsets or ())
+        if parameter_prologue_statements is None:
+            parameter_prologue_statements = []
         for parameter in param_list:
             if id(parameter) not in promoted_parameter_ids:
                 continue
@@ -19874,6 +20053,50 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             if emitted_name != parameter_name:
                 self.current_identifier_aliases[parameter_name] = emitted_name
+            if parameter_name not in mutable_resource_offsets:
+                continue
+
+            resource_type = self.directx_resource_declaration_type(promoted_type)
+            resource_name = self.hlsl_resource_type_name(resource_type)
+            if resource_name not in {
+                "Buffer",
+                "StructuredBuffer",
+                "RWBuffer",
+                "RWStructuredBuffer",
+                "RasterizerOrderedBuffer",
+                "RasterizerOrderedStructuredBuffer",
+            }:
+                continue
+            element_type = self.hlsl_resource_pointer_element_type(resource_type)
+            if element_type is None:
+                continue
+
+            used_names = set(self.current_identifier_reserved_names)
+            used_names.update(self.local_variable_types)
+            offset_name = self.hlsl_unique_local_identifier(
+                f"{parameter_name}_offset",
+                used_names,
+            )
+            self.current_identifier_reserved_names.add(offset_name)
+            self.local_variable_types[offset_name] = "int64_t"
+            access = (
+                "read_write"
+                if resource_name.startswith(("RW", "RasterizerOrdered"))
+                else "read"
+            )
+            self.current_hlsl_resource_pointer_aliases[parameter_name] = {
+                "kind": "resource-pointer",
+                "root": self.hlsl_identifier_name(emitted_name),
+                "root_kind": "entry-resource",
+                "offset": offset_name,
+                "element_type": element_type,
+                "source_element_type": element_type,
+                "resource_type": resource_type,
+                "address_space": "storage",
+                "access": access,
+                "is_pointer_alias": True,
+            }
+            parameter_prologue_statements.append(f"int64_t {offset_name} = int64_t(0);")
 
     def hlsl_entry_resource_parameter_global(self, parameter, func=None):
         mapped_type = self.hlsl_entry_resource_parameter_global_type(parameter, func)
@@ -30073,14 +30296,41 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             update_name = self.expression_name(update.operand)
             if update_name == loop_name and update.op in {"++", "--"}:
                 step = 1 if update.op == "++" else -1
+        elif isinstance(update, AssignmentNode):
+            update_name = self.expression_name(
+                getattr(update, "target", getattr(update, "left", None))
+            )
+            update_operator = getattr(update, "operator", "=")
+            update_value = getattr(update, "value", getattr(update, "right", None))
+            update_interval = self.hlsl_private_pointer_interval(
+                update_value, intervals, constants
+            )
+            if (
+                update_name == loop_name
+                and update_operator in {"+=", "-="}
+                and update_interval is not None
+                and update_interval[0] == update_interval[1]
+                and update_interval[0] != 0
+            ):
+                step = update_interval[0]
+                if update_operator == "-=":
+                    step = -step
         if bound is None or step is None:
             return loop_name, None
         if step > 0 and operator in {"<", "<="}:
             maximum = bound[1] - (1 if operator == "<" else 0)
-            return loop_name, (start[0], max(start[0], maximum))
+            if maximum <= start[0]:
+                return loop_name, (start[0], start[0])
+            reachable_maximum = start[0] + ((maximum - start[0]) // step) * step
+            return loop_name, (start[0], reachable_maximum)
         if step < 0 and operator in {">", ">="}:
             minimum = bound[0] + (1 if operator == ">" else 0)
-            return loop_name, (min(start[0], minimum), start[0])
+            if minimum >= start[0]:
+                return loop_name, (start[0], start[0])
+            reachable_minimum = start[0] - ((start[0] - minimum) // abs(step)) * abs(
+                step
+            )
+            return loop_name, (reachable_minimum, start[0])
         return loop_name, None
 
     def hlsl_analyze_private_pointer_function(
@@ -32419,10 +32669,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     workgroup_pointer_func_name, index, arg
                 )
                 if resource_binding is not None:
+                    resource_offset = self.hlsl_resource_pointer_call_offset(
+                        resource_binding
+                    )
+                    if resource_binding.get("call_offset_direction") is None:
+                        resource_offset = f"int64_t({resource_offset})"
                     generated_args.extend(
                         [
                             resource_binding["root"],
-                            f"int64_t({resource_binding.get('offset', '0')})",
+                            resource_offset,
                         ]
                     )
                 else:

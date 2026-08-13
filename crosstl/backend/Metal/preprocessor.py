@@ -17064,9 +17064,35 @@ class MetalPreprocessor(HLSLPreprocessor):
         return functions
 
     def _function_declaration_start(self, code: str, body_start: int) -> int:
-        previous_semicolon = code.rfind(";", 0, body_start)
-        previous_block = code.rfind("}", 0, body_start)
+        ignored_spans = self._find_comment_and_literal_spans(code)
+        previous_semicolon = self._previous_unignored_char(
+            code,
+            ";",
+            body_start,
+            ignored_spans,
+        )
+        previous_block = self._previous_unignored_char(
+            code,
+            "}",
+            body_start,
+            ignored_spans,
+        )
         return max(previous_semicolon, previous_block) + 1
+
+    def _previous_unignored_char(
+        self,
+        code: str,
+        target: str,
+        end: int,
+        ignored_spans: List[Tuple[int, int]],
+    ) -> int:
+        position = code.rfind(target, 0, end)
+        while position >= 0:
+            ignored = self._containing_span(position, ignored_spans)
+            if ignored is None:
+                return position
+            position = code.rfind(target, 0, ignored[0])
+        return -1
 
     def _find_function_references(
         self, code: str, function_names: Set[str]

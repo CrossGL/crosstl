@@ -69,8 +69,8 @@ def _assert_generated_contract(generated: str, target: str, proof: str) -> None:
     if target == "directx":
         assert "uint sum_bytes(in uint bytes[2], int bytes_base)" in generated
         assert "output[tid] = sum_bytes(block.words, 0);" in generated
-        assert "if (4 == 4)" in generated
-        assert "(index < 16)" in generated
+        assert "if (4 == 4)" not in generated
+        assert "(index < 16)" not in generated
         assert "& 255u" in generated
         assert "* (index + 1)" in generated
     else:

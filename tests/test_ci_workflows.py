@@ -2708,9 +2708,12 @@ def test_mlx_project_porting_workflow_runs_quantized_directx_proof_on_windows():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
 
     assert "name: Prove pinned MLX quantized DirectX lowering" in mlx_porting
+    assert "name: Prove pinned MLX quantized gather DirectX lowering" in mlx_porting
     assert "if: runner.os == 'Windows'" in mlx_porting
     assert "python demos/integrations/mlx/prove_quantized_directx.py" in mlx_porting
     assert "--work-dir .crosstl-mlx-porting/quantized-directx" in mlx_porting
+    assert "--work-dir .crosstl-mlx-porting/quantized-gather-directx" in mlx_porting
+    assert "--entry-point affine_gather_qmv_fast_float_gs_32_b_2" in mlx_porting
     assert "--require-directx-toolchain" in mlx_porting
 
 

@@ -14948,6 +14948,17 @@ METAL_TEMPLATE_SCALAR_TYPES = frozenset(
         "complex64_t",
     }
 )
+METAL_TEMPLATE_SCALAR_TYPE_ALIASES = {
+    "int8_t": "char",
+    "uint8_t": "uchar",
+    "int16_t": "short",
+    "uint16_t": "ushort",
+    "int32_t": "int",
+    "uint32_t": "uint",
+    "int64_t": "long",
+    "uint64_t": "ulong",
+    "size_t": "ulong",
+}
 
 
 def _strip_metal_attribute_blocks(text: str) -> str:
@@ -15024,6 +15035,55 @@ def _metal_merge_template_binding(
     return _strip_metal_type_qualifiers(existing) == normalized_value
 
 
+def _metal_template_scalar_type(type_text: str) -> str | None:
+    normalized = _strip_metal_type_qualifiers(type_text)
+    if normalized not in METAL_TEMPLATE_SCALAR_TYPES:
+        return None
+    return METAL_TEMPLATE_SCALAR_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _metal_template_vector_type(type_text: str) -> tuple[str, int] | None:
+    normalized = _strip_metal_type_qualifiers(type_text)
+    match = re.fullmatch(
+        r"(?P<scalar>bool|char|uchar|short|ushort|int|uint|long|ulong|"
+        r"half|float|double|bfloat16_t)(?P<width>[2-4])",
+        normalized,
+    )
+    if match is None:
+        return None
+    scalar = METAL_TEMPLATE_SCALAR_TYPE_ALIASES.get(
+        match.group("scalar"),
+        match.group("scalar"),
+    )
+    return scalar, int(match.group("width"))
+
+
+def _metal_concrete_parameter_type_compatible(
+    expected_type: str,
+    actual_type: str,
+) -> bool:
+    expected = _strip_metal_type_qualifiers(expected_type)
+    actual = _strip_metal_type_qualifiers(actual_type)
+    if expected == actual:
+        return True
+
+    expected_scalar = _metal_template_scalar_type(expected)
+    actual_scalar = _metal_template_scalar_type(actual)
+    if expected_scalar is not None or actual_scalar is not None:
+        return expected_scalar is not None and actual_scalar is not None
+
+    expected_vector = _metal_template_vector_type(expected)
+    actual_vector = _metal_template_vector_type(actual)
+    if expected_vector is not None or actual_vector is not None:
+        return (
+            expected_vector is not None
+            and actual_vector is not None
+            and expected_vector[1] == actual_vector[1]
+        )
+
+    return False
+
+
 def _collect_metal_template_type_bindings(
     preprocessor: Any,
     *,
@@ -15070,6 +15130,15 @@ def _collect_metal_template_type_bindings(
             template_parameters=template_parameters,
             template_structs_by_name=template_structs_by_name,
         )
+    if expected_element is not None and actual_pointee is not None:
+        return _collect_metal_template_type_bindings(
+            preprocessor,
+            expected_type=expected_element,
+            actual_type=actual_pointee,
+            bindings=bindings,
+            template_parameters=template_parameters,
+            template_structs_by_name=template_structs_by_name,
+        )
     if expected_element is not None and actual_element is not None:
         return _collect_metal_template_type_bindings(
             preprocessor,
@@ -15079,6 +15148,13 @@ def _collect_metal_template_type_bindings(
             template_parameters=template_parameters,
             template_structs_by_name=template_structs_by_name,
         )
+    if (
+        expected_pointee is not None
+        or actual_pointee is not None
+        or expected_element is not None
+        or actual_element is not None
+    ):
+        return False
 
     expected_base, expected_args = _metal_generic_type_parts(preprocessor, expected)
     # Concrete struct materialization replaces `Tile<T, M, N>` with a sanitized
@@ -15096,7 +15172,7 @@ def _collect_metal_template_type_bindings(
         actual = f"{expected_base}<{','.join(source_arguments)}>"
     actual_base, actual_args = _metal_generic_type_parts(preprocessor, actual)
     if not expected_args:
-        return True
+        return _metal_concrete_parameter_type_compatible(expected, actual)
     if expected_base != actual_base:
         return not actual_args
     if len(expected_args) > len(actual_args):

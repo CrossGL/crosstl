@@ -8,6 +8,7 @@ from crosstl.project.directx_toolchain import (
 )
 
 NATIVE_16_BIT_SOURCE = "RWStructuredBuffer<uint16_t> values;"
+EXACT_WAVE_SIZE_SOURCE = "[WaveSize(32)]\n[numthreads(32, 2, 1)]\nvoid CSMain() {}"
 
 
 @pytest.mark.parametrize(
@@ -82,6 +83,41 @@ def test_profiles_without_native_types_and_unrecognized_profiles_are_unchanged()
     assert dxc_profile_for_source("cs_6_0", "float value;") == "cs_6_0"
     assert dxc_profile_for_source("not-a-profile", NATIVE_16_BIT_SOURCE) == (
         "not-a-profile"
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected"),
+    (
+        ("cs_6_0", "cs_6_6"),
+        ("cs_6_5", "cs_6_6"),
+        ("cs_6_6", "cs_6_6"),
+        ("lib_6_3", "lib_6_6"),
+        ("cs_6_10", "cs_6_10"),
+    ),
+)
+def test_exact_wave_size_raises_profiles_to_6_6_without_lowering(profile, expected):
+    assert dxc_profile_for_source(profile, EXACT_WAVE_SIZE_SOURCE) == expected
+
+
+def test_exact_wave_size_ignores_comments_and_literals():
+    source = '// [WaveSize(32)]\nstring marker = "[WaveSize(32)]";'
+
+    assert dxc_profile_for_source("cs_6_0", source) == "cs_6_0"
+    assert directx_target_profiles_for_source(source) == (
+        "directx-11",
+        "directx-12",
+    )
+
+
+def test_exact_wave_size_requires_directx_12_without_native_16_bit_flag():
+    assert dxc_compiler_arguments_for_source(EXACT_WAVE_SIZE_SOURCE) == ()
+    assert directx_target_profiles_for_source(EXACT_WAVE_SIZE_SOURCE) == ("directx-12",)
+    assert (
+        dxc_profile_for_source(
+            "cs_6_0", f"{NATIVE_16_BIT_SOURCE}\n{EXACT_WAVE_SIZE_SOURCE}"
+        )
+        == "cs_6_6"
     )
 
 

@@ -7954,6 +7954,46 @@ def test_hlsl_metal_constant_pointer_helpers_forward_alias_offsets(tmp_path):
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_metal_narrow_storage_helper_preserves_byte_view_offset(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    inline uint read_byte(const device uint8_t* bytes, uint index) {
+      return bytes[index];
+    }
+
+    kernel void narrow_storage_offset(
+        const device uint32_t* input [[buffer(0)]],
+        device uint* output [[buffer(1)]]) {
+      const device uint8_t* bytes = (const device uint8_t*)input;
+      bytes += 4;
+      output[0] = read_byte(bytes + 2, 1);
+    }
+    """
+    shader_path = tmp_path / "narrow_storage_offset.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "uint read_byte(StructuredBuffer<uint> bytes, int64_t bytes_offset, "
+        "uint index)" in generated
+    )
+    assert "/ 4" in generated
+    assert "% 4) * 8" in generated
+    assert "& 255u" in generated
+    assert "bytes_offset += int64_t(4);" in generated
+    assert "read_byte(input, int64_t((bytes_offset + 2)), 1)" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_metal_constant_pointer_helper_rejects_unbacked_argument(tmp_path):
     shader = """
     #include <metal_stdlib>
@@ -8107,6 +8147,88 @@ def test_hlsl_metal_resource_pointer_offsets_apply_to_buffer_helpers(tmp_path):
     assert "out_[uint((out__offset + 1))] = 7u;" in generated_code
     assert "out_[uint(out__offset)] = 9u;" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_metal_resource_pointer_reference_offsets_write_back(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance(
+        const device float*& source,
+        device float*& destination,
+        int amount) {
+      source += amount;
+      destination += amount;
+    }
+
+    kernel void copy_advanced(
+        const device float* source [[buffer(0)]],
+        device float* destination [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      advance(source, destination, int(index));
+      destination[0] = source[0];
+    }
+    """
+    shader_path = tmp_path / "pointer_reference_offset.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "void advance(StructuredBuffer<float> source, "
+        "inout int64_t source_offset, RWStructuredBuffer<float> destination, "
+        "inout int64_t destination_offset, int amount)" in generated
+    )
+    assert "source_offset += int64_t(amount);" in generated
+    assert "destination_offset += int64_t(amount);" in generated
+    assert "int64_t source_offset = int64_t(0);" in generated
+    assert "int64_t destination_offset = int64_t(0);" in generated
+    assert (
+        "advance(source, source_offset, destination, destination_offset, "
+        "int(index));" in generated
+    )
+    assert (
+        "destination[uint((destination_offset + 0))] = "
+        "source.Load(uint((source_offset + 0)));" in generated
+    )
+    assert "inout StructuredBuffer" not in generated
+    assert "inout RWStructuredBuffer" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_mutable_resource_pointer_requires_assignable_offset():
+    shader = """
+    shader MutableResourcePointerOffset {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void advance(inout const device float* values) {
+                values += 1;
+            }
+
+            void main(StructuredBuffer<float> source @binding(0)) {
+                advance(&source[2]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "advance"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.expected_access == "read"
+    assert diagnostic.actual_access == "read"
+    assert diagnostic.reason == "mutable-offset-lvalue-unresolved"
 
 
 def test_hlsl_boolean_resource_pointer_offsets_bypass_value_compound_lowering(
@@ -8475,6 +8597,32 @@ def test_hlsl_storage_pointer_element_argument_rejects_element_type_mismatch():
     assert diagnostic.reason == "element-type-mismatch"
 
 
+def test_hlsl_storage_pointer_helper_rejects_logical_view_type_mismatch():
+    shader = """
+    shader StoragePointerLogicalViewTypeMismatch {
+        compute {
+            uint read_word(const device uint* values) {
+                return values[0];
+            }
+
+            void main(StructuredBuffer<uint> src @binding(0)) {
+                const device uint8* bytes = (uint8*)src;
+                uint value = read_word(bytes);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "read_word"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.reason == "element-type-mismatch"
+    assert "logical element type from uint8 to uint" in str(diagnostic)
+
+
 def test_hlsl_storage_pointer_parameter_rejects_pointer_to_pointer():
     shader = """
     shader StoragePointerToPointer {
@@ -8786,6 +8934,44 @@ def test_hlsl_storage_pointer_reinterpret_reads_byte_lanes():
     assert "asfloat(" in generated
     assert "PointerReinterpretNode" not in generated
     assert "uint8*" not in generated
+
+
+def test_hlsl_constant_if_prunes_unsupported_pointer_reinterpretation():
+    shader = """
+    shader ConstantPointerBranch {
+        uint read_byte(const device uint8* bytes) {
+            if (2 == 2) {
+                return bytes[0];
+            } else {
+                const device uint64* words = (uint64*)bytes;
+                return uint(words[0]);
+            }
+        }
+
+        compute {
+            @stage_entry
+            void main(
+                StructuredBuffer<uint> input @binding(0),
+                RWStructuredBuffer<uint> output @binding(1)
+            ) {
+                const device uint8* bytes = (uint8*)input;
+                buffer_store(output, 0, read_byte(bytes));
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "uint read_byte(StructuredBuffer<uint> bytes, int64_t bytes_offset)"
+        in generated
+    )
+    assert "/ 4" in generated
+    assert "% 4) * 8" in generated
+    assert "& 255u" in generated
+    assert "uint64" not in generated
+    assert "if (" not in generated
 
 
 def test_hlsl_default_integer_storage_image_vector_load_store_from_compiler_fixture():
@@ -42623,6 +42809,70 @@ def test_hlsl_private_pointer_helper_uses_fixed_local_array_extent():
     assert "sum4(values, 0)" in generated
     assert "uint8_t*" not in generated
     assert "uint8 *" not in generated
+
+
+def test_hlsl_private_pointer_compound_step_preserves_offset_slice():
+    shader = """
+    shader PrivatePointerCompoundStep {
+        void fill16(thread float* values) {
+            for (int i = 0; i < 16; i += 4) {
+                values[i] = 1.0;
+                values[i + 1] = 2.0;
+                values[i + 2] = 3.0;
+                values[i + 3] = 4.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[20];
+                fill16(backing + 4);
+                float observed = backing[4] + backing[19];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void fill16(inout float values[20], int values_base)" in generated
+    assert "values[(values_base + (i + 3))] = 4.0;" in generated
+    assert "fill16(backing, 4);" in generated
+    assert "backing + 4" not in generated
+
+
+def test_hlsl_private_pointer_descending_compound_step_preserves_offset_slice():
+    shader = """
+    shader PrivatePointerDescendingCompoundStep {
+        void fill16(thread float* values) {
+            for (int i = 15; i >= 0; i -= 4) {
+                values[i] = 1.0;
+                values[i - 1] = 2.0;
+                values[i - 2] = 3.0;
+                values[i - 3] = 4.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[20];
+                fill16(backing + 4);
+                float observed = backing[4] + backing[19];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void fill16(inout float values[20], int values_base)" in generated
+    assert "values[(values_base + (i - 3))] = 4.0;" in generated
+    assert "fill16(backing, 4);" in generated
+    assert "backing + 4" not in generated
 
 
 def test_hlsl_metal_private_struct_byte_view_reads_fixed_word_array(tmp_path):

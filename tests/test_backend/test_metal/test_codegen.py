@@ -1199,6 +1199,25 @@ def test_codegen_reference_parameters_preserve_readonly_direction(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_codegen_pointer_reference_direction_is_independent_of_pointee_constness():
+    code = """
+    void advance(
+        const device float*& source,
+        device float*& destination,
+        int amount) {
+      source += amount;
+      destination += amount;
+    }
+    """
+
+    crossgl = normalize(convert_without_preprocessing(code))
+
+    assert (
+        "void advance(inout const device float* source, "
+        "inout device float* destination, int amount)" in crossgl
+    )
+
+
 def test_codegen_writable_c_array_parameter_preserves_aliasing():
     code = """
     #include <metal_stdlib>
@@ -9913,13 +9932,16 @@ def test_mlx_random_auto_local_overload_matches_direct_and_project_opengl(
     artifact = payload["artifacts"][0]
     project = (repo / artifact["path"]).read_text(encoding="utf-8")
 
-    helper_pattern = r"int64_t (?:first|second) = ([A-Za-z_]\w*)\("
+    helper_pattern = r"uint (?:first|second) = ([A-Za-z_]\w*)\("
     direct_helpers = re.findall(helper_pattern, direct)
     project_helpers = re.findall(helper_pattern, project)
     assert len(direct_helpers) == len(project_helpers) == 2
     assert len(set(direct_helpers)) == len(set(project_helpers)) == 1
     assert direct_helpers[0] == project_helpers[0]
+    assert "elem_to_loc_uint" in direct_helpers[0]
     assert "metal_overload" not in direct_helpers[0]
+    assert "out_values[0] = int64_t(first);" in direct
+    assert "out_values[1] = int64_t(second);" in project
     assert_opengl_compute_validates_if_available(
         direct, tmp_path, "mlx-random-auto-local-overload"
     )

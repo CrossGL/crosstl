@@ -468,8 +468,8 @@ separate.
 A selected DirectX replay of `quantized.metal` now emits one artifact with zero
 translation diagnostics for `affine_quantize_float_gs_32_b_2`. It materializes
 six reachable specializations and three concrete records while pruning 110,861
-unreachable candidates. The generated HLSL is 5,271 bytes with SHA-256
-`bcc7ba3b8fefe4ebe193f5736036da86a98f02c4f9ef0bb792a5b1f7ffaafc92`.
+unreachable candidates. The generated HLSL is 4,357 bytes with SHA-256
+`52569209d98f1bf2ae7fa645f2e4858a420f3920368e14aecb98c2ba9939ac8f`.
 This path verifies the completed template-member and owner-dependent `constexpr`
 work tracked by CrossGL/crosstl#1476 and CrossGL/crosstl#1672. After unreachable
 materializations are pruned, this selected float specialization contains no live
@@ -480,31 +480,60 @@ validated elsewhere, including the pinned bfloat frontier, but is not required
 by this selected specialization. Concrete `static_assert` evaluation under
 [#1800](https://github.com/CrossGL/crosstl/issues/1800) is resolved for this
 selected entry. Contextual narrowing under
-[#1801](https://github.com/CrossGL/crosstl/issues/1801) remains recorded as
-historical resolved evidence for this selected entry, while the pinned frontier
-destination-conversion contract is resolved. The artifact contains no remaining
-`static_assert`. Its ordinary type contract needs no native-16-bit profile
-uplift, while the generated wave intrinsics keep the configured project and
-compiler target scoped to `directx-12`. Official DXC validation with profile
-`cs_6_0`, no
-`-enable-16bit-types`, and `-WX` passes. The typed resource store is emitted as
-`out_[uint((out_index + 4))] = uint(((output & 1095216660480ull) >> 32));`.
+[#1801](https://github.com/CrossGL/crosstl/issues/1801) remains recorded in the
+broader DirectX toolchain evidence, but this selected `bits = 2` entry resolves
+`OutType` to source `uint32_t` and generated HLSL `uint`. Its final typed
+resource store therefore needs no width conversion and is emitted as
+`out_[uint((out_index / writes_per_reduce))] = output;`. The artifact contains
+no remaining `static_assert`. Its ordinary type contract needs no native-16-bit
+profile uplift, while the generated wave intrinsics keep the configured project
+and compiler target scoped to `directx-12`. Official DXC validation with profile
+`cs_6_0`, no `-enable-16bit-types`, and `-WX` passes.
 The locally generated DXIL was nonempty; its byte size is not treated as a
 cross-version compiler invariant. This evidence covers translation and compiler
 acceptance only; it does not claim runtime execution or numerical parity.
 
-The adjacent DirectX entry `affine_gather_qmv_fast_float_gs_32_b_2` now
-advances through the logical `static_assert` covered by
-[#1800](https://github.com/CrossGL/crosstl/issues/1800). Its next one-unit
-project record fails before artifact emission with
-`project.translate.directx-private-pointer-unsupported` and missing capability
-`directx.private-pointer-parameter-lowering`. The materialized helper
-`load_vector_float_float_values_per_thread_2` receives the caller's
-`thread U x_thread[values_per_thread]` array with `values_per_thread = 2`, but
-the DirectX private-pointer analysis reports `missing-fixed-array-extent` for
-parameter `x_thread`. This is tracked by the cross-target fixed-array alias
-contract in [#1497](https://github.com/CrossGL/crosstl/issues/1497). No target
-artifact is emitted, so native validation is not run for this entry.
+The adjacent DirectX entry `affine_gather_qmv_fast_float_gs_32_b_2` also emits
+one artifact with zero translation diagnostics. It materializes 11 reachable
+specializations and eight concrete records while pruning 110,861 unreachable
+candidates. The specialized `load_vector_float_float_16_2` helper retains the
+caller's `thread U x_thread[values_per_thread]` storage with
+`values_per_thread = 16`; HLSL represents it as an `inout float[16]` plus a
+base offset and proves all four writes in each `i += 4` iteration. The
+`qdot_float_16_2` helper retains the read-only `uint8_t` view over its
+`uint32_t` storage resource. Each byte read selects the backing word and lane,
+and the helper call composes the root word offset, byte-view offset, row offset,
+and local alias offset without treating bytes as typed 32-bit elements.
+
+The gather path also materializes the overloaded `elem_to_loc` helper as
+`elem_to_loc_uint32_t`, preserving the source `uint32_t` index type. Its HLSL
+call carries the independent shape and stride resource offsets, and no
+unresolved `elem_to_loc(...)` call remains in the artifact.
+
+The source `adjust_matrix_offsets` helper receives five storage pointers by
+mutable reference. DirectX keeps each resource handle unchanged and passes its
+logical offset as `inout int64_t`. The entry owns the offset variables, the
+helper updates them, and the subsequent `qmv_fast_impl_float_32_2` call consumes
+all five updated values. This preserves source pointer rebasing without passing
+resource handles by reference or discarding writes to by-value offsets.
+
+The pinned `gather_qmv` host dispatch in `mlx/backend/metal/quantized.cpp` sets
+`bk = 32` and `MTL::Size group_dims(bk, 2, 1)`. The project rule therefore
+emits `[numthreads(32, 2, 1)]`. The kernel's simdgroup indices require a
+32-lane subgroup, so the generated HLSL also emits `[WaveSize(32)]` and requires
+Shader Model 6.6. The resulting artifact is 15,835 bytes with SHA-256
+`b7d6251d27fcdafc003c85975bf5c5774a1fca0a3d4602b9e9ea5ef62673f76e`.
+Windows CI compiles it with DXC profile `cs_6_6` and `-WX`. This is selected-entry
+evidence for the fixed-array alias work tracked by
+[#1497](https://github.com/CrossGL/crosstl/issues/1497) and the read-only storage
+view work tracked by [#1546](https://github.com/CrossGL/crosstl/issues/1546),
+the resource pointer-offset contract tracked by
+[#1518](https://github.com/CrossGL/crosstl/issues/1518),
+with the broader subgroup contract tracked by
+[#1786](https://github.com/CrossGL/crosstl/issues/1786). Those issues remain
+open for their broader cross-target, writable-view, alignment, subgroup, and
+runtime acceptance criteria. This proof does not dispatch the kernel through
+Direct3D, run MLX tests, or claim numerical parity.
 
 The selected `affine_quantize_float_gs_32_b_2` entry also translates to a
 5,107-byte GLSL artifact with no project diagnostics. The project configuration

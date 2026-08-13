@@ -52,9 +52,170 @@ RWStructuredBuffer<uint> out_ : register(u0);
 [numthreads(1, 1, 1)]
 void CSMain(uint3 index_dispatchThreadID : SV_DispatchThreadID) {
     uint64_t out_index = index_dispatchThreadID.x;
+    int writes_per_reduce = 4;
     uint output = 0;
-    out_[uint((out_index + 4))] = uint(((output & 1095216660480ull) >> 32));
+    out_[uint((out_index / writes_per_reduce))] = output;
 }
+"""
+
+
+def _generated_gather_hlsl():
+    byte_read = (
+        "((w[uint(((w_offset + i)) / 4)] >> "
+        "uint((((w_offset + i)) % 4) * 8)) & 255u)"
+    )
+    index_helper_call = (
+        "elem_to_loc_uint32_t(x_idx, x_shape, int64_t(x_shape_offset), "
+        "x_strides, int64_t(x_strides_offset), x_batch_ndims)"
+    )
+    return f"""
+StructuredBuffer<uint> w : register(t0);
+StructuredBuffer<float> x : register(t1);
+StructuredBuffer<int> x_shape : register(t2);
+StructuredBuffer<int64_t> x_strides : register(t3);
+StructuredBuffer<float> scales : register(t4);
+StructuredBuffer<float> biases : register(t5);
+RWStructuredBuffer<float> y : register(u2);
+RWStructuredBuffer<float> output : register(u3);
+
+void adjust_matrix_offsets_float(
+    StructuredBuffer<float> x,
+    inout int64_t x_offset,
+    StructuredBuffer<uint> w,
+    inout int64_t w_offset,
+    StructuredBuffer<float> scales,
+    inout int64_t scales_offset,
+    StructuredBuffer<float> biases,
+    inout int64_t biases_offset,
+    RWStructuredBuffer<float> y,
+    inout int64_t y_offset,
+    int output_stride);
+
+void adjust_matrix_offsets_float(
+    StructuredBuffer<float> x,
+    inout int64_t x_offset,
+    StructuredBuffer<uint> w,
+    inout int64_t w_offset,
+    StructuredBuffer<float> scales,
+    inout int64_t scales_offset,
+    StructuredBuffer<float> biases,
+    inout int64_t biases_offset,
+    RWStructuredBuffer<float> y,
+    inout int64_t y_offset,
+    int output_stride) {{
+    x_offset += 1;
+    w_offset += 2;
+    scales_offset += 3;
+    biases_offset += 4;
+    y_offset += output_stride;
+}}
+
+void qmv_fast_impl_float_32_2(
+    StructuredBuffer<uint> w,
+    int64_t w_offset,
+    StructuredBuffer<float> scales,
+    int64_t scales_offset,
+    StructuredBuffer<float> biases,
+    int64_t biases_offset,
+    StructuredBuffer<float> x,
+    int64_t x_offset,
+    RWStructuredBuffer<float> y,
+    int64_t y_offset) {{
+    y[uint(y_offset)] = x[uint(x_offset)] + scales[uint(scales_offset)]
+        + biases[uint(biases_offset)] + float(w[uint(w_offset)]);
+}}
+
+uint elem_to_loc_uint32_t(
+    uint elem,
+    StructuredBuffer<int> shape,
+    int64_t shape_offset,
+    StructuredBuffer<int64_t> strides,
+    int64_t strides_offset,
+    int ndim) {{
+    return elem + uint(shape[shape_offset]) + uint(strides[strides_offset]) + uint(ndim);
+}}
+
+float load_vector_float_float_16_2(
+    StructuredBuffer<float> x,
+    int64_t x_offset,
+    inout float x_thread[16],
+    int x_thread_base) {{
+    for (int i = 0; i < 16; i += 4) {{
+        x_thread[(x_thread_base + i)] = x[uint(x_offset + i)];
+        x_thread[(x_thread_base + (i + 1))] = x[uint(x_offset + i + 1)];
+        x_thread[(x_thread_base + (i + 2))] = x[uint(x_offset + i + 2)];
+        x_thread[(x_thread_base + (i + 3))] = x[uint(x_offset + i + 3)];
+    }}
+    return 0.0;
+}}
+
+float qdot_float_16_2(
+    StructuredBuffer<uint> w,
+    int64_t w_offset,
+    inout float x_thread[16],
+    int x_thread_base,
+    float scale,
+    float bias,
+    float sum) {{
+    int i = 0;
+    float accum = x_thread[x_thread_base] * {byte_read};
+    accum += x_thread[x_thread_base + 1] * {byte_read};
+    accum += x_thread[x_thread_base + 2] * {byte_read};
+    accum += x_thread[x_thread_base + 3] * {byte_read};
+    return scale * accum + sum * bias;
+}}
+
+[numthreads(32, 2, 1)]
+[WaveSize(32)]
+void CSMain(uint3 index : SV_DispatchThreadID) {{
+    int64_t x_offset = int64_t(0);
+    int64_t w_offset = int64_t(0);
+    int64_t scales_offset = int64_t(0);
+    int64_t biases_offset = int64_t(0);
+    int64_t y_offset = int64_t(0);
+    int64_t ws_offset = index.x;
+    int row = 0;
+    int in_vec_size_w = 4;
+    int64_t wl_offset = 0;
+    uint x_idx = index.x;
+    int64_t x_shape_offset = 0;
+    int64_t x_strides_offset = 0;
+    int x_batch_ndims = 1;
+    float x_thread[16];
+    adjust_matrix_offsets_float(
+        x,
+        x_offset,
+        w,
+        w_offset,
+        scales,
+        scales_offset,
+        biases,
+        biases_offset,
+        y,
+        y_offset,
+        5);
+    uint logical_x_offset = {index_helper_call};
+    output[0] = qdot_float_16_2(
+        w,
+        int64_t((((w_offset * 4) + (ws_offset + (row * in_vec_size_w))) + wl_offset)),
+        x_thread,
+        0,
+        1.0,
+        0.0,
+        0.0);
+    qmv_fast_impl_float_32_2(
+        w,
+        int64_t(w_offset),
+        scales,
+        int64_t(scales_offset),
+        biases,
+        int64_t(biases_offset),
+        x,
+        int64_t(x_offset),
+        y,
+        int64_t(y_offset));
+    output[1] = float(logical_x_offset);
+}}
 """
 
 
@@ -147,6 +308,15 @@ def test_quantized_directx_proof_pins_revision_source_header_and_entry():
     assert module.MLX_COMMIT == "4367c73b60541ddd5a266ce4644fd93d20223b6e"
     assert module.PINNED_FILE_SHA256 == EXPECTED_PINNED_HASHES
     assert module.MLX_QUANTIZED_ENTRY_POINT == "affine_quantize_float_gs_32_b_2"
+    assert module.MLX_QUANTIZED_GATHER_ENTRY_POINT == (
+        "affine_gather_qmv_fast_float_gs_32_b_2"
+    )
+    assert module.MLX_QUANTIZED_GATHER_WORKGROUP_SIZE == (32, 2, 1)
+    assert module.MLX_QUANTIZED_GATHER_SUBGROUP_WIDTH == 32
+    assert set(module.ENTRY_CONTRACTS) == {
+        module.MLX_QUANTIZED_ENTRY_POINT,
+        module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    }
     assert module.DIRECTX_TARGET_PROFILE == "directx-12"
     assert module.TEMPLATE_SPECIALIZATION_LIMIT == 128
     assert module.MATERIALIZATION_WORK_LIMIT == 4096
@@ -263,6 +433,19 @@ def test_quantized_directx_project_config_selects_one_directx_12_entry(tmp_path)
         }
     }
 
+    gather_config = module._project_config(
+        mlx_root,
+        work_dir,
+        entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    )
+    assert gather_config.entry_points == {
+        module.MLX_QUANTIZED_SOURCE: module.MLX_QUANTIZED_GATHER_ENTRY_POINT
+    }
+    assert gather_config.workgroup_size_rules == {
+        module.MLX_QUANTIZED_SOURCE: ("32", "2", "1")
+    }
+    assert gather_config.subgroup_width_rules == {module.MLX_QUANTIZED_SOURCE: "32"}
+
 
 def test_quantized_directx_translation_uses_public_project_api(
     tmp_path,
@@ -369,12 +552,14 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
         "native16BitTypes": "not-required",
         "staticAssertions": "absent",
         "minimumPrecisionTypes": "absent",
-        "typedResourceStoreNarrowing": {
+        "typedResourceStore": {
             "status": "passed",
             "resource": "out_",
             "resourceElementType": "uint",
-            "sourceExpressionType": "uint64_t",
-            "generatedStore": module.NARROWED_RESOURCE_STORE,
+            "sourceSpecializedType": "uint32_t",
+            "generatedValueType": "uint",
+            "conversion": "not-required",
+            "generatedStore": module.PACKED_OUTPUT_STORE,
         },
     }
     assert compiler == {
@@ -386,17 +571,149 @@ def test_quantized_directx_generated_contract_is_exact(tmp_path):
     }
 
 
+def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
+    module = _load_proof()
+    artifact_path = tmp_path / "quantized-gather.hlsl"
+    artifact_path.write_text(_generated_gather_hlsl(), encoding="utf-8")
+
+    checks, compiler = module._validate_generated_hlsl(
+        artifact_path,
+        entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    )
+
+    assert checks == {
+        "status": "passed",
+        "entryPoint": "CSMain",
+        "native16BitTypes": "not-required",
+        "staticAssertions": "absent",
+        "minimumPrecisionTypes": "absent",
+        "executionContract": {
+            "status": "passed",
+            "workgroupSize": [32, 2, 1],
+            "subgroupWidth": 32,
+            "subgroupWidthEnforcement": "WaveSize(32)",
+        },
+        "privateArrayAliasing": {
+            "status": "passed",
+            "helper": "load_vector_float_float_16_2",
+            "extent": 16,
+            "writeCountPerIteration": 4,
+            "callBaseOffset": 0,
+        },
+        "weightByteView": {
+            "status": "passed",
+            "helper": "qdot_float_16_2",
+            "backingElementType": "uint32_t",
+            "viewElementType": "uint8_t",
+            "laneReadCount": 4,
+            "composedOffsetTerms": [
+                "w_offset * 4",
+                "ws_offset",
+                "row * in_vec_size_w",
+                "wl_offset",
+            ],
+        },
+        "indexHelperMaterialization": {
+            "status": "passed",
+            "helper": "elem_to_loc_uint32_t",
+            "sourceIndexType": "uint32_t",
+            "generatedIndexType": "uint",
+            "resourceOffsets": ["x_shape_offset", "x_strides_offset"],
+        },
+        "pointerReferenceOffsetWriteback": {
+            "status": "passed",
+            "helper": "adjust_matrix_offsets_float",
+            "offsets": [
+                "x_offset",
+                "w_offset",
+                "scales_offset",
+                "biases_offset",
+                "y_offset",
+            ],
+            "downstreamHelper": "qmv_fast_impl_float_32_2",
+        },
+    }
+    assert compiler == {
+        "entryPoint": "CSMain",
+        "profile": "cs_6_6",
+        "compilerArguments": [],
+        "targetProfiles": ["directx-12"],
+        "warningsAsErrors": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ("[numthreads(32, 2, 1)]", "[numthreads(1, 1, 1)]", "32x2x1"),
+        ("[WaveSize(32)]", "", "32-lane"),
+        ("& 255u", "& 65535u", "unpack"),
+        (
+            "int64_t((((w_offset * 4) + "
+            "(ws_offset + (row * in_vec_size_w))) + wl_offset))",
+            "int64_t(wl_offset)",
+            "compose",
+        ),
+        (
+            "w[uint(((w_offset + i)) / 4)]",
+            "w[uint((w_offset + i))]",
+            "unpack",
+        ),
+        (
+            "elem_to_loc_uint32_t(x_idx, x_shape, int64_t(x_shape_offset), "
+            "x_strides, int64_t(x_strides_offset), x_batch_ndims)",
+            "elem_to_loc(x_idx, x_shape, x_strides, x_batch_ndims)",
+            "scalar index helper",
+        ),
+        (
+            "inout int64_t x_offset",
+            "int64_t x_offset",
+            "write back",
+        ),
+        (
+            "x,\n        x_offset,\n        w,\n        w_offset,",
+            "x,\n        int64_t(x_offset),\n        w,\n        int64_t(w_offset),",
+            "write back",
+        ),
+        (
+            "x,\n        int64_t(x_offset),\n        y,\n        int64_t(y_offset));",
+            "x,\n        int64_t(0),\n        y,\n        int64_t(0));",
+            "downstream quantized helper",
+        ),
+    ],
+)
+def test_quantized_gather_directx_generated_contract_rejects_semantic_drift(
+    tmp_path,
+    old,
+    new,
+    message,
+):
+    module = _load_proof()
+    artifact_path = tmp_path / "quantized-gather.hlsl"
+    artifact_path.write_text(
+        _generated_gather_hlsl().replace(old, new),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.MlxQuantizedDirectXProofError, match=message):
+        module._validate_generated_hlsl(
+            artifact_path,
+            entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+        )
+
+
 @pytest.mark.parametrize(
     ("generated", "message"),
     [
         (_generated_hlsl() + "\nstatic_assert(true);\n", "static_assert"),
         (_generated_hlsl() + "\nmin16uint minimum_width_marker;\n", "min16"),
         (
-            _generated_hlsl().replace(
-                "uint(((output & 1095216660480ull) >> 32))",
-                "((output & 1095216660480ull) >> 32)",
-            ),
-            "narrowed",
+            _generated_hlsl().replace("uint output = 0", "uint64_t output = 0"),
+            "uint32 type",
+        ),
+        (
+            _generated_hlsl().replace("= output;", "= uint64_t(output);"),
+            "width-changing conversion",
         ),
         (_generated_hlsl().replace("CSMain", "OtherMain"), "CSMain"),
         (_generated_hlsl() + "\nuint16_t native_width_marker;\n", "native 16-bit"),
@@ -476,6 +793,74 @@ def test_quantized_directx_fake_dxc_uses_derived_profile_and_flags(
     assert result["compiledArtifactCount"] == 1
     assert result["targetProfiles"] == ["directx-12"]
     assert result["compilerArguments"] == []
+
+
+def test_quantized_gather_directx_fake_dxc_requires_wave_size_profile(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_proof()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / "proof"
+    log_dir = work_dir / "logs"
+    artifact_path = work_dir / "artifacts" / "quantized-gather.hlsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(_generated_gather_hlsl(), encoding="utf-8")
+    _checks, contract = module._validate_generated_hlsl(
+        artifact_path,
+        entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    )
+    captured = {}
+
+    def run_command(name, command, *, log_dir, timeout_seconds=180):
+        del timeout_seconds
+        captured["command"] = list(command)
+        output_path = Path(command[command.index("-Fo") + 1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"DXIL")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return {
+            "name": name,
+            "command": list(command),
+            "returncode": 0,
+            "stdoutPath": stdout_path,
+            "stderrPath": stderr_path,
+        }
+
+    monkeypatch.setattr(module, "_run_command", run_command)
+    result = module._compile_directx_artifact(
+        artifact_path,
+        contract,
+        dxc="C:/tools/dxc.exe",
+        mlx_root=mlx_root,
+        work_dir=work_dir,
+        log_dir=log_dir,
+        required=True,
+        entry_point=module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+    )
+
+    assert captured["command"] == [
+        "C:/tools/dxc.exe",
+        "-WX",
+        "-T",
+        "cs_6_6",
+        "-E",
+        "CSMain",
+        str(artifact_path),
+        "-Fo",
+        str(
+            work_dir
+            / "native"
+            / "directx"
+            / f"{module.MLX_QUANTIZED_GATHER_ENTRY_POINT}.dxil"
+        ),
+    ]
+    assert result["status"] == "compiled"
+    assert result["profile"] == "cs_6_6"
 
 
 def test_quantized_directx_toolchain_requirement_and_output_fail_closed(
@@ -652,3 +1037,14 @@ def test_quantized_directx_cli_exposes_required_toolchain_flag():
 
     assert args.require_directx_toolchain is True
     assert args.no_clean is True
+    assert args.entry_point == module.MLX_QUANTIZED_ENTRY_POINT
+
+    gather_args = module.parse_args(
+        [
+            "--mlx-root",
+            "/tmp/mlx",
+            "--entry-point",
+            module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
+        ]
+    )
+    assert gather_args.entry_point == module.MLX_QUANTIZED_GATHER_ENTRY_POINT

@@ -7829,6 +7829,9 @@ class GLSLCodeGen:
                 required_access = self.glsl_storage_pointer_parameter_required_access(
                     callee, param
                 )
+                offset_direction = self.glsl_storage_pointer_offset_parameter_direction(
+                    param
+                )
                 if not image_access_satisfies_requirement(
                     required_access, binding.get("access")
                 ):
@@ -7838,6 +7841,7 @@ class GLSLCodeGen:
                     "kind": "storage-pointer",
                     "parameter_element_type": storage_element_type,
                     "required_access": required_access,
+                    "offset_direction": offset_direction,
                 }
                 bindings[index] = (param_name, binding)
                 key_parts.append(
@@ -7847,6 +7851,7 @@ class GLSLCodeGen:
                         binding["root"],
                         storage_element_type,
                         required_access,
+                        offset_direction,
                     )
                 )
                 continue
@@ -8033,6 +8038,8 @@ class GLSLCodeGen:
             }
         storage_pointer_aliases = {}
         storage_pointer_bound_indices = []
+        storage_pointer_offset_directions = {}
+        storage_pointer_parameter_names = {}
         for index, (param_name, binding) in sorted(bindings.items()):
             if binding.get("kind") not in {
                 "storage-pointer",
@@ -8044,6 +8051,7 @@ class GLSLCodeGen:
                 occupied_local_names,
             )
             remaining_param_names.add(offset_name)
+            offset_direction = binding.get("offset_direction")
             clone.parameters.append(
                 SimpleNamespace(
                     name=offset_name,
@@ -8051,10 +8059,12 @@ class GLSLCodeGen:
                     vtype="int",
                     semantic=None,
                     attributes=[],
-                    qualifiers=[],
+                    qualifiers=[offset_direction] if offset_direction else [],
                 )
             )
             storage_pointer_bound_indices.append(index)
+            storage_pointer_offset_directions[index] = offset_direction
+            storage_pointer_parameter_names[index] = param_name
             storage_pointer_aliases[param_name] = {
                 **binding,
                 "specialization_kind": binding.get("kind"),
@@ -8082,6 +8092,10 @@ class GLSLCodeGen:
         )
         clone._glsl_storage_pointer_aliases = storage_pointer_aliases
         clone._glsl_storage_pointer_bound_indices = tuple(storage_pointer_bound_indices)
+        clone._glsl_storage_pointer_offset_directions = (
+            storage_pointer_offset_directions
+        )
+        clone._glsl_storage_pointer_parameter_names = storage_pointer_parameter_names
         clone._glsl_workgroup_proof_parameter_intervals = {
             name: interval
             for name, interval in proof_parameter_intervals.items()
@@ -8322,7 +8336,33 @@ class GLSLCodeGen:
                     source_location=getattr(args[index], "source_location", None),
                 )
             offset = self.glsl_workgroup_pointer_offset_expression(binding)
-            call_args.append(f"int({offset})")
+            offset_direction = getattr(
+                specialized_func,
+                "_glsl_storage_pointer_offset_directions",
+                {},
+            ).get(index)
+            if offset_direction is not None:
+                if not self.glsl_storage_pointer_offset_lvalue(offset):
+                    parameter_name = getattr(
+                        specialized_func,
+                        "_glsl_storage_pointer_parameter_names",
+                        {},
+                    ).get(index)
+                    function_name = getattr(
+                        specialized_func, "_glsl_resource_source_name", None
+                    )
+                    raise OpenGLStoragePointerError(
+                        "OpenGL mutable storage pointer argument for "
+                        f"'{function_name}.{parameter_name}' has no assignable "
+                        "logical offset",
+                        function_name=function_name,
+                        parameter_name=parameter_name,
+                        reason="mutable-offset-lvalue-unresolved",
+                        source_location=getattr(args[index], "source_location", None),
+                    )
+                call_args.append(offset)
+            else:
+                call_args.append(f"int({offset})")
         return call_args
 
     def generate_constants(self, ast, constants=None):
@@ -14905,6 +14945,18 @@ class GLSLCodeGen:
         finally:
             self.glsl_storage_pointer_access_requirement_active.discard(cache_key)
 
+    @staticmethod
+    def glsl_storage_pointer_offset_parameter_direction(parameter):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        if "inout" in qualifiers:
+            return "inout"
+        if "out" in qualifiers:
+            return "out"
+        return None
+
     def glsl_function_has_target_pointer_parameter(self, function):
         return (
             self.glsl_function_has_workgroup_pointer_parameter(function)
@@ -15011,23 +15063,88 @@ class GLSLCodeGen:
                     )
                     if name in self.current_glsl_storage_pointer_aliases:
                         mutated_names.add(name)
+            elif isinstance(node, FunctionCallNode):
+                arguments = list(
+                    getattr(node, "arguments", getattr(node, "args", [])) or []
+                )
+                function_name = self.function_call_name(node)
+                if not function_name:
+                    continue
+                specialized_name = generic_function_call_name(
+                    self, function_name, arguments
+                )
+                if specialized_name is not None:
+                    arguments = generic_function_value_arguments(
+                        self, function_name, arguments
+                    )
+                    function_name = specialized_name
+                if function_name not in self.glsl_resource_specialized_source_names:
+                    continue
+                specialization = self.glsl_resource_function_call_specialization(
+                    function_name,
+                    arguments,
+                )
+                if specialization is None:
+                    continue
+                offset_directions = getattr(
+                    specialization,
+                    "_glsl_storage_pointer_offset_directions",
+                    {},
+                )
+                for index, direction in offset_directions.items():
+                    if direction not in {"out", "inout"} or index >= len(arguments):
+                        continue
+                    argument = arguments[index]
+                    if not isinstance(argument, (str, IdentifierNode, VariableNode)):
+                        continue
+                    raw_name = getattr(argument, "name", argument)
+                    rendered_name = self.expression_name(argument)
+                    for name in (raw_name, rendered_name):
+                        if name in self.current_glsl_storage_pointer_aliases:
+                            mutated_names.add(name)
+                            break
 
         code = ""
         for name in sorted(mutated_names):
             binding = self.current_glsl_storage_pointer_aliases.get(name)
-            if binding is None or isinstance(binding.get("offset"), str):
+            if binding is None:
                 continue
             rendered_offset = self.glsl_workgroup_pointer_offset_expression(binding)
+            if self.glsl_storage_pointer_offset_lvalue(rendered_offset):
+                continue
             offset_name = self.glsl_synthetic_local_identifier(f"{name}_offset")
-            self.current_glsl_storage_pointer_aliases[name] = {
+            lowered_binding = {
                 **binding,
                 "offset": offset_name,
                 "resource_root": False,
             }
+            for alias_name, alias_binding in list(
+                self.current_glsl_storage_pointer_aliases.items()
+            ):
+                if alias_binding.get("kind") != "storage-pointer":
+                    continue
+                if alias_binding.get("root") != binding.get("root"):
+                    continue
+                alias_offset = self.glsl_workgroup_pointer_offset_expression(
+                    alias_binding
+                )
+                if alias_offset != rendered_offset:
+                    continue
+                self.current_glsl_storage_pointer_aliases[alias_name] = {
+                    **alias_binding,
+                    "offset": offset_name,
+                    "resource_root": False,
+                }
+            self.current_glsl_storage_pointer_aliases[name] = lowered_binding
             self.local_variable_types[offset_name] = "int"
             self.local_variable_source_types[offset_name] = "int"
             code += f"{'    ' * indent}int {offset_name} = int({rendered_offset});\n"
         return code
+
+    @staticmethod
+    def glsl_storage_pointer_offset_lvalue(offset):
+        text = str(offset or "").strip()
+        return re.fullmatch(r"[A-Za-z_]\w*(?:\s*\[[^\]]+\])?", text) is not None
 
     def glsl_synthetic_local_identifier(self, base_name, used_names=None):
         used = set(used_names or self.current_glsl_synthetic_local_names)
