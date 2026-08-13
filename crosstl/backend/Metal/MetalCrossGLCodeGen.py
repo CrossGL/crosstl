@@ -7818,17 +7818,24 @@ class MetalToCrossGLConverter:
             str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
         ]
         is_reference = self.reference_parameter(var)
+        is_readonly_reference = self.readonly_parameter(var, qualifiers)
+        if (
+            is_reference
+            and self.pointer_element_type(self.effective_metal_variable_type(var))
+            is not None
+        ):
+            is_readonly_reference = self.readonly_pointer_reference(var)
         for qualifier in self.parameter_direction_qualifiers:
             if qualifier in qualifiers:
                 if is_reference:
                     declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
                 return f"{qualifier} {declaration}"
-        if is_reference and not self.readonly_parameter(var, qualifiers):
+        if is_reference and not is_readonly_reference:
             declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
             return f"inout {declaration}"
         if (
             is_reference
-            and self.readonly_parameter(var, qualifiers)
+            and is_readonly_reference
             and not (
                 id(var) in self.current_stage_entry_resource_parameter_ids
                 and self.is_stage_entry_buffer_resource_parameter(var)
@@ -7855,6 +7862,14 @@ class MetalToCrossGLConverter:
             qualifier_set & {"const", "constant", "readonly", "in"}
             or getattr(var, "is_const", False)
         )
+
+    @staticmethod
+    def readonly_pointer_reference(var):
+        raw_type = str(getattr(var, "vtype", "")).strip()
+        if not raw_type.endswith("&"):
+            return False
+        referenced_type = raw_type[:-1].rstrip()
+        return re.search(r"\*\s*const$", referenced_type) is not None
 
     def lower_c_array_parameter_reference(self, var, declaration):
         if not getattr(var, "array_sizes", None):

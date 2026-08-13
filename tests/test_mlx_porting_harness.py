@@ -7790,9 +7790,11 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`MTL::Size group_dims(bk, 2, 1)`" in normalized_readme
     assert "`[numthreads(32, 2, 1)]`" in normalized_readme
     assert "`[WaveSize(32)]`" in normalized_readme
-    assert "15,581 bytes" in normalized_readme
+    assert "15,835 bytes" in normalized_readme
     assert "materializes the overloaded `elem_to_loc` helper" in normalized_readme
     assert "independent shape and stride resource offsets" in normalized_readme
+    assert "passes its logical offset as `inout int64_t`" in normalized_readme
+    assert "consumes all five updated values" in normalized_readme
     assert "DXC profile `cs_6_6` and `-WX`" in normalized_readme
     assert "does not dispatch the kernel through Direct3D" in normalized_readme
     assert "three source-qualified index-range assertions" in normalized_readme
@@ -7941,6 +7943,18 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "generated_index_type": "uint",
         "resource_offsets": ["x_shape_offset", "x_strides_offset"],
     }
+    assert adjacent["pointer_reference_offset_writeback"] == {
+        "status": "passed",
+        "helper": "adjust_matrix_offsets_float",
+        "offsets": [
+            "x_offset",
+            "w_offset",
+            "scales_offset",
+            "biases_offset",
+            "y_offset",
+        ],
+        "downstream_helper": "qmv_fast_impl_float_32_2",
+    }
     assert adjacent["execution_contract"] == {
         "status": "source-verified-and-emitted",
         "workgroup_size": [32, 2, 1],
@@ -7955,8 +7969,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         },
     }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "fa48af57ed3b50dde25889c40fc04bb8b45d6541cd5f7054d77f89689ae6d1d7",
-        "size_bytes": 15581,
+        "sha256": "b7d6251d27fcdafc003c85975bf5c5774a1fca0a3d4602b9e9ea5ef62673f76e",
+        "size_bytes": 15835,
     }
     assert adjacent["compiler_validation"] == {
         "compiler": "dxc",
@@ -7971,6 +7985,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert adjacent["native_validation_status"] == "passed"
     assert adjacent["tracked_by"] == [
         "https://github.com/CrossGL/crosstl/issues/1497",
+        "https://github.com/CrossGL/crosstl/issues/1518",
         "https://github.com/CrossGL/crosstl/issues/1546",
         "https://github.com/CrossGL/crosstl/issues/1786",
     ]

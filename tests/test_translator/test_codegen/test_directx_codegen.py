@@ -8149,6 +8149,88 @@ def test_hlsl_metal_resource_pointer_offsets_apply_to_buffer_helpers(tmp_path):
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
+def test_hlsl_metal_resource_pointer_reference_offsets_write_back(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance(
+        const device float*& source,
+        device float*& destination,
+        int amount) {
+      source += amount;
+      destination += amount;
+    }
+
+    kernel void copy_advanced(
+        const device float* source [[buffer(0)]],
+        device float* destination [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      advance(source, destination, int(index));
+      destination[0] = source[0];
+    }
+    """
+    shader_path = tmp_path / "pointer_reference_offset.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "void advance(StructuredBuffer<float> source, "
+        "inout int64_t source_offset, RWStructuredBuffer<float> destination, "
+        "inout int64_t destination_offset, int amount)" in generated
+    )
+    assert "source_offset += int64_t(amount);" in generated
+    assert "destination_offset += int64_t(amount);" in generated
+    assert "int64_t source_offset = int64_t(0);" in generated
+    assert "int64_t destination_offset = int64_t(0);" in generated
+    assert (
+        "advance(source, source_offset, destination, destination_offset, "
+        "int(index));" in generated
+    )
+    assert (
+        "destination[uint((destination_offset + 0))] = "
+        "source.Load(uint((source_offset + 0)));" in generated
+    )
+    assert "inout StructuredBuffer" not in generated
+    assert "inout RWStructuredBuffer" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_mutable_resource_pointer_requires_assignable_offset():
+    shader = """
+    shader MutableResourcePointerOffset {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void advance(inout const device float* values) {
+                values += 1;
+            }
+
+            void main(StructuredBuffer<float> source @binding(0)) {
+                advance(&source[2]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "advance"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.expected_access == "read"
+    assert diagnostic.actual_access == "read"
+    assert diagnostic.reason == "mutable-offset-lvalue-unresolved"
+
+
 def test_hlsl_boolean_resource_pointer_offsets_bypass_value_compound_lowering(
     tmp_path,
 ):

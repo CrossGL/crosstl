@@ -510,16 +510,25 @@ The gather path also materializes the overloaded `elem_to_loc` helper as
 call carries the independent shape and stride resource offsets, and no
 unresolved `elem_to_loc(...)` call remains in the artifact.
 
+The source `adjust_matrix_offsets` helper receives five storage pointers by
+mutable reference. DirectX keeps each resource handle unchanged and passes its
+logical offset as `inout int64_t`. The entry owns the offset variables, the
+helper updates them, and the subsequent `qmv_fast_impl_float_32_2` call consumes
+all five updated values. This preserves source pointer rebasing without passing
+resource handles by reference or discarding writes to by-value offsets.
+
 The pinned `gather_qmv` host dispatch in `mlx/backend/metal/quantized.cpp` sets
 `bk = 32` and `MTL::Size group_dims(bk, 2, 1)`. The project rule therefore
 emits `[numthreads(32, 2, 1)]`. The kernel's simdgroup indices require a
 32-lane subgroup, so the generated HLSL also emits `[WaveSize(32)]` and requires
-Shader Model 6.6. The resulting artifact is 15,581 bytes with SHA-256
-`fa48af57ed3b50dde25889c40fc04bb8b45d6541cd5f7054d77f89689ae6d1d7`.
+Shader Model 6.6. The resulting artifact is 15,835 bytes with SHA-256
+`b7d6251d27fcdafc003c85975bf5c5774a1fca0a3d4602b9e9ea5ef62673f76e`.
 Windows CI compiles it with DXC profile `cs_6_6` and `-WX`. This is selected-entry
 evidence for the fixed-array alias work tracked by
 [#1497](https://github.com/CrossGL/crosstl/issues/1497) and the read-only storage
 view work tracked by [#1546](https://github.com/CrossGL/crosstl/issues/1546),
+the resource pointer-offset contract tracked by
+[#1518](https://github.com/CrossGL/crosstl/issues/1518),
 with the broader subgroup contract tracked by
 [#1786](https://github.com/CrossGL/crosstl/issues/1786). Those issues remain
 open for their broader cross-target, writable-view, alignment, subgroup, and

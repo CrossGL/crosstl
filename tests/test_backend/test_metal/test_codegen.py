@@ -1199,6 +1199,25 @@ def test_codegen_reference_parameters_preserve_readonly_direction(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_codegen_pointer_reference_direction_is_independent_of_pointee_constness():
+    code = """
+    void advance(
+        const device float*& source,
+        device float*& destination,
+        int amount) {
+      source += amount;
+      destination += amount;
+    }
+    """
+
+    crossgl = normalize(convert_without_preprocessing(code))
+
+    assert (
+        "void advance(inout const device float* source, "
+        "inout device float* destination, int amount)" in crossgl
+    )
+
+
 def test_codegen_writable_c_array_parameter_preserves_aliasing():
     code = """
     #include <metal_stdlib>

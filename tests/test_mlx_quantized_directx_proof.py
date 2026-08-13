@@ -73,7 +73,57 @@ StructuredBuffer<uint> w : register(t0);
 StructuredBuffer<float> x : register(t1);
 StructuredBuffer<int> x_shape : register(t2);
 StructuredBuffer<int64_t> x_strides : register(t3);
-RWStructuredBuffer<float> output : register(u2);
+StructuredBuffer<float> scales : register(t4);
+StructuredBuffer<float> biases : register(t5);
+RWStructuredBuffer<float> y : register(u2);
+RWStructuredBuffer<float> output : register(u3);
+
+void adjust_matrix_offsets_float(
+    StructuredBuffer<float> x,
+    inout int64_t x_offset,
+    StructuredBuffer<uint> w,
+    inout int64_t w_offset,
+    StructuredBuffer<float> scales,
+    inout int64_t scales_offset,
+    StructuredBuffer<float> biases,
+    inout int64_t biases_offset,
+    RWStructuredBuffer<float> y,
+    inout int64_t y_offset,
+    int output_stride);
+
+void adjust_matrix_offsets_float(
+    StructuredBuffer<float> x,
+    inout int64_t x_offset,
+    StructuredBuffer<uint> w,
+    inout int64_t w_offset,
+    StructuredBuffer<float> scales,
+    inout int64_t scales_offset,
+    StructuredBuffer<float> biases,
+    inout int64_t biases_offset,
+    RWStructuredBuffer<float> y,
+    inout int64_t y_offset,
+    int output_stride) {{
+    x_offset += 1;
+    w_offset += 2;
+    scales_offset += 3;
+    biases_offset += 4;
+    y_offset += output_stride;
+}}
+
+void qmv_fast_impl_float_32_2(
+    StructuredBuffer<uint> w,
+    int64_t w_offset,
+    StructuredBuffer<float> scales,
+    int64_t scales_offset,
+    StructuredBuffer<float> biases,
+    int64_t biases_offset,
+    StructuredBuffer<float> x,
+    int64_t x_offset,
+    RWStructuredBuffer<float> y,
+    int64_t y_offset) {{
+    y[uint(y_offset)] = x[uint(x_offset)] + scales[uint(scales_offset)]
+        + biases[uint(biases_offset)] + float(w[uint(w_offset)]);
+}}
 
 uint elem_to_loc_uint32_t(
     uint elem,
@@ -118,7 +168,11 @@ float qdot_float_16_2(
 [numthreads(32, 2, 1)]
 [WaveSize(32)]
 void CSMain(uint3 index : SV_DispatchThreadID) {{
-    int64_t w_offset = 0;
+    int64_t x_offset = int64_t(0);
+    int64_t w_offset = int64_t(0);
+    int64_t scales_offset = int64_t(0);
+    int64_t biases_offset = int64_t(0);
+    int64_t y_offset = int64_t(0);
     int64_t ws_offset = index.x;
     int row = 0;
     int in_vec_size_w = 4;
@@ -128,7 +182,19 @@ void CSMain(uint3 index : SV_DispatchThreadID) {{
     int64_t x_strides_offset = 0;
     int x_batch_ndims = 1;
     float x_thread[16];
-    uint x_offset = {index_helper_call};
+    adjust_matrix_offsets_float(
+        x,
+        x_offset,
+        w,
+        w_offset,
+        scales,
+        scales_offset,
+        biases,
+        biases_offset,
+        y,
+        y_offset,
+        5);
+    uint logical_x_offset = {index_helper_call};
     output[0] = qdot_float_16_2(
         w,
         int64_t((((w_offset * 4) + (ws_offset + (row * in_vec_size_w))) + wl_offset)),
@@ -137,6 +203,18 @@ void CSMain(uint3 index : SV_DispatchThreadID) {{
         1.0,
         0.0,
         0.0);
+    qmv_fast_impl_float_32_2(
+        w,
+        int64_t(w_offset),
+        scales,
+        int64_t(scales_offset),
+        biases,
+        int64_t(biases_offset),
+        x,
+        int64_t(x_offset),
+        y,
+        int64_t(y_offset));
+    output[1] = float(logical_x_offset);
 }}
 """
 
@@ -542,6 +620,18 @@ def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
             "generatedIndexType": "uint",
             "resourceOffsets": ["x_shape_offset", "x_strides_offset"],
         },
+        "pointerReferenceOffsetWriteback": {
+            "status": "passed",
+            "helper": "adjust_matrix_offsets_float",
+            "offsets": [
+                "x_offset",
+                "w_offset",
+                "scales_offset",
+                "biases_offset",
+                "y_offset",
+            ],
+            "downstreamHelper": "qmv_fast_impl_float_32_2",
+        },
     }
     assert compiler == {
         "entryPoint": "CSMain",
@@ -574,6 +664,21 @@ def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
             "x_strides, int64_t(x_strides_offset), x_batch_ndims)",
             "elem_to_loc(x_idx, x_shape, x_strides, x_batch_ndims)",
             "scalar index helper",
+        ),
+        (
+            "inout int64_t x_offset",
+            "int64_t x_offset",
+            "write back",
+        ),
+        (
+            "x,\n        x_offset,\n        w,\n        w_offset,",
+            "x,\n        int64_t(x_offset),\n        w,\n        int64_t(w_offset),",
+            "write back",
+        ),
+        (
+            "x,\n        int64_t(x_offset),\n        y,\n        int64_t(y_offset));",
+            "x,\n        int64_t(0),\n        y,\n        int64_t(0));",
+            "downstream quantized helper",
         ),
     ],
 )

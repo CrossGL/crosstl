@@ -119,6 +119,38 @@ GATHER_INDEX_HELPER_CALL = (
     "elem_to_loc_uint32_t(x_idx, x_shape, int64_t(x_shape_offset), "
     "x_strides, int64_t(x_strides_offset), x_batch_ndims)"
 )
+_GATHER_POINTER_OFFSET_WRITEBACK_SIGNATURE_RE = re.compile(
+    r"\bvoid\s+adjust_matrix_offsets_float\s*\(\s*"
+    r"StructuredBuffer<float>\s+x\s*,\s*inout\s+int64_t\s+x_offset\s*,\s*"
+    r"StructuredBuffer<uint>\s+w\s*,\s*inout\s+int64_t\s+w_offset\s*,\s*"
+    r"StructuredBuffer<float>\s+scales\s*,\s*"
+    r"inout\s+int64_t\s+scales_offset\s*,\s*"
+    r"StructuredBuffer<float>\s+biases\s*,\s*"
+    r"inout\s+int64_t\s+biases_offset\s*,.*?"
+    r"RWStructuredBuffer<float>\s+y\s*,\s*inout\s+int64_t\s+y_offset\b",
+    flags=re.DOTALL,
+)
+_GATHER_POINTER_OFFSET_WRITEBACK_CALL_RE = re.compile(
+    r"\badjust_matrix_offsets_float\s*\(\s*x\s*,\s*x_offset\s*,\s*"
+    r"w\s*,\s*w_offset\s*,\s*scales\s*,\s*scales_offset\s*,\s*"
+    r"biases\s*,\s*biases_offset\s*,.*?\by\s*,\s*y_offset\s*,",
+    flags=re.DOTALL,
+)
+_GATHER_POINTER_OFFSET_DOWNSTREAM_CALL_RE = re.compile(
+    r"\bqmv_fast_impl_float_32_2\s*\(\s*"
+    r"w\s*,\s*int64_t\s*\(\s*w_offset\s*\)\s*,\s*"
+    r"scales\s*,\s*int64_t\s*\(\s*scales_offset\s*\)\s*,\s*"
+    r"biases\s*,\s*int64_t\s*\(\s*biases_offset\s*\)\s*,\s*"
+    r"x\s*,\s*int64_t\s*\(\s*x_offset\s*\)\s*,\s*"
+    r"y\s*,\s*int64_t\s*\(\s*y_offset\s*\)",
+)
+GATHER_MUTABLE_POINTER_OFFSETS = (
+    "x_offset",
+    "w_offset",
+    "scales_offset",
+    "biases_offset",
+    "y_offset",
+)
 
 
 class MlxQuantizedDirectXProofError(RuntimeError):
@@ -636,6 +668,24 @@ def _validate_gather_generated_hlsl(generated: str) -> dict[str, Any]:
         and _GATHER_UNMATERIALIZED_INDEX_HELPER_RE.search(generated) is None,
         "the scalar index helper must be materialized with both resource offsets",
     )
+    mutable_offset_declarations = tuple(
+        f"int64_t {name} = int64_t(0);" for name in GATHER_MUTABLE_POINTER_OFFSETS
+    )
+    mutable_offset_updates = tuple(
+        f"{name} +=" for name in GATHER_MUTABLE_POINTER_OFFSETS
+    )
+    _require(
+        len(_GATHER_POINTER_OFFSET_WRITEBACK_SIGNATURE_RE.findall(generated)) == 2
+        and all(
+            generated.count(declaration) == 1
+            for declaration in mutable_offset_declarations
+        )
+        and all(generated.count(update) >= 1 for update in mutable_offset_updates)
+        and len(_GATHER_POINTER_OFFSET_WRITEBACK_CALL_RE.findall(generated)) == 1
+        and len(_GATHER_POINTER_OFFSET_DOWNSTREAM_CALL_RE.findall(generated)) == 1,
+        "the mutable resource pointer offsets must write back into the entry and "
+        "feed the downstream quantized helper",
+    )
     return {
         "executionContract": {
             "status": "passed",
@@ -669,6 +719,12 @@ def _validate_gather_generated_hlsl(generated: str) -> dict[str, Any]:
             "sourceIndexType": "uint32_t",
             "generatedIndexType": "uint",
             "resourceOffsets": ["x_shape_offset", "x_strides_offset"],
+        },
+        "pointerReferenceOffsetWriteback": {
+            "status": "passed",
+            "helper": "adjust_matrix_offsets_float",
+            "offsets": list(GATHER_MUTABLE_POINTER_OFFSETS),
+            "downstreamHelper": "qmv_fast_impl_float_32_2",
         },
     }
 

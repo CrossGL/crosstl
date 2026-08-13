@@ -58,6 +58,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLResourceMemoryQualifierError,
     OpenGLScalarConversionError,
     OpenGLSpecializationConstantError,
+    OpenGLStoragePointerError,
     OpenGLStructConstructionError,
     OpenGLTrailingZeroBuiltinError,
     OpenGLWorkgroupPointerError,
@@ -8709,6 +8710,83 @@ def test_opengl_nested_storage_pointer_helpers_compose_forwarded_offsets(tmp_pat
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "nested_storage_pointer_forwarding"
     )
+
+
+def test_opengl_metal_resource_pointer_reference_offsets_write_back(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance(
+        const device float*& source,
+        device float*& destination,
+        int amount) {
+      source += amount;
+      destination += amount;
+    }
+
+    kernel void copy_advanced(
+        const device float* source [[buffer(0)]],
+        device float* destination [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      advance(source, destination, int(index));
+      destination[0] = source[0];
+    }
+    """
+    shader_path = tmp_path / "pointer_reference_offset.metal"
+    shader_path.write_text(shader, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    helper_name = "advance_glsl_source_source_float_destination_destination_float"
+    assert (
+        f"void {helper_name}(int amount, inout int source_offset, "
+        "inout int destination_offset)" in generated
+    )
+    assert "source_offset += int(amount);" in generated
+    assert "destination_offset += int(amount);" in generated
+    assert generated.count("int source_offset = int(0);") == 1
+    assert generated.count("int destination_offset = int(0);") == 1
+    assert f"{helper_name}(int(index), source_offset, destination_offset);" in generated
+    assert "destination[destination_offset] = source[source_offset];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_reference_offset_writeback",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_mutable_storage_pointer_requires_assignable_offset():
+    shader = """
+    shader MutableStoragePointerOffset {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void advance(inout const device float* values) {
+                values += 1;
+            }
+
+            void main(StructuredBuffer<float> source @binding(0)) {
+                advance(&source[2]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "advance"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.reason == "mutable-offset-lvalue-unresolved"
 
 
 def test_glsl_repeated_struct_uniform_resources_use_distinct_block_names(tmp_path):

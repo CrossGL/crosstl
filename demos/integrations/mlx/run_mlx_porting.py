@@ -700,6 +700,18 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         "generated_index_type": "uint",
         "resource_offsets": ["x_shape_offset", "x_strides_offset"],
     },
+    "pointer_reference_offset_writeback": {
+        "status": "passed",
+        "helper": "adjust_matrix_offsets_float",
+        "offsets": [
+            "x_offset",
+            "w_offset",
+            "scales_offset",
+            "biases_offset",
+            "y_offset",
+        ],
+        "downstream_helper": "qmv_fast_impl_float_32_2",
+    },
     "execution_contract": {
         "status": "source-verified-and-emitted",
         "workgroup_size": [32, 2, 1],
@@ -714,8 +726,8 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "fa48af57ed3b50dde25889c40fc04bb8b45d6541cd5f7054d77f89689ae6d1d7",
-        "size_bytes": 15581,
+        "sha256": "b7d6251d27fcdafc003c85975bf5c5774a1fca0a3d4602b9e9ea5ef62673f76e",
+        "size_bytes": 15835,
     },
     "compiler_validation": {
         "compiler": "dxc",
@@ -730,6 +742,7 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
     "native_validation_status": "passed",
     "tracked_by": [
         "https://github.com/CrossGL/crosstl/issues/1497",
+        "https://github.com/CrossGL/crosstl/issues/1518",
         "https://github.com/CrossGL/crosstl/issues/1546",
         "https://github.com/CrossGL/crosstl/issues/1786",
     ],
