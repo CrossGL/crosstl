@@ -373,6 +373,17 @@ python demos/integrations/mlx/prove_rms_norm_specialization.py \
   --mlx-root /tmp/mlx \
   --work-dir .crosstl-mlx-porting/rms-norm-specialization \
   --require-opengl-toolchain
+
+python demos/integrations/mlx/prove_quantized_opengl.py \
+  --mlx-root /tmp/mlx \
+  --work-dir .crosstl-mlx-porting/quantized-opengl \
+  --require-opengl-toolchain
+
+python demos/integrations/mlx/prove_quantized_opengl.py \
+  --mlx-root /tmp/mlx \
+  --work-dir .crosstl-mlx-porting/quantized-gather-opengl \
+  --entry-point affine_gather_qmv_fast_float_gs_32_b_2 \
+  --require-opengl-toolchain
 ```
 
 On Windows, install DXC to require DirectX HLSL validation for the reduced
@@ -549,6 +560,24 @@ quantization operations. Linux CI compiles it for OpenGL/SPIR-V 1.3 with
 general index-width normalization contract. This evidence establishes selected
 entry translation and native toolchain acceptance only. It does not establish
 OpenGL runtime integration, MLX test execution, or numerical parity.
+
+The adjacent `affine_gather_qmv_fast_float_gs_32_b_2` entry now has the same
+selected-entry OpenGL gate. It emits a 16,132-byte GLSL artifact with SHA-256
+`d765c7694d32be8a0cd31c0250a7ff7839e9fb2e11da9cb470344d16669ec8a6`, zero
+project diagnostics, 11 reachable specializations, and eight concrete
+materializations. The project report retains the pinned `32 x 2 x 1`
+workgroup rule and four explicit index-range preconditions for the gather
+resource lookups. The generated `load_vector` and `qdot` helpers preserve the
+16-element private array. Reinterpreted storage pointers pass their root byte
+base separately from their logical byte-view offset, so `qdot` composes the
+incoming word offset, row offset, and loop index without capturing caller-local
+expressions or scaling the word offset twice. Linux CI compiles the artifact for
+OpenGL/SPIR-V 1.3 and validates the module with `spirv-val`. This advances the
+cross-target contracts tracked by [#1497](https://github.com/CrossGL/crosstl/issues/1497),
+[#1518](https://github.com/CrossGL/crosstl/issues/1518), and
+[#1546](https://github.com/CrossGL/crosstl/issues/1546); their broader acceptance
+criteria remain open. This remains compile-only evidence and does not claim
+OpenGL dispatch, MLX test execution, or numerical parity.
 
 CrossGL/crosstl#1659 is complete; resource-register relocation no longer blocks
 the selected aggregate DirectX replay. The checked-in evidence also records

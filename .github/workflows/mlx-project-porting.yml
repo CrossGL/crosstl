@@ -299,6 +299,17 @@ jobs:
             --work-dir .crosstl-mlx-porting/quantized-opengl \
             --require-opengl-toolchain
 
+      - name: Prove pinned MLX quantized gather OpenGL lowering
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/prove_quantized_opengl.py \
+            --mlx-root mlx-upstream \
+            --work-dir .crosstl-mlx-porting/quantized-gather-opengl \
+            --entry-point affine_gather_qmv_fast_float_gs_32_b_2 \
+            --require-opengl-toolchain
+
       - name: Prove Direct3D immutable lookup numerical execution
         if: runner.os == 'Windows'
         env:

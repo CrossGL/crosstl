@@ -7653,6 +7653,27 @@ class GLSLCodeGen:
             source_location=getattr(argument, "source_location", None),
         )
 
+    @staticmethod
+    def glsl_storage_pointer_specialization_view_key(binding):
+        reinterpretation = binding.get("pointer_reinterpretation")
+        byte_offset = str(binding.get("byte_offset", "0"))
+        if reinterpretation is None:
+            return ("byte-offset",) if byte_offset not in {"0", "0u"} else ("direct",)
+
+        def layout_key(layout):
+            return (
+                layout.name,
+                layout.kind,
+                layout.bit_width,
+                layout.signed,
+            )
+
+        return (
+            "reinterpret",
+            layout_key(reinterpretation["source_layout"]),
+            layout_key(reinterpretation["target_layout"]),
+        )
+
     def glsl_resource_function_specialization_key(self, func_name, args, aliases):
         callee = self.glsl_resource_function_source(func_name, args)
         if callee is None:
@@ -7852,6 +7873,7 @@ class GLSLCodeGen:
                         storage_element_type,
                         required_access,
                         offset_direction,
+                        self.glsl_storage_pointer_specialization_view_key(binding),
                     )
                 )
                 continue
@@ -7894,6 +7916,7 @@ class GLSLCodeGen:
                             binding["root"],
                             storage_element_type,
                             required_access,
+                            self.glsl_storage_pointer_specialization_view_key(binding),
                         )
                     )
                     continue
@@ -8038,6 +8061,7 @@ class GLSLCodeGen:
             }
         storage_pointer_aliases = {}
         storage_pointer_bound_indices = []
+        storage_pointer_byte_offset_indices = []
         storage_pointer_offset_directions = {}
         storage_pointer_parameter_names = {}
         for index, (param_name, binding) in sorted(bindings.items()):
@@ -8062,6 +8086,26 @@ class GLSLCodeGen:
                     qualifiers=[offset_direction] if offset_direction else [],
                 )
             )
+            byte_offset_name = None
+            if binding.get("pointer_reinterpretation") is not None or str(
+                binding.get("byte_offset", "0")
+            ) not in {"0", "0u"}:
+                byte_offset_name = self.glsl_synthetic_local_identifier(
+                    f"{sanitize_type_name(param_name)}_byte_offset",
+                    occupied_local_names,
+                )
+                remaining_param_names.add(byte_offset_name)
+                clone.parameters.append(
+                    SimpleNamespace(
+                        name=byte_offset_name,
+                        param_type="int",
+                        vtype="int",
+                        semantic=None,
+                        attributes=[],
+                        qualifiers=[],
+                    )
+                )
+                storage_pointer_byte_offset_indices.append(index)
             storage_pointer_bound_indices.append(index)
             storage_pointer_offset_directions[index] = offset_direction
             storage_pointer_parameter_names[index] = param_name
@@ -8072,6 +8116,8 @@ class GLSLCodeGen:
                 "offset": offset_name,
                 "resource_root": False,
             }
+            if byte_offset_name is not None:
+                storage_pointer_aliases[param_name]["byte_offset"] = byte_offset_name
         clone._glsl_resource_source_name = func_name
         clone._glsl_resource_bound_indices = set(bindings)
         clone._glsl_resource_dynamic_call_arguments = dynamic_call_arguments
@@ -8092,6 +8138,9 @@ class GLSLCodeGen:
         )
         clone._glsl_storage_pointer_aliases = storage_pointer_aliases
         clone._glsl_storage_pointer_bound_indices = tuple(storage_pointer_bound_indices)
+        clone._glsl_storage_pointer_byte_offset_indices = frozenset(
+            storage_pointer_byte_offset_indices
+        )
         clone._glsl_storage_pointer_offset_directions = (
             storage_pointer_offset_directions
         )
@@ -8129,6 +8178,9 @@ class GLSLCodeGen:
         target_name,
     ):
         source_key = self.glsl_function_declaration_name(source_func)
+        self.function_private_pointer_local_arrays[target_name] = (
+            self.glsl_private_pointer_local_arrays(clone)
+        )
         source_parameters = self.function_private_pointer_parameters.get(source_key)
         if not source_parameters:
             return
@@ -8176,9 +8228,6 @@ class GLSLCodeGen:
                 source_key,
                 getattr(source_func, "name", target_name),
             )
-        )
-        self.function_private_pointer_local_arrays[target_name] = (
-            self.glsl_private_pointer_local_arrays(clone)
         )
         self.function_private_pointer_full_span_parameters[target_name] = {
             name
@@ -8247,11 +8296,21 @@ class GLSLCodeGen:
                 )
                 continue
             if binding.get("kind") == "storage-pointer":
+                view_key = self.glsl_storage_pointer_specialization_view_key(binding)
+                view_suffix = ""
+                if view_key[0] == "reinterpret":
+                    view_suffix = "_view_{}_to_{}".format(
+                        sanitize_type_name(view_key[1][0]),
+                        sanitize_type_name(view_key[2][0]),
+                    )
+                elif view_key[0] == "byte-offset":
+                    view_suffix = "_byte_offset"
                 suffix_parts.append(
-                    "{}_{}_{}".format(
+                    "{}_{}_{}{}".format(
                         sanitize_type_name(param_name),
                         sanitize_type_name(binding["root"]),
                         sanitize_type_name(binding["element_type"]),
+                        view_suffix,
                     )
                 )
                 continue
@@ -8363,6 +8422,13 @@ class GLSLCodeGen:
                 call_args.append(offset)
             else:
                 call_args.append(f"int({offset})")
+            if index in getattr(
+                specialized_func,
+                "_glsl_storage_pointer_byte_offset_indices",
+                (),
+            ):
+                byte_offset = str(binding.get("byte_offset", "0"))
+                call_args.append(f"int({byte_offset})")
         return call_args
 
     def generate_constants(self, ast, constants=None):
@@ -15407,6 +15473,13 @@ class GLSLCodeGen:
                 reason="unsupported-scalar-layout",
                 source_location=getattr(expression, "source_location", None),
             )
+
+        if target_layout == view_layout:
+            return {
+                **binding,
+                "element_type": self.map_type(target_type_name),
+                "view_element_type": target_type_name,
+            }
 
         rendered_offset = self.glsl_workgroup_pointer_offset_expression(binding)
         scaled_offset = rendered_offset

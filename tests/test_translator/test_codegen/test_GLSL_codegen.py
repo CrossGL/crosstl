@@ -3205,6 +3205,49 @@ def test_opengl_resource_specialized_helper_preserves_private_pointer_extent(tmp
     )
 
 
+def test_opengl_resource_specialized_caller_preserves_local_private_array(tmp_path):
+    shader = """
+    shader SpecializedCallerPrivateArray {
+        void update(thread float* values) {
+            values[0] += 2.0;
+            values[2] += 3.0;
+        }
+
+        void accumulate(device float* output, float seed) {
+            float values[3] = {seed, 0.0, seed};
+            update(values);
+            output[0] = values[0] + values[2];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @binding(0)) {
+                accumulate(output, 5.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void update(inout float values[3], int values_base)" in generated
+    specialized = re.search(
+        r"\bvoid\s+accumulate_glsl_[A-Za-z0-9_]+\s*"
+        r"\(float seed, int output_offset\)\s*"
+        r"\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert specialized is not None, generated
+    assert "float values[3] = float[3](seed, 0.0, seed);" in specialized.group("body")
+    assert "update(values, 0);" in specialized.group("body")
+    assert "output_[output_offset] = (values[0] + values[2]);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "resource_specialized_caller_private_array"
+    )
+
+
 def test_opengl_resource_specialization_preserves_private_pointer_variant_order(
     tmp_path,
 ):
@@ -7545,6 +7588,188 @@ def test_glsl_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
     )
 
 
+def test_opengl_same_view_storage_pointer_cast_preserves_forwarded_offset(tmp_path):
+    code = """
+    shader ReinterpretedStoragePointerForwarding {
+        uint readByte(const device uint8* values, uint index) {
+            return uint(values[index]);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<uint> words @binding(0),
+                RWStructuredBuffer<uint> output @binding(1),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                const device uint8* bytes = (uint8*)words;
+                bytes += int(tid.x) * 4;
+                const device uint8* cursor = (uint8*)(bytes + 1);
+                output[0] = readByte(cursor, 2u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    helper = re.search(
+        r"\buint\s+(?P<name>readByte[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert re.search(r"\bint\s+values_offset\b", helper.group("params")), generated
+    assert re.search(r"\btid\b", helper.group("body")) is None, generated
+    assert "gl_GlobalInvocationID" not in helper.group("body"), generated
+    assert re.search(r"\bvalues_offset\b", helper.group("body")), generated
+
+    cursor_assignment = re.search(
+        r"\bint\s+cursor_offset\s*=\s*int\((?P<value>[^;]+)\);", generated
+    )
+    assert cursor_assignment is not None, generated
+    assert glsl_expression_depends_on(
+        generated, cursor_assignment.group("value"), "bytes_offset"
+    ), generated
+
+    helper_calls = re.findall(
+        rf"\b{re.escape(helper.group('name'))}\s*\(([^;\n]*)\)\s*;", generated
+    )
+    main_call = next(
+        (arguments for arguments in helper_calls if "2u" in arguments), None
+    )
+    assert main_call is not None, generated
+    assert glsl_expression_depends_on(generated, main_call, "cursor_offset"), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "same_view_storage_pointer_cast"
+    )
+
+
+def test_opengl_reinterpreted_storage_helper_forwards_byte_base_separately(tmp_path):
+    code = """
+    shader ReinterpretedStoragePointerByteBase {
+        uint readByte(const device uint8* values, uint index) {
+            return uint(values[index]);
+        }
+
+        uint readRebasedWord(const device uint* values, uint index) {
+            const device uint8* bytes = (uint8*)values;
+            bytes += 1;
+            const device uint8* cursor = (uint8*)bytes;
+            return readByte(cursor, index);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<uint> words @binding(0),
+                RWStructuredBuffer<uint> output @binding(1),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                const device uint* rebased = &words[tid.x];
+                output[0] = readRebasedWord(rebased, 2u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    byte_helper = re.search(
+        r"\buint\s+(?P<name>readByte[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert byte_helper is not None, generated
+    assert re.search(r"\bint\s+values_offset\b", byte_helper.group("params"))
+    assert re.search(r"\bint\s+values_byte_offset\b", byte_helper.group("params"))
+    assert re.search(r"\bvalues_offset\b", byte_helper.group("body")), generated
+    assert re.search(r"\bvalues_byte_offset\b", byte_helper.group("body")), generated
+    assert re.search(r"\btid\b", byte_helper.group("body")) is None, generated
+    assert "gl_GlobalInvocationID" not in byte_helper.group("body"), generated
+
+    outer_helper = re.search(
+        r"\buint\s+(?P<name>readRebasedWord[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert outer_helper is not None, generated
+    assert re.search(r"\bint\s+values_offset\b", outer_helper.group("params"))
+    nested_call = re.search(
+        rf"\b{re.escape(byte_helper.group('name'))}\s*" r"\((?P<args>[^;\n]*)\)\s*;",
+        outer_helper.group("body"),
+    )
+    assert nested_call is not None, generated
+    assert glsl_expression_depends_on(
+        outer_helper.group("body"), nested_call.group("args"), "values_offset"
+    ), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "reinterpreted_storage_pointer_byte_base"
+    )
+
+
+def test_opengl_storage_helper_specializes_direct_and_reinterpreted_views(tmp_path):
+    code = """
+    shader MixedStoragePointerViews {
+        uint readWord(const device uint* values) {
+            return values[0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<uint> words @binding(0),
+                RWStructuredBuffer<uint> output @binding(1)
+            ) {
+                output[0] = readWord(words);
+                const device uint8* bytes = (uint8*)words;
+                bytes += 4;
+                output[1] = readWord((uint*)bytes);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    helpers = list(
+        re.finditer(
+            r"\buint\s+(?P<name>readWord[A-Za-z0-9_]*)\s*"
+            r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+            generated,
+            re.MULTILINE | re.DOTALL,
+        )
+    )
+    assert len(helpers) == 2, generated
+    assert len({helper.group("name") for helper in helpers}) == 2, generated
+
+    direct = next(
+        helper
+        for helper in helpers
+        if "values_byte_offset" not in helper.group("params")
+    )
+    reinterpreted = next(
+        helper for helper in helpers if "values_byte_offset" in helper.group("params")
+    )
+    assert re.search(r"\bvalues_offset\b", direct.group("body")), generated
+    assert "values_byte_offset" not in direct.group("body"), generated
+    assert re.search(r"\bvalues_byte_offset\b", reinterpreted.group("body")), generated
+    assert f"{direct.group('name')}(int(0))" in generated
+    assert f"{reinterpreted.group('name')}(int(0), int(bytes_offset))" in generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "mixed_storage_pointer_views"
+    )
+
+
 def test_glsl_metal_private_struct_byte_view_reads_packed_words(tmp_path):
     metal_source = tmp_path / "local_struct_byte_view.metal"
     metal_source.write_text(
@@ -7770,10 +7995,17 @@ def test_glsl_metal_storage_byte_alias_reaches_storage_helper(tmp_path):
     )
 
     assert "load_word((uint*)bytes)" in intermediate
-    assert "uint load_word_glsl_values_words_uint(int values_offset)" in generated
-    assert "return words[int(" in generated
-    assert "((word_offset * 4) + 4) + (values_offset * 4)" in generated
+    helper = re.search(
+        r"\buint\s+(?P<name>load_word[A-Za-z0-9_]*)\s*"
+        r"\(int values_offset, int values_byte_offset\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert "return words[int(" in helper.group("body")
+    assert "values_byte_offset + (values_offset * 4)" in helper.group("body")
     assert "bytes_offset += int(((word_offset * 4) + 4));" in generated
+    assert f"{helper.group('name')}(int(0), int(bytes_offset))" in generated
     assert "uint values[" not in generated
     assert "values_base" not in generated
     assert "private-word-array-view" not in generated
