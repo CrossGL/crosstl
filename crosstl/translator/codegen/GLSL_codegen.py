@@ -8038,6 +8038,7 @@ class GLSLCodeGen:
             }
         storage_pointer_aliases = {}
         storage_pointer_bound_indices = []
+        storage_pointer_byte_offset_indices = []
         storage_pointer_offset_directions = {}
         storage_pointer_parameter_names = {}
         for index, (param_name, binding) in sorted(bindings.items()):
@@ -8062,6 +8063,26 @@ class GLSLCodeGen:
                     qualifiers=[offset_direction] if offset_direction else [],
                 )
             )
+            byte_offset_name = None
+            if binding.get("pointer_reinterpretation") is not None or str(
+                binding.get("byte_offset", "0")
+            ) not in {"0", "0u"}:
+                byte_offset_name = self.glsl_synthetic_local_identifier(
+                    f"{sanitize_type_name(param_name)}_byte_offset",
+                    occupied_local_names,
+                )
+                remaining_param_names.add(byte_offset_name)
+                clone.parameters.append(
+                    SimpleNamespace(
+                        name=byte_offset_name,
+                        param_type="int",
+                        vtype="int",
+                        semantic=None,
+                        attributes=[],
+                        qualifiers=[],
+                    )
+                )
+                storage_pointer_byte_offset_indices.append(index)
             storage_pointer_bound_indices.append(index)
             storage_pointer_offset_directions[index] = offset_direction
             storage_pointer_parameter_names[index] = param_name
@@ -8072,6 +8093,8 @@ class GLSLCodeGen:
                 "offset": offset_name,
                 "resource_root": False,
             }
+            if byte_offset_name is not None:
+                storage_pointer_aliases[param_name]["byte_offset"] = byte_offset_name
         clone._glsl_resource_source_name = func_name
         clone._glsl_resource_bound_indices = set(bindings)
         clone._glsl_resource_dynamic_call_arguments = dynamic_call_arguments
@@ -8092,6 +8115,9 @@ class GLSLCodeGen:
         )
         clone._glsl_storage_pointer_aliases = storage_pointer_aliases
         clone._glsl_storage_pointer_bound_indices = tuple(storage_pointer_bound_indices)
+        clone._glsl_storage_pointer_byte_offset_indices = frozenset(
+            storage_pointer_byte_offset_indices
+        )
         clone._glsl_storage_pointer_offset_directions = (
             storage_pointer_offset_directions
         )
@@ -8363,6 +8389,13 @@ class GLSLCodeGen:
                 call_args.append(offset)
             else:
                 call_args.append(f"int({offset})")
+            if index in getattr(
+                specialized_func,
+                "_glsl_storage_pointer_byte_offset_indices",
+                (),
+            ):
+                byte_offset = str(binding.get("byte_offset", "0"))
+                call_args.append(f"int({byte_offset})")
         return call_args
 
     def generate_constants(self, ast, constants=None):
