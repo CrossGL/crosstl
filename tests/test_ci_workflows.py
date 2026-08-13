@@ -2424,6 +2424,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         mlx_porting
     )
     assert '"tests/test_mlx_porting_harness.py"' in mlx_porting
+    assert '"tests/test_mlx_rms_norm_dispatch_contract_fixture.py"' in mlx_porting
     assert '"tests/test_mlx_quantized_directx_proof.py"' in mlx_porting
     assert '"tests/test_mlx_quantized_opengl_proof.py"' in mlx_porting
     assert '"tests/test_translator/test_codegen/test_SPIRV_codegen.py"' in mlx_porting
@@ -2450,6 +2451,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
     assert "MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE" in mlx_porting
     assert "MLX_LAYER_NORM_DISPATCH_VARIANTS" in mlx_porting
+    assert "MLX_RMS_NORM_DISPATCH_VARIANTS" in mlx_porting
     assert 'checks["directx-frontier"]' in mlx_porting
     assert 'checks["vulkan-frontier"]' in mlx_porting
     assert 'directx["directxToolchainArtifactCount"]' in mlx_porting
@@ -2461,8 +2463,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'directx["bfloat16LoweringEvidence"]' in mlx_porting
     assert "DirectX bfloat16 lowering evidence is incomplete" in mlx_porting
     assert "DirectX workgroup blocker evidence changed" in mlx_porting
-    assert "expected 94 fail-closed DirectX compute entries" in mlx_porting
+    assert "expected 82 fail-closed DirectX compute entries" in mlx_porting
     assert "LayerNorm dispatch frontier evidence is incomplete" in mlx_porting
+    assert "RMSNorm dispatch frontier evidence is incomplete" in mlx_porting
     assert "matched-materialized-host-names" in mlx_porting
     assert "DirectX frontier toolchain must validate every configured" in mlx_porting
     assert "source artifact and compute entry" in mlx_porting

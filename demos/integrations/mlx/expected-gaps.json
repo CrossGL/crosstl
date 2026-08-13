@@ -10,13 +10,13 @@
       "directx",
       "vulkan"
     ],
-    "artifacts": 23,
-    "translated_artifacts": 18,
-    "failed_artifacts": 5,
+    "artifacts": 34,
+    "translated_artifacts": 30,
+    "failed_artifacts": 4,
     "target_artifacts": {
       "directx": {
-        "translated": 7,
-        "failed": 5
+        "translated": 19,
+        "failed": 4
       },
       "vulkan": {
         "translated": 11,
@@ -30,7 +30,6 @@
     "pending_host_dispatch_sources": [
       "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/logsumexp.metal",
-      "mlx/backend/metal/kernels/rms_norm.metal",
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
       "mlx/backend/metal/kernels/softmax.metal"
     ],
@@ -1480,14 +1479,14 @@
   },
   "directx_toolchain_status": {
     "status": "passing-with-bounded-dispatch-and-pending-contracts",
-    "note": "Windows CI compiles 470 generated compute entries across seven DirectX HLSL artifacts from six pinned sources with zero DXC warnings. LayerNorm contributes two entry-scoped artifacts selected by a replayable host dispatch contract. Five sources covering 94 aggregate entries still fail before emission because no bounded host dispatch manifest is configured; no placeholder workgroup size is applied. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity.",
+    "note": "Windows CI compiles 482 generated compute entries across 19 DirectX HLSL artifacts from seven pinned sources with zero DXC warnings. LayerNorm contributes two entry-scoped artifacts, and RMSNorm contributes 12 unit-test-derived entry-scoped artifacts selected by replayable host dispatch contracts. Four sources covering 82 aggregate entries still fail before emission because no bounded host dispatch manifest is configured; no placeholder workgroup size is applied. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity.",
     "compiler": {
       "name": "dxc",
       "version": "v1.9.2602.24"
     },
     "warning_evidence": {
       "status": "warning-clean",
-      "validatedRunCount": 470,
+      "validatedRunCount": 482,
       "warningRunCount": 0,
       "observedWarningCount": 0,
       "uniqueContractCount": 0,
@@ -1770,6 +1769,377 @@
       "runtime_execution_attempted": false,
       "numerical_parity_claimed": false
     },
+    "rms_norm_dispatch_frontier": {
+      "status": "translated-dxc-validated",
+      "source": "mlx/backend/metal/kernels/rms_norm.metal",
+      "source_sha256": "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee",
+      "target": "directx",
+      "test_sources": [
+        "python/tests/test_fast.py::test_rms_norm",
+        "python/tests/test_fast.py::test_rms_norm_grad"
+      ],
+      "dispatch_contract": {
+        "path": "demos/integrations/mlx/contracts/rms_norm.dispatch.json",
+        "normalized_sha256": "ea91c5b5655e776e6db3537bf6539d1f1983c0a4ed74bf90f96a57ad3611e91f",
+        "content_identity": "sha256:ea238af83b140c33d43b79b5efd1814c398bbc09ac70cbef21375b1e8ff9a1eb",
+        "variant_count": 12,
+        "resolved_issue": "https://github.com/CrossGL/crosstl/issues/1793"
+      },
+      "artifact_count": 12,
+      "variants": {
+        "vjp-float32-axis-32-has-w-false": {
+          "entry_point": "vjp_rmsfloat32",
+          "artifact_id": "sha256:ef832e1ceb8c864a13aee3460d23658f4fffba18db1b800461628ba6ebe38e0a",
+          "dispatch_variant_id": "sha256:1a25dca51070c3b6fc96f162e6c152049d388833ba02b1f3d10cc1928c5661c4",
+          "inputs": {
+            "axisSize": 32,
+            "dtype": "float32",
+            "hasW": false,
+            "isVjp": true
+          },
+          "workgroup_size": [
+            32,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            800,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {
+            "20": false
+          },
+          "generated_hlsl": {
+          "normalized_sha256": "316c6393196ff1ef60ac143cfbb7946635648f296a4cf36df215255cbeadf408",
+          "size_bytes": 5440
+          }
+        },
+        "vjp-float32-axis-32-has-w-true": {
+          "entry_point": "vjp_rmsfloat32",
+          "artifact_id": "sha256:a9be06b43a6156fb9ee1f9a6955d03d6bda0940c2a8223b58f564c2d12bd0cd0",
+          "dispatch_variant_id": "sha256:26177a77e484a56b7b2572516e8e1360714c88b668881237a9cf499129e34f35",
+          "inputs": {
+            "axisSize": 32,
+            "dtype": "float32",
+            "hasW": true,
+            "isVjp": true
+          },
+          "workgroup_size": [
+            32,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            800,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {
+            "20": true
+          },
+          "generated_hlsl": {
+          "normalized_sha256": "258a16ae4d2132e8500e2b08180b87322d4f8a223a974fa18b47ab77fa160908",
+          "size_bytes": 5439
+          }
+        },
+        "forward-float32-axis-512": {
+          "entry_point": "rmsfloat32",
+          "artifact_id": "sha256:a9b6980b1645e867b2502052d6d5f37a03447258bb4f819535901bf45a01d5da",
+          "dispatch_variant_id": "sha256:369be00b341be529b913101657bd6a78d8b8c689e9dc7c6d27e694809dd9d098",
+          "inputs": {
+            "axisSize": 512,
+            "dtype": "float32",
+            "hasW": false,
+            "isVjp": false
+          },
+          "workgroup_size": [
+            128,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            2,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {},
+          "generated_hlsl": {
+          "normalized_sha256": "3790adf689bd3460602073ce19312dcc2fc631247c5e75859179e063ae1e38f5",
+          "size_bytes": 3646
+          }
+        },
+        "forward-float32-axis-4099": {
+          "entry_point": "rms_loopedfloat32",
+          "artifact_id": "sha256:b81c2043b10bde966cb6f4dbfa198d2b93a3e456f3026030b69557c4a8983729",
+          "dispatch_variant_id": "sha256:392aee49734fcc2fd3ff4fd232a49f1a97a2bb79f3c22cc80eeabeb1f1ca1959",
+          "inputs": {
+            "axisSize": 4099,
+            "dtype": "float32",
+            "hasW": false,
+            "isVjp": false
+          },
+          "workgroup_size": [
+            1024,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            1,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {},
+          "generated_hlsl": {
+          "normalized_sha256": "0c05c3e676b55f567e18dd9a1d4ede3c84876945a33c22405e442174ac53cc85",
+          "size_bytes": 4262
+          }
+        },
+        "forward-float32-axis-32": {
+          "entry_point": "rmsfloat32",
+          "artifact_id": "sha256:00c05fccf276cf11f3fb9b617b8fe0bb3c5f8766c0e4ca1ed990c093e700422e",
+          "dispatch_variant_id": "sha256:4306831dce3a9a479ef63093a7f2722358caf58b6fcf1a47ed808a1c28dc9ebb",
+          "inputs": {
+            "axisSize": 32,
+            "dtype": "float32",
+            "hasW": false,
+            "isVjp": false
+          },
+          "workgroup_size": [
+            32,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            2,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {},
+          "generated_hlsl": {
+          "normalized_sha256": "bbb3dbbeee01c267ba2b96aa048fe96af45740ad7f88bce5d0f584904b5a9d04",
+          "size_bytes": 3644
+          }
+        },
+        "forward-float16-axis-32": {
+          "entry_point": "rmsfloat16",
+          "artifact_id": "sha256:b694e5240f2a87bfae8af862878251a45cfaeaf39fd810bf2df8a5e3724bdad7",
+          "dispatch_variant_id": "sha256:51de914a20a4defb1d1b79ed26def94a994894228d6c64cae0e1132553809dbb",
+          "inputs": {
+            "axisSize": 32,
+            "dtype": "float16",
+            "hasW": false,
+            "isVjp": false
+          },
+          "workgroup_size": [
+            32,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            2,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {},
+          "generated_hlsl": {
+          "normalized_sha256": "09f5cb40981ae6a29c09a6e69f394657c0668a05721f3af91c30385fa0e083e5",
+          "size_bytes": 3664
+          }
+        },
+        "forward-bfloat16-axis-32": {
+          "entry_point": "rmsbfloat16",
+          "artifact_id": "sha256:13655322998b557a5143ac9b871dc898f0ae43c07cf9659aecd505156ed9318b",
+          "dispatch_variant_id": "sha256:635d28f468bf3e15a0ec7285aacc23d0de32f9596d511beb98adb3ecc2c2abf4",
+          "inputs": {
+            "axisSize": 32,
+            "dtype": "bfloat16",
+            "hasW": false,
+            "isVjp": false
+          },
+          "workgroup_size": [
+            32,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            2,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {},
+          "generated_hlsl": {
+          "normalized_sha256": "4280418858612f83d234445dfb1aa336ba66e215c5a416f134debdb50f8e92ac",
+          "size_bytes": 4736
+          }
+        },
+        "vjp-float32-axis-8192-has-w-true": {
+          "entry_point": "vjp_rms_loopedfloat32",
+          "artifact_id": "sha256:345d524ffec14682b6d0325bc97b624b89d83dc257a17ed49bea5e11e24573f3",
+          "dispatch_variant_id": "sha256:8fc64f93a1be95f7acac67d6595c9f9c66c01b87cf952f29052835c20d4d765b",
+          "inputs": {
+            "axisSize": 8192,
+            "dtype": "float32",
+            "hasW": true,
+            "isVjp": true
+          },
+          "workgroup_size": [
+            1024,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            4,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {
+            "20": true
+          },
+          "generated_hlsl": {
+          "normalized_sha256": "7f1712feeb2b01c6e3dfa2ad3384aa675af0e1c39bb883ac24c93eabe6ebb172",
+          "size_bytes": 6408
+          }
+        },
+        "vjp-float32-axis-256-has-w-true": {
+          "entry_point": "vjp_rmsfloat32",
+          "artifact_id": "sha256:0944044e2f050bedde1d05e1ae5648628e7144c04752dd49b2e2bb7bcd807b7b",
+          "dispatch_variant_id": "sha256:a010324f59769fde9d71cc8968852ae1e6c8b0ddc213f035523c2c5f2e12d413",
+          "inputs": {
+            "axisSize": 256,
+            "dtype": "float32",
+            "hasW": true,
+            "isVjp": true
+          },
+          "workgroup_size": [
+            64,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            800,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {
+            "20": true
+          },
+          "generated_hlsl": {
+          "normalized_sha256": "cd74fa1af043a346a605922ff79cd97b6d51e9b444ffd8db635c4efc01f87ea4",
+          "size_bytes": 5439
+          }
+        },
+        "vjp-float32-axis-256-has-w-false": {
+          "entry_point": "vjp_rmsfloat32",
+          "artifact_id": "sha256:4455fc9204f826fc5d0d7f016bcaf970b75ea31d5f1598d13ceca6a2baa369e7",
+          "dispatch_variant_id": "sha256:f26ffb357ecfabef6216ff45661f298af4f164a0494da838ca579ea0812e73d2",
+          "inputs": {
+            "axisSize": 256,
+            "dtype": "float32",
+            "hasW": false,
+            "isVjp": true
+          },
+          "workgroup_size": [
+            64,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            800,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {
+            "20": false
+          },
+          "generated_hlsl": {
+          "normalized_sha256": "5d43f9c94cf98ef57ecf61339e989cdead9d91d6b25d337042e6b03e03de405b",
+          "size_bytes": 5440
+          }
+        },
+        "forward-float32-axis-256": {
+          "entry_point": "rmsfloat32",
+          "artifact_id": "sha256:1ef80b00c1a7a2f7967177bc003a961f3e4448358716d2deb79778fc3cbfb68e",
+          "dispatch_variant_id": "sha256:f27b102d2ee4f473afef2448e42103223922ff29fd703e6d269d827f280e8bf7",
+          "inputs": {
+            "axisSize": 256,
+            "dtype": "float32",
+            "hasW": false,
+            "isVjp": false
+          },
+          "workgroup_size": [
+            64,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            2,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {},
+          "generated_hlsl": {
+          "normalized_sha256": "5ff7dcbf0f7236769184654424172b3edc34539547fa33b793745667083ca03e",
+          "size_bytes": 3644
+          }
+        },
+        "vjp-float32-axis-8192-has-w-false": {
+          "entry_point": "vjp_rms_loopedfloat32",
+          "artifact_id": "sha256:3bd55b546fc00ddf8412f092da4793c0272eec0ad7c130065ad7c1677f60cdce",
+          "dispatch_variant_id": "sha256:fa4d57c473cd5799c46a982e3ea339debc06de21fb6a255adc11bbb546f9329b",
+          "inputs": {
+            "axisSize": 8192,
+            "dtype": "float32",
+            "hasW": false,
+            "isVjp": true
+          },
+          "workgroup_size": [
+            1024,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            4,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "specialization_constants": {
+            "20": false
+          },
+          "generated_hlsl": {
+          "normalized_sha256": "30d1fb23fc6f6587235a51f8b28d4d1bd520d41051eea0a98cf28a1b62c646b6",
+          "size_bytes": 6409
+          }
+        }
+      },
+      "dxc_validated_artifact_count": 12,
+      "runtime_execution_attempted": false,
+      "numerical_parity_claimed": false
+    },
     "specialization_constants": {
       "1": false,
       "2": false,
@@ -1787,15 +2157,17 @@
       "mlx/backend/metal/kernels/binary_two.metal": 225,
       "mlx/backend/metal/kernels/layer_norm.metal": 2,
       "mlx/backend/metal/kernels/random.metal": 2,
+      "mlx/backend/metal/kernels/rms_norm.metal": 12,
       "mlx/backend/metal/kernels/rope.metal": 18,
       "mlx/backend/metal/kernels/ternary.metal": 212
     },
-    "expected_entry_point_count": 470,
+    "expected_entry_point_count": 482,
     "dxc_validated_sources": [
       "mlx/backend/metal/kernels/arange.metal",
       "mlx/backend/metal/kernels/binary_two.metal",
       "mlx/backend/metal/kernels/layer_norm.metal",
       "mlx/backend/metal/kernels/random.metal",
+      "mlx/backend/metal/kernels/rms_norm.metal",
       "mlx/backend/metal/kernels/rope.metal",
       "mlx/backend/metal/kernels/ternary.metal"
     ],
@@ -1864,18 +2236,16 @@
     "workgroup_blocked_sources": [
       "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/logsumexp.metal",
-      "mlx/backend/metal/kernels/rms_norm.metal",
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
       "mlx/backend/metal/kernels/softmax.metal"
     ],
     "workgroup_blocked_entry_point_counts": {
       "mlx/backend/metal/kernels/arg_reduce.metal": 24,
       "mlx/backend/metal/kernels/logsumexp.metal": 6,
-      "mlx/backend/metal/kernels/rms_norm.metal": 12,
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": 42,
       "mlx/backend/metal/kernels/softmax.metal": 10
     },
-    "workgroup_blocked_entry_point_count": 94,
+    "workgroup_blocked_entry_point_count": 82,
     "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
     "host_dispatch_import_resolved_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "dispatch_evidence": {
@@ -1916,26 +2286,6 @@
         ],
         "materializationParameters": [
           "AccT",
-          "N_READS",
-          "T"
-        ]
-      },
-      "mlx/backend/metal/kernels/rms_norm.metal": {
-        "specializationCount": 12,
-        "hostSource": "mlx/backend/metal/normalization.cpp",
-        "hostLines": "52-91,137-197",
-        "dispatchFormulas": [
-          "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
-          "looped: [maxTotalThreadsPerThreadgroup, 1, 1]"
-        ],
-        "dispatchSelection": [
-          "block when axis_size <= 4096; looped when axis_size > 4096"
-        ],
-        "runtimeOperands": [
-          "axis_size",
-          "maxTotalThreadsPerThreadgroup"
-        ],
-        "materializationParameters": [
           "N_READS",
           "T"
         ]
@@ -1994,7 +2344,6 @@
     "directx_toolchain_gaps": {
       "mlx/backend/metal/kernels/arg_reduce.metal": "no bounded host dispatch manifest is configured for the runtime-selected axis and pipeline limit; aggregate translation fails with project.translate.workgroup-size-entry-ambiguous (host dispatch import support resolved in https://github.com/CrossGL/crosstl/issues/1793)",
       "mlx/backend/metal/kernels/logsumexp.metal": "no bounded host dispatch manifest is configured for the runtime-selected axis and pipeline limit; aggregate translation fails with project.translate.workgroup-size-entry-ambiguous (host dispatch import support resolved in https://github.com/CrossGL/crosstl/issues/1793)",
-      "mlx/backend/metal/kernels/rms_norm.metal": "no bounded host dispatch manifest is configured for the runtime-selected axis and pipeline limit; aggregate translation fails with project.translate.workgroup-size-entry-ambiguous (host dispatch import support resolved in https://github.com/CrossGL/crosstl/issues/1793)",
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "no bounded host dispatch manifest is configured for the runtime-selected pass, shape, and device architecture; aggregate translation fails with project.translate.workgroup-size-entry-ambiguous (host dispatch import support resolved in https://github.com/CrossGL/crosstl/issues/1793)",
       "mlx/backend/metal/kernels/softmax.metal": "no bounded host dispatch manifest is configured for the runtime-selected axis and pipeline limit; aggregate translation fails with project.translate.workgroup-size-entry-ambiguous (host dispatch import support resolved in https://github.com/CrossGL/crosstl/issues/1793)",
       "mlx/backend/metal/kernels/fence.metal": "the requested mem_device, memory_order_seq_cst, thread_scope_system atomic-fence contract is not representable in HLSL and fails with project.translate.directx-atomic-fence-unsupported (https://github.com/CrossGL/crosstl/issues/1537)"

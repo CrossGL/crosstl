@@ -93,6 +93,234 @@ MLX_RANDOM_SOURCE = "mlx/backend/metal/kernels/random.metal"
 MLX_QUANTIZED_SOURCE = "mlx/backend/metal/kernels/quantized.metal"
 MLX_QUANTIZED_SELECTED_ENTRY_POINT = "affine_quantize_float_gs_32_b_2"
 MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
+MLX_RMS_NORM_SHA256 = "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee"
+MLX_RMS_NORM_DISPATCH_CONTRACT_SOURCE = (
+    Path(__file__).resolve().parent / "contracts" / "rms_norm.dispatch.json"
+)
+MLX_RMS_NORM_DISPATCH_NORMALIZED_SHA256 = (
+    "ea91c5b5655e776e6db3537bf6539d1f1983c0a4ed74bf90f96a57ad3611e91f"
+)
+MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:ea238af83b140c33d43b79b5efd1814c398bbc09ac70cbef21375b1e8ff9a1eb"
+)
+MLX_RMS_NORM_DISPATCH_VARIANTS = {
+    "forward-float32-axis-32": {
+        "entryPoint": "rmsfloat32",
+        "artifactId": (
+            "sha256:00c05fccf276cf11f3fb9b617b8fe0bb3c5f8766c0e4ca1ed990c093e700422e"
+        ),
+        "dispatchVariantId": (
+            "sha256:4306831dce3a9a479ef63093a7f2722358caf58b6fcf1a47ed808a1c28dc9ebb"
+        ),
+        "inputs": {
+            "axisSize": 32,
+            "dtype": "float32",
+            "hasW": False,
+            "isVjp": False,
+        },
+        "workgroupSize": [32, 1, 1],
+        "dispatchWorkgroupCount": [2, 1, 1],
+        "specializationConstants": {},
+    },
+    "forward-float32-axis-256": {
+        "entryPoint": "rmsfloat32",
+        "artifactId": (
+            "sha256:1ef80b00c1a7a2f7967177bc003a961f3e4448358716d2deb79778fc3cbfb68e"
+        ),
+        "dispatchVariantId": (
+            "sha256:f27b102d2ee4f473afef2448e42103223922ff29fd703e6d269d827f280e8bf7"
+        ),
+        "inputs": {
+            "axisSize": 256,
+            "dtype": "float32",
+            "hasW": False,
+            "isVjp": False,
+        },
+        "workgroupSize": [64, 1, 1],
+        "dispatchWorkgroupCount": [2, 1, 1],
+        "specializationConstants": {},
+    },
+    "forward-float32-axis-512": {
+        "entryPoint": "rmsfloat32",
+        "artifactId": (
+            "sha256:a9b6980b1645e867b2502052d6d5f37a03447258bb4f819535901bf45a01d5da"
+        ),
+        "dispatchVariantId": (
+            "sha256:369be00b341be529b913101657bd6a78d8b8c689e9dc7c6d27e694809dd9d098"
+        ),
+        "inputs": {
+            "axisSize": 512,
+            "dtype": "float32",
+            "hasW": False,
+            "isVjp": False,
+        },
+        "workgroupSize": [128, 1, 1],
+        "dispatchWorkgroupCount": [2, 1, 1],
+        "specializationConstants": {},
+    },
+    "forward-float16-axis-32": {
+        "entryPoint": "rmsfloat16",
+        "artifactId": (
+            "sha256:b694e5240f2a87bfae8af862878251a45cfaeaf39fd810bf2df8a5e3724bdad7"
+        ),
+        "dispatchVariantId": (
+            "sha256:51de914a20a4defb1d1b79ed26def94a994894228d6c64cae0e1132553809dbb"
+        ),
+        "inputs": {
+            "axisSize": 32,
+            "dtype": "float16",
+            "hasW": False,
+            "isVjp": False,
+        },
+        "workgroupSize": [32, 1, 1],
+        "dispatchWorkgroupCount": [2, 1, 1],
+        "specializationConstants": {},
+    },
+    "forward-bfloat16-axis-32": {
+        "entryPoint": "rmsbfloat16",
+        "artifactId": (
+            "sha256:13655322998b557a5143ac9b871dc898f0ae43c07cf9659aecd505156ed9318b"
+        ),
+        "dispatchVariantId": (
+            "sha256:635d28f468bf3e15a0ec7285aacc23d0de32f9596d511beb98adb3ecc2c2abf4"
+        ),
+        "inputs": {
+            "axisSize": 32,
+            "dtype": "bfloat16",
+            "hasW": False,
+            "isVjp": False,
+        },
+        "workgroupSize": [32, 1, 1],
+        "dispatchWorkgroupCount": [2, 1, 1],
+        "specializationConstants": {},
+    },
+    "forward-float32-axis-4099": {
+        "entryPoint": "rms_loopedfloat32",
+        "artifactId": (
+            "sha256:b81c2043b10bde966cb6f4dbfa198d2b93a3e456f3026030b69557c4a8983729"
+        ),
+        "dispatchVariantId": (
+            "sha256:392aee49734fcc2fd3ff4fd232a49f1a97a2bb79f3c22cc80eeabeb1f1ca1959"
+        ),
+        "inputs": {
+            "axisSize": 4099,
+            "dtype": "float32",
+            "hasW": False,
+            "isVjp": False,
+        },
+        "workgroupSize": [1024, 1, 1],
+        "dispatchWorkgroupCount": [1, 1, 1],
+        "specializationConstants": {},
+    },
+    "vjp-float32-axis-32-has-w-false": {
+        "entryPoint": "vjp_rmsfloat32",
+        "artifactId": (
+            "sha256:ef832e1ceb8c864a13aee3460d23658f4fffba18db1b800461628ba6ebe38e0a"
+        ),
+        "dispatchVariantId": (
+            "sha256:1a25dca51070c3b6fc96f162e6c152049d388833ba02b1f3d10cc1928c5661c4"
+        ),
+        "inputs": {
+            "axisSize": 32,
+            "dtype": "float32",
+            "hasW": False,
+            "isVjp": True,
+        },
+        "workgroupSize": [32, 1, 1],
+        "dispatchWorkgroupCount": [800, 1, 1],
+        "specializationConstants": {"20": False},
+    },
+    "vjp-float32-axis-32-has-w-true": {
+        "entryPoint": "vjp_rmsfloat32",
+        "artifactId": (
+            "sha256:a9be06b43a6156fb9ee1f9a6955d03d6bda0940c2a8223b58f564c2d12bd0cd0"
+        ),
+        "dispatchVariantId": (
+            "sha256:26177a77e484a56b7b2572516e8e1360714c88b668881237a9cf499129e34f35"
+        ),
+        "inputs": {
+            "axisSize": 32,
+            "dtype": "float32",
+            "hasW": True,
+            "isVjp": True,
+        },
+        "workgroupSize": [32, 1, 1],
+        "dispatchWorkgroupCount": [800, 1, 1],
+        "specializationConstants": {"20": True},
+    },
+    "vjp-float32-axis-256-has-w-false": {
+        "entryPoint": "vjp_rmsfloat32",
+        "artifactId": (
+            "sha256:4455fc9204f826fc5d0d7f016bcaf970b75ea31d5f1598d13ceca6a2baa369e7"
+        ),
+        "dispatchVariantId": (
+            "sha256:f26ffb357ecfabef6216ff45661f298af4f164a0494da838ca579ea0812e73d2"
+        ),
+        "inputs": {
+            "axisSize": 256,
+            "dtype": "float32",
+            "hasW": False,
+            "isVjp": True,
+        },
+        "workgroupSize": [64, 1, 1],
+        "dispatchWorkgroupCount": [800, 1, 1],
+        "specializationConstants": {"20": False},
+    },
+    "vjp-float32-axis-256-has-w-true": {
+        "entryPoint": "vjp_rmsfloat32",
+        "artifactId": (
+            "sha256:0944044e2f050bedde1d05e1ae5648628e7144c04752dd49b2e2bb7bcd807b7b"
+        ),
+        "dispatchVariantId": (
+            "sha256:a010324f59769fde9d71cc8968852ae1e6c8b0ddc213f035523c2c5f2e12d413"
+        ),
+        "inputs": {
+            "axisSize": 256,
+            "dtype": "float32",
+            "hasW": True,
+            "isVjp": True,
+        },
+        "workgroupSize": [64, 1, 1],
+        "dispatchWorkgroupCount": [800, 1, 1],
+        "specializationConstants": {"20": True},
+    },
+    "vjp-float32-axis-8192-has-w-false": {
+        "entryPoint": "vjp_rms_loopedfloat32",
+        "artifactId": (
+            "sha256:3bd55b546fc00ddf8412f092da4793c0272eec0ad7c130065ad7c1677f60cdce"
+        ),
+        "dispatchVariantId": (
+            "sha256:fa4d57c473cd5799c46a982e3ea339debc06de21fb6a255adc11bbb546f9329b"
+        ),
+        "inputs": {
+            "axisSize": 8192,
+            "dtype": "float32",
+            "hasW": False,
+            "isVjp": True,
+        },
+        "workgroupSize": [1024, 1, 1],
+        "dispatchWorkgroupCount": [4, 1, 1],
+        "specializationConstants": {"20": False},
+    },
+    "vjp-float32-axis-8192-has-w-true": {
+        "entryPoint": "vjp_rms_loopedfloat32",
+        "artifactId": (
+            "sha256:345d524ffec14682b6d0325bc97b624b89d83dc257a17ed49bea5e11e24573f3"
+        ),
+        "dispatchVariantId": (
+            "sha256:8fc64f93a1be95f7acac67d6595c9f9c66c01b87cf952f29052835c20d4d765b"
+        ),
+        "inputs": {
+            "axisSize": 8192,
+            "dtype": "float32",
+            "hasW": True,
+            "isVjp": True,
+        },
+        "workgroupSize": [1024, 1, 1],
+        "dispatchWorkgroupCount": [4, 1, 1],
+        "specializationConstants": {"20": True},
+    },
+}
 MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
     "mlx/backend/metal/kernels/scaled_dot_product_attention.metal"
@@ -145,7 +373,7 @@ MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = (
 MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = tuple(
     source
     for source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
-    if source != MLX_LAYER_NORM_SOURCE
+    if source not in {MLX_LAYER_NORM_SOURCE, MLX_RMS_NORM_SOURCE}
 )
 MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES = tuple(
     source
@@ -269,27 +497,33 @@ MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS = {
     MLX_TERNARY_SOURCE: 212,
 }
 # Aggregate artifacts retain every source entry when one workgroup contract applies.
-# LayerNorm contributes two bounded, entry-scoped host-dispatch artifacts.
+# LayerNorm and RMSNorm contribute bounded, entry-scoped host-dispatch artifacts.
 MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = tuple(
     source
     for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     if source in MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
-    or source == MLX_LAYER_NORM_SOURCE
+    or source in {MLX_LAYER_NORM_SOURCE, MLX_RMS_NORM_SOURCE}
 )
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
     source: (
         len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
         if source == MLX_LAYER_NORM_SOURCE
-        else MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+        else (
+            len(MLX_RMS_NORM_DISPATCH_VARIANTS)
+            if source == MLX_RMS_NORM_SOURCE
+            else MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+        )
     )
     for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
 }
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT = sum(
     MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
 )
-MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT = len(
-    MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
-) + len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT = (
+    len(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES)
+    + len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+    + len(MLX_RMS_NORM_DISPATCH_VARIANTS)
+)
 MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS: tuple[dict[str, Any], ...] = ()
 DIRECTX_TOOLCHAIN_WARNING_TRACKED_ISSUES: tuple[str, ...] = ()
 MLX_DIRECTX_TOOLCHAIN_WARNING_EVIDENCE = {
@@ -1461,6 +1695,74 @@ def _prepare_layer_norm_dispatch_contract(
         )
 
     destination = work_dir / "contracts" / "layer_norm.dispatch.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_path, destination)
+    return {
+        "path": _relpath(destination, mlx_root),
+        "contentIdentity": content_identity,
+        "variantCount": len(variants),
+    }
+
+
+def _prepare_rms_norm_dispatch_contract(
+    mlx_root: Path,
+    work_dir: Path,
+) -> dict[str, Any]:
+    source_path = MLX_RMS_NORM_DISPATCH_CONTRACT_SOURCE
+    _require(
+        source_path.is_file(), f"RMSNorm dispatch contract is missing: {source_path}"
+    )
+    _require(
+        _normalized_text_sha256(source_path) == MLX_RMS_NORM_DISPATCH_NORMALIZED_SHA256,
+        "RMSNorm dispatch contract normalized content changed",
+    )
+    rms_norm_source = mlx_root / MLX_RMS_NORM_SOURCE
+    _require(
+        rms_norm_source.is_file() and _sha256(rms_norm_source) == MLX_RMS_NORM_SHA256,
+        "pinned RMSNorm source identity changed",
+    )
+
+    manifest = load_dispatch_contract(source_path)
+    content_identity = manifest.content_identity.to_json()
+    expected_identity = {
+        "algorithm": "sha256",
+        "value": MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix("sha256:"),
+    }
+    _require(
+        content_identity == expected_identity,
+        "RMSNorm dispatch contract identity changed",
+    )
+    evaluation = manifest.evaluate().to_json()
+    variants = evaluation.get("variants")
+    variants_by_workload = {
+        variant.get("workload", {}).get("id"): variant
+        for variant in variants or []
+        if isinstance(variant, Mapping) and isinstance(variant.get("workload"), Mapping)
+    }
+    _require(
+        isinstance(variants, list)
+        and len(variants) == len(MLX_RMS_NORM_DISPATCH_VARIANTS)
+        and set(variants_by_workload) == set(MLX_RMS_NORM_DISPATCH_VARIANTS),
+        "RMSNorm dispatch contract variant set changed",
+    )
+    for workload_id, expected in MLX_RMS_NORM_DISPATCH_VARIANTS.items():
+        variant = variants_by_workload[workload_id]
+        _require(
+            variant.get("artifactId") == expected["artifactId"]
+            and variant.get("variantId") == expected["dispatchVariantId"]
+            and variant.get("source") == MLX_RMS_NORM_SOURCE
+            and variant.get("entryPoint") == expected["entryPoint"]
+            and variant.get("workload", {}).get("inputs") == expected["inputs"]
+            and variant.get("workgroupSize") == expected["workgroupSize"]
+            and variant.get("subgroupWidth") == 32
+            and variant.get("specializationConstants")
+            == expected["specializationConstants"]
+            and variant.get("dispatch", {}).get("workgroupCount")
+            == expected["dispatchWorkgroupCount"],
+            f"RMSNorm dispatch contract changed for {workload_id}",
+        )
+
+    destination = work_dir / "contracts" / "rms_norm.dispatch.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source_path, destination)
     return {
@@ -3805,6 +4107,361 @@ def _require_layer_norm_dispatch_frontier_report(
     return artifacts_by_entry, evidence, toolchain_runs
 
 
+def _require_rms_norm_dispatch_frontier_report(
+    mlx_root: Path,
+    output_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    contract: Mapping[str, Any],
+    validated: bool,
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Any], list[Mapping[str, Any]]]:
+    project = payload.get("project")
+    contract_records = (
+        project.get("dispatchContracts") if isinstance(project, Mapping) else None
+    )
+    artifact_count = len(MLX_RMS_NORM_DISPATCH_VARIANTS)
+    _require(
+        isinstance(project, Mapping)
+        and project.get("includePatterns") == [MLX_RMS_NORM_SOURCE]
+        and project.get("targets") == ["directx"]
+        and project.get("dispatchContractFiles") == [contract["path"]]
+        and project.get("dispatchContractCount") == 1
+        and project.get("dispatchVariantCount") == artifact_count
+        and isinstance(contract_records, list)
+        and len(contract_records) == 1,
+        "RMSNorm dispatch frontier project metadata changed",
+    )
+    contract_record = contract_records[0]
+    expected_manifest_path = str((mlx_root / str(contract["path"])).resolve())
+    evaluation = (
+        contract_record.get("evaluation")
+        if isinstance(contract_record, Mapping)
+        else None
+    )
+    evaluated_variants = (
+        evaluation.get("variants") if isinstance(evaluation, Mapping) else None
+    )
+    _require(
+        isinstance(contract_record, Mapping)
+        and contract_record.get("path") == contract["path"]
+        and contract_record.get("schemaVersion") == 1
+        and contract_record.get("contentIdentity") == contract["contentIdentity"]
+        and contract_record.get("manifest", {}).get("provenance", {}).get("commit")
+        == MLX_COMMIT
+        and isinstance(evaluation, Mapping)
+        and evaluation.get("manifestSource") == expected_manifest_path
+        and evaluation.get("variantCount") == artifact_count
+        and isinstance(evaluated_variants, list)
+        and len(evaluated_variants) == artifact_count,
+        "RMSNorm dispatch frontier did not retain replayable manifest provenance",
+    )
+    evaluation_by_workload = {
+        variant.get("workload", {}).get("id"): variant
+        for variant in evaluated_variants
+        if isinstance(variant, Mapping) and isinstance(variant.get("workload"), Mapping)
+    }
+    _require(
+        set(evaluation_by_workload) == set(MLX_RMS_NORM_DISPATCH_VARIANTS),
+        "RMSNorm dispatch evaluation workload set changed",
+    )
+
+    summary = payload.get("summary")
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == 1
+        and summary.get("artifactCount") == artifact_count
+        and summary.get("translatedCount") == artifact_count
+        and summary.get("failedCount") == 0
+        and summary.get("diagnosticCounts") == {"error": 0, "note": 0, "warning": 0}
+        and summary.get("artifactsByTarget", {}).get("directx")
+        == {
+            "artifactCount": artifact_count,
+            "translatedCount": artifact_count,
+            "failedCount": 0,
+        }
+        and payload.get("diagnostics") == [],
+        "RMSNorm dispatch frontier accounting changed",
+    )
+    units = payload.get("units")
+    _require(
+        isinstance(units, list)
+        and len(units) == 1
+        and units[0].get("path") == MLX_RMS_NORM_SOURCE
+        and units[0].get("sourceBackend") == "metal"
+        and units[0].get("sourceHash")
+        == {"algorithm": "sha256", "value": MLX_RMS_NORM_SHA256},
+        "RMSNorm dispatch frontier source identity changed",
+    )
+
+    dispatch_plan = project.get("dispatchArtifactPlan")
+    planned_artifacts = (
+        dispatch_plan.get("artifacts") if isinstance(dispatch_plan, Mapping) else None
+    )
+    _require(
+        isinstance(dispatch_plan, Mapping)
+        and dispatch_plan.get("kind") == "crosstl-dispatch-artifact-plan"
+        and dispatch_plan.get("schemaVersion") == 1
+        and dispatch_plan.get("sourceUnitCount") == 1
+        and dispatch_plan.get("artifactCount") == artifact_count
+        and dispatch_plan.get("dispatchVariantCount") == artifact_count
+        and isinstance(planned_artifacts, list)
+        and len(planned_artifacts) == artifact_count,
+        "RMSNorm dispatch artifact plan changed",
+    )
+    plan_by_artifact_id = {
+        record.get("artifactId"): record
+        for record in planned_artifacts
+        if isinstance(record, Mapping)
+    }
+    expected_artifact_ids = {
+        expected["artifactId"] for expected in MLX_RMS_NORM_DISPATCH_VARIANTS.values()
+    }
+    _require(
+        set(plan_by_artifact_id) == expected_artifact_ids,
+        "RMSNorm dispatch artifact plan identity set changed",
+    )
+
+    artifacts = payload.get("artifacts")
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == artifact_count,
+        "RMSNorm dispatch artifact records are incomplete",
+    )
+    artifacts_by_id = {
+        artifact.get("dispatchArtifact", {}).get("artifactId"): artifact
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        and isinstance(artifact.get("dispatchArtifact"), Mapping)
+    }
+    _require(
+        set(artifacts_by_id) == expected_artifact_ids,
+        "RMSNorm dispatch artifact identity set changed",
+    )
+
+    output_root = output_dir.resolve()
+    artifacts_by_workload: dict[str, Mapping[str, Any]] = {}
+    generated_evidence: dict[str, Any] = {}
+    for workload_id, expected in MLX_RMS_NORM_DISPATCH_VARIANTS.items():
+        artifact_id = expected["artifactId"]
+        artifact = artifacts_by_id[artifact_id]
+        plan = plan_by_artifact_id[artifact_id]
+        evaluated = evaluation_by_workload[workload_id]
+        entry = artifact.get("entryPoint")
+        entry_point = entry.get("source") if isinstance(entry, Mapping) else None
+        _require(
+            evaluated.get("artifactId") == artifact_id
+            and evaluated.get("variantId") == expected["dispatchVariantId"]
+            and evaluated.get("entryPoint") == expected["entryPoint"]
+            and evaluated.get("workload", {}).get("inputs") == expected["inputs"]
+            and evaluated.get("workgroupSize") == expected["workgroupSize"]
+            and evaluated.get("subgroupWidth") == 32
+            and evaluated.get("specializationConstants")
+            == expected["specializationConstants"]
+            and evaluated.get("dispatch", {}).get("workgroupCount")
+            == expected["dispatchWorkgroupCount"],
+            f"RMSNorm evaluated dispatch changed for {workload_id}",
+        )
+        variant_name = "dispatch-" + artifact_id.removeprefix("sha256:")
+        _require(
+            artifact.get("source") == MLX_RMS_NORM_SOURCE
+            and artifact.get("sourceBackend") == "metal"
+            and artifact.get("sourceHash")
+            == {"algorithm": "sha256", "value": MLX_RMS_NORM_SHA256}
+            and artifact.get("target") == "directx"
+            and artifact.get("status") == "translated"
+            and artifact.get("variant") == variant_name
+            and entry_point == expected["entryPoint"]
+            and entry.get("target") == "CSMain"
+            and entry.get("stage") == "compute"
+            and artifact.get("dispatchArtifact") == plan
+            and plan.get("artifactId") == artifact_id
+            and plan.get("dispatchVariantIds") == [expected["dispatchVariantId"]]
+            and plan.get("manifestContentIdentities")
+            == [MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY]
+            and plan.get("source") == MLX_RMS_NORM_SOURCE
+            and plan.get("entryPoint") == expected["entryPoint"]
+            and plan.get("workgroupSize") == expected["workgroupSize"]
+            and plan.get("subgroupWidth") == 32
+            and plan.get("specializationConstants")
+            == expected["specializationConstants"],
+            f"RMSNorm dispatch artifact contract changed for {workload_id}",
+        )
+
+        execution = artifact.get("execution")
+        execution_entries = (
+            execution.get("entryPoints") if isinstance(execution, Mapping) else None
+        )
+        _require(
+            isinstance(execution, Mapping)
+            and execution.get("sourceEntryPoints") == [expected["entryPoint"]]
+            and execution.get("provenance", {}).get("kind") == "host-dispatch-contract"
+            and execution.get("provenance", {}).get("artifactId") == artifact_id
+            and execution.get("subgroupWidthProvenance", {}).get("kind")
+            == "host-dispatch-contract"
+            and execution.get("subgroupWidthEnforcement")
+            == {
+                "mechanism": "hlsl-wave-size-attribute",
+                "minimumShaderModel": "6.6",
+                "entryProfiles": [{"entryPoint": "CSMain", "profile": "cs_6_6"}],
+            }
+            and isinstance(execution_entries, list)
+            and len(execution_entries) == 1
+            and execution_entries[0].get("sourceEntryPoint") == expected["entryPoint"]
+            and execution_entries[0].get("materializedEntryPoint")
+            == expected["entryPoint"]
+            and execution_entries[0].get("targetEntryPoint") == "CSMain"
+            and execution_entries[0].get("workgroupSize") == expected["workgroupSize"]
+            and execution_entries[0].get("subgroupWidth") == 32,
+            f"RMSNorm execution metadata changed for {workload_id}",
+        )
+
+        constants = artifact.get("specializationConstants") or []
+        constants_by_id = {
+            str(record.get("id")): record
+            for record in constants
+            if isinstance(record, Mapping)
+        }
+        _require(
+            set(constants_by_id) == set(expected["specializationConstants"]),
+            f"RMSNorm specialization inputs changed for {workload_id}",
+        )
+        for constant_id, value in expected["specializationConstants"].items():
+            record = constants_by_id[constant_id]
+            _require(
+                record.get("concreteValue") is value
+                and record.get("deferred") is False
+                and record.get("valueProvenance", {}).get("kind")
+                == "host-dispatch-contract"
+                and record.get("valueProvenance", {}).get("artifactId") == artifact_id,
+                f"RMSNorm specialization provenance changed for {workload_id}",
+            )
+
+        materialization = artifact.get("templateMaterialization")
+        specializations = (
+            materialization.get("specializations")
+            if isinstance(materialization, Mapping)
+            else None
+        )
+        _require(
+            isinstance(materialization, Mapping)
+            and materialization.get("status") == "materialized"
+            and materialization.get("specializationCount") == 1
+            and isinstance(specializations, list)
+            and len(specializations) == 1
+            and specializations[0].get("hostName") == expected["entryPoint"]
+            and materialization.get("unsupported") == [],
+            f"RMSNorm materialization changed for {workload_id}",
+        )
+
+        artifact_path_value = artifact.get("path")
+        _require(
+            isinstance(artifact_path_value, str) and artifact_path_value,
+            f"RMSNorm artifact path is missing for {workload_id}",
+        )
+        artifact_path = (mlx_root / artifact_path_value).resolve()
+        _require(
+            _is_relative_to(artifact_path, output_root) and artifact_path.is_file(),
+            f"RMSNorm artifact is missing or escaped output for {workload_id}",
+        )
+        generated = artifact_path.read_text(encoding="utf-8")
+        generated_hash = _sha256(artifact_path)
+        normalized_hash = _normalized_text_sha256(artifact_path)
+        _require(
+            artifact.get("generatedHash")
+            == {"algorithm": "sha256", "value": generated_hash}
+            and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size
+            and len(re.findall(r"\bvoid\s+CSMain\s*\(", generated)) == 1
+            and re.search(r"\[\s*WaveSize\s*\(\s*32\s*\)\s*\]", generated) is not None
+            and re.search(
+                r"\[\s*numthreads\s*\(\s*{}\s*,\s*1\s*,\s*1\s*\)\s*\]".format(
+                    expected["workgroupSize"][0]
+                ),
+                generated,
+            )
+            is not None,
+            f"RMSNorm generated HLSL contract changed for {workload_id}",
+        )
+        if expected["specializationConstants"]:
+            has_w = str(expected["specializationConstants"]["20"]).lower()
+            _require(
+                re.search(
+                    rf"\bstatic\s+const\s+bool\s+has_w\s*=\s*{has_w}\s*;",
+                    generated,
+                )
+                is not None,
+                f"RMSNorm VJP artifact did not materialize has_w={has_w}",
+            )
+        else:
+            _require(
+                re.search(r"\bhas_w\b", generated) is None,
+                "RMSNorm forward artifact retained an unreachable function constant",
+            )
+        generated_evidence[workload_id] = {
+            "entryPoint": expected["entryPoint"],
+            "artifactId": artifact_id,
+            "dispatchVariantId": expected["dispatchVariantId"],
+            "inputs": dict(expected["inputs"]),
+            "workgroupSize": list(expected["workgroupSize"]),
+            "dispatchWorkgroupCount": list(expected["dispatchWorkgroupCount"]),
+            "subgroupWidth": 32,
+            "specializationConstants": dict(expected["specializationConstants"]),
+            "generatedHlsl": {
+                "normalizedSha256": normalized_hash,
+                "contentSha256": generated_hash,
+                "sizeBytes": artifact_path.stat().st_size,
+            },
+        }
+        artifacts_by_workload[workload_id] = artifact
+
+    toolchain_runs: list[Mapping[str, Any]] = []
+    if validated:
+        validation = payload.get("validation")
+        runs = (
+            validation.get("toolchainRuns") if isinstance(validation, Mapping) else None
+        )
+        _require(
+            isinstance(validation, Mapping)
+            and isinstance(validation.get("summary"), Mapping)
+            and validation["summary"].get("failedCount") == 0
+            and isinstance(runs, list),
+            "RMSNorm dispatch DXC validation changed",
+        )
+        toolchain_runs = [
+            run
+            for run in runs
+            if isinstance(run, Mapping) and run.get("target") == "directx"
+        ]
+        artifact_paths = {artifact["path"] for artifact in artifacts_by_id.values()}
+        _require(
+            len(toolchain_runs) == artifact_count
+            and all(run.get("status") == "ok" for run in toolchain_runs)
+            and {run.get("path") for run in toolchain_runs} == artifact_paths,
+            "RMSNorm dispatch DXC did not validate every artifact",
+        )
+
+    evidence = {
+        "status": "translated-dxc-validated" if validated else "translated",
+        "source": MLX_RMS_NORM_SOURCE,
+        "sourceSha256": MLX_RMS_NORM_SHA256,
+        "target": "directx",
+        "testSources": [
+            "python/tests/test_fast.py::test_rms_norm",
+            "python/tests/test_fast.py::test_rms_norm_grad",
+        ],
+        "dispatchContract": {
+            "path": contract["path"],
+            "contentIdentity": MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY,
+            "variantCount": artifact_count,
+            "resolvedIssue": MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
+        },
+        "artifactCount": artifact_count,
+        "variants": generated_evidence,
+        "dxcValidatedArtifactCount": len(toolchain_runs),
+        "runtimeExecutionAttempted": False,
+        "numericalParityClaimed": False,
+    }
+    return artifacts_by_workload, evidence, toolchain_runs
+
+
 def _require_directx_bfloat16_lowering_evidence(
     artifacts_by_source: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
@@ -4194,6 +4851,37 @@ def _translate_directx_frontier(
         validated=False,
     )
 
+    rms_norm_contract = _prepare_rms_norm_dispatch_contract(mlx_root, work_dir)
+    rms_norm_output_dir = work_dir / "out-directx-rms-norm-dispatch-frontier"
+    (
+        _rms_norm_result,
+        rms_norm_payload,
+        _rms_norm_config,
+        rms_norm_report_path,
+    ) = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+        command_name="directx-rms-norm-dispatch-frontier",
+        target="directx",
+        sources=(MLX_RMS_NORM_SOURCE,),
+        output_dir=rms_norm_output_dir,
+        dispatch_contracts=(str(rms_norm_contract["path"]),),
+    )
+    (
+        rms_norm_artifacts,
+        rms_norm_evidence,
+        _rms_norm_runs,
+    ) = _require_rms_norm_dispatch_frontier_report(
+        mlx_root,
+        rms_norm_output_dir,
+        rms_norm_payload,
+        contract=rms_norm_contract,
+        validated=False,
+    )
+
     blocked_output_dir = work_dir / "out-directx-workgroup-frontier"
     blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
         _run_frontier_project(
@@ -4294,10 +4982,41 @@ def _translate_directx_frontier(
             contract=layer_norm_contract,
             validated=True,
         )
-        directx_runs = [*aggregate_runs, *layer_norm_runs]
+        rms_norm_toolchain_output = work_dir / "out-directx-rms-norm-dispatch-toolchain"
+        (
+            _rms_norm_toolchain_result,
+            rms_norm_toolchain_payload,
+            _rms_norm_toolchain_config,
+            _rms_norm_toolchain_report,
+        ) = _run_frontier_project(
+            mlx_root=mlx_root,
+            config_dir=config_dir,
+            report_dir=report_dir,
+            log_dir=log_dir,
+            python=python,
+            command_name="validate-directx-rms-norm-dispatch-toolchain",
+            target="directx",
+            sources=(MLX_RMS_NORM_SOURCE,),
+            output_dir=rms_norm_toolchain_output,
+            run_toolchains=True,
+            dispatch_contracts=(str(rms_norm_contract["path"]),),
+        )
+        (
+            rms_norm_artifacts,
+            rms_norm_evidence,
+            rms_norm_runs,
+        ) = _require_rms_norm_dispatch_frontier_report(
+            mlx_root,
+            rms_norm_toolchain_output,
+            rms_norm_toolchain_payload,
+            contract=rms_norm_contract,
+            validated=True,
+        )
+        directx_runs = [*aggregate_runs, *layer_norm_runs, *rms_norm_runs]
         artifact_paths = {
             *(artifact["path"] for artifact in artifacts.values()),
             *(artifact["path"] for artifact in layer_norm_artifacts.values()),
+            *(artifact["path"] for artifact in rms_norm_artifacts.values()),
         }
         validated_paths = {
             run.get("path") for run in directx_runs if run.get("status") == "ok"
@@ -4314,6 +5033,10 @@ def _translate_directx_frontier(
         artifact["path"]: entry_point
         for entry_point, artifact in layer_norm_artifacts.items()
     }
+    rms_norm_workload_by_path = {
+        artifact["path"]: workload_id
+        for workload_id, artifact in rms_norm_artifacts.items()
+    }
     for run in directx_runs:
         if run.get("status") != "ok":
             continue
@@ -4322,11 +5045,12 @@ def _translate_directx_frontier(
             source in directx_entry_points_by_source,
             f"DirectX toolchain validation reported an unexpected source: {source}",
         )
-        entry_point = (
-            layer_norm_entry_by_path.get(run.get("path"))
-            if source == MLX_LAYER_NORM_SOURCE
-            else _directx_toolchain_entry_point(run)
-        )
+        if source == MLX_LAYER_NORM_SOURCE:
+            entry_point = layer_norm_entry_by_path.get(run.get("path"))
+        elif source == MLX_RMS_NORM_SOURCE:
+            entry_point = rms_norm_workload_by_path.get(run.get("path"))
+        else:
+            entry_point = _directx_toolchain_entry_point(run)
         _require(
             entry_point is not None,
             "DirectX toolchain validation did not record a compute entry command",
@@ -4366,12 +5090,14 @@ def _translate_directx_frontier(
         "scope": "target-split-frontier",
         "report": _relpath(report_path, mlx_root),
         "layerNormDispatchReport": _relpath(layer_norm_report_path, mlx_root),
+        "rmsNormDispatchReport": _relpath(rms_norm_report_path, mlx_root),
         "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
         "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
         "unitCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
         "artifactCount": (
             len(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES)
             + len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+            + len(MLX_RMS_NORM_DISPATCH_VARIANTS)
             + len(MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES)
         ),
         "translatedSources": list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
@@ -4409,6 +5135,7 @@ def _translate_directx_frontier(
         "native16BitArithmeticEvidence": MLX_DIRECTX_NATIVE_16_BIT_ARITHMETIC_EVIDENCE,
         "bfloat16LoweringEvidence": bfloat16_lowering_evidence,
         "layerNormDispatchEvidence": layer_norm_evidence,
+        "rmsNormDispatchEvidence": rms_norm_evidence,
         "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
         "semanticReadinessStatus": "not-established",
         "trackedIssues": [

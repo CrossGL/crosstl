@@ -189,6 +189,77 @@ def test_layer_norm_dispatch_contract_accepts_crlf_checkout(tmp_path, monkeypatc
     }
 
 
+def test_rms_norm_dispatch_contract_preparation_copies_verified_manifest(
+    tmp_path, monkeypatch
+):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    source_path = mlx_root / module.MLX_RMS_NORM_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("kernel void rms_norm_fixture() {}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        module,
+        "MLX_RMS_NORM_SHA256",
+        hashlib.sha256(source_path.read_bytes()).hexdigest(),
+    )
+
+    contract = module._prepare_rms_norm_dispatch_contract(
+        mlx_root,
+        mlx_root / ".crosstl-mlx-porting",
+    )
+
+    copied_path = mlx_root / contract["path"]
+    assert (
+        copied_path.read_bytes()
+        == module.MLX_RMS_NORM_DISPATCH_CONTRACT_SOURCE.read_bytes()
+    )
+    assert contract == {
+        "path": ".crosstl-mlx-porting/contracts/rms_norm.dispatch.json",
+        "contentIdentity": {
+            "algorithm": "sha256",
+            "value": module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix(
+                "sha256:"
+            ),
+        },
+        "variantCount": len(module.MLX_RMS_NORM_DISPATCH_VARIANTS),
+    }
+
+
+def test_rms_norm_dispatch_contract_accepts_crlf_checkout(tmp_path, monkeypatch):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    source_path = mlx_root / module.MLX_RMS_NORM_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("kernel void rms_norm_fixture() {}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        module,
+        "MLX_RMS_NORM_SHA256",
+        hashlib.sha256(source_path.read_bytes()).hexdigest(),
+    )
+    contract_source = tmp_path / "rms_norm.dispatch.json"
+    normalized = module.MLX_RMS_NORM_DISPATCH_CONTRACT_SOURCE.read_text(
+        encoding="utf-8"
+    )
+    contract_source.write_bytes(normalized.replace("\n", "\r\n").encode("utf-8"))
+    monkeypatch.setattr(
+        module,
+        "MLX_RMS_NORM_DISPATCH_CONTRACT_SOURCE",
+        contract_source,
+    )
+
+    contract = module._prepare_rms_norm_dispatch_contract(
+        mlx_root,
+        mlx_root / ".crosstl-mlx-porting",
+    )
+
+    copied_path = mlx_root / contract["path"]
+    assert copied_path.read_bytes() == contract_source.read_bytes()
+    assert contract["contentIdentity"] == {
+        "algorithm": "sha256",
+        "value": module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix("sha256:"),
+    }
+
+
 def _load_rms_norm_fixture_metadata():
     return json.loads(
         (
@@ -2023,15 +2094,15 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     frontier = expected_gaps["frontier_status"]
     assert frontier["sources"] == len(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
-    assert frontier["artifacts"] == 23
+    assert frontier["artifacts"] == 34
     assert frontier["status"] == (
         "target-split-with-bounded-dispatch-and-pending-contracts"
     )
     assert frontier["scope"] == "target-split-frontier"
-    assert frontier["translated_artifacts"] == 18
-    assert frontier["failed_artifacts"] == 5
+    assert frontier["translated_artifacts"] == 30
+    assert frontier["failed_artifacts"] == 4
     assert frontier["target_artifacts"] == {
-        "directx": {"translated": 7, "failed": 5},
+        "directx": {"translated": 19, "failed": 4},
         "vulkan": {"translated": 11, "failed": 0},
     }
     assert frontier["semantic_readiness_status"] == "not-established"
@@ -2237,6 +2308,43 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert layer_norm["dxc_validated_artifact_count"] == 2
     assert layer_norm["runtime_execution_attempted"] is False
     assert layer_norm["numerical_parity_claimed"] is False
+    rms_norm = directx["rms_norm_dispatch_frontier"]
+    assert rms_norm["status"] == "translated-dxc-validated"
+    assert rms_norm["source"] == module.MLX_RMS_NORM_SOURCE
+    assert rms_norm["source_sha256"] == module.MLX_RMS_NORM_SHA256
+    assert rms_norm["test_sources"] == [
+        "python/tests/test_fast.py::test_rms_norm",
+        "python/tests/test_fast.py::test_rms_norm_grad",
+    ]
+    assert rms_norm["dispatch_contract"] == {
+        "path": "demos/integrations/mlx/contracts/rms_norm.dispatch.json",
+        "normalized_sha256": module.MLX_RMS_NORM_DISPATCH_NORMALIZED_SHA256,
+        "content_identity": module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY,
+        "variant_count": len(module.MLX_RMS_NORM_DISPATCH_VARIANTS),
+        "resolved_issue": module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
+    }
+    assert rms_norm["artifact_count"] == len(module.MLX_RMS_NORM_DISPATCH_VARIANTS)
+    assert set(rms_norm["variants"]) == set(module.MLX_RMS_NORM_DISPATCH_VARIANTS)
+    assert rms_norm["dxc_validated_artifact_count"] == 12
+    for workload_id, expected in module.MLX_RMS_NORM_DISPATCH_VARIANTS.items():
+        variant = rms_norm["variants"][workload_id]
+        assert variant["entry_point"] == expected["entryPoint"]
+        assert variant["artifact_id"] == expected["artifactId"]
+        assert variant["dispatch_variant_id"] == expected["dispatchVariantId"]
+        assert variant["inputs"] == expected["inputs"]
+        assert variant["workgroup_size"] == expected["workgroupSize"]
+        assert variant["dispatch_workgroup_count"] == (
+            expected["dispatchWorkgroupCount"]
+        )
+        assert variant["subgroup_width"] == 32
+        assert variant["subgroup_width_enforcement"] == "WaveSize(32)"
+        assert variant["specialization_constants"] == (
+            expected["specializationConstants"]
+        )
+        assert len(variant["generated_hlsl"]["normalized_sha256"]) == 64
+        assert variant["generated_hlsl"]["size_bytes"] > 0
+    assert rms_norm["runtime_execution_attempted"] is False
+    assert rms_norm["numerical_parity_claimed"] is False
     assert directx["native_runtime_executed"] is False
     assert directx["runtime_parity_claimed"] is False
 
@@ -4443,6 +4551,207 @@ def _write_layer_norm_dispatch_report(
                     "evaluation": {
                         "manifestSource": str((mlx_root / contract["path"]).resolve()),
                         "variantCount": artifact_count,
+                    },
+                }
+            ],
+            "dispatchArtifactPlan": {
+                "kind": "crosstl-dispatch-artifact-plan",
+                "schemaVersion": 1,
+                "sourceUnitCount": 1,
+                "artifactCount": artifact_count,
+                "dispatchVariantCount": artifact_count,
+                "artifacts": planned_artifacts,
+            },
+        },
+        "summary": {
+            "unitCount": 1,
+            "artifactCount": artifact_count,
+            "translatedCount": artifact_count,
+            "failedCount": 0,
+            "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+            "artifactsByTarget": {
+                "directx": {
+                    "artifactCount": artifact_count,
+                    "translatedCount": artifact_count,
+                    "failedCount": 0,
+                }
+            },
+        },
+        "units": [unit],
+        "artifacts": artifacts,
+        "diagnostics": [],
+        "validation": {
+            "summary": {"failedCount": 0},
+            "toolchainRuns": list(toolchain_runs),
+        },
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report
+
+
+def _write_rms_norm_dispatch_report(
+    module,
+    mlx_root,
+    output_dir,
+    report_path,
+    *,
+    contract,
+    toolchain_runs=(),
+):
+    unit = {
+        "id": module.MLX_RMS_NORM_SOURCE,
+        "path": module.MLX_RMS_NORM_SOURCE,
+        "sourceBackend": "metal",
+        "sourceHash": {
+            "algorithm": "sha256",
+            "value": module.MLX_RMS_NORM_SHA256,
+        },
+        "sourceSizeBytes": 12069,
+    }
+    artifacts = []
+    planned_artifacts = []
+    evaluated_variants = []
+    for workload_id, expected in module.MLX_RMS_NORM_DISPATCH_VARIANTS.items():
+        entry_point = expected["entryPoint"]
+        variant = "dispatch-" + expected["artifactId"].removeprefix("sha256:")
+        generated_path = (
+            output_dir
+            / "directx"
+            / variant
+            / "mlx/backend/metal/kernels/rms_norm"
+            / f"{entry_point}.hlsl"
+        )
+        generated_path.parent.mkdir(parents=True, exist_ok=True)
+        generated_lines = [
+            f"[numthreads({expected['workgroupSize'][0]}, 1, 1)]",
+            "[WaveSize(32)]",
+        ]
+        if expected["specializationConstants"]:
+            has_w = str(expected["specializationConstants"]["20"]).lower()
+            generated_lines.insert(0, f"static const bool has_w = {has_w};")
+        generated_lines.extend(("void CSMain() {", "}", ""))
+        generated_path.write_text("\n".join(generated_lines), encoding="utf-8")
+        generated_hash = hashlib.sha256(generated_path.read_bytes()).hexdigest()
+        plan = {
+            "artifactId": expected["artifactId"],
+            "dispatchVariantIds": [expected["dispatchVariantId"]],
+            "entryPoint": entry_point,
+            "manifestContentIdentities": [
+                module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY
+            ],
+            "source": module.MLX_RMS_NORM_SOURCE,
+            "specializationConstants": dict(expected["specializationConstants"]),
+            "subgroupWidth": 32,
+            "variant": variant,
+            "workgroupSize": list(expected["workgroupSize"]),
+        }
+        planned_artifacts.append(plan)
+        evaluated_variants.append(
+            {
+                "artifactId": expected["artifactId"],
+                "variantId": expected["dispatchVariantId"],
+                "source": module.MLX_RMS_NORM_SOURCE,
+                "entryPoint": entry_point,
+                "workload": {
+                    "id": workload_id,
+                    "inputs": dict(expected["inputs"]),
+                },
+                "workgroupSize": list(expected["workgroupSize"]),
+                "subgroupWidth": 32,
+                "specializationConstants": dict(expected["specializationConstants"]),
+                "dispatch": {
+                    "workgroupCount": list(expected["dispatchWorkgroupCount"])
+                },
+            }
+        )
+        constants = [
+            {
+                "id": int(constant_id),
+                "concreteValue": value,
+                "deferred": False,
+                "valueProvenance": {
+                    "kind": "host-dispatch-contract",
+                    "artifactId": expected["artifactId"],
+                },
+            }
+            for constant_id, value in expected["specializationConstants"].items()
+        ]
+        artifacts.append(
+            {
+                "source": module.MLX_RMS_NORM_SOURCE,
+                "sourceBackend": "metal",
+                "sourceHash": unit["sourceHash"],
+                "sourceSizeBytes": unit["sourceSizeBytes"],
+                "target": "directx",
+                "status": "translated",
+                "variant": variant,
+                "path": generated_path.relative_to(mlx_root).as_posix(),
+                "generatedHash": {
+                    "algorithm": "sha256",
+                    "value": generated_hash,
+                },
+                "generatedSizeBytes": generated_path.stat().st_size,
+                "entryPoint": {
+                    "source": entry_point,
+                    "target": "CSMain",
+                    "stage": "compute",
+                },
+                "dispatchArtifact": plan,
+                "execution": {
+                    "sourceEntryPoints": [entry_point],
+                    "provenance": {
+                        "kind": "host-dispatch-contract",
+                        "artifactId": expected["artifactId"],
+                    },
+                    "subgroupWidthProvenance": {
+                        "kind": "host-dispatch-contract",
+                    },
+                    "subgroupWidthEnforcement": {
+                        "mechanism": "hlsl-wave-size-attribute",
+                        "minimumShaderModel": "6.6",
+                        "entryProfiles": [
+                            {"entryPoint": "CSMain", "profile": "cs_6_6"}
+                        ],
+                    },
+                    "entryPoints": [
+                        {
+                            "sourceEntryPoint": entry_point,
+                            "materializedEntryPoint": entry_point,
+                            "targetEntryPoint": "CSMain",
+                            "workgroupSize": list(expected["workgroupSize"]),
+                            "subgroupWidth": 32,
+                        }
+                    ],
+                },
+                "specializationConstants": constants,
+                "templateMaterialization": {
+                    "status": "materialized",
+                    "specializationCount": 1,
+                    "specializations": [{"hostName": entry_point}],
+                    "unsupported": [],
+                },
+            }
+        )
+
+    artifact_count = len(artifacts)
+    report = {
+        "project": {
+            "includePatterns": [module.MLX_RMS_NORM_SOURCE],
+            "targets": ["directx"],
+            "dispatchContractFiles": [contract["path"]],
+            "dispatchContractCount": 1,
+            "dispatchVariantCount": artifact_count,
+            "dispatchContracts": [
+                {
+                    "path": contract["path"],
+                    "schemaVersion": 1,
+                    "contentIdentity": contract["contentIdentity"],
+                    "manifest": {"provenance": {"commit": module.MLX_COMMIT}},
+                    "evaluation": {
+                        "manifestSource": str((mlx_root / contract["path"]).resolve()),
+                        "variantCount": artifact_count,
+                        "variants": evaluated_variants,
                     },
                 }
             ],
@@ -7626,6 +7935,21 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         "_prepare_layer_norm_dispatch_contract",
         lambda *_args: layer_norm_contract,
     )
+    rms_norm_contract = {
+        "path": ".crosstl-mlx-porting/contracts/rms_norm.dispatch.json",
+        "contentIdentity": {
+            "algorithm": "sha256",
+            "value": module.MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY.removeprefix(
+                "sha256:"
+            ),
+        },
+        "variantCount": len(module.MLX_RMS_NORM_DISPATCH_VARIANTS),
+    }
+    monkeypatch.setattr(
+        module,
+        "_prepare_rms_norm_dispatch_contract",
+        lambda *_args: rms_norm_contract,
+    )
     commands = []
 
     def warning_stderr(source, relative_path):
@@ -7700,6 +8024,47 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
                     output_dir,
                     report_dir / f"{name}.json",
                     contract=layer_norm_contract,
+                    toolchain_runs=toolchain_runs,
+                )
+        elif "rms-norm-dispatch" in name:
+            is_toolchain = name.startswith("validate-")
+            output_dir = work_dir / (
+                "out-directx-rms-norm-dispatch-toolchain"
+                if is_toolchain
+                else "out-directx-rms-norm-dispatch-frontier"
+            )
+            report = _write_rms_norm_dispatch_report(
+                module,
+                mlx_root,
+                output_dir,
+                report_dir / f"{name}.json",
+                contract=rms_norm_contract,
+            )
+            if is_toolchain:
+                toolchain_runs = [
+                    {
+                        "source": module.MLX_RMS_NORM_SOURCE,
+                        "target": "directx",
+                        "path": artifact["path"],
+                        "command": [
+                            "dxc",
+                            "-T",
+                            "cs_6_6",
+                            "-E",
+                            "CSMain",
+                            artifact["path"],
+                        ],
+                        "status": "ok",
+                        "stderr": "",
+                    }
+                    for artifact in report["artifacts"]
+                ]
+                _write_rms_norm_dispatch_report(
+                    module,
+                    mlx_root,
+                    output_dir,
+                    report_dir / f"{name}.json",
+                    contract=rms_norm_contract,
                     toolchain_runs=toolchain_runs,
                 )
         else:
@@ -7809,6 +8174,12 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     assert set(result["layerNormDispatchEvidence"]["variants"]) == set(
         module.MLX_LAYER_NORM_DISPATCH_VARIANTS
     )
+    assert result["rmsNormDispatchEvidence"]["status"] == ("translated-dxc-validated")
+    assert result["rmsNormDispatchEvidence"]["artifactCount"] == 12
+    assert result["rmsNormDispatchEvidence"]["dxcValidatedArtifactCount"] == 12
+    assert set(result["rmsNormDispatchEvidence"]["variants"]) == set(
+        module.MLX_RMS_NORM_DISPATCH_VARIANTS
+    )
     assert result["workgroupBlockedSources"] == list(
         module.MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
@@ -7819,12 +8190,15 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     assert [name for name, _command in commands] == [
         "directx-frontier",
         "directx-layer-norm-dispatch-frontier",
+        "directx-rms-norm-dispatch-frontier",
         "directx-workgroup-frontier",
         "validate-directx-frontier-toolchain",
         "validate-directx-layer-norm-dispatch-toolchain",
+        "validate-directx-rms-norm-dispatch-toolchain",
     ]
-    assert "--run-toolchains" in commands[3][1]
     assert "--run-toolchains" in commands[4][1]
+    assert "--run-toolchains" in commands[5][1]
+    assert "--run-toolchains" in commands[6][1]
     toolchain_config = (
         config_dir / "validate-directx-frontier-toolchain.toml"
     ).read_text(encoding="utf-8")
@@ -7840,6 +8214,11 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     ).read_text(encoding="utf-8")
     assert module.MLX_LAYER_NORM_SOURCE in layer_norm_config
     assert layer_norm_contract["path"] in layer_norm_config
+    rms_norm_config = (
+        config_dir / "validate-directx-rms-norm-dispatch-toolchain.toml"
+    ).read_text(encoding="utf-8")
+    assert module.MLX_RMS_NORM_SOURCE in rms_norm_config
+    assert rms_norm_contract["path"] in rms_norm_config
 
 
 def test_directx_toolchain_warning_contract_rejects_new_warning():
@@ -7969,6 +8348,7 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_BINARY_TWO_SOURCE,
         module.MLX_LAYER_NORM_SOURCE,
         module.MLX_RANDOM_SOURCE,
+        module.MLX_RMS_NORM_SOURCE,
         module.MLX_ROPE_SOURCE,
         module.MLX_TERNARY_SOURCE,
     )
@@ -7983,6 +8363,7 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_BINARY_TWO_SOURCE: 225,
         module.MLX_LAYER_NORM_SOURCE: 2,
         module.MLX_RANDOM_SOURCE: 2,
+        module.MLX_RMS_NORM_SOURCE: 12,
         module.MLX_ROPE_SOURCE: 18,
         module.MLX_TERNARY_SOURCE: 212,
     }
@@ -7994,12 +8375,12 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
         module.MLX_SOFTMAX_SOURCE: 10,
     }
-    assert len(expected_sources) == 6
+    assert len(expected_sources) == 7
     assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == sum(
         module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
     )
-    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == 470
-    assert module.MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT == 7
+    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == 482
+    assert module.MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT == 19
     assert sum(module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS.values()) == 106
     assert {
         source: evidence["specializationCount"]
@@ -8075,12 +8456,12 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
     normalized_readme = " ".join(readme.split())
 
     assert "official DXC v1.9.2602.24 on Windows CI" in readme
-    assert "seven-artifact frontier representing six pinned sources" in (
+    assert "19-artifact frontier representing seven pinned sources" in (
         normalized_readme
     )
-    assert "11, 225, 2, 2, 18, and 212 entries respectively" in normalized_readme
-    assert "470 generated compute entries" in normalized_readme
-    assert "five pending aggregate sources cover 94 compute entries" in (
+    assert "11, 225, 2, 2, 12, 18, and 212 entries respectively" in (normalized_readme)
+    assert "482 generated compute entries" in normalized_readme
+    assert "four pending aggregate sources cover 82 compute entries" in (
         normalized_readme
     )
     assert "no placeholder workgroup size is restored" in normalized_readme
@@ -8105,6 +8486,11 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
     assert "does not dispatch these kernels or establish numerical parity" in (
         normalized_readme
     )
+    assert "captures 12 distinct dispatch artifacts exercised by the pinned" in (
+        normalized_readme
+    )
+    assert "test_rms_norm` and `test_rms_norm_grad` workloads" in normalized_readme
+    assert "the MLX runtime is not redirected to these artifacts" in (normalized_readme)
     assert "DirectX remains outside the DXC gate" not in readme
 
 
@@ -8119,7 +8505,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "profile `cs_6_0`, no `-enable-16bit-types`, and `-WX` passes" in (
         normalized_readme
     )
-    assert "zero warnings across all 470 entry-point runs" in normalized_readme
+    assert "zero warnings across all 482 entry-point runs" in normalized_readme
     assert "records this as a warning-clean contract" in normalized_readme
     assert "rejects any newly observed warning" in normalized_readme
     assert "two selected `random.metal` entries compile without" in normalized_readme

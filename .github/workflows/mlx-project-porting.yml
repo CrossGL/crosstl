@@ -18,6 +18,7 @@ on:
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
       - "tests/test_mlx_dispatch_contract_fixture.py"
+      - "tests/test_mlx_rms_norm_dispatch_contract_fixture.py"
       - "tests/test_mlx_layer_norm_directx_proof.py"
       - "tests/test_mlx_quantized_directx_proof.py"
       - "tests/test_mlx_quantized_opengl_proof.py"
@@ -49,6 +50,7 @@ on:
       - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_copy_directx_proof.py"
       - "tests/test_mlx_dispatch_contract_fixture.py"
+      - "tests/test_mlx_rms_norm_dispatch_contract_fixture.py"
       - "tests/test_mlx_layer_norm_directx_proof.py"
       - "tests/test_mlx_quantized_directx_proof.py"
       - "tests/test_mlx_quantized_opengl_proof.py"
@@ -555,6 +557,10 @@ jobs:
               MLX_LAYER_NORM_DISPATCH_VARIANTS,
               MLX_LAYER_NORM_SHA256,
               MLX_LAYER_NORM_SOURCE,
+              MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY,
+              MLX_RMS_NORM_DISPATCH_VARIANTS,
+              MLX_RMS_NORM_SHA256,
+              MLX_RMS_NORM_SOURCE,
               MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
               MLX_OPENGL_FRONTIER_SOURCES,
               MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS,
@@ -818,8 +824,8 @@ jobs:
                   raise SystemExit(
                       f"DirectX workgroup blocker evidence changed for {source}"
                   )
-          if directx_blocked_entry_point_count != 94:
-              raise SystemExit("expected 94 fail-closed DirectX compute entries")
+          if directx_blocked_entry_point_count != 82:
+              raise SystemExit("expected 82 fail-closed DirectX compute entries")
           layer_norm = directx["layerNormDispatchEvidence"]
           expected_layer_norm_status = (
               "translated-dxc-validated"
@@ -852,6 +858,43 @@ jobs:
               or layer_norm["numericalParityClaimed"] is not False
           ):
               raise SystemExit("LayerNorm dispatch frontier evidence is incomplete")
+          rms_norm = directx["rmsNormDispatchEvidence"]
+          expected_rms_norm_status = (
+              "translated-dxc-validated"
+              if os.environ["RUNNER_OS"] == "Windows"
+              else "translated"
+          )
+          expected_rms_norm_validated = (
+              len(MLX_RMS_NORM_DISPATCH_VARIANTS)
+              if os.environ["RUNNER_OS"] == "Windows"
+              else 0
+          )
+          if (
+              rms_norm["status"] != expected_rms_norm_status
+              or rms_norm["source"] != MLX_RMS_NORM_SOURCE
+              or rms_norm["sourceSha256"] != MLX_RMS_NORM_SHA256
+              or rms_norm["target"] != "directx"
+              or rms_norm["testSources"]
+              != [
+                  "python/tests/test_fast.py::test_rms_norm",
+                  "python/tests/test_fast.py::test_rms_norm_grad",
+              ]
+              or rms_norm["dispatchContract"]["contentIdentity"]
+              != MLX_RMS_NORM_DISPATCH_CONTENT_IDENTITY
+              or rms_norm["dispatchContract"]["variantCount"]
+              != len(MLX_RMS_NORM_DISPATCH_VARIANTS)
+              or rms_norm["dispatchContract"]["resolvedIssue"]
+              != MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
+              or rms_norm["artifactCount"]
+              != len(MLX_RMS_NORM_DISPATCH_VARIANTS)
+              or set(rms_norm["variants"])
+              != set(MLX_RMS_NORM_DISPATCH_VARIANTS)
+              or rms_norm["dxcValidatedArtifactCount"]
+              != expected_rms_norm_validated
+              or rms_norm["runtimeExecutionAttempted"] is not False
+              or rms_norm["numericalParityClaimed"] is not False
+          ):
+              raise SystemExit("RMSNorm dispatch frontier evidence is incomplete")
           if os.environ["RUNNER_OS"] == "Windows":
               if (
                   directx["directxToolchainRequired"] is not True
