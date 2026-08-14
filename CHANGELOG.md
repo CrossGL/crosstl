@@ -2,6 +2,46 @@
 
 All notable changes to CrossTL are documented in this file.
 
+## [3.2.0] - 2026-08-14
+
+### Added
+
+- Native Direct3D and OpenGL loader target adapters with a stable generation registry, structured diagnostics, artifact verification, SPIR-V specialization, and translated-device proofs.
+- Exact native runtime variant dispatch packages that bind ready variants to copied target artifacts, verified loader descriptors, and deterministic C++17 execution wrappers, with Python and C++ lookup interfaces.
+- Bounded deferred native compilation: a closed versioned request contract, verified input packaging with deterministic provenance, a success-only output cache keyed by request and toolchain identity, and execution through native runtimes (HLSL to DXIL, GLSL to OpenGL SPIR-V).
+- Runtime variant binding to deferred native compilation, deriving bounded DirectX and OpenGL compilation requests only after exact registry, package, source, descriptor, target, execution, and specialization identity checks.
+- Execution-boundary verification of native artifact identity before dispatch.
+- Resumable project translation checkpoints with a durable contract, interruption recording, and checkpoint identity that covers configured limits.
+- Bounded, process-isolated project translation workers with deterministic report and checkpoint coordination, lazily streamed plans, transactional artifact pair publication, coordinated concurrent publication, typed worker failure coordinates, interrupted-worker termination, and per-artifact wall-clock timeouts, exposed through both the API and CLI.
+- Multiple project entry artifacts per source, a backend-neutral project source entry-point discovery contract with Metal enumeration, and opt-in discovered-entry expansion for selected sources recorded in reports, artifact matrices, and checkpoints.
+- Pinned MLX native execution evidence: a binary kernel executed on DirectX and OpenGL with exact device readback, quantized OpenGL lowering and quantized gather provenance proofs, and bounded LayerNorm host dispatch integrated into the MLX porting frontier.
+- Deferred Native Compilation CI workflow covering a three-platform contract matrix plus native Direct3D 12 and software OpenGL compile-and-dispatch jobs with pinned DXC verification and required device readback.
+
+### Improved
+
+- Metal analysis performance: lexical scope lookups are indexed and repeated whole-tree traversals eliminated.
+- OpenGL resource specialization includes the storage pointer view layout in specialization identity and generated helper names, so direct and reinterpreted calls against the same root receive distinct deterministic helpers regardless of call order.
+- HLSL compute stages are inferred from `numthreads` attributes, keeping deferred interface reflection aligned with DXC entry-point selection.
+- Project artifact report identities stay repository-relative on Windows by preferring lexical project-root containment.
+- Per-artifact time limits are applied to MLX full-corpus scouting so stalled units produce structured diagnostics and durable checkpoint records.
+- Support matrix, generated roadmaps, and project-porting documentation regenerated for the new DirectX and OpenGL coverage.
+- Test suite grown to over 17,500 collected tests (from 13,485 at v3.0.0).
+- pre-commit tooling updated (ruff 0.15.22 to 0.16.2, isort 9.0.0b1 to 9.0.0b2).
+
+### Fixed
+
+- OpenGL bounded index narrowing now tracks scalar and vector-component ranges across declarations, branches, loops, casts, and mutation boundaries, normalizes supported 64-bit indices once, and fails closed when no narrowing proof exists.
+- OpenGL scalar conversion contexts, explicit source truthiness lowering, narrow integer initializer contracts, and `isnan`/`isinf` result-type inference.
+- OpenGL boolean arithmetic compound assignments and trailing-zero builtin lowering, with structured diagnostics for unsupported operand contracts and target profiles.
+- OpenGL private arrays are preserved in resource-specialized callers, redundant same-view storage pointer casts are treated as idempotent, and reinterpreted storage byte bases are forwarded explicitly so nested helpers keep pointer arithmetic without capturing caller-local expressions or double-scaling offsets.
+- DirectX aggregate initialization: destination type information is preserved while probing typed-buffer atomic expressions, omitted structure and fixed-array fields are recursively value-initialized, and untyped array literals are rejected with a structured diagnostic instead of ambiguous HLSL brace expressions.
+- Metal helper calls preserve mutable resource pointer offsets in both DirectX and OpenGL output.
+- Direct3D shutdown with live pipelines and unverified HLSL includes now fail closed, and OpenGL adapter object ownership is hardened with caller-controlled context lifetime for injected contexts.
+- Worker timeout exceptions are distinguished from job deadlines so a timeout raised inside translation code remains a typed worker failure.
+- Python 3.8 and 3.9 compatibility preserved across entry discovery and deferred compilation tests.
+
+---
+
 ## [3.1.0] - 2026-07-19
 
 ### Added
