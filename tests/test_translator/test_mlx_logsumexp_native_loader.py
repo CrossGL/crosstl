@@ -70,6 +70,39 @@ def _skip_or_fail(message: str) -> None:
     pytest.skip(message)
 
 
+def _assert_directx_runtime_requirements(source_path: Path, work_dir: Path) -> None:
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        return
+
+    dxil_path = work_dir / "block-logsumexp-float32.dxil"
+    compile_result = subprocess.run(
+        [
+            dxc,
+            "-WX",
+            "-T",
+            "cs_6_6",
+            "-E",
+            "CSMain",
+            "-Fo",
+            str(dxil_path),
+            str(source_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr
+    dump_result = subprocess.run(
+        [dxc, "-dumpbin", str(dxil_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert dump_result.returncode == 0, dump_result.stderr
+    requirements = dump_result.stdout + dump_result.stderr
+    assert "Wave level operations" in requirements
+    assert "64-Bit integer" not in requirements
+
+
 def _pinned_mlx_root() -> Path:
     root_value = os.environ.get("CROSTL_MLX_ROOT")
     if not root_value:
@@ -170,6 +203,10 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     assert axis_32_artifact["dispatchArtifact"]["workgroupSize"] == [32, 1, 1]
     assert axis_32_artifact["dispatchArtifact"]["subgroupWidth"] == 32
     assert not axis_32_artifact.get("specializationConstants")
+    generated_path = mlx_root / axis_32_artifact["path"]
+    generated_source = generated_path.read_text(encoding="utf-8")
+    assert "in__offset += uint(" in generated_source
+    _assert_directx_runtime_requirements(generated_path, work_dir)
 
     report_path = work_dir / "portability-report.json"
     report.write_json(report_path)

@@ -1785,6 +1785,12 @@ class HLSLCodeGen:
     }
     HLSL_WAVE_BASIC_COMPONENT_TYPES = HLSL_WAVE_NUMERIC_COMPONENT_TYPES | {"bool"}
     HLSL_WAVE_SIZE_LANE_COUNTS = {4, 8, 16, 32, 64, 128}
+    HLSL_RESOURCE_POINTER_UNSIGNED_DELTA_TYPES = {
+        "uint",
+        "uint16_t",
+        "uint64_t",
+        "min16uint",
+    }
     # Subgroup/wave builtins (Metal [[thread_index_in_simdgroup]] /
     # [[threads_per_simdgroup]], canonicalised to gl_Subgroup* in CrossGL) have no
     # HLSL system-value semantic; HLSL exposes them only through wave intrinsics.
@@ -14057,7 +14063,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         offset_type = "int" if current.get("kind") == "workgroup-pointer" else "int64_t"
         if op in {"+=", "-="}:
             delta = self.generate_expression(value)
-            return f"{offset_name} {op} {offset_type}({delta})"
+            delta_type = (
+                "int"
+                if current.get("kind") == "workgroup-pointer"
+                else self.hlsl_resource_pointer_delta_type(value)
+            )
+            return f"{offset_name} {op} {delta_type}({delta})"
         if op != "=":
             if current.get("kind") == "workgroup-pointer":
                 raise self.hlsl_workgroup_pointer_error(
@@ -14586,6 +14597,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return f"{lhs} {op} {rhs}"
 
+    def hlsl_resource_pointer_delta_type(self, value):
+        source_type = self.hlsl_source_expression_type(value)
+        mapped_type = self.map_type(source_type) if source_type is not None else ""
+        if mapped_type in self.HLSL_RESOURCE_POINTER_UNSIGNED_DELTA_TYPES:
+            return "uint"
+        if mapped_type == "int64_t":
+            return "int64_t"
+        return "int"
+
     def generate_hlsl_resource_pointer_offset_assignment(self, target, value, op):
         alias_assignment = self.generate_hlsl_resource_pointer_alias_assignment(
             target, value, op
@@ -14623,7 +14643,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             rhs = self.generate_expression(value)
             return (
                 f"int64_t {offset_name} = int64_t({initial_offset})\n"
-                f"{offset_name} {op} int64_t({rhs})"
+                f"{offset_name} {op} {self.hlsl_resource_pointer_delta_type(value)}({rhs})"
             )
 
         if op != "+=":
