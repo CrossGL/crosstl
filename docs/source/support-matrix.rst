@@ -23,7 +23,7 @@ implicitly supported.
    :header: "Backend", "Target aliases", "Target profiles", "Ext", "Target generator", "Source kind", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
    "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1387", "451", "Microsoft Learn HLSL reference; HLSL specification project"
-   "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_arithmetic_conversions.py, tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py, tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py, tests/test_backend/test_GLSL", "1523", "287", "GLSL 4.60 specification; OpenGL registry"
+   "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_arithmetic_conversions.py, tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py, tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py, tests/test_backend/test_GLSL", "1525", "289", "GLSL 4.60 specification; OpenGL registry"
    "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_arithmetic_conversions.py, tests/test_translator/test_codegen/test_webgl_codegen.py", "59", "40", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
    "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "104", "70", "WGSL specification; WebGPU specification"
    "Metal", "", "", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "1645", "564", "Apple Metal resources; Metal Shading Language specification"
@@ -38,7 +38,7 @@ implicitly supported.
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
    "DirectX / HLSL", "84", "1", "2", "0", "0", "0"
-   "OpenGL / GLSL", "83", "1", "2", "1", "0", "0"
+   "OpenGL / GLSL", "84", "1", "2", "0", "0", "0"
    "WebGL / GLSL ES", "43", "1", "23", "17", "3", "0"
    "WebGPU / WGSL", "47", "1", "21", "15", "3", "0"
    "Metal", "71", "1", "4", "8", "3", "0"
@@ -59,7 +59,7 @@ scope for graphics backend completion work.
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
    "DirectX / HLSL", "84", "1", "2", "0", "0", "0"
-   "OpenGL / GLSL", "83", "1", "2", "1", "0", "0"
+   "OpenGL / GLSL", "84", "1", "2", "0", "0", "0"
    "Metal", "71", "1", "4", "8", "3", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal actionable backlog
@@ -82,7 +82,7 @@ inspection, diagnostics, validation, and corpus-coverage rows.
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
    "DirectX / HLSL", "41", "1", "1", "0", "0", "0"
-   "OpenGL / GLSL", "40", "1", "1", "1", "0", "0"
+   "OpenGL / GLSL", "41", "1", "1", "0", "0", "0"
    "WebGL / GLSL ES", "30", "1", "1", "8", "3", "0"
    "WebGPU / WGSL", "30", "1", "1", "8", "3", "0"
    "Metal", "30", "1", "1", "8", "3", "0"
@@ -232,7 +232,7 @@ Each category below uses the status codes from the legend.
    "Source entry-point discovery", "P", "P", "P", "P", "P", "P", "P", "P", "P", "P", "P"
    "Entry-scoped project artifacts", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
    "Per-entry workgroup size specialization", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
-   "Per-entry subgroup width specialization", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R", "R"
+   "Per-entry subgroup width specialization", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
    "Optional validation hooks", "D", "D", "D", "D", "D", "D", "D", "D", "D", "D", "D"
    "Migration action report", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime integration planning", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"

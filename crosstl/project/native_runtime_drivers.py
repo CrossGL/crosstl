@@ -178,6 +178,12 @@ class _OpenGLSPIRVUnavailable(RuntimeError):
 
 
 _OPENGL_SPIRV_HEADER_BYTE_LENGTH = 5 * 4
+_OPENGL_SUBGROUP_SIZE_KHR = 0x9532
+_OPENGL_SUBGROUP_EXTENSION = "GL_KHR_shader_subgroup"
+_OPENGL_REQUIRED_SUBGROUP_WIDTH_RE = re.compile(
+    r"^\s*#define\s+CROSSTL_REQUIRED_SUBGROUP_WIDTH\s+" r"(?P<width>[^\s]+)\s*$",
+    re.MULTILINE,
+)
 _DIRECTX_MAX_PADDED_DESCRIPTOR_COUNT = 4096
 
 
@@ -813,6 +819,16 @@ class OpenGLComputeRuntime:
                     "missingPythonModules": ["moderngl"],
                 },
             )
+        try:
+            required_subgroup_width = _opengl_runtime_request_required_subgroup_width(
+                request
+            )
+        except RuntimeAdapterSetupError as exc:
+            return RuntimeExecutorAvailability(
+                False,
+                reason=str(exc),
+                details=dict(exc.details),
+            )
 
         context = None
         try:
@@ -835,6 +851,16 @@ class OpenGLComputeRuntime:
                     },
                 )
             specialization_details: dict[str, Any] = {}
+            subgroup_details: dict[str, Any] = {}
+            if required_subgroup_width is not None:
+                actual_subgroup_width = self._validate_context_subgroup_width(
+                    context, required_subgroup_width
+                )
+                subgroup_details = {
+                    "requiredSubgroupWidth": required_subgroup_width,
+                    "subgroupWidth": actual_subgroup_width,
+                    "subgroupWidthQuery": "GL_SUBGROUP_SIZE_KHR",
+                }
             if requires_spirv:
                 api = self._load_opengl_spirv_api(context)
                 specialization_details = {
@@ -842,6 +868,12 @@ class OpenGLComputeRuntime:
                     "specializationEntryPoint": api.specialize_entry_point,
                     "requiredExtension": "GL_ARB_gl_spirv",
                 }
+        except RuntimeAdapterSetupError as exc:
+            return RuntimeExecutorAvailability(
+                False,
+                reason=str(exc),
+                details=dict(exc.details),
+            )
         except _OpenGLSPIRVUnavailable as exc:
             return RuntimeExecutorAvailability(
                 False,
@@ -874,6 +906,7 @@ class OpenGLComputeRuntime:
                 "contextBackend": backend or "default",
                 "versionCode": version_code,
                 **specialization_details,
+                **subgroup_details,
             },
         )
 
@@ -972,6 +1005,24 @@ class OpenGLComputeRuntime:
                     workgroup_count=_workgroup_count(request, target="OpenGL"),
                 )
             )
+        required_subgroup_widths = sorted(
+            {
+                width
+                for prepared in prepared_dispatches
+                for width in (
+                    _opengl_dispatch_required_subgroup_width(
+                        prepared.request, prepared.shader_artifact
+                    ),
+                )
+                if width is not None
+            }
+        )
+        if len(required_subgroup_widths) > 1:
+            raise _opengl_setup_error(
+                "One OpenGL dispatch sequence cannot require multiple subgroup widths.",
+                "subgroup-width-sequence-conflict",
+                subgroupWidths=required_subgroup_widths,
+            )
         allocation_plan, view_keys = _prepare_sequence_allocations(
             [item.buffers for item in prepared_dispatches],
             target="opengl",
@@ -1002,6 +1053,16 @@ class OpenGLComputeRuntime:
                     contextBackend=backend or "default",
                     requiredVersionCode=self.require_version,
                     versionCode=version_code,
+                )
+            if required_subgroup_widths:
+                actual_subgroup_width = self._validate_context_subgroup_width(
+                    context, required_subgroup_widths[0]
+                )
+                self._record_subgroup_width_validation(
+                    state,
+                    required=required_subgroup_widths[0],
+                    actual=actual_subgroup_width,
+                    backend=backend,
                 )
 
             try:
@@ -1209,6 +1270,104 @@ class OpenGLComputeRuntime:
                     f"OpenGL resource binding failed for {prepared.name!r}: {exc}",
                     details=details,
                 ) from exc
+
+    def _query_context_subgroup_width(self, context: Any) -> int:
+        extensions = {
+            str(extension) for extension in getattr(context, "extensions", ()) or ()
+        }
+        if _OPENGL_SUBGROUP_EXTENSION not in extensions:
+            raise _opengl_setup_error(
+                "OpenGL exact subgroup-width execution requires "
+                f"{_OPENGL_SUBGROUP_EXTENSION}.",
+                "subgroup-extension-unavailable",
+                requiredExtension=_OPENGL_SUBGROUP_EXTENSION,
+                extensionAvailable=False,
+            )
+        try:
+            gl = self._module_loader("OpenGL.GL")
+        except Exception as exc:
+            raise _opengl_setup_error(
+                "PyOpenGL is required to query the OpenGL subgroup width.",
+                "dependency-unavailable",
+                missingPythonModules=["PyOpenGL"],
+                hostQuery="GL_SUBGROUP_SIZE_KHR",
+            ) from exc
+        get_integer = getattr(gl, "glGetIntegerv", None)
+        if not _opengl_entry_point_available(get_integer):
+            raise _opengl_setup_error(
+                "OpenGL subgroup-width query entry point is unavailable.",
+                "subgroup-query-unavailable",
+                hostQuery="GL_SUBGROUP_SIZE_KHR",
+                missingEntryPoints=["glGetIntegerv"],
+            )
+        token = int(getattr(gl, "GL_SUBGROUP_SIZE_KHR", _OPENGL_SUBGROUP_SIZE_KHR))
+        try:
+            value = get_integer(token)
+            item = getattr(value, "item", None)
+            if callable(item):
+                value = item()
+            elif isinstance(value, Sequence) and not isinstance(
+                value, (str, bytes, bytearray)
+            ):
+                value = value[0] if value else 0
+            width = int(value)
+        except Exception as exc:
+            raise _opengl_setup_error(
+                "OpenGL subgroup-width query failed.",
+                "subgroup-query-failed",
+                hostQuery="GL_SUBGROUP_SIZE_KHR",
+                queryToken=token,
+                error=str(exc),
+            ) from exc
+        if width <= 0 or width > 128 or width & (width - 1):
+            raise _opengl_setup_error(
+                "OpenGL reported an invalid subgroup width.",
+                "subgroup-query-invalid",
+                hostQuery="GL_SUBGROUP_SIZE_KHR",
+                subgroupWidth=width,
+            )
+        return width
+
+    def _validate_context_subgroup_width(self, context: Any, required: int) -> int:
+        actual = self._query_context_subgroup_width(context)
+        if actual != required:
+            raise _opengl_setup_error(
+                f"OpenGL artifact requires subgroup width {required}, but the "
+                f"current device reports {actual}.",
+                "subgroup-width-mismatch",
+                requiredSubgroupWidth=required,
+                subgroupWidth=actual,
+                hostQuery="GL_SUBGROUP_SIZE_KHR",
+                mismatchBehavior="reject-before-dispatch",
+            )
+        return actual
+
+    def _record_subgroup_width_validation(
+        self,
+        state: Any,
+        *,
+        required: int,
+        actual: int,
+        backend: str | None,
+    ) -> None:
+        details = {
+            "target": "opengl",
+            "runtime": self.name,
+            "contextBackend": backend or "default",
+            "requiredSubgroupWidth": required,
+            "subgroupWidth": actual,
+            "hostQuery": "GL_SUBGROUP_SIZE_KHR",
+        }
+        state_details = getattr(state, "details", None)
+        if isinstance(state_details, dict):
+            state_details["openglSubgroupWidth"] = details
+        record_step = getattr(state, "record_step", None)
+        if callable(record_step):
+            record_step(
+                "validate",
+                "validate-opengl-subgroup-width",
+                details=details,
+            )
 
     def _load_moderngl(self) -> Any:
         try:
@@ -3537,6 +3696,125 @@ def _opengl_context_version_code(context: Any) -> int:
         return int(getattr(context, "version_code", 0) or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _opengl_subgroup_width_value(value: Any, *, source: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise _opengl_setup_error(
+            "OpenGL exact subgroup width must be a positive integer.",
+            "subgroup-width-contract-invalid",
+            contractSource=source,
+            subgroupWidth=value,
+        )
+    if value > 128 or value & (value - 1):
+        raise _opengl_setup_error(
+            "OpenGL exact subgroup width must be a power of two no greater than 128.",
+            "subgroup-width-contract-invalid",
+            contractSource=source,
+            subgroupWidth=value,
+        )
+    return value
+
+
+def _opengl_execution_config_subgroup_width(
+    execution_config: Mapping[str, Any],
+    *,
+    source: str,
+) -> int | None:
+    values = []
+    for field_name in ("subgroupWidth", "subgroup_width", "waveSize", "wave_size"):
+        if field_name not in execution_config:
+            continue
+        value = _opengl_subgroup_width_value(
+            execution_config[field_name],
+            source=f"{source}.{field_name}",
+        )
+        if value is not None:
+            values.append(value)
+    if len(set(values)) > 1:
+        raise _opengl_setup_error(
+            "OpenGL execution metadata declares conflicting subgroup widths.",
+            "subgroup-width-contract-conflict",
+            contractSource=source,
+            subgroupWidths=sorted(set(values)),
+        )
+    return values[0] if values else None
+
+
+def _opengl_shader_subgroup_width(shader_artifact: str | bytes) -> int | None:
+    if not isinstance(shader_artifact, str):
+        return None
+    matches = list(_OPENGL_REQUIRED_SUBGROUP_WIDTH_RE.finditer(shader_artifact))
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise _opengl_setup_error(
+            "OpenGL artifact declares multiple exact subgroup-width markers.",
+            "subgroup-width-marker-ambiguous",
+            marker="CROSSTL_REQUIRED_SUBGROUP_WIDTH",
+            markerCount=len(matches),
+        )
+    token = matches[0].group("width")
+    match = re.fullmatch(r"(?P<value>(?:0[xX][0-9A-Fa-f]+)|(?:[0-9]+))[uU]?", token)
+    if match is None:
+        raise _opengl_setup_error(
+            "OpenGL artifact subgroup-width marker is not an integer literal.",
+            "subgroup-width-marker-invalid",
+            marker="CROSSTL_REQUIRED_SUBGROUP_WIDTH",
+            markerValue=token,
+        )
+    return _opengl_subgroup_width_value(
+        int(match.group("value"), 0),
+        source="artifact.CROSSTL_REQUIRED_SUBGROUP_WIDTH",
+    )
+
+
+def _opengl_dispatch_required_subgroup_width(
+    request: NativeRuntimeDispatchRequest,
+    shader_artifact: str | bytes,
+) -> int | None:
+    metadata_width = _opengl_execution_config_subgroup_width(
+        request.execution_config,
+        source="dispatch.executionConfig",
+    )
+    marker_width = _opengl_shader_subgroup_width(shader_artifact)
+    if (
+        metadata_width is not None
+        and marker_width is not None
+        and metadata_width != marker_width
+    ):
+        raise _opengl_setup_error(
+            "OpenGL artifact and execution metadata require different subgroup widths.",
+            "subgroup-width-contract-conflict",
+            executionSubgroupWidth=metadata_width,
+            artifactSubgroupWidth=marker_width,
+        )
+    return metadata_width if metadata_width is not None else marker_width
+
+
+def _opengl_runtime_request_required_subgroup_width(
+    request: RuntimeExecutionRequest,
+) -> int | None:
+    selected_entry = request.fixture.entry_point
+    widths = []
+    for entry_point in request.adapter_contract.entry_points:
+        if selected_entry is not None and entry_point.name != selected_entry:
+            continue
+        width = _opengl_execution_config_subgroup_width(
+            entry_point.execution_config,
+            source=f"runtimeAdapter.entryPoints.{entry_point.name}.executionConfig",
+        )
+        if width is not None:
+            widths.append(width)
+    if len(set(widths)) > 1:
+        raise _opengl_setup_error(
+            "OpenGL runtime request selects conflicting subgroup widths.",
+            "subgroup-width-contract-conflict",
+            subgroupWidths=sorted(set(widths)),
+        )
+    return widths[0] if widths else None
 
 
 def _opengl_status(value: Any) -> bool:

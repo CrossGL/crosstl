@@ -1527,6 +1527,8 @@ WORKGROUP_SIZE_SPECIALIZATION_TARGETS = frozenset(("directx", "opengl"))
 SUBGROUP_WIDTH_RULES_CONFIG_KEY = "subgroup_width_rules"
 SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY = "execution.subgroup-width-specialization"
 DIRECTX_EXACT_SUBGROUP_WIDTHS = frozenset((4, 8, 16, 32, 64, 128))
+OPENGL_EXACT_SUBGROUP_WIDTHS = frozenset((1, 2, 4, 8, 16, 32, 64, 128))
+SUBGROUP_WIDTH_SPECIALIZATION_TARGETS = frozenset(("directx", "opengl"))
 DEFERRED_SPECIALIZATION_TARGETS = frozenset(
     ("cgl", "crossgl", "metal", "opengl", "vulkan")
 )
@@ -1821,7 +1823,16 @@ REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_RULE_FIELDS = frozenset(
     ("expression", "sourcePattern", "path")
 )
 REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_ENFORCEMENT_FIELDS = frozenset(
-    ("mechanism", "minimumShaderModel", "entryProfiles")
+    (
+        "mechanism",
+        "minimumShaderModel",
+        "entryProfiles",
+        "shaderExtension",
+        "hostExtension",
+        "hostQuery",
+        "artifactMarker",
+        "mismatchBehavior",
+    )
 )
 REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_PROFILE_FIELDS = frozenset(
     ("entryPoint", "profile")
@@ -3004,6 +3015,17 @@ DIRECTX_HLSL_EXACT_WAVE_SIZE_RE = re.compile(
 DIRECTX_HLSL_WAVE_SIZE_RE = re.compile(
     r"\[\s*WaveSize\s*\((?P<arguments>[^\]]*)\)\s*\]",
     re.IGNORECASE,
+)
+OPENGL_REQUIRED_SUBGROUP_WIDTH_MACRO = "CROSSTL_REQUIRED_SUBGROUP_WIDTH"
+OPENGL_REQUIRED_SUBGROUP_WIDTH_RE = re.compile(
+    rf"^\s*#define\s+{OPENGL_REQUIRED_SUBGROUP_WIDTH_MACRO}\s+"
+    r"(?P<width>[^\s]+)\s*$",
+    re.MULTILINE,
+)
+OPENGL_SUBGROUP_WIDTH_GUARD_RE = re.compile(
+    rf"\bif\s*\(\s*gl_SubgroupSize\s*!=\s*"
+    rf"{OPENGL_REQUIRED_SUBGROUP_WIDTH_MACRO}\s*\)\s*\{{\s*return\s*;\s*\}}",
+    re.MULTILINE,
 )
 DIRECTX_HLSL_SEMANTIC_RE = re.compile(
     r":\s*(?P<semantic>[A-Za-z_]\w*)\b", re.IGNORECASE
@@ -11429,30 +11451,58 @@ def _configured_subgroup_width_rule(
     )
 
 
+def _exact_subgroup_widths_for_target(target: str) -> frozenset[int]:
+    if target == "directx":
+        return DIRECTX_EXACT_SUBGROUP_WIDTHS
+    if target == "opengl":
+        return OPENGL_EXACT_SUBGROUP_WIDTHS
+    return frozenset()
+
+
+def _subgroup_width_enforcement_metadata(
+    target: str,
+    target_entry_points: Sequence[str],
+) -> dict[str, Any]:
+    entries = list(dict.fromkeys(str(entry) for entry in target_entry_points))
+    if target == "directx":
+        return {
+            "mechanism": "hlsl-wave-size-attribute",
+            "minimumShaderModel": "6.6",
+            "entryProfiles": [
+                {"entryPoint": entry, "profile": "cs_6_6"} for entry in entries
+            ],
+        }
+    if target == "opengl":
+        return {
+            "mechanism": "glsl-subgroup-size-guard",
+            "shaderExtension": "GL_KHR_shader_subgroup_basic",
+            "hostExtension": "GL_KHR_shader_subgroup",
+            "hostQuery": "GL_SUBGROUP_SIZE_KHR",
+            "artifactMarker": OPENGL_REQUIRED_SUBGROUP_WIDTH_MACRO,
+            "mismatchBehavior": "reject-before-dispatch",
+        }
+    raise ValueError(f"Target '{target}' has no exact subgroup-width contract")
+
+
 def _unsupported_subgroup_width_rule_target_error(
     config: ProjectConfig,
     unit: ProjectTranslationUnit,
     target: str,
 ) -> ProjectSubgroupWidthError | None:
     configured = _configured_subgroup_width_rule(config, unit.relative_path)
-    if configured is None or target == "directx":
+    if configured is None or target in SUBGROUP_WIDTH_SPECIALIZATION_TARGETS:
         return None
     pattern, expression, provenance = configured
-    reason = (
-        "opengl-enforcement-unavailable"
-        if target == "opengl"
-        else "target-not-supported"
-    )
     return ProjectSubgroupWidthError(
         f"Target '{target}' cannot enforce an exact subgroup width.",
         code="project.translate.subgroup-width-enforcement-unsupported",
-        reason=reason,
+        reason="target-not-supported",
         rule_details={
             "path": provenance["path"],
             "sourcePattern": pattern,
             "expression": expression,
             "target": target,
-            "supportedTargets": ["directx"],
+            "supportedTargets": sorted(SUBGROUP_WIDTH_SPECIALIZATION_TARGETS),
         },
     )
 
@@ -12287,9 +12337,10 @@ def _project_subgroup_width_rule_execution_metadata(
                 source_entry_points=(host_name,),
                 subgroup_width=subgroup_width,
             )
-        if subgroup_width not in DIRECTX_EXACT_SUBGROUP_WIDTHS:
+        supported_widths = _exact_subgroup_widths_for_target(target)
+        if subgroup_width not in supported_widths:
             raise ProjectSubgroupWidthError(
-                f"DirectX cannot enforce subgroup width {subgroup_width} for "
+                f"Target '{target}' cannot enforce subgroup width {subgroup_width} for "
                 f"'{host_name}'.",
                 code="project.translate.subgroup-width-invalid",
                 reason="target-width-unsupported",
@@ -12299,7 +12350,7 @@ def _project_subgroup_width_rule_execution_metadata(
                     "path": provenance["path"],
                     "sourcePattern": source_pattern,
                     "expression": expression,
-                    "supportedWidths": sorted(DIRECTX_EXACT_SUBGROUP_WIDTHS),
+                    "supportedWidths": sorted(supported_widths),
                 },
             )
         _set_crossgl_stage_subgroup_width(stage, subgroup_width)
@@ -12342,14 +12393,10 @@ def _project_subgroup_width_rule_execution_metadata(
         "sourceEntryPoints": [entry["sourceEntryPoint"] for entry in entries],
         "entryPoints": entries,
         "subgroupWidthProvenance": provenance,
-        "subgroupWidthEnforcement": {
-            "mechanism": "hlsl-wave-size-attribute",
-            "minimumShaderModel": "6.6",
-            "entryProfiles": [
-                {"entryPoint": entry["targetEntryPoint"], "profile": "cs_6_6"}
-                for entry in entries
-            ],
-        },
+        "subgroupWidthEnforcement": _subgroup_width_enforcement_metadata(
+            target,
+            [str(entry["targetEntryPoint"]) for entry in entries],
+        ),
     }
     execution["identity"] = _subgroup_rule_execution_identity(
         source=unit.relative_path,
@@ -12372,7 +12419,7 @@ def _dispatch_subgroup_width_execution_metadata(
     configured_subgroup: tuple[int, Mapping[str, Any]],
 ) -> dict[str, Any]:
     subgroup_width, provenance = configured_subgroup
-    if target != "directx":
+    if target not in SUBGROUP_WIDTH_SPECIALIZATION_TARGETS:
         raise ProjectSubgroupWidthError(
             "The target cannot enforce an exact host dispatch subgroup width.",
             code="project.translate.subgroup-width-invalid",
@@ -12380,15 +12427,16 @@ def _dispatch_subgroup_width_execution_metadata(
             source_entry_points=(selected_entry_point or "main",),
             subgroup_width=subgroup_width,
         )
-    if subgroup_width not in DIRECTX_EXACT_SUBGROUP_WIDTHS:
+    supported_widths = _exact_subgroup_widths_for_target(target)
+    if subgroup_width not in supported_widths:
         raise ProjectSubgroupWidthError(
-            f"DirectX cannot enforce subgroup width {subgroup_width}.",
+            f"Target '{target}' cannot enforce subgroup width {subgroup_width}.",
             code="project.translate.subgroup-width-invalid",
             reason="target-width-unsupported",
             source_entry_points=(selected_entry_point or "main",),
             subgroup_width=subgroup_width,
             rule_details={
-                "supportedWidths": sorted(DIRECTX_EXACT_SUBGROUP_WIDTHS),
+                "supportedWidths": sorted(supported_widths),
                 "path": provenance.get("path"),
             },
         )
@@ -12435,11 +12483,9 @@ def _dispatch_subgroup_width_execution_metadata(
         "entryPoints": [entry],
         "provenance": normalized_provenance,
         "subgroupWidthProvenance": normalized_provenance,
-        "subgroupWidthEnforcement": {
-            "mechanism": "hlsl-wave-size-attribute",
-            "minimumShaderModel": "6.6",
-            "entryProfiles": [{"entryPoint": target_entry, "profile": "cs_6_6"}],
-        },
+        "subgroupWidthEnforcement": _subgroup_width_enforcement_metadata(
+            target, [target_entry]
+        ),
     }
     execution["identity"] = _subgroup_rule_execution_identity(
         source=unit.relative_path,
@@ -25671,9 +25717,66 @@ def _validate_project_workgroup_target_output(
         )
 
 
+def _validate_project_opengl_subgroup_width_target_output(
+    output_path: Path,
+    *,
+    execution: Mapping[str, Any],
+    expected: Mapping[str, int],
+) -> None:
+    if set(expected) != {"main"}:
+        raise ProjectSubgroupWidthError(
+            "Generated OpenGL artifact must expose one guarded main entry point.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-entry-identity-mismatch",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+        )
+    enforcement = execution.get("subgroupWidthEnforcement")
+    expected_enforcement = _subgroup_width_enforcement_metadata("opengl", ["main"])
+    if enforcement != expected_enforcement:
+        raise ProjectSubgroupWidthError(
+            "OpenGL subgroup-width enforcement metadata is incomplete.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-profile-contract-invalid",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+        )
+
+    source = output_path.read_text(encoding="utf-8", errors="replace")
+    markers = list(OPENGL_REQUIRED_SUBGROUP_WIDTH_RE.finditer(source))
+    reflected_width = None
+    if len(markers) == 1:
+        try:
+            reflected_width = parse_c_family_integral_literal(markers[0].group("width"))
+        except CFamilyIntegralLiteralError:
+            reflected_width = None
+    expected_width = expected["main"]
+    has_required_extension = bool(
+        re.search(
+            r"^\s*#extension\s+GL_KHR_shader_subgroup_basic\s*:\s*require\s*$",
+            source,
+            flags=re.MULTILINE,
+        )
+    )
+    guards = list(OPENGL_SUBGROUP_WIDTH_GUARD_RE.finditer(source))
+    if (
+        len(markers) != 1
+        or reflected_width != expected_width
+        or not has_required_extension
+        or len(guards) != 1
+    ):
+        raise ProjectSubgroupWidthError(
+            "Generated OpenGL entry does not preserve its exact subgroup-width guard.",
+            code="project.translate.subgroup-width-conflict",
+            reason="target-output-mismatch",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+            subgroup_width=expected_width,
+            source_subgroup_width=reflected_width,
+        )
+
+
 def _validate_project_subgroup_width_target_output(
     output_path: Path,
     *,
+    target: str,
     execution: Mapping[str, Any],
 ) -> None:
     entries = [
@@ -25686,6 +25789,20 @@ def _validate_project_subgroup_width_target_output(
     expected = {
         str(entry["targetEntryPoint"]): int(entry["subgroupWidth"]) for entry in entries
     }
+    if target == "opengl":
+        _validate_project_opengl_subgroup_width_target_output(
+            output_path,
+            execution=execution,
+            expected=expected,
+        )
+        return
+    if target != "directx":
+        raise ProjectSubgroupWidthError(
+            f"Target '{target}' has no exact subgroup-width output validator.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-not-enforceable",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+        )
     enforcement = execution.get("subgroupWidthEnforcement")
     profiles = (
         enforcement.get("entryProfiles") if isinstance(enforcement, Mapping) else None
@@ -25792,17 +25909,33 @@ def _opengl_workgroup_split_specs(
             split_execution = {
                 "sourceEntryPoints": [source_entry],
                 "entryPoints": [split_entry],
-                "provenance": dict(execution["provenance"]),
             }
-            split_execution["identity"] = _workgroup_rule_execution_identity(
-                source=unit.relative_path,
-                source_hash=unit.source_hash,
-                target="opengl",
-                variant=variant,
-                source_entry_points=[source_entry],
-                entry_points=[split_entry],
-                provenance=split_execution["provenance"],
-            )
+            for field_name in (
+                "provenance",
+                "subgroupWidthProvenance",
+                "subgroupWidthEnforcement",
+            ):
+                value = execution.get(field_name)
+                if isinstance(value, Mapping):
+                    split_execution[field_name] = copy.deepcopy(value)
+            if "subgroupWidth" in split_entry:
+                split_execution["identity"] = _subgroup_rule_execution_identity(
+                    source=unit.relative_path,
+                    source_hash=unit.source_hash,
+                    target="opengl",
+                    variant=variant,
+                    execution=split_execution,
+                )
+            else:
+                split_execution["identity"] = _workgroup_rule_execution_identity(
+                    source=unit.relative_path,
+                    source_hash=unit.source_hash,
+                    target="opengl",
+                    variant=variant,
+                    source_entry_points=[source_entry],
+                    entry_points=[split_entry],
+                    provenance=split_execution["provenance"],
+                )
             specs.append((source_entry, materialized_entry, split_execution))
         return specs
 
@@ -26630,7 +26763,7 @@ def _translate_project_impl(
                     requires_subgroup_specialization = (
                         configured_subgroup is not None
                         or (
-                            target == "directx"
+                            target in SUBGROUP_WIDTH_SPECIALIZATION_TARGETS
                             and _configured_subgroup_width_rule(
                                 config, unit.relative_path
                             )
@@ -26815,6 +26948,7 @@ def _translate_project_impl(
                                     )
                                     _validate_project_subgroup_width_target_output(
                                         split_output_path,
+                                        target=target,
                                         execution=split_execution,
                                     )
                                     records, split_diagnostics = (
@@ -26880,6 +27014,7 @@ def _translate_project_impl(
                                 )
                                 _validate_project_subgroup_width_target_output(
                                     output_path,
+                                    target=target,
                                     execution=execution,
                                 )
                     if generated_source is None and index_range_assertions:
@@ -28272,7 +28407,11 @@ def _subgroup_width_target_validation_diagnostics(
     artifact_path: Path,
 ) -> list[ProjectDiagnostic]:
     execution = artifact.get("execution")
-    if artifact.get("target") != "directx" or not isinstance(execution, Mapping):
+    if artifact.get(
+        "target"
+    ) not in SUBGROUP_WIDTH_SPECIALIZATION_TARGETS or not isinstance(
+        execution, Mapping
+    ):
         return []
     entries = [
         entry
@@ -28285,6 +28424,7 @@ def _subgroup_width_target_validation_diagnostics(
     try:
         _validate_project_subgroup_width_target_output(
             artifact_path,
+            target=str(artifact["target"]),
             execution=execution,
         )
     except ProjectSubgroupWidthError as exc:
@@ -30063,7 +30203,10 @@ def _runtime_manifest_execution_host_interface(
     artifact: Mapping[str, Any],
     host_interface: Mapping[str, Any] | None,
 ) -> Mapping[str, Any] | None:
-    if artifact.get("target") != "directx" or not isinstance(host_interface, Mapping):
+    target = artifact.get("target")
+    if target not in SUBGROUP_WIDTH_SPECIALIZATION_TARGETS or not isinstance(
+        host_interface, Mapping
+    ):
         return host_interface
     execution = artifact.get("execution")
     execution_entries = (
@@ -30098,7 +30241,9 @@ def _runtime_manifest_execution_host_interface(
             else {}
         )
         if isinstance(size, list):
-            execution_config["numthreads"] = list(size)
+            execution_config["numthreads" if target == "directx" else "local_size"] = (
+                list(size)
+            )
         if subgroup_width is not None:
             execution_config["subgroupWidth"] = subgroup_width
         entry_point.update(
@@ -45489,8 +45634,13 @@ def _artifact_subgroup_rule_execution_contract_reasons(
         record.get("variant") if _is_non_empty_string(record.get("variant")) else None
     )
     source_hash = record.get("sourceHash")
-    if target != "directx":
-        reasons.append(f"{execution_prefix} subgroup width requires target directx")
+    supported_widths = (
+        _exact_subgroup_widths_for_target(str(target))
+        if _is_non_empty_string(target)
+        else frozenset()
+    )
+    if target not in SUBGROUP_WIDTH_SPECIALIZATION_TARGETS:
+        reasons.append(f"{execution_prefix} subgroup width requires a supported target")
     project_rules = (
         project.get("subgroupWidthRules") if isinstance(project, Mapping) else None
     )
@@ -45537,9 +45687,9 @@ def _artifact_subgroup_rule_execution_contract_reasons(
             or subgroup_width <= 0
         ):
             reasons.append(f"{entry_prefix}.subgroupWidth must be a positive integer")
-        elif subgroup_width not in DIRECTX_EXACT_SUBGROUP_WIDTHS:
+        elif subgroup_width not in supported_widths:
             reasons.append(
-                f"{entry_prefix}.subgroupWidth is not enforceable by DirectX WaveSize"
+                f"{entry_prefix}.subgroupWidth is not enforceable by target {target}"
             )
         rule = entry.get("subgroupWidthRule")
         expression = None
@@ -45741,12 +45891,13 @@ def _artifact_subgroup_rule_execution_contract_reasons(
                 REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_ENFORCEMENT_FIELDS,
             )
         )
-    profile_records = []
-    if not isinstance(profiles, list):
-        reasons.append(
-            f"{execution_prefix}.subgroupWidthEnforcement.entryProfiles must be a list"
-        )
-    else:
+    if profiles is not None:
+        if not isinstance(profiles, list):
+            reasons.append(
+                f"{execution_prefix}.subgroupWidthEnforcement.entryProfiles must "
+                "be a list"
+            )
+            profiles = []
         for index, item in enumerate(profiles):
             profile_prefix = (
                 f"{execution_prefix}.subgroupWidthEnforcement.entryProfiles[{index}]"
@@ -45761,22 +45912,15 @@ def _artifact_subgroup_rule_execution_contract_reasons(
                     REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_PROFILE_FIELDS,
                 )
             )
-            profile_records.append(item)
-    profile_entries = [str(item.get("entryPoint", "")) for item in profile_records]
-    if (
-        not isinstance(enforcement, Mapping)
-        or enforcement.get("mechanism") != "hlsl-wave-size-attribute"
-        or enforcement.get("minimumShaderModel") != "6.6"
-        or profile_entries != sorted(set(target_entries))
-        or any(
-            not _is_non_empty_string(item.get("profile"))
-            or item.get("profile") != "cs_6_6"
-            for item in profile_records
-        )
-    ):
+    expected_enforcement = (
+        _subgroup_width_enforcement_metadata(str(target), target_entries)
+        if target in SUBGROUP_WIDTH_SPECIALIZATION_TARGETS
+        else None
+    )
+    if enforcement != expected_enforcement:
         reasons.append(
-            f"{execution_prefix}.subgroupWidthEnforcement must require WaveSize "
-            "and cs_6_6 for every target entry"
+            f"{execution_prefix}.subgroupWidthEnforcement must match the "
+            f"{target} exact-width contract"
         )
     identity_reasons = _hash_contract_reasons(
         f"{execution_prefix}.identity",
@@ -45858,9 +46002,11 @@ def _artifact_dispatch_execution_contract_reasons(
         "artifactId": dispatch_artifact.get("artifactId"),
     }
     reasons = []
-    if record.get("target") != "directx":
+    target = record.get("target")
+    if target not in SUBGROUP_WIDTH_SPECIALIZATION_TARGETS:
         reasons.append(
-            f"{execution_prefix} exact subgroup enforcement requires target directx"
+            f"{execution_prefix} exact subgroup enforcement requires a supported "
+            "target"
         )
     if execution.get("provenance") != expected_provenance:
         reasons.append(
@@ -45925,7 +46071,7 @@ def _artifact_dispatch_execution_contract_reasons(
             expected_identity = _workgroup_rule_entry_identity(
                 source=str(record["source"]),
                 source_hash=record["sourceHash"],
-                target="directx",
+                target=str(target),
                 variant=str(record["variant"]),
                 entry=entry,
             )
@@ -45935,15 +46081,16 @@ def _artifact_dispatch_execution_contract_reasons(
                 )
 
         target_entry = entry.get("targetEntryPoint")
-        expected_enforcement = {
-            "mechanism": "hlsl-wave-size-attribute",
-            "minimumShaderModel": "6.6",
-            "entryProfiles": [{"entryPoint": target_entry, "profile": "cs_6_6"}],
-        }
+        expected_enforcement = (
+            _subgroup_width_enforcement_metadata(str(target), [str(target_entry)])
+            if target in SUBGROUP_WIDTH_SPECIALIZATION_TARGETS
+            and _is_non_empty_string(target_entry)
+            else None
+        )
         if execution.get("subgroupWidthEnforcement") != expected_enforcement:
             reasons.append(
-                f"{execution_prefix}.subgroupWidthEnforcement must require "
-                "WaveSize and cs_6_6 for the target entry"
+                f"{execution_prefix}.subgroupWidthEnforcement must match the "
+                f"{target} exact-width contract"
             )
 
     identity_reasons = _hash_contract_reasons(
@@ -45960,7 +46107,7 @@ def _artifact_dispatch_execution_contract_reasons(
         expected_identity = _subgroup_rule_execution_identity(
             source=str(record["source"]),
             source_hash=record["sourceHash"],
-            target="directx",
+            target=str(target),
             variant=str(record["variant"]),
             execution=execution,
         )

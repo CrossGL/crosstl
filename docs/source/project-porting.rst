@@ -2290,14 +2290,24 @@ execution identities, and checks the generated ``WaveSize`` and shader-profile
 contract. A subgroup-width rule can accompany a per-entry workgroup-size rule;
 both must resolve to the same materialized entry identities.
 
-OpenGL cannot enforce an exact subgroup width through this project contract, so
-a matching rule fails before GLSL generation with
+OpenGL accepts exact widths ``1``, ``2``, ``4``, ``8``, ``16``, ``32``, ``64``,
+and ``128`` through a device-compatibility contract. Generated GLSL requires
+``GL_KHR_shader_subgroup_basic``, declares
+``CROSSTL_REQUIRED_SUBGROUP_WIDTH``, and guards the compute entry before any
+translated work. Execution metadata requires the host extension
+``GL_KHR_shader_subgroup`` and the ``GL_SUBGROUP_SIZE_KHR`` query. The built-in
+Python and generated C++ OpenGL adapters compare that query with the artifact
+contract before shader compilation, resource allocation, or dispatch, and
+report a structured mismatch instead of running on an incompatible device.
+Report validation verifies the extension, marker, guard, execution metadata,
+and deterministic identities. The shader guard is a defensive fallback; hosts
+must honor the recorded pre-dispatch check.
+
+Every other target currently fails closed before generation with
 ``project.translate.subgroup-width-enforcement-unsupported`` and reason
-``opengl-enforcement-unavailable``. Every other target currently fails closed
-with the same diagnostic and reason ``target-not-supported``. These failures
-record the missing ``execution.subgroup-width-specialization`` capability, rule
-provenance, and the supported target set without emitting a misleading target
-artifact.
+``target-not-supported``. These failures record the missing
+``execution.subgroup-width-specialization`` capability, rule provenance, and
+the supported target set without emitting a misleading target artifact.
 
 Subgroup-width specialization establishes a compiler-facing shader contract
 only. It does not dispatch device work, verify hardware support, integrate a
@@ -2317,12 +2327,13 @@ The pinned MLX project-porting gate applies this contract to
 named variants, selecting ``has_w=false`` by declaration name and ``"20"=true``
 by numeric ID. The gate checks report provenance and concrete materialization,
 then compiles a reflected compute entry from each generated HLSL artifact with
-DXC on Windows. Its unconfigured OpenGL project checks deferred
-``layout(constant_id = 20)`` emission and validates generated OpenGL SPIR-V on
-Linux. This proves translation and native compilation only; it does not claim
-RMSNorm numerical runtime parity or full MLX test-suite support. Numerical
-execution also requires host dispatch values to match each compiled artifact's
-workgroup-size contract.
+DXC on Windows. Its current OpenGL proof leaves the subgroup rule unconfigured,
+checks deferred ``layout(constant_id = 20)`` emission, and validates generated
+OpenGL SPIR-V on Linux. The separate bounded LogSumExp proof exercises the
+OpenGL exact-width contract. These checks prove translation and native
+compilation only; they do not claim RMSNorm numerical runtime parity or full MLX
+test-suite support. Numerical execution also requires host dispatch values to
+match each compiled artifact's workgroup-size and subgroup-width contracts.
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Project

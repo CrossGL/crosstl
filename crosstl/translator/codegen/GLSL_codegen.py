@@ -370,6 +370,19 @@ class OpenGLWorkgroupSizeError(ValueError):
         self.reason = reason
 
 
+class OpenGLSubgroupWidthError(ValueError):
+    """Raised when an exact OpenGL subgroup-width guard is not representable."""
+
+    project_diagnostic_code = "project.translate.subgroup-width-invalid"
+    missing_capabilities = ("execution.subgroup-width-specialization",)
+    check_kind = "execution-specialization"
+
+    def __init__(self, message, *, subgroup_width=None, reason=None):
+        super().__init__(message)
+        self.subgroup_width = subgroup_width
+        self.reason = reason
+
+
 class OpenGLEntryPointSelectionError(ValueError):
     """Raised when a requested standalone OpenGL entry cannot be selected."""
 
@@ -1621,6 +1634,11 @@ class GLSLCodeGen:
     GLSL_INT64_EXTENSION = "GL_ARB_gpu_shader_int64"
     GLSL_INT64_EXTENSION_LINE = "#extension GL_ARB_gpu_shader_int64 : require"
     GLSL_INT64_SCALAR_TYPES = {"int64_t", "uint64_t"}
+    GLSL_SUBGROUP_BASIC_EXTENSION_LINE = (
+        "#extension GL_KHR_shader_subgroup_basic : require"
+    )
+    GLSL_EXACT_SUBGROUP_WIDTHS = frozenset({1, 2, 4, 8, 16, 32, 64, 128})
+    GLSL_REQUIRED_SUBGROUP_WIDTH_MACRO = "CROSSTL_REQUIRED_SUBGROUP_WIDTH"
     GLSL_CLANG_TRAILING_ZERO_BUILTINS = frozenset(
         {"__builtin_ctz", "__builtin_ctzl", "__builtin_ctzll"}
     )
@@ -3444,11 +3462,15 @@ class GLSLCodeGen:
     def glsl_wave_extension_lines(self, ast, target_stage=None):
         operations = self.glsl_wave_operations(ast, target_stage)
         lines = []
-        if self.uses_glsl_subgroup_basic_builtin(ast, target_stage) or any(
-            operation in self.GLSL_WAVE_EXTENSION_REQUIREMENTS
-            for operation in operations
+        if (
+            self.glsl_stage_requires_exact_subgroup_width(ast, target_stage)
+            or (self.uses_glsl_subgroup_basic_builtin(ast, target_stage))
+            or any(
+                operation in self.GLSL_WAVE_EXTENSION_REQUIREMENTS
+                for operation in operations
+            )
         ):
-            lines.append("#extension GL_KHR_shader_subgroup_basic : require")
+            lines.append(self.GLSL_SUBGROUP_BASIC_EXTENSION_LINE)
         for operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
             if operation not in operations:
                 continue
@@ -3460,6 +3482,74 @@ class GLSLCodeGen:
                 if shuffle_line not in lines:
                     lines.append(shuffle_line)
         return lines
+
+    def glsl_wave_size_attribute(self, attribute):
+        name = str(getattr(attribute, "name", "")).strip().lower()
+        if name.startswith("hlsl_"):
+            name = name[len("hlsl_") :]
+        return name == "wavesize"
+
+    def glsl_exact_subgroup_width(self, function, shader_type=None):
+        attributes = [
+            attribute
+            for attribute in getattr(function, "attributes", []) or []
+            if self.glsl_wave_size_attribute(attribute)
+        ]
+        if not attributes:
+            return None
+        if len(attributes) != 1:
+            raise OpenGLSubgroupWidthError(
+                "OpenGL compute entry points require exactly one WaveSize attribute.",
+                reason="source-metadata-ambiguous",
+            )
+        if shader_type is not None and shader_type != "compute":
+            raise OpenGLSubgroupWidthError(
+                "OpenGL WaveSize is only valid on compute shader entry points.",
+                reason="stage-unsupported",
+            )
+        arguments = list(getattr(attributes[0], "arguments", []) or [])
+        if len(arguments) != 1:
+            raise OpenGLSubgroupWidthError(
+                "OpenGL WaveSize requires exactly one integer argument.",
+                reason="source-metadata-not-exact",
+            )
+        width = self.literal_int_value(arguments[0])
+        if width not in self.GLSL_EXACT_SUBGROUP_WIDTHS:
+            raise OpenGLSubgroupWidthError(
+                "OpenGL WaveSize must be a power of two from 1 through 128.",
+                subgroup_width=width,
+                reason="target-width-unsupported",
+            )
+        return width
+
+    def glsl_stage_exact_subgroup_width(self, ast, target_stage=None):
+        widths = set()
+        for stage_name, stage in getattr(ast, "stages", {}).items():
+            normalized_stage = normalize_stage_name(stage_name)
+            if target_stage is not None and normalized_stage != target_stage:
+                continue
+            function = getattr(stage, "entry_point", None)
+            if function is None:
+                continue
+            width = self.glsl_exact_subgroup_width(function, normalized_stage)
+            if width is not None:
+                widths.add(width)
+        if len(widths) > 1:
+            raise OpenGLSubgroupWidthError(
+                "One OpenGL artifact cannot require multiple exact subgroup widths.",
+                reason="entry-width-conflict",
+            )
+        return next(iter(widths), None)
+
+    def glsl_stage_requires_exact_subgroup_width(self, ast, target_stage=None):
+        return self.glsl_stage_exact_subgroup_width(ast, target_stage) is not None
+
+    def generate_glsl_exact_subgroup_width_guard(self, function, shader_type):
+        width = self.glsl_exact_subgroup_width(function, shader_type)
+        if width is None:
+            return ""
+        macro = self.GLSL_REQUIRED_SUBGROUP_WIDTH_MACRO
+        return f"    if (gl_SubgroupSize != {macro}) {{\n" "        return;\n" "    }\n"
 
     def generate_glsl_wave_helpers(self, ast, target_stage=None):
         operations = self.glsl_wave_operations(ast, target_stage)
@@ -4598,12 +4688,18 @@ class GLSLCodeGen:
         self.current_glsl_resource_binding_layouts_supported = (
             self.glsl_resource_binding_layouts_supported(version_line)
         )
+        exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
         code += f"{version_line}\n"
         for line in self.glsl_stage_extension_lines(ast, target_stage):
             if line not in extra_lines:
                 code += f"{line}\n"
         if extra_lines:
             code += "\n".join(extra_lines) + "\n"
+        if exact_subgroup_width is not None:
+            code += (
+                f"#define {self.GLSL_REQUIRED_SUBGROUP_WIDTH_MACRO} "
+                f"{exact_subgroup_width}u\n"
+            )
         cooperative_matrix_support_insertion_index = len(code)
         code += self.generate_glsl_enum_constants(
             self.plain_enums + self.struct_payload_enums,
@@ -11250,6 +11346,8 @@ class GLSLCodeGen:
         if shader_type in stage_entry_types:
             code += f"void {entry_name or 'main'}() {{\n"
             self.current_function_return_type = "void"
+            if shader_type == "compute" and is_native_stage_entry:
+                code += self.generate_glsl_exact_subgroup_width_guard(func, shader_type)
         else:
             raw_return_type = self.type_name_string(getattr(func, "return_type", None))
             self.current_function_return_type = raw_return_type or "void"
@@ -35877,6 +35975,7 @@ complex64_t crossgl_complex64_mod_assign(
             "fragment",
             "fractional_even_spacing",
             "fractional_odd_spacing",
+            "hlsl_wavesize",
             "invocations",
             "inputtopology",
             "isolines",
@@ -35909,6 +36008,7 @@ complex64_t crossgl_complex64_mod_assign(
             "vertex",
             "vertices",
             "workgroup_size",
+            "wavesize",
         } | self.GLSL_BLEND_SUPPORT_LAYOUT_NAMES
         if normalized in valid_names:
             return normalized

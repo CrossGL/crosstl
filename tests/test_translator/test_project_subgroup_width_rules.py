@@ -146,10 +146,60 @@ def test_subgroup_width_rule_join_is_independent_of_record_order(tmp_path, monke
     )
 
 
+@pytest.mark.parametrize("with_workgroup", (False, True))
+def test_subgroup_width_rules_emit_guarded_opengl_contracts(tmp_path, with_workgroup):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_fixture(repo)
+
+    report = project_api.translate_project(
+        _config(repo, targets=("opengl",), with_workgroup=with_workgroup),
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert len(payload["artifacts"]) == 2
+    assert {artifact["entryPoint"]["source"] for artifact in payload["artifacts"]} == {
+        "wave32",
+        "wave64",
+    }
+    for artifact in payload["artifacts"]:
+        execution = artifact["execution"]
+        assert execution["sourceEntryPoints"] == [artifact["entryPoint"]["source"]]
+        assert len(execution["entryPoints"]) == 1
+        entry = execution["entryPoints"][0]
+        assert entry["targetEntryPoint"] == "main"
+        expected_width = 32 if entry["sourceEntryPoint"] == "wave32" else 64
+        assert entry["subgroupWidth"] == expected_width
+        if with_workgroup:
+            expected_y = 1 if expected_width == 32 else 2
+            assert entry["workgroupSize"] == [expected_width, expected_y, 1]
+        assert execution["subgroupWidthEnforcement"] == {
+            "mechanism": "glsl-subgroup-size-guard",
+            "shaderExtension": "GL_KHR_shader_subgroup_basic",
+            "hostExtension": "GL_KHR_shader_subgroup",
+            "hostQuery": "GL_SUBGROUP_SIZE_KHR",
+            "artifactMarker": "CROSSTL_REQUIRED_SUBGROUP_WIDTH",
+            "mismatchBehavior": "reject-before-dispatch",
+        }
+        generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+        marker = f"#define CROSSTL_REQUIRED_SUBGROUP_WIDTH {expected_width}u"
+        guard = "if (gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH)"
+        assert generated.count(marker) == 1
+        assert generated.count(guard) == 1
+        assert generated.index(guard) < generated.index("output_[index] =")
+
+    report_path = repo / "opengl-report.json"
+    report.write_json(report_path)
+    assert project_api.validate_project_report(report_path)["success"] is True
+
+
 @pytest.mark.parametrize(
     ("target", "reason"),
     [
-        ("opengl", "opengl-enforcement-unavailable"),
         ("metal", "target-not-supported"),
         ("vulkan", "target-not-supported"),
         ("cuda", "target-not-supported"),

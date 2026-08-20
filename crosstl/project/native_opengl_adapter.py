@@ -107,7 +107,8 @@ def generate_opengl_native_loader_adapter() -> str:
             CROSSTL_OPENGL43_UNIFORM_BARRIER_BIT = 0x00000004u,
             CROSSTL_OPENGL43_BUFFER_UPDATE_BARRIER_BIT = 0x00000200u,
             CROSSTL_OPENGL43_SHADER_STORAGE_BARRIER_BIT = 0x00002000u,
-            CROSSTL_OPENGL43_MAX_COMPUTE_WORK_GROUP_COUNT = 0x91BEu
+            CROSSTL_OPENGL43_MAX_COMPUTE_WORK_GROUP_COUNT = 0x91BEu,
+            CROSSTL_OPENGL43_SUBGROUP_SIZE_KHR = 0x9532u
         };
 
         typedef enum CrossTLOpenGL43Status {
@@ -158,7 +159,10 @@ def generate_opengl_native_loader_adapter() -> str:
             CROSSTL_OPENGL43_STATUS_SPECIALIZATION_PAYLOAD_INVALID = 44,
             CROSSTL_OPENGL43_STATUS_SPECIALIZATION_ID_DUPLICATE = 45,
             CROSSTL_OPENGL43_STATUS_SPIRV_BINARY_LOAD_FAILED = 46,
-            CROSSTL_OPENGL43_STATUS_SPIRV_SPECIALIZATION_FAILED = 47
+            CROSSTL_OPENGL43_STATUS_SPIRV_SPECIALIZATION_FAILED = 47,
+            CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_CONTRACT_INVALID = 48,
+            CROSSTL_OPENGL43_STATUS_SUBGROUP_CAPABILITY_UNSUPPORTED = 49,
+            CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_MISMATCH = 50
         } CrossTLOpenGL43Status;
 
         typedef CrossTLOpenGL43Enum(CROSSTL_OPENGL43_APIENTRY
@@ -332,6 +336,7 @@ def generate_opengl_native_loader_adapter() -> str:
             CrossTLOpenGL43ArtifactKind kind;
             std::vector<uint8_t> bytes;
             std::vector<CrossTLOpenGL43Specialization> specializations;
+            uint32_t required_subgroup_width = 0u;
         } CrossTLOpenGL43Artifact;
 
         typedef struct CrossTLOpenGL43Pipeline {
@@ -355,7 +360,8 @@ def generate_opengl_native_loader_adapter() -> str:
             return "caller-owned current desktop OpenGL 4.3+ context; "
                    "context-compatible loaded core entry points; serialized "
                    "execution on the context-owning thread; OpenGL 4.6 or "
-                   "GL_ARB_gl_spirv for SPIR-V specialization";
+                   "GL_ARB_gl_spirv for SPIR-V specialization; "
+                   "GL_KHR_shader_subgroup for exact subgroup-width artifacts";
         }
 
         static inline const char *crosstl_opengl43_status_name(int32_t status) {
@@ -456,6 +462,12 @@ def generate_opengl_native_loader_adapter() -> str:
                     return "spirv-binary-load-failed";
                 case CROSSTL_OPENGL43_STATUS_SPIRV_SPECIALIZATION_FAILED:
                     return "spirv-specialization-failed";
+                case CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_CONTRACT_INVALID:
+                    return "subgroup-width-contract-invalid";
+                case CROSSTL_OPENGL43_STATUS_SUBGROUP_CAPABILITY_UNSUPPORTED:
+                    return "subgroup-capability-unsupported";
+                case CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_MISMATCH:
+                    return "subgroup-width-mismatch";
                 default:
                     return "unknown";
             }
@@ -970,6 +982,95 @@ def generate_opengl_native_loader_adapter() -> str:
             return CROSSTL_OPENGL43_STATUS_OK;
         }
 
+        static inline int32_t crosstl_opengl43_parse_subgroup_width(
+            CrossTLOpenGL43Context *context,
+            CrossTLOpenGL43Artifact *artifact) {
+            if (artifact == NULL ||
+                artifact->kind != CROSSTL_OPENGL43_ARTIFACT_GLSL_SOURCE) {
+                return CROSSTL_OPENGL43_STATUS_OK;
+            }
+            const std::string source(
+                reinterpret_cast<const char *>(artifact->bytes.data()),
+                artifact->bytes.size());
+            const std::string marker =
+                "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH";
+            const size_t position = source.find(marker);
+            if (position == std::string::npos) {
+                return CROSSTL_OPENGL43_STATUS_OK;
+            }
+            if (source.find(marker, position + marker.size()) !=
+                std::string::npos) {
+                return crosstl_opengl43_report(
+                    context,
+                    CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_CONTRACT_INVALID,
+                    "load-artifact",
+                    "The GLSL artifact declares multiple subgroup-width markers.");
+            }
+            const size_t line_start = source.rfind('\n', position);
+            const size_t prefix_start =
+                line_start == std::string::npos ? 0u : line_start + 1u;
+            for (size_t index = prefix_start; index < position; ++index) {
+                if (source[index] != ' ' && source[index] != '\t') {
+                    return crosstl_opengl43_report(
+                        context,
+                        CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_CONTRACT_INVALID,
+                        "load-artifact",
+                        "The GLSL subgroup-width marker must start a directive line.");
+                }
+            }
+            size_t cursor = position + marker.size();
+            if (cursor >= source.size() ||
+                (source[cursor] != ' ' && source[cursor] != '\t')) {
+                return crosstl_opengl43_report(
+                    context,
+                    CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_CONTRACT_INVALID,
+                    "load-artifact",
+                    "The GLSL subgroup-width marker is malformed.");
+            }
+            while (cursor < source.size() &&
+                   (source[cursor] == ' ' || source[cursor] == '\t')) {
+                ++cursor;
+            }
+            uint32_t width = 0u;
+            size_t digit_count = 0u;
+            while (cursor < source.size() &&
+                   source[cursor] >= '0' && source[cursor] <= '9') {
+                const uint32_t digit =
+                    static_cast<uint32_t>(source[cursor] - '0');
+                if (width > (128u - digit) / 10u) {
+                    return crosstl_opengl43_report(
+                        context,
+                        CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_CONTRACT_INVALID,
+                        "load-artifact",
+                        "The GLSL subgroup-width marker is out of range.");
+                }
+                width = width * 10u + digit;
+                ++cursor;
+                ++digit_count;
+            }
+            if (cursor < source.size() &&
+                (source[cursor] == 'u' || source[cursor] == 'U')) {
+                ++cursor;
+            }
+            while (cursor < source.size() &&
+                   (source[cursor] == ' ' || source[cursor] == '\t' ||
+                    source[cursor] == '\r')) {
+                ++cursor;
+            }
+            if (digit_count == 0u ||
+                (cursor < source.size() && source[cursor] != '\n') ||
+                width == 0u || width > 128u ||
+                (width & (width - 1u)) != 0u) {
+                return crosstl_opengl43_report(
+                    context,
+                    CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_CONTRACT_INVALID,
+                    "load-artifact",
+                    "The GLSL subgroup width must be a power of two from 1 through 128.");
+            }
+            artifact->required_subgroup_width = width;
+            return CROSSTL_OPENGL43_STATUS_OK;
+        }
+
         static inline int32_t crosstl_opengl43_load_artifact(
             void *opaque,
             const CrossTLNativeLoaderUnitDescriptor *unit,
@@ -1110,7 +1211,14 @@ def generate_opengl_native_loader_adapter() -> str:
                     delete artifact;
                     return status;
                 }
-                if (kind == CROSSTL_OPENGL43_ARTIFACT_SPIRV_BINARY) {
+                if (kind == CROSSTL_OPENGL43_ARTIFACT_GLSL_SOURCE) {
+                    status = crosstl_opengl43_parse_subgroup_width(
+                        context, artifact);
+                    if (status != CROSSTL_OPENGL43_STATUS_OK) {
+                        delete artifact;
+                        return status;
+                    }
+                } else {
                     if (artifact->bytes.size() < 20u ||
                         artifact->bytes.size() % sizeof(uint32_t) != 0u) {
                         delete artifact;
@@ -1274,6 +1382,44 @@ def generate_opengl_native_loader_adapter() -> str:
                     : "GL_ARB_gl_spirv requires glSpecializeShaderARB.");
         }
 
+        static inline int32_t crosstl_opengl43_validate_subgroup_width(
+            CrossTLOpenGL43Context *context,
+            const CrossTLOpenGL43Artifact *artifact) {
+            if (artifact == NULL || artifact->required_subgroup_width == 0u) {
+                return CROSSTL_OPENGL43_STATUS_OK;
+            }
+            CrossTLOpenGL43Int subgroup_width = 0;
+            crosstl_opengl43_clear_errors(context);
+            context->functions.get_integerv(
+                CROSSTL_OPENGL43_SUBGROUP_SIZE_KHR, &subgroup_width);
+            int32_t status = crosstl_opengl43_check_error_status(
+                context,
+                CROSSTL_OPENGL43_STATUS_SUBGROUP_CAPABILITY_UNSUPPORTED,
+                "create-pipeline",
+                "glGetIntegerv(GL_SUBGROUP_SIZE_KHR)");
+            if (status != CROSSTL_OPENGL43_STATUS_OK) {
+                return status;
+            }
+            if (subgroup_width <= 0 || subgroup_width > 128 ||
+                (static_cast<uint32_t>(subgroup_width) &
+                 (static_cast<uint32_t>(subgroup_width) - 1u)) != 0u) {
+                return crosstl_opengl43_report(
+                    context,
+                    CROSSTL_OPENGL43_STATUS_SUBGROUP_CAPABILITY_UNSUPPORTED,
+                    "create-pipeline",
+                    "GL_SUBGROUP_SIZE_KHR did not report a valid subgroup width.");
+            }
+            if (static_cast<uint32_t>(subgroup_width) !=
+                artifact->required_subgroup_width) {
+                return crosstl_opengl43_report(
+                    context,
+                    CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_MISMATCH,
+                    "create-pipeline",
+                    "The OpenGL device subgroup width does not match the artifact requirement.");
+            }
+            return CROSSTL_OPENGL43_STATUS_OK;
+        }
+
         static inline int32_t crosstl_opengl43_create_pipeline(
             void *opaque,
             void *artifact_opaque,
@@ -1305,6 +1451,11 @@ def generate_opengl_native_loader_adapter() -> str:
             }
             CrossTLOpenGL43Artifact *artifact =
                 static_cast<CrossTLOpenGL43Artifact *>(artifact_opaque);
+            status = crosstl_opengl43_validate_subgroup_width(
+                context, artifact);
+            if (status != CROSSTL_OPENGL43_STATUS_OK) {
+                return status;
+            }
             if (artifact->kind ==
                     CROSSTL_OPENGL43_ARTIFACT_GLSL_SOURCE &&
                 !crosstl_native_loader_strings_equal(

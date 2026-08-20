@@ -665,6 +665,7 @@ class NativeRuntimeDispatchRequest:
     constants: Mapping[str, NativeRuntimeConstantBinding]
     dispatch: RuntimeDispatchGeometry | None = None
     entry_point: str | None = None
+    execution_config: Mapping[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -681,6 +682,8 @@ class NativeRuntimeDispatchRequest:
         }
         if self.entry_point is not None:
             payload["entryPoint"] = self.entry_point
+        if self.execution_config:
+            payload["executionConfig"] = dict(self.execution_config)
         if self.dispatch is not None:
             payload["dispatch"] = self.dispatch.to_json()
         return payload
@@ -1510,6 +1513,15 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
         constants = self._native_constant_bindings(state)
         dispatch = state.plan.dispatch
         entry_point = dispatch.entry_point if dispatch is not None else None
+        execution_config: dict[str, Any] = {}
+        if dispatch is not None and isinstance(
+            dispatch.metadata.get("executionConfig"), Mapping
+        ):
+            execution_config.update(dispatch.metadata["executionConfig"])
+        for candidate in state.request.adapter_contract.entry_points:
+            if entry_point is None or candidate.name == entry_point:
+                execution_config.update(candidate.execution_config)
+                break
         runtime_artifact = dict(state.request.artifact)
         if state.request.artifact_identity is not None:
             runtime_artifact.update(state.request.artifact_identity.to_json())
@@ -1523,6 +1535,7 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
             constants=constants,
             dispatch=dispatch,
             entry_point=entry_point,
+            execution_config=execution_config,
         )
         state.record_step(
             "bind",
@@ -1531,6 +1544,7 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 "target": self.target,
                 "bufferCount": len(buffers),
                 "constantCount": len(constants),
+                "executionConfig": execution_config,
                 "outputBufferCount": sum(
                     1
                     for binding in buffers.values()

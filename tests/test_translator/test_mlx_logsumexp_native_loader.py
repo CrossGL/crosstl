@@ -24,6 +24,7 @@ from crosstl.project import (
     build_runtime_package,
     load_project_config,
     translate_project,
+    validate_project_report,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,15 +41,18 @@ MLX_LOGSUMEXP_DISPATCH_CONTRACT = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "logsumexp.dispatch.json"
 )
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_LOGSUMEXP_DIRECTX_NATIVE_LOADER"
+REQUIRE_OPENGL_PROOF_ENV = "CROSTL_REQUIRE_MLX_LOGSUMEXP_OPENGL_TOOLCHAIN"
 
 
-def _project_config(*, output_dir: str, dispatch_contract: str) -> str:
+def _project_config(
+    *, output_dir: str, dispatch_contract: str, target: str = "directx"
+) -> str:
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
         include = ["{MLX_LOGSUMEXP_SOURCE}"]
         include_dirs = ["."]
-        targets = ["directx"]
+        targets = ["{target}"]
         output_dir = "{output_dir}"
         dispatch_contracts = ["{dispatch_contract}"]
 
@@ -106,7 +110,10 @@ def _assert_directx_runtime_requirements(source_path: Path, work_dir: Path) -> N
 def _pinned_mlx_root() -> Path:
     root_value = os.environ.get("CROSTL_MLX_ROOT")
     if not root_value:
-        if os.environ.get(REQUIRE_PROOF_ENV) == "1":
+        if any(
+            os.environ.get(name) == "1"
+            for name in (REQUIRE_PROOF_ENV, REQUIRE_OPENGL_PROOF_ENV)
+        ):
             pytest.fail("CROSTL_MLX_ROOT is not configured")
         pytest.skip("CROSTL_MLX_ROOT is not configured")
 
@@ -125,6 +132,90 @@ def _pinned_mlx_root() -> Path:
     assert checkout_commit == MLX_COMMIT
     assert hashlib.sha256(source_path.read_bytes()).hexdigest() == MLX_LOGSUMEXP_SHA256
     return mlx_root
+
+
+def test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts():
+    mlx_root = _pinned_mlx_root()
+    with tempfile.TemporaryDirectory(
+        prefix=".crosstl-logsumexp-opengl-toolchain-",
+        dir=mlx_root,
+    ) as temporary_directory:
+        work_dir = Path(temporary_directory)
+        contract_path = work_dir / "logsumexp.dispatch.json"
+        shutil.copyfile(MLX_LOGSUMEXP_DISPATCH_CONTRACT, contract_path)
+        output_dir = work_dir / "out"
+        config_path = work_dir / "crosstl.toml"
+        config_path.write_text(
+            _project_config(
+                output_dir=output_dir.relative_to(mlx_root).as_posix(),
+                dispatch_contract=contract_path.relative_to(mlx_root).as_posix(),
+                target="opengl",
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        report = translate_project(
+            load_project_config(mlx_root, config_path),
+            targets=("opengl",),
+            output_dir=output_dir.relative_to(mlx_root).as_posix(),
+            format_output=False,
+            validate=True,
+            run_toolchains=True,
+        )
+        payload = report.to_json()
+
+        assert payload["summary"]["unitCount"] == 1
+        assert payload["summary"]["translatedCount"] == 2
+        assert payload["summary"]["failedCount"] == 0
+        artifacts = payload["artifacts"]
+        assert {
+            tuple(artifact["execution"]["entryPoints"][0]["workgroupSize"])
+            for artifact in artifacts
+        } == {(32, 1, 1), (288, 1, 1)}
+        for artifact in artifacts:
+            assert artifact["entryPoint"] == {
+                "source": MLX_LOGSUMEXP_ENTRY,
+                "target": "main",
+                "stage": "compute",
+            }
+            entry = artifact["execution"]["entryPoints"][0]
+            assert entry["subgroupWidth"] == 32
+            assert artifact["execution"]["subgroupWidthEnforcement"] == {
+                "mechanism": "glsl-subgroup-size-guard",
+                "shaderExtension": "GL_KHR_shader_subgroup_basic",
+                "hostExtension": "GL_KHR_shader_subgroup",
+                "hostQuery": "GL_SUBGROUP_SIZE_KHR",
+                "artifactMarker": "CROSSTL_REQUIRED_SUBGROUP_WIDTH",
+                "mismatchBehavior": "reject-before-dispatch",
+            }
+            generated = (mlx_root / artifact["path"]).read_text(encoding="utf-8")
+            assert "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 32u" in generated
+            assert (
+                "if (gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH)" in generated
+            )
+            assert "subgroupMax" in generated
+            assert "subgroupAdd" in generated
+
+        toolchain_runs = payload["validation"]["toolchainRuns"]
+        assert len(toolchain_runs) == 2
+        assert {run["status"] for run in toolchain_runs} == {"ok"}
+        assert {run["target"] for run in toolchain_runs} == {"opengl"}
+
+        report_path = work_dir / "opengl-portability-report.json"
+        report.write_json(report_path)
+        assert validate_project_report(report_path)["success"] is True
+        runtime_artifacts = build_runtime_artifact_manifest(report_path)
+        assert runtime_artifacts["success"] is True
+        assert runtime_artifacts["summary"]["artifactCount"] == 2
+        for artifact in runtime_artifacts["artifacts"]:
+            entry_point = artifact["hostInterface"]["entryPoints"][0]
+            assert entry_point["name"] == "main"
+            assert entry_point["executionConfig"]["subgroupWidth"] == 32
+            assert entry_point["executionConfig"]["local_size"] in (
+                [32, 1, 1],
+                [288, 1, 1],
+            )
 
 
 def _expected_scalar_layouts() -> dict[str, dict]:
