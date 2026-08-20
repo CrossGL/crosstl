@@ -60,6 +60,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLSpecializationConstantError,
     OpenGLStoragePointerError,
     OpenGLStructConstructionError,
+    OpenGLSubgroupWidthError,
     OpenGLTrailingZeroBuiltinError,
     OpenGLWorkgroupPointerError,
     OpenGLWorkgroupSizeError,
@@ -19938,6 +19939,68 @@ def test_glsl_subgroup_builtin_inputs_request_basic_extension(tmp_path):
         spirv_target="spirv1.3",
         validate_spirv=True,
     )
+
+
+@pytest.mark.parametrize("subgroup_width", [4, 32])
+def test_glsl_exact_subgroup_width_emits_guarded_compute_artifact(
+    subgroup_width, tmp_path
+):
+    code = f"""
+    shader GLSLExactSubgroupWidth {{
+        compute {{
+            void main() @ WaveSize({subgroup_width}) {{
+                uint value = gl_LocalInvocationID.x;
+            }}
+        }}
+    }}
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    marker = f"#define CROSSTL_REQUIRED_SUBGROUP_WIDTH {subgroup_width}u"
+    guard = "if (gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH)"
+    assert generated.count("#extension GL_KHR_shader_subgroup_basic : require") == 1
+    assert generated.count(marker) == 1
+    assert generated.count(guard) == 1
+    assert generated.index(guard) < generated.index(
+        "uint value = gl_LocalInvocationID.x;"
+    )
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"exact_subgroup_width_{subgroup_width}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage", "attribute", "reason"),
+    [
+        ("compute", "WaveSize", "source-metadata-not-exact"),
+        ("compute", "WaveSize(4, 8)", "source-metadata-not-exact"),
+        ("compute", "WaveSize(3)", "target-width-unsupported"),
+        ("fragment", "WaveSize(32)", "stage-unsupported"),
+    ],
+)
+def test_glsl_exact_subgroup_width_rejects_invalid_contracts(stage, attribute, reason):
+    return_type = "void" if stage == "compute" else "vec4"
+    body = "" if stage == "compute" else "return vec4(1.0);"
+    semantic = "" if stage == "compute" else " @ SV_Target"
+    code = f"""
+    shader GLSLInvalidExactSubgroupWidth {{
+        {stage} {{
+            {return_type} main() @ {attribute}{semantic} {{
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSubgroupWidthError) as raised:
+        generate_code(parse_code(tokenize_code(code)))
+
+    assert raised.value.reason == reason
 
 
 def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():

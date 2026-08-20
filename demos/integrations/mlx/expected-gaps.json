@@ -233,6 +233,70 @@
     "runtime_integration_included": false,
     "runtime_parity_claimed": false
   },
+  "opengl_logsumexp_dispatch_status": {
+    "status": "translated-glslang-spirv-val-validated-with-runtime-width-preflight",
+    "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+    "source": "mlx/backend/metal/kernels/logsumexp.metal",
+    "source_sha256": "f9bec5e1e5a23d20bedf9ff8d29a8c03bbb5144bc5d751bbfe906d32ee894817",
+    "target": "opengl",
+    "dispatch_contract": {
+      "path": "demos/integrations/mlx/contracts/logsumexp.dispatch.json",
+      "content_identity": "sha256:db762a188e05786e206d9aa5a340b6f9095a8a3e938b85a7c04836f300e97c95",
+      "workload_count": 2,
+      "workgroup_sizes": [
+        [
+          32,
+          1,
+          1
+        ],
+        [
+          288,
+          1,
+          1
+        ]
+      ],
+      "subgroup_width": 32
+    },
+    "project_translation": {
+      "unit_count": 1,
+      "artifact_count": 2,
+      "translated_count": 2,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "entry_point": "block_logsumexp_float32",
+      "target_entry_point": "main"
+    },
+    "subgroup_width_contract": {
+      "shader_extension": "GL_KHR_shader_subgroup_basic",
+      "artifact_marker": "CROSSTL_REQUIRED_SUBGROUP_WIDTH",
+      "entry_guard": "gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH",
+      "host_extension": "GL_KHR_shader_subgroup",
+      "host_query": "GL_SUBGROUP_SIZE_KHR",
+      "mismatch_behavior": "reject-before-shader-compilation-or-dispatch"
+    },
+    "toolchain_validation": {
+      "compiler": "glslangValidator",
+      "compiler_target": "OpenGL/SPIR-V 1.3",
+      "validator": "spirv-val",
+      "validator_target": "SPIR-V 1.3",
+      "compiled_artifact_count": 2,
+      "validated_artifact_count": 2,
+      "status": "passed"
+    },
+    "runtime_compatibility": {
+      "adapter_preflight_included": true,
+      "compatible_width_device_test": {
+        "artifact_specialized_to_reported_width": true,
+        "width_source": "GL_SUBGROUP_SIZE_KHR"
+      },
+      "logsumexp_required_width": 32,
+      "logsumexp_runtime_execution_attempted": false,
+      "blocked_by": "https://github.com/CrossGL/crosstl/issues/1894"
+    },
+    "runtime_integration_included": false,
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "opengl_fft_workgroup_pointer_status": {
     "status": "blocked-after-provenance",
     "source": "mlx/backend/metal/kernels/fft.metal",
@@ -2618,6 +2682,7 @@
     "https://github.com/CrossGL/crosstl/issues/1696",
     "https://github.com/CrossGL/crosstl/issues/1735",
     "https://github.com/CrossGL/crosstl/issues/1786",
+    "https://github.com/CrossGL/crosstl/issues/1894",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1462",
     "https://github.com/CrossGL/crosstl/issues/1676",

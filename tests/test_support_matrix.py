@@ -387,7 +387,7 @@ def test_project_subgroup_width_specialization_support_is_target_scoped():
         backend_id
         for backend_id, support in feature["support"].items()
         if support["status"] == "supported"
-    } == {"directx"}
+    } == {"directx", "opengl"}
 
     directx = feature["support"]["directx"]
     assert "[project.subgroup_width_rules]" in directx["notes"]
@@ -404,16 +404,25 @@ def test_project_subgroup_width_specialization_support_is_target_scoped():
     ) in directx["evidence"]
 
     opengl = feature["support"]["opengl"]
-    assert opengl["status"] == "validated_rejection"
-    assert "opengl-enforcement-unavailable" in opengl["notes"]
-    assert "no GLSL artifact is emitted" in opengl["notes"]
+    assert opengl["status"] == "supported"
+    assert "CROSSTL_REQUIRED_SUBGROUP_WIDTH" in opengl["notes"]
+    assert "GL_SUBGROUP_SIZE_KHR pre-dispatch query" in opengl["notes"]
+    assert "reject an incompatible device before shader compilation" in opengl["notes"]
+    assert (
+        "tests/test_translator/test_project_subgroup_width_rules.py::def "
+        "test_subgroup_width_rules_emit_guarded_opengl_contracts"
+    ) in opengl["evidence"]
+    assert (
+        "tests/test_translator/test_mlx_logsumexp_native_loader.py::def "
+        "test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts"
+    ) in opengl["evidence"]
 
     for backend_id, support in feature["support"].items():
         assert "shader/kernel artifact" in support["notes"]
         assert "runtime execution and numerical parity are not established" in (
             support["notes"]
         )
-        if backend_id == "directx":
+        if backend_id in {"directx", "opengl"}:
             assert support["status"] == "supported"
         else:
             assert support["status"] == "validated_rejection"

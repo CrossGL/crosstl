@@ -5,6 +5,7 @@ import textwrap
 
 import pytest
 
+import crosstl.project.pipeline as project_pipeline
 from crosstl.project import (
     DISPATCH_CONTRACT_KIND,
     DISPATCH_CONTRACT_SCHEMA_VERSION,
@@ -605,7 +606,7 @@ def test_directx_enforces_exact_dispatch_subgroup_width(tmp_path):
     assert "subgroupWidthEnforcement" in invalid_report["message"]
 
 
-def test_opengl_fails_closed_for_exact_dispatch_subgroup_width(tmp_path):
+def test_opengl_enforces_exact_dispatch_subgroup_width(tmp_path):
     root, config = _write_project(tmp_path, subgroup_width=32)
 
     report = translate_project(
@@ -616,37 +617,55 @@ def test_opengl_fails_closed_for_exact_dispatch_subgroup_width(tmp_path):
     )
     payload = report.to_json()
 
-    assert payload["summary"]["translatedCount"] == 1
-    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
     planned_job = payload["project"]["dispatchArtifactPlan"]["artifacts"][0]
     assert planned_job["subgroupWidth"] == 32
     artifact = _artifacts_for(payload, "kernels/planned.cgl", target="opengl")[0]
-    assert artifact["status"] == "failed"
+    assert artifact["status"] == "translated"
     assert artifact["dispatchArtifact"] == planned_job
-    assert not (root / artifact["path"]).exists()
-
-    diagnostic = next(
-        item
-        for item in payload["diagnostics"]
-        if item["code"] == "project.translate.subgroup-width-invalid"
-    )
-    assert diagnostic["message"] == (
-        "The target cannot enforce an exact host dispatch subgroup width."
-    )
-    assert diagnostic["target"] == "opengl"
-    assert diagnostic["checkKind"] == "execution-specialization"
-    assert diagnostic["missingCapabilities"] == [
-        "execution.subgroup-width-specialization"
-    ]
-    assert diagnostic["details"]["executionSpecialization"] == {
-        "reason": "target-not-enforceable",
-        "sourceEntryPoints": ["main"],
-        "subgroupWidth": 32,
+    execution = artifact["execution"]
+    assert execution["entryPoints"][0]["targetEntryPoint"] == "main"
+    assert execution["entryPoints"][0]["workgroupSize"] == [32, 1, 1]
+    assert execution["entryPoints"][0]["subgroupWidth"] == 32
+    assert execution["subgroupWidthEnforcement"] == {
+        "mechanism": "glsl-subgroup-size-guard",
+        "shaderExtension": "GL_KHR_shader_subgroup_basic",
+        "hostExtension": "GL_KHR_shader_subgroup",
+        "hostQuery": "GL_SUBGROUP_SIZE_KHR",
+        "artifactMarker": "CROSSTL_REQUIRED_SUBGROUP_WIDTH",
+        "mismatchBehavior": "reject-before-dispatch",
     }
+    generated_path = root / artifact["path"]
+    generated = generated_path.read_text(encoding="utf-8")
+    assert (
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;" in generated
+    )
+    assert "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 32u" in generated
+    assert "if (gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH)" in generated
 
     report_path = root / "opengl-report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
-    assert "project.validate.invalid-report" not in {
-        item["code"] for item in validation["diagnostics"]
-    }
+    assert validation["success"] is True
+
+    generated_path.write_text(
+        generated.replace(
+            "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 32u",
+            "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 16u",
+        ),
+        encoding="utf-8",
+    )
+    artifact["generatedHash"] = project_pipeline._source_hash(generated_path)
+    artifact["generatedSizeBytes"] = generated_path.stat().st_size
+    tampered_path = _write_report(root, payload, "opengl-tampered-report.json")
+    tampered_validation = validate_project_report(tampered_path)
+    assert tampered_validation["success"] is False
+    mismatch = next(
+        item
+        for item in tampered_validation["diagnostics"]
+        if item["code"] == "project.validate.subgroup-width-contract-mismatch"
+    )
+    assert mismatch["details"]["executionSpecialization"]["reason"] == (
+        "target-output-mismatch"
+    )

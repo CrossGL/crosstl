@@ -17,6 +17,7 @@ from crosstl.project.native_opengl_adapter import (
 
 _SHADER_SOURCE = (
     b"#version 430 core\n"
+    b"#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 4u\n"
     b"layout(local_size_x=1, local_size_y=1, local_size_z=1) in;\n"
     b"void main() {}\n"
 )
@@ -210,6 +211,10 @@ def test_generated_opengl_adapter_encodes_platform_and_execution_contracts():
         "CROSSTL_OPENGL43_STATUS_HASH_MISMATCH",
         "CROSSTL_OPENGL43_STATUS_ARTIFACT_PATH_UNSAFE",
         "CROSSTL_OPENGL43_STATUS_SPIRV_CAPABILITY_UNSUPPORTED",
+        "CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_CONTRACT_INVALID",
+        "CROSSTL_OPENGL43_STATUS_SUBGROUP_CAPABILITY_UNSUPPORTED",
+        "CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_MISMATCH",
+        "CROSSTL_OPENGL43_SUBGROUP_SIZE_KHR",
         "CROSSTL_OPENGL43_STATUS_SPECIALIZATION_UNSUPPORTED",
         "CROSSTL_OPENGL43_STATUS_RESOURCE_SET_UNSUPPORTED",
         "CROSSTL_OPENGL43_STATUS_RESOURCE_KIND_UNSUPPORTED",
@@ -289,6 +294,7 @@ def test_generated_opengl_adapter_runs_execution_abi_and_enforces_lifecycle(
             static CrossTLOpenGL43UInt fake_uniform_buffer = 4u;
             static CrossTLOpenGL43UInt fake_base_bindings[8] = {6u, 7u};
             static CrossTLOpenGL43UInt fake_current_program = 44u;
+            static CrossTLOpenGL43Int fake_subgroup_width = 4;
             static int fake_compile_success = 1;
             static int fake_link_success = 1;
             static int fake_create_shader_count = 0;
@@ -329,6 +335,8 @@ def test_generated_opengl_adapter_runs_execution_abi_and_enforces_lifecycle(
                 } else if (token == CROSSTL_OPENGL43_CURRENT_PROGRAM) {
                     *value = static_cast<CrossTLOpenGL43Int>(
                         fake_current_program);
+                } else if (token == CROSSTL_OPENGL43_SUBGROUP_SIZE_KHR) {
+                    *value = fake_subgroup_width;
                 } else if (
                     token ==
                     CROSSTL_OPENGL43_SHADER_STORAGE_BUFFER_BINDING) {
@@ -788,6 +796,19 @@ def test_generated_opengl_adapter_runs_execution_abi_and_enforces_lifecycle(
                     const char replacement = '#';
                     artifact_file.write(&replacement, 1);
                 }
+
+                fake_subgroup_width = 8;
+                result = EXECUTE_SYMBOL(&request, &adapter);
+                if (result.succeeded ||
+                    result.error.phase !=
+                        CROSSTL_NATIVE_LOADER_PHASE_CREATE_PIPELINE ||
+                    result.error.adapter_status !=
+                        CROSSTL_OPENGL43_STATUS_SUBGROUP_WIDTH_MISMATCH ||
+                    fake_create_shader_count != 0 ||
+                    fake_dispatch_count != 0) {
+                    return 24;
+                }
+                fake_subgroup_width = 4;
 
                 fake_compile_success = 0;
                 state.last_message.clear();

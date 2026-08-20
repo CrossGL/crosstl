@@ -8,6 +8,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -2790,6 +2791,76 @@ def test_opengl_compute_runtime_probes_and_releases_headless_context(tmp_path):
     assert context.released is True
 
 
+@pytest.mark.parametrize(
+    ("reported_width", "available"),
+    ((4, True), (8, False)),
+)
+def test_opengl_compute_runtime_probes_exact_subgroup_width(
+    tmp_path, reported_width, available
+):
+    class FakeContext:
+        version_code = 460
+        extensions = {"GL_KHR_shader_subgroup"}
+
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    class FakeGL:
+        GL_SUBGROUP_SIZE_KHR = 0x9532
+
+        @staticmethod
+        def glGetIntegerv(token):
+            assert token == FakeGL.GL_SUBGROUP_SIZE_KHR
+            return reported_width
+
+    context = FakeContext()
+
+    def load_module(name):
+        return FakeGL if name == "OpenGL.GL" else object()
+
+    runtime = OpenGLComputeRuntime(
+        module_loader=load_module,
+        context_factory=lambda module: context,
+    )
+    request = RuntimeExecutionRequest(
+        fixture=RuntimeFixture(
+            id="opengl-subgroup-width",
+            selector=RuntimeArtifactSelector(target="opengl"),
+            entry_point="main",
+        ),
+        artifact={"target": "opengl", "path": "out/opengl/width.glsl"},
+        artifact_path=tmp_path / "out" / "opengl" / "width.glsl",
+        project_root=tmp_path,
+        adapter_contract=RuntimeAdapterContract(
+            entry_points=(
+                RuntimeEntryPoint(
+                    name="main",
+                    stage="compute",
+                    execution_config={
+                        "local_size": [4, 1, 1],
+                        "subgroupWidth": 4,
+                    },
+                ),
+            )
+        ),
+    )
+
+    availability = runtime.is_available(None, request)
+
+    assert availability.available is available
+    assert availability.details["requiredSubgroupWidth"] == 4
+    assert availability.details["subgroupWidth"] == reported_width
+    if available:
+        assert availability.details["subgroupWidthQuery"] == ("GL_SUBGROUP_SIZE_KHR")
+    else:
+        assert availability.details["reasonKind"] == "subgroup-width-mismatch"
+        assert availability.details["mismatchBehavior"] == "reject-before-dispatch"
+    assert context.released is True
+
+
 def test_opengl_compute_runtime_probe_preserves_caller_owned_context(tmp_path):
     class FakeContext:
         version_code = 460
@@ -2871,6 +2942,64 @@ def test_opengl_compute_runtime_rechecks_context_version_at_dispatch(tmp_path):
     assert excinfo.value.details["requiredVersionCode"] == 430
     assert excinfo.value.details["versionCode"] == 420
     assert context.released is True
+
+
+def test_opengl_compute_runtime_rejects_subgroup_mismatch_before_setup(tmp_path):
+    events = []
+
+    class FakeContext:
+        version_code = 460
+        extensions = {"GL_KHR_shader_subgroup"}
+
+        def compute_shader(self, source):
+            events.append(("compile", source))
+            raise AssertionError("mismatched subgroup width compiled a shader")
+
+        def buffer(self, **kwargs):
+            events.append(("buffer", kwargs))
+            raise AssertionError("mismatched subgroup width allocated a buffer")
+
+        def release(self):
+            events.append(("release", None))
+
+    class FakeGL:
+        GL_SUBGROUP_SIZE_KHR = 0x9532
+
+        @staticmethod
+        def glGetIntegerv(token):
+            assert token == FakeGL.GL_SUBGROUP_SIZE_KHR
+            events.append(("query", token))
+            return 4
+
+    context = FakeContext()
+
+    def load_module(name):
+        return FakeGL if name == "OpenGL.GL" else object()
+
+    runtime = OpenGLComputeRuntime(
+        module_loader=load_module,
+        context_factory=lambda module: context,
+    )
+    request = _opengl_dispatch_request(tmp_path)
+    request = NativeRuntimeDispatchRequest(
+        **{
+            **request.__dict__,
+            "loaded_artifact": (
+                "#version 450 core\n"
+                "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 32u\n"
+                "void main() {}\n"
+            ),
+            "execution_config": {"local_size": [1, 1, 1], "subgroupWidth": 32},
+        }
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.dispatch(None, None, request)
+
+    assert excinfo.value.details["reasonKind"] == "subgroup-width-mismatch"
+    assert excinfo.value.details["requiredSubgroupWidth"] == 32
+    assert excinfo.value.details["subgroupWidth"] == 4
+    assert events == [("query", 0x9532), ("release", None)]
 
 
 def test_opengl_compute_runtime_reports_missing_spirv_extension(tmp_path):
@@ -4187,6 +4316,97 @@ def test_opengl_bounded_wave_shuffle_and_fill_up_translation_and_manifest_plan(
     tmp_path,
 ):
     _prepare_opengl_bounded_wave_shuffle_runtime_fixture(tmp_path)
+
+
+def test_opengl_compute_runtime_executes_exact_subgroup_width_on_device(tmp_path):
+    if os.environ.get("CROSTL_RUN_OPENGL_EXACT_SUBGROUP_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_OPENGL_EXACT_SUBGROUP_DEVICE_TEST=1 to run the "
+            "exact-width OpenGL subgroup test"
+        )
+    if not sys.platform.startswith("linux"):
+        pytest.fail("Exact-width OpenGL subgroup runtime proof requires Linux")
+    try:
+        moderngl = __import__("moderngl")
+        __import__("OpenGL.GL")
+    except ImportError as exc:
+        pytest.fail(f"OpenGL subgroup runtime dependency is unavailable: {exc}")
+
+    context = moderngl.create_standalone_context(require=430, backend="egl")
+    runtime = OpenGLComputeRuntime(
+        context_factory=lambda _moderngl: context,
+        release_context=False,
+    )
+    try:
+        subgroup_width = runtime._query_context_subgroup_width(context)
+        source = textwrap.dedent(f"""
+        shader OpenGLExactSubgroupRuntime {{
+            compute {{
+                void main(
+                    RWStructuredBuffer<uint> outputValues @buffer(0),
+                    uint localIndex @gl_LocalInvocationIndex
+                ) @ WaveSize({subgroup_width}) {{
+                    outputValues[localIndex] = WaveGetLaneCount();
+                }}
+            }}
+        }}
+        """)
+        ast = Parser(Lexer(source).get_tokens()).parse()
+        next(iter(ast.stages.values())).execution_config = {
+            "numthreads": (subgroup_width, 1, 1)
+        }
+        generated = GLSLCodeGen().generate(ast)
+        artifact_path = tmp_path / "exact-subgroup-width.comp"
+        artifact_path.write_text(generated, encoding="utf-8")
+        assert f"#define CROSSTL_REQUIRED_SUBGROUP_WIDTH {subgroup_width}u" in generated
+        assert "if (gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH)" in generated
+
+        request = NativeRuntimeDispatchRequest(
+            target="opengl",
+            artifact={"target": "opengl"},
+            artifact_path=artifact_path,
+            module_path=artifact_path,
+            loaded_artifact=generated,
+            buffers={
+                "output_values": NativeRuntimeBufferBinding(
+                    name="output_values",
+                    binding=RuntimeResourceBinding(
+                        name="output_values",
+                        kind="storage-buffer",
+                        set=0,
+                        binding=0,
+                        access="write",
+                    ),
+                    source="expectedOutput",
+                    dtype="uint32",
+                    shape=(subgroup_width,),
+                    metadata={"runtimeValueName": "subgroup_width"},
+                )
+            },
+            constants={},
+            dispatch=RuntimeDispatchGeometry(
+                entry_point="main",
+                workgroup_size=(subgroup_width, 1, 1),
+                workgroup_count=(1, 1, 1),
+            ),
+            entry_point="main",
+            execution_config={
+                "local_size": [subgroup_width, 1, 1],
+                "subgroupWidth": subgroup_width,
+            },
+        )
+
+        outputs = runtime.dispatch(None, None, request)
+
+        assert outputs == {
+            "subgroup_width": {
+                "dtype": "uint32",
+                "shape": [subgroup_width],
+                "values": [subgroup_width] * subgroup_width,
+            }
+        }
+    finally:
+        context.release()
 
 
 def test_opengl_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device(
