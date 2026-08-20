@@ -151,8 +151,7 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     axis_32_artifact = next(
         artifact
         for artifact in report_payload["artifacts"]
-        if artifact["dispatchArtifact"]["artifactId"]
-        == MLX_LOGSUMEXP_AXIS_32_ARTIFACT
+        if artifact["dispatchArtifact"]["artifactId"] == MLX_LOGSUMEXP_AXIS_32_ARTIFACT
     )
     expected_variant = "dispatch-" + MLX_LOGSUMEXP_AXIS_32_ARTIFACT.removeprefix(
         "sha256:"
@@ -230,8 +229,7 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     }
     assert descriptor["specializationConstants"] == []
     descriptor_layouts = {
-        binding["name"]: binding["scalarLayout"]
-        for binding in descriptor["bindings"]
+        binding["name"]: binding["scalarLayout"] for binding in descriptor["bindings"]
     }
     assert descriptor_layouts == _expected_scalar_layouts()
     return descriptor, package_dir
@@ -291,7 +289,9 @@ def test_pinned_mlx_logsumexp_executes_through_directx_native_loader():
                 executor="directx",
                 adapter_kind="directx-native-runtime",
             ),
-            runtime_adapter=DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime()),
+            runtime_adapter=DirectXRuntimeParityAdapter(
+                runtime=DirectXComputeRuntime()
+            ),
         )
         availability = executor.is_available(request)
         if not availability.available:

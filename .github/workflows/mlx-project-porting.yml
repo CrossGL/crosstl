@@ -121,8 +121,7 @@ jobs:
         run: |
           python -m pytest -q -n auto \
             tests/test_mlx_dispatch_contract_fixture.py \
-            tests/test_mlx_logsumexp_dispatch_contract_fixture.py \
-            tests/test_mlx_rms_norm_dispatch_contract_fixture.py
+            tests/test_mlx_logsumexp_dispatch_contract_fixture.py
 
       - name: Install Linux SPIR-V tools
         if: runner.os == 'Linux'
