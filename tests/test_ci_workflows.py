@@ -2423,7 +2423,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "translate_project_reports_unrepresentable_atomic_fence_contract" in (
         mlx_porting
     )
+    assert (
+        "python -m pytest -q -n auto "
+        "tests/test_mlx_dispatch_contract_fixture.py "
+        "tests/test_mlx_logsumexp_dispatch_contract_fixture.py" in mlx_porting
+    )
     assert '"tests/test_mlx_porting_harness.py"' in mlx_porting
+    assert '"tests/test_mlx_logsumexp_dispatch_contract_fixture.py"' in mlx_porting
     assert '"tests/test_mlx_rms_norm_dispatch_contract_fixture.py"' in mlx_porting
     assert '"tests/test_mlx_quantized_directx_proof.py"' in mlx_porting
     assert '"tests/test_mlx_quantized_opengl_proof.py"' in mlx_porting
@@ -2451,6 +2457,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
     assert "MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE" in mlx_porting
     assert "MLX_LAYER_NORM_DISPATCH_VARIANTS" in mlx_porting
+    assert "MLX_LOGSUMEXP_DISPATCH_VARIANTS" in mlx_porting
     assert "MLX_RMS_NORM_DISPATCH_VARIANTS" in mlx_porting
     assert 'checks["directx-frontier"]' in mlx_porting
     assert 'checks["vulkan-frontier"]' in mlx_porting
@@ -2463,8 +2470,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'directx["bfloat16LoweringEvidence"]' in mlx_porting
     assert "DirectX bfloat16 lowering evidence is incomplete" in mlx_porting
     assert "DirectX workgroup blocker evidence changed" in mlx_porting
-    assert "expected 82 fail-closed DirectX compute entries" in mlx_porting
+    assert "expected 76 fail-closed DirectX compute entries" in mlx_porting
     assert "LayerNorm dispatch frontier evidence is incomplete" in mlx_porting
+    assert "LogSumExp dispatch frontier evidence is incomplete" in mlx_porting
     assert "RMSNorm dispatch frontier evidence is incomplete" in mlx_porting
     assert "matched-materialized-host-names" in mlx_porting
     assert "DirectX frontier toolchain must validate every configured" in mlx_porting
@@ -3071,6 +3079,55 @@ def test_mlx_project_porting_workflow_runs_pinned_binary_native_loader_proof():
     )
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
+
+
+def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_logsumexp_native_loader.py"
+
+    assert mlx_porting.count(f'"{test_path}"') == 2
+    step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX LogSumExp Direct3D native-loader execution",
+    )
+    assert "if: runner.os == 'Windows'" in step
+    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream" in step
+    assert 'CROSTL_REQUIRE_MLX_LOGSUMEXP_DIRECTX_NATIVE_LOADER: "1"' in step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_logsumexp_executes_through_directx_native_loader" in step
+    )
+    assert "-n auto" in step
+    assert "-k" not in step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove pinned MLX LogSumExp Direct3D native-loader execution",
+        "Checkout pinned MLX",
+    )
+    assert mlx_porting.index(
+        "- name: Prove pinned MLX LogSumExp Direct3D native-loader execution"
+    ) < mlx_porting.index("- name: Run MLX project-porting checks")
+
+
+def test_mlx_project_porting_workflow_installs_pinned_warp_runtime():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    step_name = "Install pinned Windows WARP runtime"
+    step = ci_coverage.workflow_step_section(mlx_porting, step_name)
+
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        step_name,
+        "Install Windows Direct3D runtime dependencies",
+    )
+    assert "if: runner.os == 'Windows'" in step
+    assert 'warpVersion = "1.0.20"' in step
+    assert "e5fe5de661ce98b58ef9cfb736e73c0a7a2623d3bbf5f14839b2d55566d87e40" in step
+    assert "api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp" in step
+    assert "Get-FileHash -Path $archive -Algorithm SHA256" in step
+    assert '"build\\native\\bin\\x64\\d3d10warp.dll"' in step
+    assert 'Join-Path $env:pythonLocation "d3d10warp.dll"' in step
 
 
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():

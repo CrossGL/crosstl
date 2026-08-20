@@ -67,9 +67,10 @@ The current harness verifies:
   `ternary.metal`. Vulkan must translate and structurally validate all 11.
   DirectX emits five aggregate artifacts whose entries do not require a
   runtime-selected workgroup size, two entry-scoped `layer_norm.metal`
-  artifacts, and 12 entry-scoped `rms_norm.metal` artifacts selected by
-  checked-in host dispatch contracts. It records exact expected failures for
-  the other four sources. Each blocked report must retain
+  artifacts, two entry-scoped `logsumexp.metal` artifacts, and 12 entry-scoped
+  `rms_norm.metal` artifacts selected by checked-in host dispatch contracts. It
+  records exact expected failures for the other three sources. Each blocked
+  report must retain
   the pinned total specialization
   count and exactly match its diagnostic entry names to the materialized host
   names, with no additional diagnostics. Separate configs prevent DirectX
@@ -91,13 +92,15 @@ The current harness verifies:
   dispatch uses runtime axis and pipeline-limit operands unavailable to source
   materialization;
 - DirectX HLSL compiler checks with official DXC v1.9.2602.24 on Windows CI for
-  the 19-artifact frontier representing seven pinned sources: `arange.metal`,
-  `binary_two.metal`, two bounded `layer_norm.metal` entries, `random.metal`,
-  12 test-derived `rms_norm.metal` entries, `rope.metal`, and `ternary.metal`.
-  At the pinned revision the gate compiles 11, 225, 2, 2, 12, 18, and 212
-  entries respectively, for 482 generated compute entries in total. Each
-  LayerNorm and RMSNorm artifact is emitted independently with its host-derived
-  workgroup size, specialization constants, and exact subgroup width. The
+  the 21-artifact frontier representing eight pinned sources: `arange.metal`,
+  `binary_two.metal`, two bounded `layer_norm.metal` entries, two bounded
+  `logsumexp.metal` entries, `random.metal`, 12 test-derived `rms_norm.metal`
+  entries, `rope.metal`, and `ternary.metal`. At the pinned revision the gate
+  compiles 11, 225, 2, 2, 2, 12, 18, and 212 entries respectively, for 484
+  generated compute entries in total. Each LayerNorm, LogSumExp, and RMSNorm
+  artifact is emitted independently with its host-derived workgroup size and
+  exact subgroup width; specialization constants are retained where required.
+  The
   pinned rope translation supplies required function constant IDs through the
   quoted `"1"`, `"2"`, and `"3"` selectors in
   `[project.specialization_constants]` and materializes the concrete DirectX
@@ -114,7 +117,7 @@ The current harness verifies:
   metadata remains tracked by
   [#1542](https://github.com/CrossGL/crosstl/issues/1542). Host dispatch contract
   import was completed under [#1793](https://github.com/CrossGL/crosstl/issues/1793).
-  The four pending aggregate sources cover 82 compute entries and are asserted
+  The three pending aggregate sources cover 76 compute entries and are asserted
   as failed artifacts until bounded dispatch manifests are supplied;
   no placeholder workgroup size is restored. `fence.metal` is
   excluded because its DirectX translation intentionally fails under
@@ -297,7 +300,7 @@ and fails closed if either field is missing or changes. Native-profile bfloat
 helpers now use exact `uint16_t` boundaries, and the two selected
 `random.metal` entries compile without the promotion warnings tracked by
 [#1799](https://github.com/CrossGL/crosstl/issues/1799). DXC reports zero
-warnings across all 482 entry-point runs in the 19-artifact emitted frontier.
+warnings across all 484 entry-point runs in the 21-artifact emitted frontier.
 The harness records this as a warning-clean contract and rejects any newly
 observed warning. Contextual destination conversion under
 [#1801](https://github.com/CrossGL/crosstl/issues/1801) is resolved for the
@@ -853,6 +856,41 @@ evaluation with:
 ```bash
 .venv/bin/python -m pytest -q -n auto \
   tests/test_mlx_dispatch_contract_fixture.py
+```
+
+The checked-in
+[`contracts/logsumexp.dispatch.json`](contracts/logsumexp.dispatch.json)
+fixture captures two float32 block-reduction workloads from the pinned MLX
+operation and gradient tests. The records use axis sizes 32 and 1025 to exercise
+distinct results of the pinned host formula
+`32 * ceil_div(ceil_div(axis_size, 4), 32)`: workgroup sizes `[32, 1, 1]` and
+`[288, 1, 1]`. Both dispatch one output row, require a 32-lane subgroup, and
+select `block_logsumexp_float32`. The looped path for axis sizes above 4096 and
+the float16 and bfloat16 entries remain outside this bounded contract.
+
+The repository harness evaluates both records against the unchanged pinned
+`logsumexp.metal` source and emits one standalone DirectX artifact per workload.
+It verifies source, contract, dispatch, template-materialization, and artifact
+identities; checks the generated max and sum wave reductions, group barriers,
+exponential, logarithm, output store, workgroup size, and `[WaveSize(32)]`; and
+requires official DXC `cs_6_6` compilation with warnings as errors on Windows.
+This establishes translation and native compiler acceptance for the two listed
+test-derived dispatches.
+
+A separate Windows native-loader test packages the axis-size-32 artifact,
+builds its reflected DirectX ABI, binds 32 nonuniform float32 inputs and the
+axis-size constant, dispatches one 32-thread workgroup, and compares the
+readback with a stable CPU LogSumExp reference under explicit float tolerance.
+That is numerical runtime evidence for one finite workload. It does not redirect
+the MLX runtime, cover the axis-size-1025 artifact or looped reduction path, or
+establish parity for other dtypes, shapes, devices, or the full MLX test suite.
+
+Validate the LogSumExp contract schema, provenance, deterministic identities,
+and bounded workload set with:
+
+```bash
+.venv/bin/python -m pytest -q -n auto \
+  tests/test_mlx_logsumexp_dispatch_contract_fixture.py
 ```
 
 The checked-in

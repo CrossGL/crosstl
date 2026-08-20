@@ -7988,7 +7988,7 @@ def test_hlsl_metal_narrow_storage_helper_preserves_byte_view_offset(tmp_path):
     assert "/ 4" in generated
     assert "% 4) * 8" in generated
     assert "& 255u" in generated
-    assert "bytes_offset += int64_t(4);" in generated
+    assert "bytes_offset += int(4);" in generated
     assert "read_byte(input, int64_t((bytes_offset + 2)), 1)" in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)
@@ -8143,7 +8143,7 @@ def test_hlsl_metal_resource_pointer_offsets_apply_to_buffer_helpers(tmp_path):
     assert "out_ +=" not in generated_code
     assert "buffer_store" not in generated_code
     assert "int64_t out__offset = int64_t(0);" in generated_code
-    assert "out__offset += int64_t((uint64_t(index) * 4));" in generated_code
+    assert "out__offset += uint((uint64_t(index) * 4));" in generated_code
     assert "out_[uint((out__offset + 1))] = 7u;" in generated_code
     assert "out_[uint(out__offset)] = 9u;" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
@@ -8185,8 +8185,8 @@ def test_hlsl_metal_resource_pointer_reference_offsets_write_back(tmp_path):
         "inout int64_t source_offset, RWStructuredBuffer<float> destination, "
         "inout int64_t destination_offset, int amount)" in generated
     )
-    assert "source_offset += int64_t(amount);" in generated
-    assert "destination_offset += int64_t(amount);" in generated
+    assert "source_offset += int(amount);" in generated
+    assert "destination_offset += int(amount);" in generated
     assert "int64_t source_offset = int64_t(0);" in generated
     assert "int64_t destination_offset = int64_t(0);" in generated
     assert (
@@ -8297,10 +8297,10 @@ def test_hlsl_metal_resource_pointer_dereferences_lower_to_buffer_indices(tmp_pa
 
     assert "int64_t cursor_offset = int64_t(1);" in generated_code
     assert "float first = sourceValues[uint(cursor_offset)];" in generated_code
-    assert "cursor_offset += int64_t(2);" in generated_code
+    assert "cursor_offset += int(2);" in generated_code
     assert "float second = sourceValues[uint(cursor_offset)];" in generated_code
     assert "int64_t writer_offset = int64_t(2);" in generated_code
-    assert "writer_offset += int64_t(3);" in generated_code
+    assert "writer_offset += int(3);" in generated_code
     assert "resultValues[uint(writer_offset)] = (first + second);" in generated_code
     assert "float* cursor" not in generated_code
     assert "*writer" not in generated_code
@@ -8672,7 +8672,7 @@ def test_hlsl_readonly_resource_pointer_root_can_advance(tmp_path):
     )
 
     assert "int64_t sourceValues_offset = int64_t(0);" in generated_code
-    assert "sourceValues_offset += int64_t(index);" in generated_code
+    assert "sourceValues_offset += uint(index);" in generated_code
     assert "float value = sourceValues[uint(sourceValues_offset)];" in generated_code
     assert "sourceValues +=" not in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
@@ -43224,7 +43224,7 @@ def test_hlsl_metal_storage_struct_view_preserves_typed_alias_offset(tmp_path):
         source_backend="metal",
     )
 
-    assert "words_offset += int64_t((gid * 2));" in generated
+    assert "words_offset += uint((gid * 2));" in generated
     assert "local.words[0] = packed[uint(((words_offset * 4)) / 4)];" in generated
     assert "local.words[1] = packed[uint((((words_offset + 1) * 4)) / 4)];" in generated
     assert "local.words[0] = packed[uint(0)]" not in generated
