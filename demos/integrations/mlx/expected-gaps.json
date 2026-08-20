@@ -10,13 +10,13 @@
       "directx",
       "vulkan"
     ],
-    "artifacts": 34,
-    "translated_artifacts": 30,
-    "failed_artifacts": 4,
+    "artifacts": 35,
+    "translated_artifacts": 32,
+    "failed_artifacts": 3,
     "target_artifacts": {
       "directx": {
-        "translated": 19,
-        "failed": 4
+        "translated": 21,
+        "failed": 3
       },
       "vulkan": {
         "translated": 11,
@@ -29,7 +29,6 @@
     "host_dispatch_import_resolved_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "pending_host_dispatch_sources": [
       "mlx/backend/metal/kernels/arg_reduce.metal",
-      "mlx/backend/metal/kernels/logsumexp.metal",
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
       "mlx/backend/metal/kernels/softmax.metal"
     ],
@@ -1479,14 +1478,14 @@
   },
   "directx_toolchain_status": {
     "status": "passing-with-bounded-dispatch-and-pending-contracts",
-    "note": "Windows CI compiles 482 generated compute entries across 19 DirectX HLSL artifacts from seven pinned sources with zero DXC warnings. LayerNorm contributes two entry-scoped artifacts, and RMSNorm contributes 12 unit-test-derived entry-scoped artifacts selected by replayable host dispatch contracts. Four sources covering 82 aggregate entries still fail before emission because no bounded host dispatch manifest is configured; no placeholder workgroup size is applied. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity.",
+    "note": "Windows CI compiles 484 generated compute entries across 21 DirectX HLSL artifacts from eight pinned sources with zero DXC warnings. LayerNorm and LogSumExp each contribute two entry-scoped artifacts, and RMSNorm contributes 12 unit-test-derived entry-scoped artifacts selected by replayable host dispatch contracts. Three sources covering 76 aggregate entries still fail before emission because no bounded host dispatch manifest is configured; no placeholder workgroup size is applied. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity.",
     "compiler": {
       "name": "dxc",
       "version": "v1.9.2602.24"
     },
     "warning_evidence": {
       "status": "warning-clean",
-      "validatedRunCount": 482,
+      "validatedRunCount": 484,
       "warningRunCount": 0,
       "observedWarningCount": 0,
       "uniqueContractCount": 0,
@@ -1762,6 +1761,81 @@
           "generated_hlsl": {
             "sha256": "c565a0fc1bde31d3d04210f1a62be2bf96a703c8dcf8d1be51a73093a0a4a45f",
             "size_bytes": 8802
+          }
+        }
+      },
+      "dxc_validated_artifact_count": 2,
+      "runtime_execution_attempted": false,
+      "numerical_parity_claimed": false
+    },
+    "logsumexp_dispatch_frontier": {
+      "status": "translated-dxc-validated",
+      "source": "mlx/backend/metal/kernels/logsumexp.metal",
+      "source_sha256": "f9bec5e1e5a23d20bedf9ff8d29a8c03bbb5144bc5d751bbfe906d32ee894817",
+      "target": "directx",
+      "test_sources": [
+        "python/tests/test_ops.py::test_logsumexp",
+        "python/tests/test_autograd.py::test_logsumexp_grad"
+      ],
+      "dispatch_contract": {
+        "path": "demos/integrations/mlx/contracts/logsumexp.dispatch.json",
+        "normalized_sha256": "b1153ba5a68cb9fdb1bdcb04f552f258c6adaf127e6bcbedd8ef8c152067b3d5",
+        "content_identity": "sha256:db762a188e05786e206d9aa5a340b6f9095a8a3e938b85a7c04836f300e97c95",
+        "variant_count": 2,
+        "resolved_issue": "https://github.com/CrossGL/crosstl/issues/1793"
+      },
+      "artifact_count": 2,
+      "variants": {
+        "block-float32-axis-32": {
+          "entry_point": "block_logsumexp_float32",
+          "artifact_id": "sha256:f51ab67b8a9ad3240e3fbb52f6de00cdf4a8532e58790758e59aa50fb95e2c52",
+          "dispatch_variant_id": "sha256:0a9cafa696d2fddd6284c44673b9120120a70630a0a18714e27284f8a6189c59",
+          "inputs": {
+            "axisSize": 32,
+            "dtype": "float32",
+            "nRows": 1
+          },
+          "workgroup_size": [
+            32,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            1,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "generated_hlsl": {
+            "sha256": "ce219ef1c7639ef3cdf61d8f4bf2cee8c9253a0f564d9eea8f0e318fbfbc2b49",
+            "size_bytes": 3329
+          }
+        },
+        "block-float32-axis-1025": {
+          "entry_point": "block_logsumexp_float32",
+          "artifact_id": "sha256:ae512c102a88628c05a49f28a872c44ab582bacf74584e8ca7e6ae765263afe0",
+          "dispatch_variant_id": "sha256:35754405ceaa5e50614c3fef95a66390b99580c9bd2394c0ba5279322fde7446",
+          "inputs": {
+            "axisSize": 1025,
+            "dtype": "float32",
+            "nRows": 1
+          },
+          "workgroup_size": [
+            288,
+            1,
+            1
+          ],
+          "dispatch_workgroup_count": [
+            1,
+            1,
+            1
+          ],
+          "subgroup_width": 32,
+          "subgroup_width_enforcement": "WaveSize(32)",
+          "generated_hlsl": {
+            "sha256": "7584a96799944d5a88f34b43d647102195cc13a1a5281778132306b75323e14a",
+            "size_bytes": 3331
           }
         }
       },
@@ -2156,16 +2230,18 @@
       "mlx/backend/metal/kernels/arange.metal": 11,
       "mlx/backend/metal/kernels/binary_two.metal": 225,
       "mlx/backend/metal/kernels/layer_norm.metal": 2,
+      "mlx/backend/metal/kernels/logsumexp.metal": 2,
       "mlx/backend/metal/kernels/random.metal": 2,
       "mlx/backend/metal/kernels/rms_norm.metal": 12,
       "mlx/backend/metal/kernels/rope.metal": 18,
       "mlx/backend/metal/kernels/ternary.metal": 212
     },
-    "expected_entry_point_count": 482,
+    "expected_entry_point_count": 484,
     "dxc_validated_sources": [
       "mlx/backend/metal/kernels/arange.metal",
       "mlx/backend/metal/kernels/binary_two.metal",
       "mlx/backend/metal/kernels/layer_norm.metal",
+      "mlx/backend/metal/kernels/logsumexp.metal",
       "mlx/backend/metal/kernels/random.metal",
       "mlx/backend/metal/kernels/rms_norm.metal",
       "mlx/backend/metal/kernels/rope.metal",
@@ -2235,17 +2311,15 @@
     },
     "workgroup_blocked_sources": [
       "mlx/backend/metal/kernels/arg_reduce.metal",
-      "mlx/backend/metal/kernels/logsumexp.metal",
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
       "mlx/backend/metal/kernels/softmax.metal"
     ],
     "workgroup_blocked_entry_point_counts": {
       "mlx/backend/metal/kernels/arg_reduce.metal": 24,
-      "mlx/backend/metal/kernels/logsumexp.metal": 6,
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": 42,
       "mlx/backend/metal/kernels/softmax.metal": 10
     },
-    "workgroup_blocked_entry_point_count": 82,
+    "workgroup_blocked_entry_point_count": 76,
     "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
     "host_dispatch_import_resolved_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "dispatch_evidence": {
@@ -2266,27 +2340,6 @@
         "materializationParameters": [
           "N_READS",
           "Op",
-          "T"
-        ]
-      },
-      "mlx/backend/metal/kernels/logsumexp.metal": {
-        "specializationCount": 7,
-        "hostSource": "mlx/backend/metal/logsumexp.cpp",
-        "hostLines": "58-91",
-        "dispatchFormulas": [
-          "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
-          "looped: [maxTotalThreadsPerThreadgroup, 1, 1]"
-        ],
-        "dispatchSelection": [
-          "block when axis_size <= 4096; looped when axis_size > 4096"
-        ],
-        "runtimeOperands": [
-          "axis_size",
-          "maxTotalThreadsPerThreadgroup"
-        ],
-        "materializationParameters": [
-          "AccT",
-          "N_READS",
           "T"
         ]
       },
@@ -2343,7 +2396,6 @@
     },
     "directx_toolchain_gaps": {
       "mlx/backend/metal/kernels/arg_reduce.metal": "no bounded host dispatch manifest is configured for the runtime-selected axis and pipeline limit; aggregate translation fails with project.translate.workgroup-size-entry-ambiguous (host dispatch import support resolved in https://github.com/CrossGL/crosstl/issues/1793)",
-      "mlx/backend/metal/kernels/logsumexp.metal": "no bounded host dispatch manifest is configured for the runtime-selected axis and pipeline limit; aggregate translation fails with project.translate.workgroup-size-entry-ambiguous (host dispatch import support resolved in https://github.com/CrossGL/crosstl/issues/1793)",
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "no bounded host dispatch manifest is configured for the runtime-selected pass, shape, and device architecture; aggregate translation fails with project.translate.workgroup-size-entry-ambiguous (host dispatch import support resolved in https://github.com/CrossGL/crosstl/issues/1793)",
       "mlx/backend/metal/kernels/softmax.metal": "no bounded host dispatch manifest is configured for the runtime-selected axis and pipeline limit; aggregate translation fails with project.translate.workgroup-size-entry-ambiguous (host dispatch import support resolved in https://github.com/CrossGL/crosstl/issues/1793)",
       "mlx/backend/metal/kernels/fence.metal": "the requested mem_device, memory_order_seq_cst, thread_scope_system atomic-fence contract is not representable in HLSL and fails with project.translate.directx-atomic-fence-unsupported (https://github.com/CrossGL/crosstl/issues/1537)"

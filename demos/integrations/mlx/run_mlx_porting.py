@@ -88,6 +88,46 @@ MLX_LAYER_NORM_DISPATCH_VARIANTS = {
     },
 }
 MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
+MLX_LOGSUMEXP_SHA256 = (
+    "f9bec5e1e5a23d20bedf9ff8d29a8c03bbb5144bc5d751bbfe906d32ee894817"
+)
+MLX_LOGSUMEXP_DISPATCH_CONTRACT_SOURCE = (
+    Path(__file__).resolve().parent / "contracts" / "logsumexp.dispatch.json"
+)
+MLX_LOGSUMEXP_DISPATCH_NORMALIZED_SHA256 = (
+    "b1153ba5a68cb9fdb1bdcb04f552f258c6adaf127e6bcbedd8ef8c152067b3d5"
+)
+MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:db762a188e05786e206d9aa5a340b6f9095a8a3e938b85a7c04836f300e97c95"
+)
+MLX_LOGSUMEXP_DISPATCH_VARIANTS = {
+    "block-float32-axis-32": {
+        "entryPoint": "block_logsumexp_float32",
+        "artifactId": (
+            "sha256:f51ab67b8a9ad3240e3fbb52f6de00cdf4a8532e58790758e59aa50fb95e2c52"
+        ),
+        "dispatchVariantId": (
+            "sha256:0a9cafa696d2fddd6284c44673b9120120a70630a0a18714e27284f8a6189c59"
+        ),
+        "inputs": {"axisSize": 32, "dtype": "float32", "nRows": 1},
+        "workgroupSize": [32, 1, 1],
+        "dispatchWorkgroupCount": [1, 1, 1],
+        "specializationConstants": {},
+    },
+    "block-float32-axis-1025": {
+        "entryPoint": "block_logsumexp_float32",
+        "artifactId": (
+            "sha256:ae512c102a88628c05a49f28a872c44ab582bacf74584e8ca7e6ae765263afe0"
+        ),
+        "dispatchVariantId": (
+            "sha256:35754405ceaa5e50614c3fef95a66390b99580c9bd2394c0ba5279322fde7446"
+        ),
+        "inputs": {"axisSize": 1025, "dtype": "float32", "nRows": 1},
+        "workgroupSize": [288, 1, 1],
+        "dispatchWorkgroupCount": [1, 1, 1],
+        "specializationConstants": {},
+    },
+}
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
 MLX_RANDOM_SOURCE = "mlx/backend/metal/kernels/random.metal"
 MLX_QUANTIZED_SOURCE = "mlx/backend/metal/kernels/quantized.metal"
@@ -373,7 +413,7 @@ MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = (
 MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = tuple(
     source
     for source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
-    if source not in {MLX_LAYER_NORM_SOURCE, MLX_RMS_NORM_SOURCE}
+    if source not in {MLX_LAYER_NORM_SOURCE, MLX_LOGSUMEXP_SOURCE, MLX_RMS_NORM_SOURCE}
 )
 MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES = tuple(
     source
@@ -497,21 +537,25 @@ MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS = {
     MLX_TERNARY_SOURCE: 212,
 }
 # Aggregate artifacts retain every source entry when one workgroup contract applies.
-# LayerNorm and RMSNorm contribute bounded, entry-scoped host-dispatch artifacts.
+# LayerNorm, LogSumExp, and RMSNorm contribute bounded, entry-scoped artifacts.
 MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = tuple(
     source
     for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     if source in MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
-    or source in {MLX_LAYER_NORM_SOURCE, MLX_RMS_NORM_SOURCE}
+    or source in {MLX_LAYER_NORM_SOURCE, MLX_LOGSUMEXP_SOURCE, MLX_RMS_NORM_SOURCE}
 )
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
     source: (
         len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
         if source == MLX_LAYER_NORM_SOURCE
         else (
-            len(MLX_RMS_NORM_DISPATCH_VARIANTS)
-            if source == MLX_RMS_NORM_SOURCE
-            else MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+            len(MLX_LOGSUMEXP_DISPATCH_VARIANTS)
+            if source == MLX_LOGSUMEXP_SOURCE
+            else (
+                len(MLX_RMS_NORM_DISPATCH_VARIANTS)
+                if source == MLX_RMS_NORM_SOURCE
+                else MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+            )
         )
     )
     for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
@@ -522,6 +566,7 @@ MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT = sum(
 MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT = (
     len(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES)
     + len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+    + len(MLX_LOGSUMEXP_DISPATCH_VARIANTS)
     + len(MLX_RMS_NORM_DISPATCH_VARIANTS)
 )
 MLX_DIRECTX_TOOLCHAIN_WARNING_CONTRACTS: tuple[dict[str, Any], ...] = ()
@@ -1695,6 +1740,77 @@ def _prepare_layer_norm_dispatch_contract(
         )
 
     destination = work_dir / "contracts" / "layer_norm.dispatch.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_path, destination)
+    return {
+        "path": _relpath(destination, mlx_root),
+        "contentIdentity": content_identity,
+        "variantCount": len(variants),
+    }
+
+
+def _prepare_logsumexp_dispatch_contract(
+    mlx_root: Path,
+    work_dir: Path,
+) -> dict[str, Any]:
+    source_path = MLX_LOGSUMEXP_DISPATCH_CONTRACT_SOURCE
+    _require(
+        source_path.is_file(),
+        f"LogSumExp dispatch contract is missing: {source_path}",
+    )
+    _require(
+        _normalized_text_sha256(source_path)
+        == MLX_LOGSUMEXP_DISPATCH_NORMALIZED_SHA256,
+        "LogSumExp dispatch contract normalized content changed",
+    )
+    logsumexp_source = mlx_root / MLX_LOGSUMEXP_SOURCE
+    _require(
+        logsumexp_source.is_file()
+        and _sha256(logsumexp_source) == MLX_LOGSUMEXP_SHA256,
+        "pinned LogSumExp source identity changed",
+    )
+
+    manifest = load_dispatch_contract(source_path)
+    content_identity = manifest.content_identity.to_json()
+    expected_identity = {
+        "algorithm": "sha256",
+        "value": MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY.removeprefix("sha256:"),
+    }
+    _require(
+        content_identity == expected_identity,
+        "LogSumExp dispatch contract identity changed",
+    )
+    evaluation = manifest.evaluate().to_json()
+    variants = evaluation.get("variants")
+    variants_by_workload = {
+        variant.get("workload", {}).get("id"): variant
+        for variant in variants or []
+        if isinstance(variant, Mapping) and isinstance(variant.get("workload"), Mapping)
+    }
+    _require(
+        isinstance(variants, list)
+        and len(variants) == len(MLX_LOGSUMEXP_DISPATCH_VARIANTS)
+        and set(variants_by_workload) == set(MLX_LOGSUMEXP_DISPATCH_VARIANTS),
+        "LogSumExp dispatch contract variant set changed",
+    )
+    for workload_id, expected in MLX_LOGSUMEXP_DISPATCH_VARIANTS.items():
+        variant = variants_by_workload[workload_id]
+        _require(
+            variant.get("artifactId") == expected["artifactId"]
+            and variant.get("variantId") == expected["dispatchVariantId"]
+            and variant.get("source") == MLX_LOGSUMEXP_SOURCE
+            and variant.get("entryPoint") == expected["entryPoint"]
+            and variant.get("workload", {}).get("inputs") == expected["inputs"]
+            and variant.get("workgroupSize") == expected["workgroupSize"]
+            and variant.get("subgroupWidth") == 32
+            and variant.get("specializationConstants")
+            == expected["specializationConstants"]
+            and variant.get("dispatch", {}).get("workgroupCount")
+            == expected["dispatchWorkgroupCount"],
+            f"LogSumExp dispatch contract changed for {workload_id}",
+        )
+
+    destination = work_dir / "contracts" / "logsumexp.dispatch.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source_path, destination)
     return {
@@ -4107,6 +4223,341 @@ def _require_layer_norm_dispatch_frontier_report(
     return artifacts_by_entry, evidence, toolchain_runs
 
 
+def _require_logsumexp_dispatch_frontier_report(
+    mlx_root: Path,
+    output_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    contract: Mapping[str, Any],
+    validated: bool,
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Any], list[Mapping[str, Any]]]:
+    project = payload.get("project")
+    contract_records = (
+        project.get("dispatchContracts") if isinstance(project, Mapping) else None
+    )
+    artifact_count = len(MLX_LOGSUMEXP_DISPATCH_VARIANTS)
+    _require(
+        isinstance(project, Mapping)
+        and project.get("includePatterns") == [MLX_LOGSUMEXP_SOURCE]
+        and project.get("targets") == ["directx"]
+        and project.get("dispatchContractFiles") == [contract["path"]]
+        and project.get("dispatchContractCount") == 1
+        and project.get("dispatchVariantCount") == artifact_count
+        and isinstance(contract_records, list)
+        and len(contract_records) == 1,
+        "LogSumExp dispatch frontier project metadata changed",
+    )
+    contract_record = contract_records[0]
+    expected_manifest_path = str((mlx_root / str(contract["path"])).resolve())
+    evaluation = (
+        contract_record.get("evaluation")
+        if isinstance(contract_record, Mapping)
+        else None
+    )
+    evaluated_variants = (
+        evaluation.get("variants") if isinstance(evaluation, Mapping) else None
+    )
+    _require(
+        isinstance(contract_record, Mapping)
+        and contract_record.get("path") == contract["path"]
+        and contract_record.get("schemaVersion") == 1
+        and contract_record.get("contentIdentity") == contract["contentIdentity"]
+        and contract_record.get("manifest", {}).get("provenance", {}).get("commit")
+        == MLX_COMMIT
+        and isinstance(evaluation, Mapping)
+        and evaluation.get("manifestSource") == expected_manifest_path
+        and evaluation.get("variantCount") == artifact_count
+        and isinstance(evaluated_variants, list)
+        and len(evaluated_variants) == artifact_count,
+        "LogSumExp dispatch frontier did not retain replayable manifest provenance",
+    )
+    evaluation_by_workload = {
+        variant.get("workload", {}).get("id"): variant
+        for variant in evaluated_variants
+        if isinstance(variant, Mapping) and isinstance(variant.get("workload"), Mapping)
+    }
+    _require(
+        set(evaluation_by_workload) == set(MLX_LOGSUMEXP_DISPATCH_VARIANTS),
+        "LogSumExp dispatch evaluation workload set changed",
+    )
+
+    summary = payload.get("summary")
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == 1
+        and summary.get("artifactCount") == artifact_count
+        and summary.get("translatedCount") == artifact_count
+        and summary.get("failedCount") == 0
+        and summary.get("diagnosticCounts") == {"error": 0, "note": 0, "warning": 0}
+        and summary.get("artifactsByTarget", {}).get("directx")
+        == {
+            "artifactCount": artifact_count,
+            "translatedCount": artifact_count,
+            "failedCount": 0,
+        }
+        and payload.get("diagnostics") == [],
+        "LogSumExp dispatch frontier accounting changed",
+    )
+    units = payload.get("units")
+    _require(
+        isinstance(units, list)
+        and len(units) == 1
+        and units[0].get("path") == MLX_LOGSUMEXP_SOURCE
+        and units[0].get("sourceBackend") == "metal"
+        and units[0].get("sourceHash")
+        == {"algorithm": "sha256", "value": MLX_LOGSUMEXP_SHA256},
+        "LogSumExp dispatch frontier source identity changed",
+    )
+
+    dispatch_plan = project.get("dispatchArtifactPlan")
+    planned_artifacts = (
+        dispatch_plan.get("artifacts") if isinstance(dispatch_plan, Mapping) else None
+    )
+    expected_artifact_ids = {
+        expected["artifactId"] for expected in MLX_LOGSUMEXP_DISPATCH_VARIANTS.values()
+    }
+    _require(
+        isinstance(dispatch_plan, Mapping)
+        and dispatch_plan.get("kind") == "crosstl-dispatch-artifact-plan"
+        and dispatch_plan.get("schemaVersion") == 1
+        and dispatch_plan.get("sourceUnitCount") == 1
+        and dispatch_plan.get("artifactCount") == artifact_count
+        and dispatch_plan.get("dispatchVariantCount") == artifact_count
+        and isinstance(planned_artifacts, list)
+        and len(planned_artifacts) == artifact_count,
+        "LogSumExp dispatch artifact plan changed",
+    )
+    plan_by_artifact_id = {
+        record.get("artifactId"): record
+        for record in planned_artifacts
+        if isinstance(record, Mapping)
+    }
+    _require(
+        set(plan_by_artifact_id) == expected_artifact_ids,
+        "LogSumExp dispatch artifact plan identity set changed",
+    )
+
+    artifacts = payload.get("artifacts")
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == artifact_count,
+        "LogSumExp dispatch artifact records are incomplete",
+    )
+    artifacts_by_id = {
+        artifact.get("dispatchArtifact", {}).get("artifactId"): artifact
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        and isinstance(artifact.get("dispatchArtifact"), Mapping)
+    }
+    _require(
+        set(artifacts_by_id) == expected_artifact_ids,
+        "LogSumExp dispatch artifact identity set changed",
+    )
+
+    output_root = output_dir.resolve()
+    artifacts_by_workload: dict[str, Mapping[str, Any]] = {}
+    generated_evidence: dict[str, Any] = {}
+    expected_template_parameters = {"AccT": "float", "N_READS": "4", "T": "float"}
+    for workload_id, expected in MLX_LOGSUMEXP_DISPATCH_VARIANTS.items():
+        artifact_id = expected["artifactId"]
+        artifact = artifacts_by_id[artifact_id]
+        plan = plan_by_artifact_id[artifact_id]
+        evaluated = evaluation_by_workload[workload_id]
+        entry = artifact.get("entryPoint")
+        entry_point = entry.get("source") if isinstance(entry, Mapping) else None
+        _require(
+            evaluated.get("artifactId") == artifact_id
+            and evaluated.get("variantId") == expected["dispatchVariantId"]
+            and evaluated.get("entryPoint") == expected["entryPoint"]
+            and evaluated.get("workload", {}).get("inputs") == expected["inputs"]
+            and evaluated.get("workgroupSize") == expected["workgroupSize"]
+            and evaluated.get("subgroupWidth") == 32
+            and evaluated.get("specializationConstants") == {}
+            and evaluated.get("dispatch", {}).get("workgroupCount")
+            == expected["dispatchWorkgroupCount"],
+            f"LogSumExp evaluated dispatch changed for {workload_id}",
+        )
+        variant_name = "dispatch-" + artifact_id.removeprefix("sha256:")
+        _require(
+            artifact.get("source") == MLX_LOGSUMEXP_SOURCE
+            and artifact.get("sourceBackend") == "metal"
+            and artifact.get("sourceHash")
+            == {"algorithm": "sha256", "value": MLX_LOGSUMEXP_SHA256}
+            and artifact.get("target") == "directx"
+            and artifact.get("status") == "translated"
+            and artifact.get("variant") == variant_name
+            and entry_point == expected["entryPoint"]
+            and entry.get("target") == "CSMain"
+            and entry.get("stage") == "compute"
+            and artifact.get("dispatchArtifact") == plan
+            and plan.get("artifactId") == artifact_id
+            and plan.get("dispatchVariantIds") == [expected["dispatchVariantId"]]
+            and plan.get("manifestContentIdentities")
+            == [MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY]
+            and plan.get("source") == MLX_LOGSUMEXP_SOURCE
+            and plan.get("entryPoint") == expected["entryPoint"]
+            and plan.get("workgroupSize") == expected["workgroupSize"]
+            and plan.get("subgroupWidth") == 32
+            and plan.get("specializationConstants") == {},
+            f"LogSumExp dispatch artifact contract changed for {workload_id}",
+        )
+
+        execution = artifact.get("execution")
+        execution_entries = (
+            execution.get("entryPoints") if isinstance(execution, Mapping) else None
+        )
+        _require(
+            isinstance(execution, Mapping)
+            and execution.get("sourceEntryPoints") == [expected["entryPoint"]]
+            and execution.get("provenance", {}).get("kind") == "host-dispatch-contract"
+            and execution.get("provenance", {}).get("artifactId") == artifact_id
+            and execution.get("subgroupWidthProvenance", {}).get("kind")
+            == "host-dispatch-contract"
+            and execution.get("subgroupWidthEnforcement")
+            == {
+                "mechanism": "hlsl-wave-size-attribute",
+                "minimumShaderModel": "6.6",
+                "entryProfiles": [{"entryPoint": "CSMain", "profile": "cs_6_6"}],
+            }
+            and isinstance(execution_entries, list)
+            and len(execution_entries) == 1
+            and execution_entries[0].get("sourceEntryPoint") == expected["entryPoint"]
+            and execution_entries[0].get("materializedEntryPoint")
+            == expected["entryPoint"]
+            and execution_entries[0].get("targetEntryPoint") == "CSMain"
+            and execution_entries[0].get("workgroupSize") == expected["workgroupSize"]
+            and execution_entries[0].get("subgroupWidth") == 32,
+            f"LogSumExp execution metadata changed for {workload_id}",
+        )
+        _require(
+            not artifact.get("specializationConstants"),
+            f"LogSumExp artifact gained specialization constants for {workload_id}",
+        )
+
+        materialization = artifact.get("templateMaterialization")
+        specializations = (
+            materialization.get("specializations")
+            if isinstance(materialization, Mapping)
+            else None
+        )
+        _require(
+            isinstance(materialization, Mapping)
+            and materialization.get("status") == "materialized"
+            and materialization.get("specializationCount") == 1
+            and isinstance(specializations, list)
+            and len(specializations) == 1
+            and specializations[0].get("hostName") == expected["entryPoint"]
+            and specializations[0].get("parameters") == expected_template_parameters
+            and materialization.get("unsupported") == [],
+            f"LogSumExp materialization changed for {workload_id}",
+        )
+
+        artifact_path_value = artifact.get("path")
+        _require(
+            isinstance(artifact_path_value, str) and artifact_path_value,
+            f"LogSumExp artifact path is missing for {workload_id}",
+        )
+        artifact_path = (mlx_root / artifact_path_value).resolve()
+        _require(
+            _is_relative_to(artifact_path, output_root) and artifact_path.is_file(),
+            f"LogSumExp artifact is missing or escaped output for {workload_id}",
+        )
+        generated = artifact_path.read_text(encoding="utf-8")
+        generated_hash = _sha256(artifact_path)
+        normalized_hash = _normalized_text_sha256(artifact_path)
+        _require(
+            artifact.get("generatedHash")
+            == {"algorithm": "sha256", "value": generated_hash}
+            and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size
+            and len(re.findall(r"\bvoid\s+CSMain\s*\(", generated)) == 1
+            and re.search(r"\[\s*WaveSize\s*\(\s*32\s*\)\s*\]", generated) is not None
+            and re.search(
+                r"\[\s*numthreads\s*\(\s*{}\s*,\s*1\s*,\s*1\s*\)\s*\]".format(
+                    expected["workgroupSize"][0]
+                ),
+                generated,
+            )
+            is not None
+            and all(
+                fragment in generated
+                for fragment in (
+                    "WaveActiveMax",
+                    "WaveActiveSum",
+                    "GroupMemoryBarrierWithGroupSync",
+                    "exp(",
+                    "log(",
+                    "out_[gid]",
+                )
+            ),
+            f"LogSumExp generated HLSL contract changed for {workload_id}",
+        )
+        generated_evidence[workload_id] = {
+            "entryPoint": expected["entryPoint"],
+            "artifactId": artifact_id,
+            "dispatchVariantId": expected["dispatchVariantId"],
+            "inputs": dict(expected["inputs"]),
+            "workgroupSize": list(expected["workgroupSize"]),
+            "dispatchWorkgroupCount": list(expected["dispatchWorkgroupCount"]),
+            "subgroupWidth": 32,
+            "generatedHlsl": {
+                "normalizedSha256": normalized_hash,
+                "contentSha256": generated_hash,
+                "sizeBytes": artifact_path.stat().st_size,
+            },
+        }
+        artifacts_by_workload[workload_id] = artifact
+
+    toolchain_runs: list[Mapping[str, Any]] = []
+    if validated:
+        validation = payload.get("validation")
+        runs = (
+            validation.get("toolchainRuns") if isinstance(validation, Mapping) else None
+        )
+        _require(
+            isinstance(validation, Mapping)
+            and isinstance(validation.get("summary"), Mapping)
+            and validation["summary"].get("failedCount") == 0
+            and isinstance(runs, list),
+            "LogSumExp dispatch DXC validation changed",
+        )
+        toolchain_runs = [
+            run
+            for run in runs
+            if isinstance(run, Mapping) and run.get("target") == "directx"
+        ]
+        artifact_paths = {
+            artifact["path"] for artifact in artifacts_by_workload.values()
+        }
+        _require(
+            len(toolchain_runs) == artifact_count
+            and all(run.get("status") == "ok" for run in toolchain_runs)
+            and {run.get("path") for run in toolchain_runs} == artifact_paths,
+            "LogSumExp dispatch DXC did not validate every artifact",
+        )
+
+    evidence = {
+        "status": "translated-dxc-validated" if validated else "translated",
+        "source": MLX_LOGSUMEXP_SOURCE,
+        "sourceSha256": MLX_LOGSUMEXP_SHA256,
+        "target": "directx",
+        "testSources": [
+            "python/tests/test_ops.py::test_logsumexp",
+            "python/tests/test_autograd.py::test_logsumexp_grad",
+        ],
+        "dispatchContract": {
+            "path": contract["path"],
+            "contentIdentity": MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY,
+            "variantCount": artifact_count,
+            "resolvedIssue": MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
+        },
+        "artifactCount": artifact_count,
+        "variants": generated_evidence,
+        "dxcValidatedArtifactCount": len(toolchain_runs),
+        "runtimeExecutionAttempted": False,
+        "numericalParityClaimed": False,
+    }
+    return artifacts_by_workload, evidence, toolchain_runs
+
+
 def _require_rms_norm_dispatch_frontier_report(
     mlx_root: Path,
     output_dir: Path,
@@ -4851,6 +5302,37 @@ def _translate_directx_frontier(
         validated=False,
     )
 
+    logsumexp_contract = _prepare_logsumexp_dispatch_contract(mlx_root, work_dir)
+    logsumexp_output_dir = work_dir / "out-directx-logsumexp-dispatch-frontier"
+    (
+        _logsumexp_result,
+        logsumexp_payload,
+        _logsumexp_config,
+        logsumexp_report_path,
+    ) = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+        command_name="directx-logsumexp-dispatch-frontier",
+        target="directx",
+        sources=(MLX_LOGSUMEXP_SOURCE,),
+        output_dir=logsumexp_output_dir,
+        dispatch_contracts=(str(logsumexp_contract["path"]),),
+    )
+    (
+        logsumexp_artifacts,
+        logsumexp_evidence,
+        _logsumexp_runs,
+    ) = _require_logsumexp_dispatch_frontier_report(
+        mlx_root,
+        logsumexp_output_dir,
+        logsumexp_payload,
+        contract=logsumexp_contract,
+        validated=False,
+    )
+
     rms_norm_contract = _prepare_rms_norm_dispatch_contract(mlx_root, work_dir)
     rms_norm_output_dir = work_dir / "out-directx-rms-norm-dispatch-frontier"
     (
@@ -4982,6 +5464,38 @@ def _translate_directx_frontier(
             contract=layer_norm_contract,
             validated=True,
         )
+        logsumexp_toolchain_output = (
+            work_dir / "out-directx-logsumexp-dispatch-toolchain"
+        )
+        (
+            _logsumexp_toolchain_result,
+            logsumexp_toolchain_payload,
+            _logsumexp_toolchain_config,
+            _logsumexp_toolchain_report,
+        ) = _run_frontier_project(
+            mlx_root=mlx_root,
+            config_dir=config_dir,
+            report_dir=report_dir,
+            log_dir=log_dir,
+            python=python,
+            command_name="validate-directx-logsumexp-dispatch-toolchain",
+            target="directx",
+            sources=(MLX_LOGSUMEXP_SOURCE,),
+            output_dir=logsumexp_toolchain_output,
+            run_toolchains=True,
+            dispatch_contracts=(str(logsumexp_contract["path"]),),
+        )
+        (
+            logsumexp_artifacts,
+            logsumexp_evidence,
+            logsumexp_runs,
+        ) = _require_logsumexp_dispatch_frontier_report(
+            mlx_root,
+            logsumexp_toolchain_output,
+            logsumexp_toolchain_payload,
+            contract=logsumexp_contract,
+            validated=True,
+        )
         rms_norm_toolchain_output = work_dir / "out-directx-rms-norm-dispatch-toolchain"
         (
             _rms_norm_toolchain_result,
@@ -5012,10 +5526,16 @@ def _translate_directx_frontier(
             contract=rms_norm_contract,
             validated=True,
         )
-        directx_runs = [*aggregate_runs, *layer_norm_runs, *rms_norm_runs]
+        directx_runs = [
+            *aggregate_runs,
+            *layer_norm_runs,
+            *logsumexp_runs,
+            *rms_norm_runs,
+        ]
         artifact_paths = {
             *(artifact["path"] for artifact in artifacts.values()),
             *(artifact["path"] for artifact in layer_norm_artifacts.values()),
+            *(artifact["path"] for artifact in logsumexp_artifacts.values()),
             *(artifact["path"] for artifact in rms_norm_artifacts.values()),
         }
         validated_paths = {
@@ -5033,6 +5553,10 @@ def _translate_directx_frontier(
         artifact["path"]: entry_point
         for entry_point, artifact in layer_norm_artifacts.items()
     }
+    logsumexp_workload_by_path = {
+        artifact["path"]: workload_id
+        for workload_id, artifact in logsumexp_artifacts.items()
+    }
     rms_norm_workload_by_path = {
         artifact["path"]: workload_id
         for workload_id, artifact in rms_norm_artifacts.items()
@@ -5047,6 +5571,8 @@ def _translate_directx_frontier(
         )
         if source == MLX_LAYER_NORM_SOURCE:
             entry_point = layer_norm_entry_by_path.get(run.get("path"))
+        elif source == MLX_LOGSUMEXP_SOURCE:
+            entry_point = logsumexp_workload_by_path.get(run.get("path"))
         elif source == MLX_RMS_NORM_SOURCE:
             entry_point = rms_norm_workload_by_path.get(run.get("path"))
         else:
@@ -5090,6 +5616,7 @@ def _translate_directx_frontier(
         "scope": "target-split-frontier",
         "report": _relpath(report_path, mlx_root),
         "layerNormDispatchReport": _relpath(layer_norm_report_path, mlx_root),
+        "logsumexpDispatchReport": _relpath(logsumexp_report_path, mlx_root),
         "rmsNormDispatchReport": _relpath(rms_norm_report_path, mlx_root),
         "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
         "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
@@ -5097,6 +5624,7 @@ def _translate_directx_frontier(
         "artifactCount": (
             len(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES)
             + len(MLX_LAYER_NORM_DISPATCH_VARIANTS)
+            + len(MLX_LOGSUMEXP_DISPATCH_VARIANTS)
             + len(MLX_RMS_NORM_DISPATCH_VARIANTS)
             + len(MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES)
         ),
@@ -5135,6 +5663,7 @@ def _translate_directx_frontier(
         "native16BitArithmeticEvidence": MLX_DIRECTX_NATIVE_16_BIT_ARITHMETIC_EVIDENCE,
         "bfloat16LoweringEvidence": bfloat16_lowering_evidence,
         "layerNormDispatchEvidence": layer_norm_evidence,
+        "logsumexpDispatchEvidence": logsumexp_evidence,
         "rmsNormDispatchEvidence": rms_norm_evidence,
         "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
         "semanticReadinessStatus": "not-established",
