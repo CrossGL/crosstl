@@ -2211,6 +2211,44 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_frontier["runtime_integration_included"] is False
     assert opengl_frontier["runtime_parity_claimed"] is False
 
+    opengl_logsumexp = expected_gaps["opengl_logsumexp_dispatch_status"]
+    assert opengl_logsumexp["commit"] == module.MLX_COMMIT
+    assert opengl_logsumexp["source"] == module.MLX_LOGSUMEXP_SOURCE
+    assert opengl_logsumexp["source_sha256"] == module.MLX_LOGSUMEXP_SHA256
+    assert opengl_logsumexp["target"] == "opengl"
+    assert opengl_logsumexp["dispatch_contract"] == {
+        "path": "demos/integrations/mlx/contracts/logsumexp.dispatch.json",
+        "content_identity": module.MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY,
+        "workload_count": len(module.MLX_LOGSUMEXP_DISPATCH_VARIANTS),
+        "workgroup_sizes": [
+            variant["workgroupSize"]
+            for variant in module.MLX_LOGSUMEXP_DISPATCH_VARIANTS.values()
+        ],
+        "subgroup_width": 32,
+    }
+    assert opengl_logsumexp["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count": 2,
+        "translated_count": 2,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "entry_point": "block_logsumexp_float32",
+        "target_entry_point": "main",
+    }
+    assert opengl_logsumexp["toolchain_validation"]["status"] == "passed"
+    assert opengl_logsumexp["toolchain_validation"]["compiled_artifact_count"] == 2
+    assert opengl_logsumexp["toolchain_validation"]["validated_artifact_count"] == 2
+    assert opengl_logsumexp["runtime_compatibility"] == {
+        "adapter_preflight_included": True,
+        "compatible_width_device_test": 4,
+        "logsumexp_required_width": 32,
+        "logsumexp_runtime_execution_attempted": False,
+        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1894",
+    }
+    assert opengl_logsumexp["runtime_integration_included"] is False
+    assert opengl_logsumexp["numerical_parity_claimed"] is False
+    assert opengl_logsumexp["runtime_parity_claimed"] is False
+
     opengl_quantized = expected_gaps["opengl_quantized_frontier_status"]
     assert opengl_quantized == module.MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE
     assert opengl_quantized["artifact_emitted"] is True
@@ -9452,7 +9490,7 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
         readme
     )
     assert "This establishes exact workgroup-size specialization" in readme
-    assert "It does not establish wave semantics" in readme
+    assert "does not establish wave semantics" in readme
 
 
 def test_gemv_opengl_gap_records_strict_expected_frontier():
@@ -9534,7 +9572,8 @@ def test_gemv_opengl_gap_records_strict_expected_frontier():
     assert "all 225 specializations materialized" in readme
     assert "the base offset is in `[0, 14]`" in readme
     assert "at most element `14` of the 16-element backing" in readme
-    assert "target subgroup-width contract is also not established" in readme
+    assert "does not configure the exact subgroup width" in readme
+    assert "can now gate execution on a device reporting width 32" in readme
     assert "attempts no native compiler" in readme
     assert "does not claim an emitted or runnable GEMV artifact" in readme
 

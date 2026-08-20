@@ -533,6 +533,55 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_binary_native_loader.py::test_pinned_mlx_binary_add_executes_through_opengl_native_loader
 
+      - name: Validate pinned MLX LogSumExp OpenGL dispatch artifacts
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_LOGSUMEXP_OPENGL_TOOLCHAIN: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_logsumexp_native_loader.py::test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts
+
+      - name: Prove exact OpenGL subgroup-width execution
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_RUN_OPENGL_EXACT_SUBGROUP_DEVICE_TEST: "1"
+          EGL_PLATFORM: surfaceless
+          GALLIUM_DRIVER: zink
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          LIBGL_KOPPER_DRI2: "true"
+          MESA_LOADER_DRIVER_OVERRIDE: zink
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+
+          lavapipe_icd=""
+          for icd_dir in /usr/share/vulkan/icd.d /etc/vulkan/icd.d; do
+            if [ ! -d "$icd_dir" ]; then
+              continue
+            fi
+            lavapipe_icd="$(
+              find "$icd_dir" \
+                -maxdepth 1 \
+                -type f \
+                -name 'lvp_icd*.json' \
+                -print \
+                -quit
+            )"
+            if [ -n "$lavapipe_icd" ]; then
+              break
+            fi
+          done
+          if [ -z "$lavapipe_icd" ]; then
+            echo "::error::Lavapipe Vulkan ICD manifest was not found." >&2
+            exit 1
+          fi
+          export VK_DRIVER_FILES="$lavapipe_icd"
+          export VK_ICD_FILENAMES="$lavapipe_icd"
+
+          python -m pytest -q -n auto \
+            tests/test_translator/test_native_runtime_drivers.py::test_opengl_compute_runtime_executes_exact_subgroup_width_on_device
+
       - name: Validate generated OpenGL subgroup contract through Vulkan
         if: runner.os == 'Linux'
         env:

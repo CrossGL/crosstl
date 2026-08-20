@@ -3109,6 +3109,26 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
         "- name: Prove pinned MLX LogSumExp Direct3D native-loader execution"
     ) < mlx_porting.index("- name: Run MLX project-porting checks")
 
+    opengl_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Validate pinned MLX LogSumExp OpenGL dispatch artifacts",
+    )
+    assert "if: runner.os == 'Linux'" in opengl_step
+    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream" in opengl_step
+    assert 'CROSTL_REQUIRE_MLX_LOGSUMEXP_OPENGL_TOOLCHAIN: "1"' in opengl_step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts"
+        in opengl_step
+    )
+    assert "-n auto" in opengl_step
+    assert "-k" not in opengl_step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Validate pinned MLX LogSumExp OpenGL dispatch artifacts",
+        "Checkout pinned MLX",
+    )
+
 
 def test_mlx_project_porting_workflow_installs_pinned_warp_runtime():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")

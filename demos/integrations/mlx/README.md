@@ -174,6 +174,13 @@ The current harness verifies:
   exact fail-closed workgroup-size diagnostic and no target file. This is native
   artifact validation only; the gate does not run the kernels or establish
   runtime parity;
+- a separate bounded OpenGL dispatch-contract proof for the actual pinned
+  `logsumexp.metal` source. The two float32 workloads emit standalone GLSL
+  artifacts with workgroup sizes `[32, 1, 1]` and `[288, 1, 1]`, an exact
+  subgroup width of 32, and preserved subgroup max and sum reductions. Linux CI
+  compiles both artifacts to OpenGL SPIR-V 1.3 and validates both binaries. The
+  runtime contract requires `GL_KHR_shader_subgroup` and rejects a device whose
+  `GL_SUBGROUP_SIZE_KHR` value is not 32 before shader compilation or dispatch;
 - full project materialization of pinned `gemv.metal` for DirectX. The gate
   requires 225 materialized specializations, no unsupported materializations or
   unresolved residue, no bare pure value-discard statements, one aggregate HLSL
@@ -550,8 +557,10 @@ view work tracked by [#1546](https://github.com/CrossGL/crosstl/issues/1546),
 the resource pointer-offset contract tracked by
 [#1518](https://github.com/CrossGL/crosstl/issues/1518),
 with the broader subgroup contract tracked by
-[#1786](https://github.com/CrossGL/crosstl/issues/1786). Those issues remain
-open for their broader cross-target, writable-view, alignment, subgroup, and
+[#1894](https://github.com/CrossGL/crosstl/issues/1894). Issue
+[#1786](https://github.com/CrossGL/crosstl/issues/1786) established the exact
+subgroup-width metadata and DirectX enforcement model. The remaining issues
+cover broader cross-target, writable-view, alignment, subgroup fallback, and
 runtime acceptance criteria. This proof does not dispatch the kernel through
 Direct3D, run MLX tests, or claim numerical parity.
 
@@ -661,11 +670,11 @@ shader attribute` warnings caused by using a library profile. The gate derives
 the expected warning source-line counts from the seven generated `numthreads`
 forms and requires exact severity, message, source expression, and count
 matches. Any unused-value warning, error, or other diagnostic fails the gate.
-[#1786](https://github.com/CrossGL/crosstl/issues/1786) tracks the required
-32-lane wave-size specialization. Library compilation proves that DXC accepts
-and code-generates every exported function. It does not establish wave
-semantics, runtime execution, numerical parity, or whole-kernel semantic
-validity.
+[#1786](https://github.com/CrossGL/crosstl/issues/1786) established the exact
+wave-size specialization contract. This existing GEMV library frontier does not
+apply that contract, so library compilation proves that DXC accepts and
+code-generates every exported function but does not establish wave semantics,
+runtime execution, numerical parity, or whole-kernel semantic validity.
 
 The separate pinned `gemv.metal` OpenGL frontier uses the same 4,096
 specialization limit and 2,097,152-item materialization work budget. It requires
@@ -685,15 +694,17 @@ subgroup width and the configured `[32, 8, 1]` workgroup, `simd_gid` is in
 `[0, 7]`, the base offset is in `[0, 14]`, and the guarded reduction reaches at
 most element `14` of the 16-element backing. Translation remains fail-closed
 because the target-independent backing-view analysis does not yet carry this
-range proof, while the target subgroup-width contract is also not established.
+range proof. The existing frontier also does not configure the exact subgroup
+width on the blocked artifact.
 [#1671](https://github.com/CrossGL/crosstl/issues/1671) tracks backing and range
 propagation and remains the translation blocker.
-[#1786](https://github.com/CrossGL/crosstl/issues/1786) remains the execution
-blocker for required subgroup-width specialization. Because translation emits
-no GLSL artifact, this frontier does not claim an emitted or runnable GEMV
-artifact, attempts no native compiler or runtime validation, and makes no
-runtime or numerical-parity claim. Configuring the workgroup-size rule alone
-does not prove the unavailable generated-artifact execution contract.
+The exact subgroup-width contract can now gate execution on a device reporting
+width 32; [#1894](https://github.com/CrossGL/crosstl/issues/1894) tracks a
+semantics-preserving fallback for devices without that native width. Because
+translation emits no GLSL artifact, this frontier does not claim an emitted or
+runnable GEMV artifact, attempts no native compiler or runtime validation, and
+makes no runtime or numerical-parity claim. Configuring the workgroup-size rule
+alone does not prove the unavailable generated-artifact execution contract.
 
 Owner-dependent `constexpr` helper calls in quantized struct static members now
 resolve for the selected pinned replay, completing CrossGL/crosstl#1672.
@@ -877,6 +888,25 @@ requires official DXC `cs_6_6` compilation with warnings as errors on Windows.
 This establishes translation and native compiler acceptance for the two listed
 test-derived dispatches.
 
+The same checked-in contract also produces two standalone OpenGL artifacts.
+Each generated GLSL file requires `GL_KHR_shader_subgroup_basic`, declares
+`CROSSTL_REQUIRED_SUBGROUP_WIDTH` as 32, and checks `gl_SubgroupSize` before any
+translated kernel work. The portability report records the matching
+`GL_KHR_shader_subgroup` host requirement and `GL_SUBGROUP_SIZE_KHR` query, and
+the runtime artifact manifest retains both the local size and exact subgroup
+width. Linux CI requires `glslangValidator` and `spirv-val` to accept both
+artifacts. The built-in Python runtime and generated C++ adapter reject a
+reported width other than 32 before compiling the shader or allocating its
+resources.
+
+The Linux software-device proof separately executes an exact-width reduced
+compute artifact on a device reporting subgroup width 4. That verifies the
+query, compatibility gate, dispatch, and readback path, but it cannot execute
+the width-32 LogSumExp artifacts. OpenGL LogSumExp numerical parity therefore
+remains dependent on compatible hardware or a semantics-preserving subgroup
+emulation strategy tracked by
+[#1894](https://github.com/CrossGL/crosstl/issues/1894).
+
 A separate Windows native-loader test packages the axis-size-32 artifact,
 builds its reflected DirectX ABI, binds 32 nonuniform float32 inputs and the
 axis-size constant, dispatches one 32-thread workgroup, and compares the
@@ -956,12 +986,13 @@ each HLSL library with `cs_6_6`; native 16-bit artifacts additionally pass
 
 For OpenGL, the `workgroup_32` and `workgroup_64` variants leave `has_w`
 deferred, retain `layout(constant_id = 20)`, and split each host-named entry
-into a standalone `main` artifact. The proof deliberately does not configure a
-subgroup-width rule for OpenGL because this project contract cannot enforce an
-exact subgroup width there. It requires subgroup provenance and enforcement
-metadata to remain absent. Linux CI compiles all 24 GLSL artifacts to OpenGL
-SPIR-V 1.3 and validates all 24 binaries with `spirv-val`; that result does not
-establish the source's 32-lane simdgroup or `simd_sum` semantics.
+into a standalone `main` artifact. This existing RMSNorm proof deliberately
+does not configure an OpenGL subgroup-width rule, so subgroup provenance and
+enforcement metadata remain absent. Linux CI compiles all 24 GLSL artifacts to
+OpenGL SPIR-V 1.3 and validates all 24 binaries with `spirv-val`; that result
+does not establish the source's 32-lane simdgroup or `simd_sum` semantics. The
+bounded LogSumExp proof above exercises the exact-width OpenGL contract without
+inflating the RMSNorm claim.
 
 This is translation and native compilation evidence only. It does not execute
 RMSNorm, establish numerical or runtime parity, claim complete runtime
