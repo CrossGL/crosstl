@@ -2423,6 +2423,11 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "translate_project_reports_unrepresentable_atomic_fence_contract" in (
         mlx_porting
     )
+    assert (
+        "python -m pytest -q -n auto "
+        "tests/test_mlx_dispatch_contract_fixture.py "
+        "tests/test_mlx_logsumexp_dispatch_contract_fixture.py" in mlx_porting
+    )
     assert '"tests/test_mlx_porting_harness.py"' in mlx_porting
     assert '"tests/test_mlx_logsumexp_dispatch_contract_fixture.py"' in mlx_porting
     assert '"tests/test_mlx_rms_norm_dispatch_contract_fixture.py"' in mlx_porting

@@ -118,10 +118,7 @@ jobs:
           xcrun --sdk macosx metal --version
 
       - name: Validate bounded MLX dispatch contracts
-        run: |
-          python -m pytest -q -n auto \
-            tests/test_mlx_dispatch_contract_fixture.py \
-            tests/test_mlx_logsumexp_dispatch_contract_fixture.py
+        run: python -m pytest -q -n auto tests/test_mlx_dispatch_contract_fixture.py tests/test_mlx_logsumexp_dispatch_contract_fixture.py
 
       - name: Install Linux SPIR-V tools
         if: runner.os == 'Linux'
