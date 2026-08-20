@@ -173,6 +173,41 @@ jobs:
         if: runner.os == 'Windows'
         run: python -m pip install -e ".[directx-runtime]" pytest-xdist
 
+      - name: Install pinned Windows WARP runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $warpVersion = "1.0.20"
+          $warpSha256 = "e5fe5de661ce98b58ef9cfb736e73c0a7a2623d3bbf5f14839b2d55566d87e40"
+          $archive = Join-Path $env:RUNNER_TEMP "microsoft.direct3d.warp.$warpVersion.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "microsoft.direct3d.warp.$warpVersion"
+          $warpUri = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/$warpVersion/microsoft.direct3d.warp.$warpVersion.nupkg"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $warpUri -OutFile $archive
+              break
+            } catch {
+              if ($attempt -eq 5) {
+                throw
+              }
+              Write-Warning "WARP download failed on attempt $attempt; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          $archiveSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveSha256 -ne $warpSha256) {
+            throw "WARP archive checksum mismatch: expected $warpSha256, got $archiveSha256."
+          }
+          Expand-Archive -Path $archive -DestinationPath $warpRoot -Force
+          $warp = Join-Path $warpRoot "build\native\bin\x64\d3d10warp.dll"
+          if (-not (Test-Path -Path $warp -PathType Leaf)) {
+            throw "d3d10warp.dll not found in WARP package."
+          }
+          $pythonWarp = Join-Path $env:pythonLocation "d3d10warp.dll"
+          Copy-Item -Path $warp -Destination $pythonWarp -Force
+          Write-Host "Installed WARP $((Get-Item $pythonWarp).VersionInfo.FileVersion) beside python.exe."
+
       - name: Install Linux runtime dependencies
         if: runner.os == 'Linux'
         run: |
@@ -188,6 +223,15 @@ jobs:
           git -C mlx-upstream sparse-checkout init --cone
           git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
           git -C mlx-upstream checkout "$MLX_COMMIT"
+
+      - name: Prove pinned MLX LogSumExp Direct3D native-loader execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_LOGSUMEXP_DIRECTX_NATIVE_LOADER: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_logsumexp_native_loader.py::test_pinned_mlx_logsumexp_executes_through_directx_native_loader
 
       - name: Enumerate pinned MLX Metal entry points
         shell: bash
@@ -388,15 +432,6 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_binary_native_loader.py::test_pinned_mlx_binary_add_executes_through_directx_native_loader
-
-      - name: Prove pinned MLX LogSumExp Direct3D native-loader execution
-        if: runner.os == 'Windows'
-        env:
-          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
-          CROSTL_REQUIRE_MLX_LOGSUMEXP_DIRECTX_NATIVE_LOADER: "1"
-        run: >-
-          python -m pytest -q -n auto
-          tests/test_translator/test_mlx_logsumexp_native_loader.py::test_pinned_mlx_logsumexp_executes_through_directx_native_loader
 
       - name: Prove Direct3D local-struct byte-view native readback
         if: runner.os == 'Windows'

@@ -3100,6 +3100,34 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
     )
     assert "-n auto" in step
     assert "-k" not in step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove pinned MLX LogSumExp Direct3D native-loader execution",
+        "Checkout pinned MLX",
+    )
+    assert mlx_porting.index(
+        "- name: Prove pinned MLX LogSumExp Direct3D native-loader execution"
+    ) < mlx_porting.index("- name: Run MLX project-porting checks")
+
+
+def test_mlx_project_porting_workflow_installs_pinned_warp_runtime():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    step_name = "Install pinned Windows WARP runtime"
+    step = ci_coverage.workflow_step_section(mlx_porting, step_name)
+
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        step_name,
+        "Install Windows Direct3D runtime dependencies",
+    )
+    assert "if: runner.os == 'Windows'" in step
+    assert 'warpVersion = "1.0.20"' in step
+    assert "e5fe5de661ce98b58ef9cfb736e73c0a7a2623d3bbf5f14839b2d55566d87e40" in step
+    assert "api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp" in step
+    assert "Get-FileHash -Path $archive -Algorithm SHA256" in step
+    assert '"build\\native\\bin\\x64\\d3d10warp.dll"' in step
+    assert 'Join-Path $env:pythonLocation "d3d10warp.dll"' in step
 
 
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
