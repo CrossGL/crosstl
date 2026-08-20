@@ -4327,74 +4327,86 @@ def test_opengl_compute_runtime_executes_exact_subgroup_width_on_device(tmp_path
     if not sys.platform.startswith("linux"):
         pytest.fail("Exact-width OpenGL subgroup runtime proof requires Linux")
     try:
-        __import__("moderngl")
+        moderngl = __import__("moderngl")
         __import__("OpenGL.GL")
     except ImportError as exc:
         pytest.fail(f"OpenGL subgroup runtime dependency is unavailable: {exc}")
 
-    source = textwrap.dedent("""
-        shader OpenGLExactSubgroupRuntime {
-            compute {
+    context = moderngl.create_standalone_context(require=430, backend="egl")
+    runtime = OpenGLComputeRuntime(
+        context_factory=lambda _moderngl: context,
+        release_context=False,
+    )
+    try:
+        subgroup_width = runtime._query_context_subgroup_width(context)
+        source = textwrap.dedent(f"""
+        shader OpenGLExactSubgroupRuntime {{
+            compute {{
                 void main(
                     RWStructuredBuffer<uint> outputValues @buffer(0),
                     uint localIndex @gl_LocalInvocationIndex
-                ) @ WaveSize(4) {
+                ) @ WaveSize({subgroup_width}) {{
                     outputValues[localIndex] = WaveGetLaneCount();
-                }
+                }}
+            }}
+        }}
+        """)
+        ast = Parser(Lexer(source).get_tokens()).parse()
+        next(iter(ast.stages.values())).execution_config = {
+            "numthreads": (subgroup_width, 1, 1)
+        }
+        generated = GLSLCodeGen().generate(ast)
+        artifact_path = tmp_path / "exact-subgroup-width.comp"
+        artifact_path.write_text(generated, encoding="utf-8")
+        assert f"#define CROSSTL_REQUIRED_SUBGROUP_WIDTH {subgroup_width}u" in generated
+        assert "if (gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH)" in generated
+
+        request = NativeRuntimeDispatchRequest(
+            target="opengl",
+            artifact={"target": "opengl"},
+            artifact_path=artifact_path,
+            module_path=artifact_path,
+            loaded_artifact=generated,
+            buffers={
+                "output_values": NativeRuntimeBufferBinding(
+                    name="output_values",
+                    binding=RuntimeResourceBinding(
+                        name="output_values",
+                        kind="storage-buffer",
+                        set=0,
+                        binding=0,
+                        access="write",
+                    ),
+                    source="expectedOutput",
+                    dtype="uint32",
+                    shape=(subgroup_width,),
+                    metadata={"runtimeValueName": "subgroup_width"},
+                )
+            },
+            constants={},
+            dispatch=RuntimeDispatchGeometry(
+                entry_point="main",
+                workgroup_size=(subgroup_width, 1, 1),
+                workgroup_count=(1, 1, 1),
+            ),
+            entry_point="main",
+            execution_config={
+                "local_size": [subgroup_width, 1, 1],
+                "subgroupWidth": subgroup_width,
+            },
+        )
+
+        outputs = runtime.dispatch(None, None, request)
+
+        assert outputs == {
+            "subgroup_width": {
+                "dtype": "uint32",
+                "shape": [subgroup_width],
+                "values": [subgroup_width] * subgroup_width,
             }
         }
-        """)
-    ast = Parser(Lexer(source).get_tokens()).parse()
-    next(iter(ast.stages.values())).execution_config = {"numthreads": (4, 1, 1)}
-    generated = GLSLCodeGen().generate(ast)
-    artifact_path = tmp_path / "exact-subgroup-width.comp"
-    artifact_path.write_text(generated, encoding="utf-8")
-    assert "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 4u" in generated
-    assert "if (gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH)" in generated
-
-    request = NativeRuntimeDispatchRequest(
-        target="opengl",
-        artifact={"target": "opengl"},
-        artifact_path=artifact_path,
-        module_path=artifact_path,
-        loaded_artifact=generated,
-        buffers={
-            "output_values": NativeRuntimeBufferBinding(
-                name="output_values",
-                binding=RuntimeResourceBinding(
-                    name="output_values",
-                    kind="storage-buffer",
-                    set=0,
-                    binding=0,
-                    access="write",
-                ),
-                source="expectedOutput",
-                dtype="uint32",
-                shape=(4,),
-                metadata={"runtimeValueName": "subgroup_width"},
-            )
-        },
-        constants={},
-        dispatch=RuntimeDispatchGeometry(
-            entry_point="main",
-            workgroup_size=(4, 1, 1),
-            workgroup_count=(1, 1, 1),
-        ),
-        entry_point="main",
-        execution_config={"local_size": [4, 1, 1], "subgroupWidth": 4},
-    )
-
-    outputs = OpenGLComputeRuntime(context_backends=("egl",)).dispatch(
-        None, None, request
-    )
-
-    assert outputs == {
-        "subgroup_width": {
-            "dtype": "uint32",
-            "shape": [4],
-            "values": [4, 4, 4, 4],
-        }
-    }
+    finally:
+        context.release()
 
 
 def test_opengl_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device(

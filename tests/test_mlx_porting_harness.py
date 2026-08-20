@@ -2240,7 +2240,10 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_logsumexp["toolchain_validation"]["validated_artifact_count"] == 2
     assert opengl_logsumexp["runtime_compatibility"] == {
         "adapter_preflight_included": True,
-        "compatible_width_device_test": 4,
+        "compatible_width_device_test": {
+            "artifact_specialized_to_reported_width": True,
+            "width_source": "GL_SUBGROUP_SIZE_KHR",
+        },
         "logsumexp_required_width": 32,
         "logsumexp_runtime_execution_attempted": False,
         "blocked_by": "https://github.com/CrossGL/crosstl/issues/1894",

@@ -899,12 +899,13 @@ artifacts. The built-in Python runtime and generated C++ adapter reject a
 reported width other than 32 before compiling the shader or allocating its
 resources.
 
-The Linux software-device proof separately executes an exact-width reduced
-compute artifact on a device reporting subgroup width 4. That verifies the
-query, compatibility gate, dispatch, and readback path, but it cannot execute
-the width-32 LogSumExp artifacts. OpenGL LogSumExp numerical parity therefore
-remains dependent on compatible hardware or a semantics-preserving subgroup
-emulation strategy tracked by
+The Linux software-device proof separately queries the device subgroup width,
+specializes a reduced exact-width compute artifact to that reported value, and
+verifies dispatch and readback. This validates the query and compatibility path
+without assuming a fixed Mesa subgroup width, but it cannot execute the
+width-32 LogSumExp artifacts unless the device reports 32. OpenGL LogSumExp
+numerical parity therefore remains dependent on compatible hardware or a
+semantics-preserving subgroup emulation strategy tracked by
 [#1894](https://github.com/CrossGL/crosstl/issues/1894).
 
 A separate Windows native-loader test packages the axis-size-32 artifact,

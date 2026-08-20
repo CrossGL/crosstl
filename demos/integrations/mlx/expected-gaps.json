@@ -285,7 +285,10 @@
     },
     "runtime_compatibility": {
       "adapter_preflight_included": true,
-      "compatible_width_device_test": 4,
+      "compatible_width_device_test": {
+        "artifact_specialized_to_reported_width": true,
+        "width_source": "GL_SUBGROUP_SIZE_KHR"
+      },
       "logsumexp_required_width": 32,
       "logsumexp_runtime_execution_attempted": false,
       "blocked_by": "https://github.com/CrossGL/crosstl/issues/1894"
