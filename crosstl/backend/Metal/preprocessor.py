@@ -3823,6 +3823,73 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         return self._apply_text_replacements(body, replacements)
 
+    def _canonicalize_struct_scoped_template_arguments(
+        self,
+        body: str,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        structs_by_name: Optional[Dict[str, _MetalStructDefinition]],
+    ) -> str:
+        alias_names = set(struct.type_aliases)
+        if not alias_names or not (set(IDENTIFIER_RE.findall(body)) & alias_names):
+            return body
+
+        ignored_spans = self._find_comment_and_literal_spans(body)
+        local_aliases = self._local_type_alias_shadow_scopes(body)
+        value_shadowed_aliases = alias_names & (
+            set(method.parameter_names) | self._local_variable_names(body)
+        )
+        # Lowered methods leave the struct's type scope before explicit helper
+        # templates are materialized, so resolve only their argument lists here.
+        replacements: List[Tuple[int, int, str]] = []
+        index = 0
+        while index < len(body):
+            ignored = self._containing_span(index, ignored_spans)
+            if ignored is not None:
+                index = ignored[1]
+                continue
+            if not (body[index].isalpha() or body[index] == "_"):
+                index += 1
+                continue
+
+            _identifier, consumed = self._read_identifier(body, index)
+            identifier_end = index + consumed
+            angle_start = identifier_end
+            while angle_start < len(body) and body[angle_start].isspace():
+                angle_start += 1
+            if angle_start >= len(body) or body[angle_start] != "<":
+                index = identifier_end
+                continue
+            angle_end = self._find_matching_angle(body, angle_start)
+            if angle_end is None:
+                index = identifier_end
+                continue
+            call_start = angle_end + 1
+            while call_start < len(body) and body[call_start].isspace():
+                call_start += 1
+            if call_start >= len(body) or body[call_start] != "(":
+                index = identifier_end
+                continue
+
+            arguments = body[angle_start + 1 : angle_end]
+            if not (set(IDENTIFIER_RE.findall(arguments)) & alias_names):
+                index = angle_end + 1
+                continue
+            excluded_aliases = value_shadowed_aliases | self._shadowed_type_aliases_at(
+                local_aliases, angle_start
+            )
+            canonical = self._canonicalize_struct_scoped_type(
+                arguments,
+                struct,
+                structs_by_name,
+                excluded_aliases=excluded_aliases,
+            )
+            if canonical and canonical != arguments.strip():
+                replacements.append((angle_start + 1, angle_end, canonical))
+            index = angle_end + 1
+
+        return self._apply_text_replacements(body, replacements)
+
     def _split_struct_body(
         self,
         struct_name: str,
@@ -5648,6 +5715,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         rewritten_body = self._canonicalize_struct_scoped_cast_types(
             rewritten_body, struct, structs_by_name
+        )
+        rewritten_body = self._canonicalize_struct_scoped_template_arguments(
+            rewritten_body, struct, method, structs_by_name
         )
         if instantiated_template_functions is not None and template_methods_by_struct:
             rewritten_body = self._lower_internal_template_member_calls(
@@ -8351,6 +8421,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         rewritten_body = self._canonicalize_struct_scoped_cast_types(
             rewritten_body, struct, None
+        )
+        rewritten_body = self._canonicalize_struct_scoped_template_arguments(
+            rewritten_body, struct, method, None
         )
         params = self._canonicalize_struct_scoped_parameters(
             method.parameters, struct, None

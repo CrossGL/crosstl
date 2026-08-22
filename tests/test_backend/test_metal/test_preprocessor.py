@@ -6728,6 +6728,37 @@ def test_preprocessor_preserves_local_alias_shadow_in_explicit_cast():
     assert "static_cast<value_type>(value)" in output
 
 
+def test_preprocessor_resolves_struct_scoped_aliases_in_template_helper_calls():
+    code = """
+    template <typename T>
+    T convert(T value) { return value; }
+
+    template <typename T>
+    struct Reader {
+      using scalar_type = T;
+
+      scalar_type read(scalar_type value) {
+        return convert<scalar_type>(value);
+      }
+
+      scalar_type read_shadowed(scalar_type value) {
+        using scalar_type = int;
+        return T(convert<scalar_type>(int(value)));
+      }
+    };
+
+    Reader<half> reader;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "return convert_half(value);" in output
+    assert "return half(convert_int(int(value)));" in output
+    assert "half convert_half(half value)" in output
+    assert "int convert_int(int value)" in output
+    assert "convert_scalar_type" not in output
+
+
 def test_preprocessor_resolves_qualified_owner_alias_with_pointer_target():
     code = """
     template <typename T>
