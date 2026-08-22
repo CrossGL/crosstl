@@ -5653,9 +5653,9 @@ def test_codegen_size_t_typedef_uses_parseable_crossgl_alias_from_moltenvk():
     assert parse_crossgl(crossgl) is not None
 
 
-def test_codegen_omits_user_type_aliases_from_public_metal_headers():
-    # Reduced from MetalPetal's MTIShaderLib.h: CrossGL can use the user type
-    # directly, but cannot parse a typedef whose source is another user type.
+def test_codegen_canonicalizes_user_type_aliases_from_public_metal_headers():
+    # Reduced from MetalPetal's MTIShaderLib.h: CrossGL uses the declared user
+    # type directly because it cannot represent a typedef to another user type.
     code = """
     typedef MTIVertex VertexIn;
 
@@ -5670,7 +5670,8 @@ def test_codegen_omits_user_type_aliases_from_public_metal_headers():
     crossgl = convert(code)
 
     assert "typedef MTIVertex VertexIn;" not in crossgl
-    assert "VertexIn in_" in crossgl
+    assert "vec4 passthrough(MTIVertex in_)" in crossgl
+    assert "VertexIn" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -6988,6 +6989,83 @@ def test_codegen_using_alias():
     """
     result = convert(code)
     assert "typedef uint Index;" in result
+
+
+def test_codegen_canonicalizes_global_alias_to_concrete_struct(tmp_path):
+    code = """
+    struct Value_float {
+        float value;
+        Value_float(float input) : value(input) {}
+    };
+
+    using ValueAlias = Value_float;
+    using ChainedValueAlias = ValueAlias;
+
+    ChainedValueAlias make_value(ValueAlias input) {
+        ValueAlias local = (ValueAlias)input;
+        ChainedValueAlias values[1] = {local};
+        return ChainedValueAlias(values[0].value);
+    }
+
+    kernel void alias_kernel(
+        const device ValueAlias* input [[buffer(0)]],
+        device ChainedValueAlias* output [[buffer(1)]]) {
+        output[0] = make_value(input[0]);
+    }
+    """
+
+    result = convert(code)
+
+    assert "ValueAlias" not in result
+    assert "ChainedValueAlias" not in result
+    assert "Value_float make_value(Value_float input)" in result
+    assert "Value_float local = input;" in result
+    assert "Value_float[1] values;" in result
+    assert "crosstl_ctor_Value_float_1(values[0].value)" in result
+    assert "StructuredBuffer<Value_float> input @buffer(0)" in result
+    assert "RWStructuredBuffer<Value_float> output @buffer(1)" in result
+    assert parse_crossgl(result) is not None
+
+    source_path = tmp_path / "concrete-struct-alias.metal"
+    source_path.write_text(code, encoding="utf-8")
+    outputs = {
+        target: crosstl.translate(
+            str(source_path),
+            backend=target,
+            format_output=False,
+        )
+        for target in ("directx", "opengl")
+    }
+    assert all("ValueAlias" not in output for output in outputs.values())
+    HLSLParser(HLSLLexer(outputs["directx"]).tokenize()).parse()
+    assert_opengl_compute_validates_if_available(
+        outputs["opengl"],
+        tmp_path,
+        "concrete-struct-alias",
+    )
+
+
+def test_codegen_canonicalizes_qualified_concrete_struct_alias():
+    code = """
+    namespace values {
+    struct Value_float {
+        float value;
+    };
+    }
+
+    using QualifiedAlias = values::Value_float;
+
+    QualifiedAlias identity(QualifiedAlias input) {
+        return input;
+    }
+    """
+
+    result = convert(code)
+
+    assert "Value_float identity(Value_float input)" in result
+    assert "QualifiedAlias" not in result
+    assert "values::Value_float" not in result
+    assert parse_crossgl(result) is not None
 
 
 def test_codegen_function_table_call_and_icb_methods():
