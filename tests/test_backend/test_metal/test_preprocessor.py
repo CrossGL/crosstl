@@ -1239,6 +1239,108 @@ def test_preprocessor_removes_proven_static_assertion_for_concrete_struct_layout
     assert "struct TaggedPair" in output
 
 
+def _evaluate_aggregate_static_assertions(
+    assertions,
+    *,
+    operator_body=(
+        "return {a.real * b.real - a.imag * b.imag, "
+        "a.real * b.imag + a.imag * b.real};"
+    ),
+    additional_operators="",
+):
+    code = f"""
+    typedef bfloat bfloat16_t;
+
+    template <typename T>
+    struct Pair {{
+        T real;
+        T imag;
+
+        constexpr Pair(T real, T imag) thread : real(real), imag(imag) {{}}
+    }};
+
+    template <typename T>
+    constexpr Pair<T> operator*(Pair<T> a, Pair<T> b) {{
+        {operator_body}
+    }}
+
+    {additional_operators}
+    {assertions}
+    """
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_explicit_template_struct_instantiations(
+        code
+    )
+    return preprocessor._evaluate_static_assertions(materialized)
+
+
+def test_preprocessor_removes_proven_aggregate_constexpr_static_assertions():
+    output = _evaluate_aggregate_static_assertions("""
+        static_assert(
+            (Pair<half>{1.0h, 2.0h} * Pair<half>{3.0h, 4.0h}).real ==
+                -5.0h);
+        static_assert(
+            (Pair<bfloat16_t>{bfloat16_t(1.0f), bfloat16_t(2.0f)} *
+             Pair<bfloat16_t>{bfloat16_t(3.0f), bfloat16_t(4.0f)}).real ==
+                bfloat16_t(-5.0f));
+        """)
+
+    assert "static_assert" not in output
+    assert "struct Pair_half" in output
+    assert "struct Pair_bfloat16_t" in output
+
+
+def test_preprocessor_rejects_false_aggregate_constexpr_static_assertion():
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        _evaluate_aggregate_static_assertions("""
+            static_assert(
+                (Pair<half>{1.0h, 2.0h} * Pair<half>{3.0h, 4.0h}).real ==
+                    -4.0h);
+            """)
+
+    error = exc_info.value
+    assert error.reason == "assertion-failed"
+    assert error.unresolved_dependencies == ()
+
+
+def test_preprocessor_keeps_stateful_aggregate_constexpr_operator_unresolved():
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        _evaluate_aggregate_static_assertions(
+            """
+            static_assert(
+                (Pair<half>{1.0h, 2.0h} * Pair<half>{3.0h, 4.0h}).real ==
+                    -5.0h);
+            """,
+            operator_body="""
+                T real = a.real * b.real - a.imag * b.imag;
+                return {real, a.real * b.imag + a.imag * b.real};
+            """,
+        )
+
+    assert exc_info.value.reason == "condition-unresolved"
+
+
+def test_preprocessor_keeps_ambiguous_aggregate_constexpr_operator_unresolved():
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        _evaluate_aggregate_static_assertions(
+            """
+            static_assert(
+                (Pair<half>{1.0h, 2.0h} * Pair<half>{3.0h, 4.0h}).real ==
+                    -5.0h);
+            """,
+            additional_operators="""
+                template <typename T, typename U>
+                constexpr Pair<T> operator*(Pair<T> a, Pair<U> b) {
+                    return {
+                        a.real * b.real - a.imag * b.imag,
+                        a.real * b.imag + a.imag * b.real};
+                }
+            """,
+        )
+
+    assert exc_info.value.reason == "condition-unresolved"
+
+
 def test_preprocessor_rejects_false_static_assertion_for_padded_struct_layout():
     code = """
     struct PaddedValue {

@@ -1,9 +1,11 @@
 """Preprocessor support for Metal source imports."""
 
 import ast
+import math
 import operator
 import os
 import re
+import struct as binary_struct
 from bisect import bisect_right
 from dataclasses import dataclass, field, replace
 from heapq import heappop, heappush
@@ -377,6 +379,32 @@ class _MetalConstexprFunction:
     variadic_template_parameters: Set[str] = field(default_factory=set)
     template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
     template_parameter_types: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _MetalConstexprScalarValue:
+    type_name: str
+    value: Union[bool, int, float]
+
+
+@dataclass(frozen=True)
+class _MetalConstexprAggregateValue:
+    type_name: str
+    members: Tuple[Tuple[str, _MetalConstexprScalarValue], ...]
+
+    def member(self, name: str) -> Optional[_MetalConstexprScalarValue]:
+        return dict(self.members).get(name)
+
+
+@dataclass(frozen=True)
+class _MetalConstexprBinaryOperator:
+    operator: str
+    span: Tuple[int, int]
+    template_parameters: Tuple[str, ...]
+    return_type: str
+    parameter_names: Tuple[str, str]
+    parameter_types: Tuple[str, str]
+    return_expression: str
 
 
 @dataclass(frozen=True)
@@ -5262,6 +5290,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         structs = self._find_concrete_struct_definitions(code)
         constexpr_functions: Dict[str, List[_MetalConstexprFunction]] = {}
+        constexpr_binary_operators: Optional[List[_MetalConstexprBinaryOperator]] = None
         constexpr_index_built = False
         replacements: List[Tuple[int, int, str]] = []
         assertion_index = 0
@@ -5319,6 +5348,18 @@ class MetalPreprocessor(HLSLPreprocessor):
             folded, value = self._evaluate_static_integral_expression(
                 evaluation_condition
             )
+            if not folded:
+                if constexpr_binary_operators is None:
+                    constexpr_binary_operators = (
+                        self._static_constexpr_binary_operators(code)
+                    )
+                folded, value = self._evaluate_static_aggregate_assertion(
+                    evaluation_condition,
+                    operators=constexpr_binary_operators,
+                    structs=structs,
+                    type_aliases=type_aliases,
+                    position=condition_position,
+                )
             if folded and value:
                 replacements.append((*assertion.span, ""))
                 assertion_index += 1
@@ -5556,6 +5597,863 @@ class MetalPreprocessor(HLSLPreprocessor):
             and re.search(rf"\b{re.escape(name)}\b", masked) is not None
         )
         return tuple(sorted(dependencies))
+
+    def _evaluate_static_aggregate_assertion(
+        self,
+        expression: str,
+        *,
+        operators: Sequence[_MetalConstexprBinaryOperator],
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+    ) -> Tuple[bool, Optional[int]]:
+        comparison = self._split_static_top_level_operator(
+            expression,
+            ("==", "!="),
+        )
+        if comparison is None:
+            return False, None
+        left_text, comparison_operator, right_text = comparison
+        left = self._evaluate_static_aggregate_member_expression(
+            left_text,
+            operators=operators,
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+        right = self._evaluate_static_aggregate_member_expression(
+            right_text,
+            operators=operators,
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+        if left is None and right is None:
+            return False, None
+        if left is None:
+            if right is None:
+                return False, None
+            left = self._evaluate_static_scalar_expression(
+                left_text,
+                expected_type=right.type_name,
+            )
+        elif right is None:
+            right = self._evaluate_static_scalar_expression(
+                right_text,
+                expected_type=left.type_name,
+            )
+        if left is None or right is None or left.type_name != right.type_name:
+            return False, None
+        equal = left.value == right.value
+        return True, int(equal if comparison_operator == "==" else not equal)
+
+    def _evaluate_static_aggregate_member_expression(
+        self,
+        expression: str,
+        *,
+        operators: Sequence[_MetalConstexprBinaryOperator],
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+    ) -> Optional[_MetalConstexprScalarValue]:
+        text = self._strip_static_outer_parentheses(expression)
+        if not text.startswith("("):
+            return None
+        close_paren = self._find_matching_delimiter(text, 0, "(", ")")
+        if close_paren is None:
+            return None
+        member_match = re.fullmatch(
+            r"\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*",
+            text[close_paren + 1 :],
+        )
+        if member_match is None:
+            return None
+        operation = self._split_top_level_binary_arithmetic(text[1:close_paren].strip())
+        if operation is None:
+            return None
+        left_text, binary_operator, right_text = operation
+        left = self._evaluate_static_aggregate_constructor(
+            left_text,
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+        right = self._evaluate_static_aggregate_constructor(
+            right_text,
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+        if left is None or right is None:
+            return None
+        result = self._evaluate_static_constexpr_binary_operator(
+            binary_operator,
+            left,
+            right,
+            operators=operators,
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+        return None if result is None else result.member(member_match.group(1))
+
+    def _evaluate_static_constexpr_binary_operator(
+        self,
+        binary_operator: str,
+        left: _MetalConstexprAggregateValue,
+        right: _MetalConstexprAggregateValue,
+        *,
+        operators: Sequence[_MetalConstexprBinaryOperator],
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+    ) -> Optional[_MetalConstexprAggregateValue]:
+        results: List[_MetalConstexprAggregateValue] = []
+        for candidate in operators:
+            if candidate.operator != binary_operator:
+                continue
+            template_parameters = set(candidate.template_parameters)
+            bindings: Dict[str, str] = {}
+            compatible = True
+            for declared_type, value in zip(
+                candidate.parameter_types,
+                (left, right),
+            ):
+                self._infer_template_parameter_bindings_from_type(
+                    declared_type,
+                    value.type_name,
+                    template_parameters,
+                    bindings,
+                )
+                concrete_declared_type = self._substitute_static_type_bindings(
+                    declared_type,
+                    bindings,
+                )
+                if self._canonical_static_aggregate_type(
+                    concrete_declared_type
+                ) != self._canonical_static_aggregate_type(value.type_name):
+                    compatible = False
+                    break
+            if not compatible or not template_parameters <= set(bindings):
+                continue
+
+            concrete_return_type = self._substitute_static_type_bindings(
+                candidate.return_type,
+                bindings,
+            )
+            canonical_return_type = self._canonical_static_aggregate_type(
+                concrete_return_type
+            )
+            result_type_candidates = {
+                value.type_name
+                for value in (left, right)
+                if self._canonical_static_aggregate_type(value.type_name)
+                == canonical_return_type
+            }
+            if len(result_type_candidates) != 1:
+                continue
+            return_expression = self._replace_identifiers(
+                candidate.return_expression,
+                bindings,
+            ).strip()
+            if not return_expression.startswith("{"):
+                continue
+            close_brace = self._find_matching_delimiter(
+                return_expression,
+                0,
+                "{",
+                "}",
+            )
+            if close_brace != len(return_expression) - 1:
+                continue
+            arguments = self._split_top_level_commas(return_expression[1:close_brace])
+            result = self._construct_static_aggregate(
+                next(iter(result_type_candidates)),
+                arguments,
+                structs=structs,
+                type_aliases=type_aliases,
+                position=position,
+                aggregate_bindings={
+                    candidate.parameter_names[0]: left,
+                    candidate.parameter_names[1]: right,
+                },
+            )
+            if result is not None:
+                results.append(result)
+        return results[0] if len(results) == 1 else None
+
+    def _evaluate_static_aggregate_constructor(
+        self,
+        expression: str,
+        *,
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+    ) -> Optional[_MetalConstexprAggregateValue]:
+        text = self._strip_static_outer_parentheses(expression)
+        open_brace = self._find_next_top_level_char(text, 0, "{")
+        if open_brace is None:
+            return None
+        type_name = text[:open_brace].strip()
+        if (
+            re.fullmatch(
+                r"(?:::)?[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*",
+                type_name,
+            )
+            is None
+        ):
+            return None
+        close_brace = self._find_matching_delimiter(text, open_brace, "{", "}")
+        if close_brace != len(text) - 1:
+            return None
+        return self._construct_static_aggregate(
+            type_name,
+            self._split_top_level_commas(text[open_brace + 1 : close_brace]),
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+
+    def _construct_static_aggregate(
+        self,
+        type_name: str,
+        arguments: Sequence[str],
+        *,
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+        aggregate_bindings: Optional[
+            Mapping[str, _MetalConstexprAggregateValue]
+        ] = None,
+    ) -> Optional[_MetalConstexprAggregateValue]:
+        resolved_type = self._resolve_type_aliases_at(
+            type_name,
+            type_aliases,
+            position,
+        )
+        normalized_type = self._normalize_inferred_type(resolved_type)
+        matching_structs = [
+            struct
+            for struct in structs
+            if normalized_type in {struct.name, struct.qualified_name}
+        ]
+        if len(matching_structs) != 1:
+            return None
+        struct = matching_structs[0]
+        if not struct.data_members or any(
+            member.array_suffix or member.is_pointer for member in struct.data_members
+        ):
+            return None
+
+        results: List[_MetalConstexprAggregateValue] = []
+        for constructor in struct.constructors:
+            if (
+                not constructor.is_constexpr
+                or constructor.template_parameters
+                or len(constructor.param_names) != len(arguments)
+                or len(constructor.param_types) != len(arguments)
+                or (
+                    constructor.receiver_address_spaces
+                    and "thread" not in constructor.receiver_address_spaces
+                )
+                or self._strip_template_argument_comments(constructor.body).strip()
+            ):
+                continue
+            parameter_values: Dict[str, _MetalConstexprScalarValue] = {}
+            for name, declared_type, argument in zip(
+                constructor.param_names,
+                constructor.param_types,
+                arguments,
+            ):
+                scalar_type = self._static_constexpr_scalar_type(
+                    self._resolve_type_aliases_at(
+                        declared_type,
+                        type_aliases,
+                        position,
+                    )
+                )
+                if scalar_type is None:
+                    break
+                value = self._evaluate_static_scalar_expression(
+                    argument,
+                    expected_type=scalar_type,
+                    aggregate_bindings=aggregate_bindings,
+                )
+                if value is None:
+                    break
+                parameter_values[name] = value
+            else:
+                member_values: List[Tuple[str, _MetalConstexprScalarValue]] = []
+                for member in struct.data_members:
+                    member_type = self._static_constexpr_scalar_type(
+                        self._resolve_type_aliases_at(
+                            member.type_text,
+                            type_aliases,
+                            position,
+                        )
+                    )
+                    initializer = constructor.init_map.get(
+                        member.name,
+                        member.default,
+                    )
+                    if member_type is None or initializer is None:
+                        break
+                    value = self._evaluate_static_scalar_expression(
+                        initializer,
+                        expected_type=member_type,
+                        scalar_bindings=parameter_values,
+                        aggregate_bindings=aggregate_bindings,
+                    )
+                    if value is None:
+                        break
+                    member_values.append((member.name, value))
+                else:
+                    results.append(
+                        _MetalConstexprAggregateValue(
+                            type_name=normalized_type,
+                            members=tuple(member_values),
+                        )
+                    )
+        return results[0] if len(results) == 1 else None
+
+    def _static_constexpr_binary_operators(
+        self,
+        code: str,
+    ) -> List[_MetalConstexprBinaryOperator]:
+        template_matches = list(re.finditer(r"\btemplate\s*<", code))
+        template_starts = [match.start() for match in template_matches]
+        operators: List[_MetalConstexprBinaryOperator] = []
+        for operator_match in re.finditer(
+            r"\boperator\s*(?P<operator>[+\-*/])\s*\(",
+            code,
+        ):
+            template_index = (
+                bisect_right(
+                    template_starts,
+                    operator_match.start(),
+                )
+                - 1
+            )
+            if template_index < 0:
+                continue
+            template_match = template_matches[template_index]
+            angle_start = code.find("<", template_match.start(), template_match.end())
+            angle_end = self._find_matching_template_param_angle(code, angle_start)
+            if angle_end is None or angle_end >= operator_match.start():
+                continue
+            declaration_prefix = code[angle_end + 1 : operator_match.start()]
+            if any(character in declaration_prefix for character in ";{}"):
+                continue
+            if (
+                re.search(
+                    r"\b(?:constexpr|consteval|C10_METAL_CONSTEXPR)\b",
+                    declaration_prefix,
+                )
+                is None
+            ):
+                continue
+
+            open_paren = operator_match.end() - 1
+            close_paren = self._find_matching_delimiter(
+                code,
+                open_paren,
+                "(",
+                ")",
+            )
+            if close_paren is None:
+                continue
+            body_start = close_paren + 1
+            while body_start < len(code) and code[body_start].isspace():
+                body_start += 1
+            if body_start >= len(code) or code[body_start] != "{":
+                continue
+            body_end = self._find_matching_brace(code, body_start)
+            if body_end is None:
+                continue
+            body = self._strip_template_argument_comments(
+                code[body_start + 1 : body_end - 1]
+            ).strip()
+            return_match = re.fullmatch(
+                r"return\s+(?P<expression>.+?)\s*;",
+                body,
+                re.DOTALL,
+            )
+            if return_match is None:
+                continue
+
+            parameter_text = code[open_paren + 1 : close_paren]
+            parameter_names = self._parameter_identifier_names(parameter_text)
+            parameter_types = self._parameter_declared_types(parameter_text)
+            if len(parameter_names) != 2 or len(parameter_types) != 2:
+                continue
+            template_parameters = self._template_parameter_names(
+                code[angle_start + 1 : angle_end]
+            )
+            if not template_parameters:
+                continue
+            return_type = re.sub(
+                r"\b(?:constexpr|consteval|inline|static|METAL_FUNC|"
+                r"C10_METAL_CONSTEXPR)\b",
+                " ",
+                declaration_prefix,
+            )
+            return_type = self._normalize_template_argument_text(return_type)
+            if not return_type:
+                continue
+            operators.append(
+                _MetalConstexprBinaryOperator(
+                    operator=operator_match.group("operator"),
+                    span=(template_match.start(), body_end),
+                    template_parameters=tuple(template_parameters),
+                    return_type=return_type,
+                    parameter_names=(parameter_names[0], parameter_names[1]),
+                    parameter_types=(parameter_types[0], parameter_types[1]),
+                    return_expression=return_match.group("expression").strip(),
+                )
+            )
+        return operators
+
+    def _canonical_static_aggregate_type(self, type_name: str) -> str:
+        normalized = self._normalize_inferred_type(type_name)
+        specialization = self._materialized_struct_specializations.get(normalized)
+        if specialization is None:
+            return normalized
+        source_name, source_arguments = specialization
+        return self._normalize_template_argument_text(
+            f"{source_name}<{', '.join(source_arguments)}>"
+        )
+
+    def _substitute_static_type_bindings(
+        self,
+        type_text: str,
+        bindings: Mapping[str, str],
+    ) -> str:
+        return self._normalize_template_argument_text(
+            self._replace_identifiers(type_text, dict(bindings))
+        )
+
+    def _evaluate_static_scalar_expression(
+        self,
+        expression: str,
+        *,
+        expected_type: Optional[str] = None,
+        scalar_bindings: Optional[Mapping[str, _MetalConstexprScalarValue]] = None,
+        aggregate_bindings: Optional[
+            Mapping[str, _MetalConstexprAggregateValue]
+        ] = None,
+    ) -> Optional[_MetalConstexprScalarValue]:
+        text = self._strip_static_outer_parentheses(
+            self._strip_template_argument_comments(expression)
+        )
+        if not text or len(text) > 512:
+            return None
+        scalar_bindings = scalar_bindings or {}
+        aggregate_bindings = aggregate_bindings or {}
+
+        def finish(
+            value: Optional[_MetalConstexprScalarValue],
+        ) -> Optional[_MetalConstexprScalarValue]:
+            if value is None or expected_type is None:
+                return value
+            return self._cast_static_constexpr_scalar(value, expected_type)
+
+        if text.startswith("static_cast"):
+            angle_start = text.find("<", len("static_cast"))
+            if angle_start != -1:
+                angle_end = self._find_matching_angle(text, angle_start)
+                cursor = angle_end + 1 if angle_end is not None else -1
+                while cursor >= 0 and cursor < len(text) and text[cursor].isspace():
+                    cursor += 1
+                if cursor >= 0 and cursor < len(text) and text[cursor] == "(":
+                    close_paren = self._find_matching_delimiter(
+                        text,
+                        cursor,
+                        "(",
+                        ")",
+                    )
+                    if close_paren == len(text) - 1:
+                        cast_type = self._static_constexpr_scalar_type(
+                            text[angle_start + 1 : angle_end]
+                        )
+                        value = self._evaluate_static_scalar_expression(
+                            text[cursor + 1 : close_paren],
+                            scalar_bindings=scalar_bindings,
+                            aggregate_bindings=aggregate_bindings,
+                        )
+                        if cast_type is not None and value is not None:
+                            return finish(
+                                self._cast_static_constexpr_scalar(value, cast_type)
+                            )
+            return None
+
+        cast_match = re.match(
+            r"(?P<type>(?:::)?[A-Za-z_][A-Za-z0-9_]*"
+            r"(?:::[A-Za-z_][A-Za-z0-9_]*)*)\s*\(",
+            text,
+        )
+        if cast_match is not None:
+            open_paren = cast_match.end() - 1
+            close_paren = self._find_matching_delimiter(
+                text,
+                open_paren,
+                "(",
+                ")",
+            )
+            if close_paren == len(text) - 1:
+                cast_type = self._static_constexpr_scalar_type(cast_match.group("type"))
+                value = self._evaluate_static_scalar_expression(
+                    text[open_paren + 1 : close_paren],
+                    scalar_bindings=scalar_bindings,
+                    aggregate_bindings=aggregate_bindings,
+                )
+                if cast_type is not None and value is not None:
+                    return finish(self._cast_static_constexpr_scalar(value, cast_type))
+                return None
+
+        operation = self._split_top_level_binary_arithmetic(text)
+        if operation is not None:
+            left_text, binary_operator, right_text = operation
+            left = self._evaluate_static_scalar_expression(
+                left_text,
+                scalar_bindings=scalar_bindings,
+                aggregate_bindings=aggregate_bindings,
+            )
+            right = self._evaluate_static_scalar_expression(
+                right_text,
+                scalar_bindings=scalar_bindings,
+                aggregate_bindings=aggregate_bindings,
+            )
+            return finish(
+                self._evaluate_static_scalar_binary_operation(
+                    binary_operator,
+                    left,
+                    right,
+                )
+            )
+
+        member_match = re.fullmatch(
+            r"([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*" r"([A-Za-z_][A-Za-z0-9_]*)",
+            text,
+        )
+        if member_match is not None:
+            aggregate = aggregate_bindings.get(member_match.group(1))
+            return finish(
+                None if aggregate is None else aggregate.member(member_match.group(2))
+            )
+        if IDENTIFIER_RE.fullmatch(text):
+            if text == "true":
+                return finish(_MetalConstexprScalarValue("bool", True))
+            if text == "false":
+                return finish(_MetalConstexprScalarValue("bool", False))
+            return finish(scalar_bindings.get(text))
+        if text[0] in "+-":
+            operand = self._evaluate_static_scalar_expression(
+                text[1:],
+                scalar_bindings=scalar_bindings,
+                aggregate_bindings=aggregate_bindings,
+            )
+            if operand is None or isinstance(operand.value, bool):
+                return None
+            value = operand.value if text[0] == "+" else -operand.value
+            return finish(
+                self._cast_static_constexpr_scalar(
+                    _MetalConstexprScalarValue(operand.type_name, value),
+                    operand.type_name,
+                )
+            )
+        return finish(self._parse_static_constexpr_scalar_literal(text))
+
+    def _evaluate_static_scalar_binary_operation(
+        self,
+        binary_operator: str,
+        left: Optional[_MetalConstexprScalarValue],
+        right: Optional[_MetalConstexprScalarValue],
+    ) -> Optional[_MetalConstexprScalarValue]:
+        if left is None or right is None:
+            return None
+        result_type = self._static_constexpr_common_scalar_type(
+            left.type_name,
+            right.type_name,
+        )
+        if result_type is None:
+            return None
+        converted_left = self._cast_static_constexpr_scalar(left, result_type)
+        converted_right = self._cast_static_constexpr_scalar(right, result_type)
+        if converted_left is None or converted_right is None:
+            return None
+        left_value = converted_left.value
+        right_value = converted_right.value
+        if isinstance(left_value, bool) or isinstance(right_value, bool):
+            return None
+        try:
+            if binary_operator == "+":
+                value = left_value + right_value
+            elif binary_operator == "-":
+                value = left_value - right_value
+            elif binary_operator == "*":
+                value = left_value * right_value
+            elif binary_operator == "/":
+                if right_value == 0:
+                    return None
+                if result_type in self._METAL_INTEGRAL_SCALAR_TYPES:
+                    quotient = abs(int(left_value)) // abs(int(right_value))
+                    value = (
+                        -quotient if (left_value < 0) != (right_value < 0) else quotient
+                    )
+                else:
+                    value = left_value / right_value
+            else:
+                return None
+        except (ArithmeticError, OverflowError, ValueError):
+            return None
+        return self._cast_static_constexpr_scalar(
+            _MetalConstexprScalarValue(result_type, value),
+            result_type,
+        )
+
+    def _parse_static_constexpr_scalar_literal(
+        self,
+        text: str,
+    ) -> Optional[_MetalConstexprScalarValue]:
+        match = re.fullmatch(
+            r"(?P<number>(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)"
+            r"(?P<suffix>[fFhH]|[uUlL]*)",
+            text,
+        )
+        if match is None:
+            return None
+        number = match.group("number")
+        suffix = match.group("suffix")
+        is_floating = (
+            "." in number
+            or "e" in number.lower()
+            or suffix.lower()
+            in {
+                "f",
+                "h",
+            }
+        )
+        try:
+            if is_floating:
+                if suffix and suffix.lower() not in {"f", "h"}:
+                    return None
+                type_name = {"f": "float", "h": "half"}.get(
+                    suffix.lower(),
+                    "double",
+                )
+                value: Union[bool, int, float] = float(number)
+            else:
+                if suffix and re.fullmatch(r"[uUlL]+", suffix) is None:
+                    return None
+                type_name = "uint" if "u" in suffix.lower() else "int"
+                value = int(number, 10)
+        except (OverflowError, ValueError):
+            return None
+        return self._cast_static_constexpr_scalar(
+            _MetalConstexprScalarValue(type_name, value),
+            type_name,
+        )
+
+    def _static_constexpr_scalar_type(self, type_text: str) -> Optional[str]:
+        if any(token in type_text for token in ("*", "&", "[", "]")):
+            return None
+        normalized = self._normalize_template_argument_text(type_text)
+        normalized = re.sub(
+            r"\b(?:const|constant|constexpr|consteval|device|inline|static|"
+            r"thread|threadgroup|volatile)\b",
+            " ",
+            normalized,
+        )
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        normalized = re.sub(r"^(?:::)?metal::", "", normalized)
+        normalized = {
+            "bfloat": "bfloat16_t",
+            "bfloat16": "bfloat16_t",
+        }.get(normalized, normalized)
+        return normalized if normalized in self._METAL_SCALAR_TYPE_SIZES else None
+
+    def _static_constexpr_common_scalar_type(
+        self,
+        left_type: str,
+        right_type: str,
+    ) -> Optional[str]:
+        left = self._static_constexpr_scalar_type(left_type)
+        right = self._static_constexpr_scalar_type(right_type)
+        if left is None or right is None:
+            return None
+        if left == right:
+            return left
+        floating_rank = {
+            "half": 1,
+            "float16_t": 1,
+            "bfloat16_t": 1,
+            "float": 2,
+            "double": 3,
+        }
+        left_floating = floating_rank.get(left)
+        right_floating = floating_rank.get(right)
+        if left_floating is not None and right_floating is not None:
+            if left_floating == right_floating == 1 and {left, right} not in (
+                {"half", "float16_t"},
+            ):
+                return None
+            return left if left_floating >= right_floating else right
+        if left_floating is not None and right in self._METAL_INTEGRAL_SCALAR_TYPES:
+            return left
+        if right_floating is not None and left in self._METAL_INTEGRAL_SCALAR_TYPES:
+            return right
+        if (
+            left in self._METAL_INTEGRAL_SCALAR_TYPES
+            and right in self._METAL_INTEGRAL_SCALAR_TYPES
+        ):
+            left_size = self._METAL_SCALAR_TYPE_SIZES[left]
+            right_size = self._METAL_SCALAR_TYPE_SIZES[right]
+            left_signed = left in self._METAL_SIGNED_SCALAR_TYPES
+            right_signed = right in self._METAL_SIGNED_SCALAR_TYPES
+            if left_size == right_size and left_signed != right_signed:
+                return None
+            return left if left_size >= right_size else right
+        return None
+
+    def _cast_static_constexpr_scalar(
+        self,
+        value: _MetalConstexprScalarValue,
+        target_type: str,
+    ) -> Optional[_MetalConstexprScalarValue]:
+        target = self._static_constexpr_scalar_type(target_type)
+        if target is None:
+            return None
+        raw_value = value.value
+        if target == "bool":
+            return _MetalConstexprScalarValue(target, bool(raw_value))
+        if target in self._METAL_INTEGRAL_SCALAR_TYPES:
+            if isinstance(raw_value, float) and not math.isfinite(raw_value):
+                return None
+            try:
+                integer_value = int(raw_value)
+            except (OverflowError, TypeError, ValueError):
+                return None
+            bits = self._METAL_SCALAR_TYPE_SIZES[target] * 8
+            if target in self._METAL_SIGNED_SCALAR_TYPES:
+                minimum = -(1 << (bits - 1))
+                maximum = (1 << (bits - 1)) - 1
+            else:
+                minimum = 0
+                maximum = (1 << bits) - 1
+            if not minimum <= integer_value <= maximum:
+                return None
+            return _MetalConstexprScalarValue(target, integer_value)
+
+        try:
+            floating_value = float(raw_value)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        if not math.isfinite(floating_value):
+            return None
+        try:
+            if target in {"half", "float16_t"}:
+                floating_value = binary_struct.unpack(
+                    ">e",
+                    binary_struct.pack(">e", floating_value),
+                )[0]
+            elif target == "bfloat16_t":
+                bits = int.from_bytes(
+                    binary_struct.pack(">f", floating_value),
+                    "big",
+                )
+                rounded = bits + 0x7FFF + ((bits >> 16) & 1)
+                floating_value = binary_struct.unpack(
+                    ">f",
+                    ((rounded >> 16) << 16).to_bytes(4, "big"),
+                )[0]
+            elif target == "float":
+                floating_value = binary_struct.unpack(
+                    ">f",
+                    binary_struct.pack(">f", floating_value),
+                )[0]
+            elif target != "double":
+                return None
+        except (OverflowError, ValueError, binary_struct.error):
+            return None
+        if not math.isfinite(floating_value):
+            return None
+        return _MetalConstexprScalarValue(target, floating_value)
+
+    def _strip_static_outer_parentheses(self, expression: str) -> str:
+        text = expression.strip()
+        while text.startswith("("):
+            close_paren = self._find_matching_delimiter(text, 0, "(", ")")
+            if close_paren != len(text) - 1:
+                break
+            text = text[1:close_paren].strip()
+        return text
+
+    def _split_static_top_level_operator(
+        self,
+        expression: str,
+        operators: Sequence[str],
+    ) -> Optional[Tuple[str, str, str]]:
+        ordered_operators = sorted(operators, key=len, reverse=True)
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+        angle_depth = 0
+        found: Optional[Tuple[int, str]] = None
+        index = 0
+        while index < len(expression):
+            if expression[index] in "\"'":
+                _literal, consumed = self._read_string(expression, index)
+                index += consumed
+                continue
+            if expression.startswith("//", index):
+                end = expression.find("\n", index)
+                index = len(expression) if end == -1 else end + 1
+                continue
+            if expression.startswith("/*", index):
+                end = expression.find("*/", index + 2)
+                index = len(expression) if end == -1 else end + 2
+                continue
+            character = expression[index]
+            if character == "(":
+                paren_depth += 1
+            elif character == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif character == "[":
+                bracket_depth += 1
+            elif character == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif character == "{":
+                brace_depth += 1
+            elif character == "}":
+                brace_depth = max(0, brace_depth - 1)
+            elif character == "<":
+                angle_depth += 1
+            elif character == ">" and angle_depth:
+                angle_depth -= 1
+            elif paren_depth == bracket_depth == brace_depth == angle_depth == 0:
+                matched = next(
+                    (
+                        operator_text
+                        for operator_text in ordered_operators
+                        if expression.startswith(operator_text, index)
+                    ),
+                    None,
+                )
+                if matched is not None:
+                    if found is not None:
+                        return None
+                    found = (index, matched)
+                    index += len(matched)
+                    continue
+            index += 1
+        if found is None:
+            return None
+        operator_index, operator_text = found
+        left = expression[:operator_index].strip()
+        right = expression[operator_index + len(operator_text) :].strip()
+        if not left or not right:
+            return None
+        return left, operator_text, right
 
     def _static_constexpr_function_index(
         self, code: str
