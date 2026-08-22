@@ -14,11 +14,11 @@ from typing import Any, Sequence
 from crosstl.translator.entry_discovery import ENTRY_DISCOVERY_AVAILABLE
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
-MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx.git"
 MLX_KERNEL_ROOT = Path("mlx/backend/metal/kernels")
-EXPECTED_SOURCE_UNIT_COUNT = 40
-EXPECTED_ENTRY_COUNT = 16446
+EXPECTED_SOURCE_UNIT_COUNT = 42
+EXPECTED_ENTRY_COUNT = 17319
 REPORT_KIND = "crosstl-mlx-entry-discovery"
 REPORT_SCHEMA_VERSION = 1
 

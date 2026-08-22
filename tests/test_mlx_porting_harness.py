@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+CURRENT_MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 HARNESS_PATH = ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
 RMS_NORM_HARNESS_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "prove_rms_norm_specialization.py"
@@ -47,7 +48,9 @@ def test_mlx_porting_contract_uses_exact_pinned_revision():
         )
     )
 
-    assert module.MLX_COMMIT == PINNED_MLX_COMMIT
+    assert module.MLX_REFERENCE_COMMIT == PINNED_MLX_COMMIT
+    assert module.MLX_CORPUS_COMMIT == CURRENT_MLX_COMMIT
+    assert module.MLX_COMMIT == module.MLX_REFERENCE_COMMIT
     assert expected_gaps["commit"] == PINNED_MLX_COMMIT
 
 
@@ -410,25 +413,32 @@ template <int TAG>
 def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=False):
     per_target = {
         target: {
-            "translatedCount": module.EXPECTED_METAL_KERNEL_COUNT - 1,
+            "translatedCount": module.FULL_CORPUS_EXPECTED_UNIT_COUNT - 1,
             "failedCount": 1,
         }
         for target in module.FULL_CORPUS_TARGETS
     }
     diagnostics_by_code = {
         contract["diagnosticCode"]: 1
-        for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
+        for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
+        if target in module.FULL_CORPUS_TARGETS
     }
-    diagnostics_by_code["project.validate.failed-artifact"] = 3
+    diagnostics_by_code["project.validate.failed-artifact"] = (
+        module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
+    )
     missing_capability_counts = {
         contract["missingCapability"]: 1
-        for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
+        for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
+        if target in module.FULL_CORPUS_TARGETS
     }
-    missing_capability_counts["batch.translation"] = 3
+    missing_capability_counts["batch.translation"] = (
+        module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
+    )
     diagnostics = []
     artifacts = []
     extensions = {"directx": ".hlsl", "opengl": ".glsl", "vulkan": ".spvasm"}
-    for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items():
+    for target in module.FULL_CORPUS_TARGETS:
+        contract = module.MLX_FENCE_TARGET_CONTRACTS[target]
         message = module._atomic_fence_expected_message(contract)
         artifact_path = (
             work_dir
@@ -473,7 +483,7 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
     failed_count = module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
     if include_extra_failure:
         per_target["directx"] = {
-            "translatedCount": module.EXPECTED_METAL_KERNEL_COUNT - 2,
+            "translatedCount": module.FULL_CORPUS_EXPECTED_UNIT_COUNT - 2,
             "failedCount": 2,
         }
         translated_count -= 1
@@ -519,7 +529,7 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
         )
 
     summary = {
-        "unitCount": module.EXPECTED_METAL_KERNEL_COUNT,
+        "unitCount": module.FULL_CORPUS_EXPECTED_UNIT_COUNT,
         "artifactCount": module.FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
         "translatedCount": translated_count,
         "failedCount": failed_count,
@@ -2190,7 +2200,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     arg_reduce = expected_gaps["arg_reduce_status"]
     assert arg_reduce["status"] == "target-dependent"
     assert arg_reduce["source"] == module.MLX_ARG_REDUCE_SOURCE
-    assert arg_reduce["artifact_records"] == len(module.FULL_CORPUS_TARGETS)
+    assert arg_reduce["artifact_records"] == len(module.MLX_REFERENCE_TARGETS)
     assert arg_reduce["translated_artifacts"] == 1
     assert arg_reduce["failed_artifacts"] == 2
     assert arg_reduce["translated_targets"] == ["vulkan"]
@@ -2470,7 +2480,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     pointer_reinterpretation = expected_gaps["pointer_reinterpretation_status"]
     assert pointer_reinterpretation["status"] == "partial"
-    assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert pointer_reinterpretation["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert pointer_reinterpretation["next_kernel_blocked_by"] == [
         "https://github.com/CrossGL/crosstl/issues/1574",
         "https://github.com/CrossGL/crosstl/issues/1544",
@@ -2481,7 +2491,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     callback = expected_gaps["captured_callback_status"]
     assert callback["status"] == "partial"
-    assert callback["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert callback["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert callback["remaining_callback_helpers_blocked_by"] == [
         "https://github.com/CrossGL/crosstl/issues/1554"
     ]
@@ -2491,7 +2501,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     compile_time_loop = expected_gaps["compile_time_loop_status"]
     assert compile_time_loop["status"] == "partial"
-    assert compile_time_loop["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert compile_time_loop["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert "verified integral_constant" in compile_time_loop["supported_contract"]
     assert compile_time_loop["native_validation"] == {
         "directx": "generated-reduced-fixture-dxc-not-run",
@@ -2575,7 +2585,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     struct_scoped_cast_alias = expected_gaps["struct_scoped_cast_alias_status"]
     assert struct_scoped_cast_alias["status"] == "partial"
-    assert struct_scoped_cast_alias["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert struct_scoped_cast_alias["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert struct_scoped_cast_alias["concrete_specializations"] == ["float", "int"]
     assert struct_scoped_cast_alias["qualifier_transport"] == "retained-in-metal-ast"
     assert struct_scoped_cast_alias["strict_crossgl_function_body_parse"] == (
@@ -2603,7 +2613,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     function_local_alias = expected_gaps["function_local_alias_status"]
     assert function_local_alias["status"] == "partial"
-    assert function_local_alias["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert function_local_alias["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert function_local_alias["entry_count"] == 42
     assert function_local_alias["resolved_use_counts"] == {
         "declaration_types": 402,
@@ -2630,7 +2640,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "mlx/backend/metal/kernels/fp_quantized.metal",
         "mlx/backend/metal/kernels/quantized_nax.metal",
     ]
-    assert generic_member_call["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert generic_member_call["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert generic_member_call["native_validation"] == {
         "directx": "validated-with-glslang-hlsl",
         "opengl": "validated-with-glslang",
@@ -2681,13 +2691,15 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     )
 
     full_corpus = expected_gaps["full_corpus_scout"]
-    assert full_corpus["artifacts"] == module.FULL_CORPUS_EXPECTED_ARTIFACT_COUNT
+    reference_artifact_count = module.EXPECTED_METAL_KERNEL_COUNT * len(
+        module.MLX_REFERENCE_TARGETS
+    )
+    reference_fence_failure_count = len(module.MLX_REFERENCE_TARGETS)
+    assert full_corpus["artifacts"] == reference_artifact_count
     assert full_corpus["expected_translated_artifacts"] == (
-        module.FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT
+        reference_artifact_count - reference_fence_failure_count
     )
-    assert full_corpus["expected_fence_failures"] == (
-        module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
-    )
+    assert full_corpus["expected_fence_failures"] == (reference_fence_failure_count)
     assert full_corpus["expected_fence_diagnostics"] == {
         contract["diagnosticCode"]: 1
         for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
@@ -7946,7 +7958,7 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
 
     config = (config_dir / "full-corpus.toml").read_text(encoding="utf-8")
     assert 'include = ["mlx/backend/metal/kernels/**/*.metal"]' in config
-    assert 'targets = ["directx", "opengl", "vulkan"]' in config
+    assert 'targets = ["directx", "opengl"]' in config
     assert "max_template_specializations = 4096" in config
     assert "max_template_materialization_work = 131072" in config
     assert commands == [
@@ -7968,22 +7980,20 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
         ]
     ]
     assert "--run-toolchains" not in commands[0]
-    assert result["unitCount"] == 40
-    assert result["artifactCount"] == 120
-    assert result["translatedCount"] == 117
-    assert result["failedCount"] == 3
+    assert result["unitCount"] == 42
+    assert result["artifactCount"] == 84
+    assert result["translatedCount"] == 82
+    assert result["failedCount"] == 2
     assert result["status"] == "passed-with-expected-fence-blockers"
     assert result["jobTimeoutSeconds"] == 120
     assert result["targetCounts"] == {
-        "directx": {"translatedCount": 39, "failedCount": 1},
-        "opengl": {"translatedCount": 39, "failedCount": 1},
-        "vulkan": {"translatedCount": 39, "failedCount": 1},
+        "directx": {"translatedCount": 41, "failedCount": 1},
+        "opengl": {"translatedCount": 41, "failedCount": 1},
     }
     assert result["fenceContract"]["status"] == "blocked-as-expected"
     assert set(result["fenceContract"]["targetContracts"]) == {
         "directx",
         "opengl",
-        "vulkan",
     }
     assert result["shaderArtifactsOnly"] is True
     assert result["runtimeIntegrationIncluded"] is False
@@ -8137,9 +8147,9 @@ def test_full_corpus_mode_reports_tracked_translation_errors(tmp_path, monkeypat
     )
 
     assert result["status"] == "blocked-by-tracked-issues"
-    assert result["translatedCount"] == 116
-    assert result["failedCount"] == 4
-    assert result["expectedFenceFailureCount"] == 3
+    assert result["translatedCount"] == 81
+    assert result["failedCount"] == 3
+    assert result["expectedFenceFailureCount"] == 2
     assert result["unexpectedFailedCount"] == 1
     assert result["unexpectedErrorDiagnosticsByCode"] == {
         "project.translate.failed": 1,
@@ -8188,7 +8198,7 @@ def test_full_corpus_mode_reports_tracked_timeout_without_report(tmp_path, monke
     assert result["jobTimeoutSeconds"] == 120
     assert result["checkpoint"]["produced"] is True
     assert result["checkpoint"]["state"] == "running"
-    assert result["checkpoint"]["completedCount"] == 3
+    assert result["checkpoint"]["completedCount"] == 2
     assert result["checkpoint"]["activeCoordinate"] == {
         "source": module.MLX_ARG_REDUCE_SOURCE,
         "target": "directx",
@@ -9696,16 +9706,26 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     module = _load_harness()
     mlx_root = tmp_path / "mlx"
     mlx_root.mkdir()
+    verification_options = []
+    scan_options = []
+
+    def verify_checkout(*args, **kwargs):
+        verification_options.append(kwargs)
+        return {"name": "mlx-checkout", "status": "passed"}
+
+    def scan_kernels(*args, **kwargs):
+        scan_options.append(kwargs)
+        return {"name": "metal-kernel-scan", "status": "passed"}
 
     monkeypatch.setattr(
         module,
         "_verify_mlx_checkout",
-        lambda *args: {"name": "mlx-checkout", "status": "passed"},
+        verify_checkout,
     )
     monkeypatch.setattr(
         module,
         "_scan_metal_kernels",
-        lambda *args: {"name": "metal-kernel-scan", "status": "passed"},
+        scan_kernels,
     )
     monkeypatch.setattr(
         module,
@@ -9781,11 +9801,19 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
         "full-corpus",
     ]
     assert result["scope"]["mode"] == module.FULL_CORPUS_MODE
+    assert verification_options == [{"expected_commit": CURRENT_MLX_COMMIT}]
+    assert scan_options == [
+        {
+            "expected_unit_count": 42,
+            "targets": ("directx", "opengl"),
+        }
+    ]
     assert result["scope"]["metalRoundTripIncluded"] is True
-    assert result["scope"]["fullCorpusExpectedUnitCount"] == 40
-    assert result["scope"]["fullCorpusExpectedArtifactCount"] == 120
-    assert result["scope"]["fullCorpusExpectedTranslatedArtifactCount"] == 117
-    assert result["scope"]["fullCorpusExpectedFenceFailureCount"] == 3
+    assert result["repository"]["commit"] == CURRENT_MLX_COMMIT
+    assert result["scope"]["fullCorpusExpectedUnitCount"] == 42
+    assert result["scope"]["fullCorpusExpectedArtifactCount"] == 84
+    assert result["scope"]["fullCorpusExpectedTranslatedArtifactCount"] == 82
+    assert result["scope"]["fullCorpusExpectedFenceFailureCount"] == 2
     assert result["scope"]["referenceAccessorProofIncluded"] is False
     assert result["scope"]["referenceAccessorTargets"] == []
     assert result["scope"]["referenceAccessorDirectxToolchainRequired"] is False
@@ -9807,12 +9835,15 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     monkeypatch.setattr(
         module,
         "_verify_mlx_checkout",
-        lambda *args: {"name": "mlx-checkout", "status": "passed"},
+        lambda *args, **kwargs: {"name": "mlx-checkout", "status": "passed"},
     )
     monkeypatch.setattr(
         module,
         "_scan_metal_kernels",
-        lambda *args: {"name": "metal-kernel-scan", "status": "passed"},
+        lambda *args, **kwargs: {
+            "name": "metal-kernel-scan",
+            "status": "passed",
+        },
     )
     monkeypatch.setattr(
         module,

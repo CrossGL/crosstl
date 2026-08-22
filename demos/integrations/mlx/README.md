@@ -463,6 +463,22 @@ python demos/integrations/mlx/run_mlx_porting.py \
 The harness writes reports, generated artifacts, and command logs under
 `<mlx-root>/.crosstl-mlx-porting`.
 
+## Corpus Baselines
+
+The reduced compiler and runtime proofs remain pinned to MLX commit
+`4367c73b60541ddd5a266ce4644fd93d20223b6e`. Their checked-in source hashes,
+dispatch contracts, generated artifacts, and numerical results describe that
+exact reference revision and are not relabelled when the upstream corpus moves.
+
+The scheduled full-corpus scout is pinned separately to current MLX commit
+`846d176227a0ac13d2667e58d2bb68b322109ab0`. Entry discovery for that revision
+records 42 Metal source units and 17,319 host-visible entries with no discovery
+diagnostics. The scout plans 84 source-target coordinates across DirectX and
+OpenGL, writes resumable progress and portability reports, and reports
+unsupported constructs as structured failures. This corpus scan measures
+translation coverage only; it does not claim MLX runtime integration or
+numerical parity on either target.
+
 ## Current Translator Gaps
 
 The latest full-corpus scout at MLX commit

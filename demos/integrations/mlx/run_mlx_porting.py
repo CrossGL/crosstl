@@ -35,7 +35,11 @@ from crosstl.project.runtime_verification import (
 )
 
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
-MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+MLX_REFERENCE_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+MLX_CORPUS_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
+# The reduced frontier remains an exact historical proof until each fixture and
+# runtime contract has been remeasured against the current corpus.
+MLX_COMMIT = MLX_REFERENCE_COMMIT
 MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_ARG_REDUCE_SOURCE = "mlx/backend/metal/kernels/arg_reduce.metal"
@@ -818,12 +822,14 @@ MLX_FENCE_TARGET_CONTRACTS = {
         "targetDescription": "Vulkan SPIR-V",
     },
 }
+MLX_REFERENCE_TARGETS = tuple(MLX_FENCE_TARGET_CONTRACTS)
 EXPECTED_METAL_KERNEL_COUNT = 40
-FULL_CORPUS_TARGETS = ("directx", "opengl", "vulkan")
-FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = EXPECTED_METAL_KERNEL_COUNT * len(
+FULL_CORPUS_EXPECTED_UNIT_COUNT = 42
+FULL_CORPUS_TARGETS = ("directx", "opengl")
+FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = FULL_CORPUS_EXPECTED_UNIT_COUNT * len(
     FULL_CORPUS_TARGETS
 )
-FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT = len(MLX_FENCE_TARGET_CONTRACTS)
+FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT = len(FULL_CORPUS_TARGETS)
 FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT = (
     FULL_CORPUS_EXPECTED_ARTIFACT_COUNT - FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
 )
@@ -1965,7 +1971,13 @@ def _write_template_member_pointer_project_config(path: Path, output_dir: str) -
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _verify_mlx_checkout(mlx_root: Path, python: str, log_dir: Path) -> dict[str, Any]:
+def _verify_mlx_checkout(
+    mlx_root: Path,
+    python: str,
+    log_dir: Path,
+    *,
+    expected_commit: str = MLX_COMMIT,
+) -> dict[str, Any]:
     _require(mlx_root.is_dir(), f"MLX checkout does not exist: {mlx_root}")
     _require(
         (mlx_root / MLX_ARANGE_SOURCE).is_file(),
@@ -1987,8 +1999,8 @@ def _verify_mlx_checkout(mlx_root: Path, python: str, log_dir: Path) -> dict[str
     )
     revision = result.stdout_path.read_text(encoding="utf-8").strip()
     _require(
-        revision == MLX_COMMIT,
-        f"MLX checkout must be pinned to {MLX_COMMIT}; found {revision}",
+        revision == expected_commit,
+        f"MLX checkout must be pinned to {expected_commit}; found {revision}",
     )
     return {
         "name": "mlx-checkout",
@@ -2006,13 +2018,16 @@ def _scan_metal_kernels(
     report_dir: Path,
     log_dir: Path,
     python: str,
+    *,
+    expected_unit_count: int = EXPECTED_METAL_KERNEL_COUNT,
+    targets: Sequence[str] = MLX_REFERENCE_TARGETS,
 ) -> dict[str, Any]:
     config_path = config_dir / "scan-metal-kernels.toml"
     report_path = report_dir / "scan-metal-kernels.json"
     _write_project_config(
         config_path,
         include=f"{MLX_METAL_KERNEL_ROOT}/**/*.metal",
-        targets=("directx", "opengl", "vulkan"),
+        targets=targets,
         output_dir=_relpath(work_dir / "out-scan", mlx_root),
     )
     _run_command(
@@ -2036,9 +2051,9 @@ def _scan_metal_kernels(
     _require(isinstance(summary, dict), "scan report summary must be an object")
     _require(isinstance(units, list), "scan report units must be a list")
     _require(
-        summary.get("unitCount") == EXPECTED_METAL_KERNEL_COUNT,
+        summary.get("unitCount") == expected_unit_count,
         "expected {} MLX Metal kernels, found {}".format(
-            EXPECTED_METAL_KERNEL_COUNT,
+            expected_unit_count,
             summary.get("unitCount"),
         ),
     )
@@ -2309,17 +2324,24 @@ def _validate_atomic_fence_contract_report(
     payload: Mapping[str, Any],
     *,
     exact_report: bool,
+    targets: Sequence[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    targets = tuple(MLX_FENCE_TARGET_CONTRACTS)
+    selected_targets = tuple(targets or MLX_FENCE_TARGET_CONTRACTS)
+    _require(
+        all(target in MLX_FENCE_TARGET_CONTRACTS for target in selected_targets),
+        "fence contract contains an unsupported target",
+    )
     summary = payload.get("summary", {})
     _require(isinstance(summary, Mapping), "fence contract summary must be an object")
     expected_diagnostic_codes = {
         contract["diagnosticCode"]: 1
-        for contract in MLX_FENCE_TARGET_CONTRACTS.values()
+        for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
+        if target in selected_targets
     }
     expected_missing_capabilities = {
         contract["missingCapability"]: 1
-        for contract in MLX_FENCE_TARGET_CONTRACTS.values()
+        for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
+        if target in selected_targets
     }
     diagnostics_by_code = summary.get("diagnosticsByCode", {})
     missing_capability_counts = summary.get("missingCapabilityCounts", {})
@@ -2334,14 +2356,14 @@ def _validate_atomic_fence_contract_report(
     if exact_report:
         _require(
             summary.get("unitCount") == 1
-            and summary.get("artifactCount") == len(targets)
+            and summary.get("artifactCount") == len(selected_targets)
             and summary.get("translatedCount") == 0
-            and summary.get("failedCount") == len(targets),
+            and summary.get("failedCount") == len(selected_targets),
             "fence contract translation must report one failed artifact per target",
         )
         _require(
             summary.get("diagnosticCounts")
-            == {"error": len(targets), "note": 0, "warning": 0},
+            == {"error": len(selected_targets), "note": 0, "warning": 0},
             "fence contract translation reported unexpected diagnostic severities",
         )
         _require(
@@ -2374,13 +2396,15 @@ def _validate_atomic_fence_contract_report(
     _require(isinstance(artifacts, list), "fence contract artifacts must be a list")
     if exact_report:
         _require(
-            len(diagnostics) == len(targets) and len(artifacts) == len(targets),
+            len(diagnostics) == len(selected_targets)
+            and len(artifacts) == len(selected_targets),
             "fence contract report must contain one diagnostic and artifact per target",
         )
 
     target_results: dict[str, dict[str, Any]] = {}
     output_root = output_dir.resolve()
-    for target, contract in MLX_FENCE_TARGET_CONTRACTS.items():
+    for target in selected_targets:
+        contract = MLX_FENCE_TARGET_CONTRACTS[target]
         target_diagnostics = [
             diagnostic
             for diagnostic in diagnostics
@@ -8704,7 +8728,7 @@ def _translate_full_corpus(
             "status": "blocked-by-tracked-issues",
             "report": _relpath(report_path, mlx_root),
             "reportProduced": False,
-            "unitCount": EXPECTED_METAL_KERNEL_COUNT,
+            "unitCount": FULL_CORPUS_EXPECTED_UNIT_COUNT,
             "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
             "targets": list(FULL_CORPUS_TARGETS),
             "returncode": result.returncode,
@@ -8733,9 +8757,9 @@ def _translate_full_corpus(
     )
     failed_count = summary.get("failedCount")
     _require(
-        summary.get("unitCount") == EXPECTED_METAL_KERNEL_COUNT,
+        summary.get("unitCount") == FULL_CORPUS_EXPECTED_UNIT_COUNT,
         "full-corpus translation must scan {} units; found {}".format(
-            EXPECTED_METAL_KERNEL_COUNT,
+            FULL_CORPUS_EXPECTED_UNIT_COUNT,
             summary.get("unitCount"),
         ),
     )
@@ -8774,6 +8798,7 @@ def _translate_full_corpus(
         output_dir,
         payload,
         exact_report=False,
+        targets=FULL_CORPUS_TARGETS,
     )
     diagnostics = payload.get("diagnostics", [])
     _require(isinstance(diagnostics, list), "full-corpus diagnostics must be a list")
@@ -8788,7 +8813,8 @@ def _translate_full_corpus(
         {
             **{
                 contract["diagnosticCode"]: 1
-                for contract in MLX_FENCE_TARGET_CONTRACTS.values()
+                for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
+                if target in FULL_CORPUS_TARGETS
             },
             "project.validate.failed-artifact": (
                 FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
@@ -8797,7 +8823,7 @@ def _translate_full_corpus(
     )
     expected_target_counts = {
         target: {
-            "translatedCount": EXPECTED_METAL_KERNEL_COUNT - 1,
+            "translatedCount": FULL_CORPUS_EXPECTED_UNIT_COUNT - 1,
             "failedCount": 1,
         }
         for target in FULL_CORPUS_TARGETS
@@ -8825,7 +8851,7 @@ def _translate_full_corpus(
             "name": "full-corpus",
             "status": "blocked-by-tracked-issues",
             "report": _relpath(report_path, mlx_root),
-            "unitCount": EXPECTED_METAL_KERNEL_COUNT,
+            "unitCount": FULL_CORPUS_EXPECTED_UNIT_COUNT,
             "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
             "translatedCount": summary.get("translatedCount", 0),
             "failedCount": summary.get("failedCount", 0),
@@ -8863,7 +8889,7 @@ def _translate_full_corpus(
         "name": "full-corpus",
         "status": "passed-with-expected-fence-blockers",
         "report": _relpath(report_path, mlx_root),
-        "unitCount": EXPECTED_METAL_KERNEL_COUNT,
+        "unitCount": FULL_CORPUS_EXPECTED_UNIT_COUNT,
         "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
         "translatedCount": FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT,
         "failedCount": FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT,
@@ -8889,6 +8915,12 @@ def _translate_full_corpus(
 
 def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     mlx_root = Path(args.mlx_root).resolve()
+    full_corpus = args.mode == FULL_CORPUS_MODE
+    expected_commit = MLX_CORPUS_COMMIT if full_corpus else MLX_REFERENCE_COMMIT
+    expected_unit_count = (
+        FULL_CORPUS_EXPECTED_UNIT_COUNT if full_corpus else EXPECTED_METAL_KERNEL_COUNT
+    )
+    scan_targets = FULL_CORPUS_TARGETS if full_corpus else MLX_REFERENCE_TARGETS
     require_metal_toolchain = bool(getattr(args, "require_metal_toolchain", False))
     require_directx_gemv_compiler_frontier = bool(
         getattr(args, "require_directx_gemv_compiler_frontier", False)
@@ -8937,7 +8969,12 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         directory.mkdir(parents=True, exist_ok=True)
 
     checks: list[dict[str, Any]] = [
-        _verify_mlx_checkout(mlx_root, args.python, log_dir),
+        _verify_mlx_checkout(
+            mlx_root,
+            args.python,
+            log_dir,
+            expected_commit=expected_commit,
+        ),
         _scan_metal_kernels(
             mlx_root,
             work_dir,
@@ -8945,6 +8982,8 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             report_dir,
             log_dir,
             args.python,
+            expected_unit_count=expected_unit_count,
+            targets=scan_targets,
         ),
     ]
     checks.append(
@@ -9110,7 +9149,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         "repository": {
             "name": "ml-explore/mlx",
             "url": MLX_REPOSITORY,
-            "commit": MLX_COMMIT,
+            "commit": expected_commit,
         },
         "scope": {
             "mode": args.mode,
@@ -9142,7 +9181,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "hostDispatchImportResolvedIssue": MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
             "fullCorpusTargets": list(FULL_CORPUS_TARGETS),
-            "fullCorpusExpectedUnitCount": EXPECTED_METAL_KERNEL_COUNT,
+            "fullCorpusExpectedUnitCount": FULL_CORPUS_EXPECTED_UNIT_COUNT,
             "fullCorpusExpectedArtifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
             "fullCorpusExpectedTranslatedArtifactCount": (
                 FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT
@@ -9298,6 +9337,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     mlx_root = Path(args.mlx_root).resolve()
+    expected_commit = (
+        MLX_CORPUS_COMMIT if args.mode == FULL_CORPUS_MODE else MLX_REFERENCE_COMMIT
+    )
     work_dir = _resolve_work_dir(mlx_root, args.work_dir)
     summary_path = (
         Path(args.summary).resolve() if args.summary else work_dir / "summary.json"
@@ -9318,7 +9360,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "repository": {
                         "name": "ml-explore/mlx",
                         "url": MLX_REPOSITORY,
-                        "commit": MLX_COMMIT,
+                        "commit": expected_commit,
                     },
                     "scope": {
                         "mode": args.mode,

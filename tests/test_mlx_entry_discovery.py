@@ -68,3 +68,27 @@ def test_mlx_entry_discovery_cli_defaults_to_pinned_contract():
     assert args.expected_commit == module.MLX_COMMIT
     assert args.expected_unit_count == module.EXPECTED_SOURCE_UNIT_COUNT
     assert args.expected_entry_count == module.EXPECTED_ENTRY_COUNT
+    assert args.expected_commit == "846d176227a0ac13d2667e58d2bb68b322109ab0"
+    assert args.expected_unit_count == 42
+    assert args.expected_entry_count == 17319
+
+
+def test_mlx_entry_discovery_cli_accepts_reference_contract_overrides():
+    module = _load_discovery_tool()
+
+    args = module.parse_args(
+        [
+            "--mlx-root",
+            "/tmp/mlx",
+            "--expected-commit",
+            "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+            "--expected-unit-count",
+            "40",
+            "--expected-entry-count",
+            "16446",
+        ]
+    )
+
+    assert args.expected_commit == "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+    assert args.expected_unit_count == 40
+    assert args.expected_entry_count == 16446

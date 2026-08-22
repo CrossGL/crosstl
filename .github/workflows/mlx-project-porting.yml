@@ -3,6 +3,7 @@ name: MLX Project Porting
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+  MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
 
 on:
   push:
@@ -238,7 +239,10 @@ jobs:
         run: |
           set -euo pipefail
           python demos/integrations/mlx/discover_entries.py \
-            --mlx-root mlx-upstream
+            --mlx-root mlx-upstream \
+            --expected-commit "$MLX_COMMIT" \
+            --expected-unit-count 40 \
+            --expected-entry-count 16446
 
       - name: Run MLX project-porting checks
         shell: bash
@@ -1382,7 +1386,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .
 
-      - name: Checkout pinned MLX
+      - name: Checkout current MLX corpus
         shell: bash
         run: |
           set -euo pipefail
@@ -1390,7 +1394,14 @@ jobs:
           git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-upstream
           git -C mlx-upstream sparse-checkout init --cone
           git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-upstream checkout "$MLX_COMMIT"
+          git -C mlx-upstream checkout "$MLX_CORPUS_COMMIT"
+
+      - name: Enumerate current MLX Metal entry points
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/discover_entries.py \
+            --mlx-root mlx-upstream
 
       - name: Run MLX full-corpus artifact scout
         shell: bash
