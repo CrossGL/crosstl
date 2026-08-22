@@ -22280,6 +22280,43 @@ def _metal_static_assertion_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_type_trait_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-type-trait-unresolved"
+    ):
+        return {}
+
+    type_trait: dict[str, Any] = {}
+    fields = {
+        "trait": getattr(exc, "trait", None),
+        "expression": getattr(exc, "expression", None),
+        "reason": getattr(exc, "reason", None),
+        "owner": getattr(exc, "owner", None),
+        "suggestedAction": getattr(exc, "suggested_action", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            type_trait[name] = value
+    operands = getattr(exc, "operands", None)
+    if operands:
+        type_trait["operands"] = [str(operand) for operand in operands]
+    resolved_operands = getattr(exc, "resolved_operands", None)
+    if resolved_operands:
+        type_trait["resolvedOperands"] = [str(operand) for operand in resolved_operands]
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    if type_trait:
+        details["typeTrait"] = dict(sorted(type_trait.items()))
+    return dict(sorted(details.items()))
+
+
 def _metal_sizeof_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -23680,6 +23717,7 @@ def _translation_failure_details(
         **_metal_constructor_failure_details(exc, unit, artifact_path),
         **_metal_stateless_global_failure_details(exc, unit, artifact_path),
         **_metal_static_assertion_failure_details(exc, unit, artifact_path),
+        **_metal_type_trait_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_template_argument_failure_details(exc, unit, artifact_path),

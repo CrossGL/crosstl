@@ -48288,6 +48288,115 @@ def test_translate_project_removes_proven_metal_static_assertions(tmp_path, targ
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_folds_materialized_metal_type_traits(tmp_path, target):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "traits.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            struct StorageTraits {
+                using scalar_T = T;
+            };
+
+            template <typename In, typename Out>
+            struct IOTypeTraits {
+                using scalar_T = typename StorageTraits<In>::scalar_T;
+                static_assert(
+                    metal::is_same_v<
+                        scalar_T,
+                        typename StorageTraits<Out>::scalar_T>,
+                    "Storage types must share a scalar type.");
+                int value;
+            };
+
+            template <typename T>
+            [[kernel]] void trait_kernel(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                IOTypeTraits<T, T> traits;
+                traits.value = 1;
+                constexpr bool integral = metal::is_integral_v<T>;
+                out[gid] = integral ? T(traits.value) : T(0);
+            }
+
+            instantiate_kernel("trait_kernel_int", trait_kernel, int)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "is_same" not in output
+    assert "is_integral" not in output
+    assert "static_assert" not in output
+    if target == "directx":
+        assert_directx_compute_validates_if_available(output, tmp_path)
+    else:
+        assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_reports_unresolved_metal_type_trait(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "unresolved_trait.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void unresolved_trait(device int* out [[buffer(0)]]) {
+                static_assert(
+                    metal::is_same_v<MissingType, int>,
+                    "The source type must be materialized.");
+                out[0] = 1;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.metal-type-trait-unresolved"
+    )
+    assert diagnostic["missingCapabilities"] == ["compile-time.type-trait-evaluation"]
+    assert diagnostic["location"]["file"] == "unresolved_trait.metal"
+    assert diagnostic["details"]["typeTrait"] == {
+        "expression": "metal::is_same_v<MissingType, int>",
+        "operands": ["MissingType", "int"],
+        "owner": "unresolved_trait",
+        "reason": "operand-unresolved",
+        "resolvedOperands": ["MissingType", "int"],
+        "suggestedAction": (
+            "materialize every trait operand to a concrete supported type before "
+            "target translation"
+        ),
+        "trait": "is_same",
+    }
+    assert not (repo / payload["artifacts"][0]["path"]).exists()
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
 def test_translate_project_removes_included_concrete_struct_size_assertions(
     tmp_path,
     target,
