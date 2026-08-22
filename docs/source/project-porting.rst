@@ -2061,6 +2061,9 @@ configuration contract is intentionally small:
    [project.workgroup_size_rules]
    "kernels/gemv.metal" = ["32", "BN", "BM"]
 
+   [project.entry_workgroup_size_rules."kernels/gemv.metal"]
+   "gemv_wide*" = ["32", "k_lanes / 8", "1"]
+
    [project.subgroup_width_rules]
    "kernels/wave.metal" = "WIDTH"
 
@@ -2216,6 +2219,17 @@ materializations without ``hostName`` remain provenance records and are not
 reported as runnable entries. The source is materialized and parsed once per
 target, after which a distinct size is applied to each matched compute stage.
 
+``[project.entry_workgroup_size_rules.<source-pattern>]`` handles source files
+that contain template families with different dispatch formulas. Its keys are
+host entry-point patterns and its values use the same three-expression format.
+The most specific matching entry pattern overrides
+``[project.workgroup_size_rules]`` for that entry; the source-wide rule remains
+the fallback for entries without an override. Without a source-wide fallback,
+every host-named materialization must match an entry rule. Every configured
+entry pattern must match at least one host-named materialization. Missing entry
+coverage and stale patterns fail closed with
+``project.translate.workgroup-size-entry-rule-unmatched``.
+
 For DirectX and OpenGL project translation, a consumed Metal
 ``[[threads_per_threadgroup]]`` parameter requires this concrete configuration
 or equivalent concrete source execution metadata. Translation emits
@@ -2265,11 +2279,12 @@ entry includes the source, materialized, and target entry names, evaluated
 dimensions, exact expression rule, concrete parameter values and provenance,
 the joined materialization identity, and a deterministic SHA-256 identity. The
 aggregate execution identity covers the complete entry array and rule
-provenance. Report validation re-evaluates every expression, verifies the
-materialization join and hashes, and checks the generated target entry metadata.
-These records describe shader or kernel translation and dispatch requirements;
-they do not rewrite framework runtime code or establish numerical runtime
-parity.
+provenance. Entry-specific rules additionally retain the selected entry pattern
+and its nested configuration path. Report validation selects each source and
+entry pattern again, re-evaluates every expression, verifies the materialization
+join and hashes, and checks the generated target entry metadata. These records
+describe shader or kernel translation and dispatch requirements; they do not
+rewrite framework runtime code or establish numerical runtime parity.
 
 ``[project.subgroup_width_rules]`` defines repository-relative,
 source-specific exact subgroup widths for materialized compute entries. Each
