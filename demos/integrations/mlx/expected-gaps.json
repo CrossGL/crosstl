@@ -546,18 +546,18 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
-  "opengl_gemv_frontier_status": {
-    "status": "blocked-as-expected",
+  "opengl_gemv_toolchain_status": {
+    "status": "all-entry-points-validated",
     "source": "mlx/backend/metal/kernels/gemv.metal",
     "source_sha256": "c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f",
     "source_size_bytes": 5383,
     "target": "opengl",
     "project_translation": {
       "unit_count": 1,
-      "artifact_count": 1,
-      "translated_count": 0,
-      "failed_count": 1,
-      "emitted_target_file_count": 0,
+      "artifact_count": 224,
+      "translated_count": 224,
+      "failed_count": 0,
+      "emitted_target_file_count": 224,
       "max_template_specializations": 4096,
       "max_template_materialization_work": 2097152,
       "workgroup_size_rule": [
@@ -569,60 +569,27 @@
         "32",
         "BN",
         "BM"
-      ]
+      ],
+      "subgroup_width_rule": 32,
+      "index_range_assertion_count": 5
     },
     "materialization": {
       "status": "materialized",
       "specialization_count": 225,
-      "unsupported_specialization_count": 0
+      "unsupported_specialization_count": 0,
+      "artifact_packaging": "entry-scoped-artifacts"
     },
-    "diagnostic": {
-      "code": "project.translate.opengl-workgroup-pointer-unsupported",
-      "missing_capability": "opengl.workgroup-pointer-lowering",
-      "message": "OpenGL cannot prove the workgroup pointer access range for 'GEMVKernel_bfloat16_t_1_8_1_32_1_4_false__run.tgp_memory' into shared backing 'tgp_memory'",
-      "workgroup_pointer": {
-        "backingName": "tgp_memory",
-        "function": "GEMVKernel_bfloat16_t_1_8_1_32_1_4_false__run",
-        "materializationName": "GEMVKernel_bfloat16_t_1_8_1_32_1_4_false_run__glsl_tgp_memory_gemv_bfloat16_bm1_bn8_sm1_sn32_tm1_tn4_nc0_axpby0_tgp_memory_float_16",
-        "offsetExpression": "0",
-        "parameter": "tgp_memory",
-        "reason": "unprovable-view-access"
-      }
+    "compiler": {
+      "name": "glslangValidator",
+      "target_environment": "OpenGL SPIR-V 1.3",
+      "compiled_artifact_count": 224,
+      "validator": "spirv-val",
+      "validator_target_environment": "spv1.3",
+      "validated_artifact_count": 224
     },
-    "range_derivation": {
-      "sgN": "simd_gid % 8",
-      "simdM": "simd_gid / 8",
-      "bm": "simdM * 1",
-      "tgp_results": "tgp_memory + sgN * 2 + bm",
-      "source_required_subgroup_width": 32,
-      "configured_workgroup_size": [
-        32,
-        8,
-        1
-      ],
-      "source_reachable_simd_gid": [
-        0,
-        7
-      ],
-      "base_offset_range": [
-        0,
-        14
-      ],
-      "guarded_reduction_max_element_index": 14,
-      "backing_element_count": 16,
-      "highest_valid_element_index": 15
-    },
-    "provenance_status": "concrete-backing-preserved",
-    "access_range_status": "unprovable",
-    "artifact_emitted": false,
-    "native_validation_attempted": false,
-    "native_validation_status": "not-run-no-artifact",
-    "translation_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1671"
-    ],
     "execution_contracts": {
       "workgroup_size_specialization": {
-        "status": "configured-in-project-report",
+        "status": "established",
         "rule": [
           32,
           "BN",
@@ -633,20 +600,48 @@
           "BN",
           "BM"
         ],
-        "emitted_artifact_contract_claimed": false
+        "resolved_sizes": [
+          [32, 1, 1],
+          [32, 1, 4],
+          [32, 1, 8],
+          [32, 2, 1],
+          [32, 4, 1],
+          [32, 8, 1],
+          [32, 16, 1]
+        ]
       },
       "subgroup_width_specialization": {
-        "status": "not-established",
-        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1786"
+        "status": "guarded",
+        "required_width": 32,
+        "enforcement": {
+          "mechanism": "glsl-subgroup-size-guard",
+          "shaderExtension": "GL_KHR_shader_subgroup_basic",
+          "hostExtension": "GL_KHR_shader_subgroup",
+          "hostQuery": "GL_SUBGROUP_SIZE_KHR",
+          "artifactMarker": "CROSSTL_REQUIRED_SUBGROUP_WIDTH",
+          "mismatchBehavior": "reject-before-dispatch"
+        },
+        "fallback_tracked_by": "https://github.com/CrossGL/crosstl/issues/1894"
+      },
+      "index_range_assertions": {
+        "count": 5,
+        "contract_kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": false,
+        "runtime_enforced": false
       }
     },
-    "blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1671",
-      "https://github.com/CrossGL/crosstl/issues/1786"
+    "provenance_status": "concrete-backing-preserved",
+    "access_range_status": "statically-proven-under-project-contracts",
+    "native_validation_attempted": true,
+    "native_validation_status": "validated",
+    "translation_blocked_by": [],
+    "tracked_issues": [
+      "https://github.com/CrossGL/crosstl/issues/1894"
     ],
     "runtime_execution_attempted": false,
     "runtime_integration_included": false,
     "runnable_artifact_claimed": false,
+    "compiler_validated_artifact_claimed": true,
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },

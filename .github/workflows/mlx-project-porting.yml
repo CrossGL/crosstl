@@ -85,7 +85,7 @@ jobs:
     name: MLX Metal project porting (${{ matrix.os }})
     if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -250,7 +250,7 @@ jobs:
               --mode reduced-frontier \
               --mlx-root mlx-upstream \
               --require-opengl-frontier-toolchain \
-              --require-opengl-gemv-frontier \
+              --require-opengl-gemv-toolchain \
               --require-opengl-native-runtime \
               --require-vulkan-gemv-toolchain \
               --require-vulkan-toolchain \
@@ -629,13 +629,16 @@ jobs:
 
           from demos.integrations.mlx.run_mlx_porting import (
               GEMV_DIRECTX_COMPILER_ENTRY_POINTS,
+              GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES,
               GEMV_DIRECTX_EXPECTED_ENTRY_POINTS,
               GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
+              GEMV_EXPECTED_ENTRY_POINT_COUNT,
               GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES,
-              GEMV_OPENGL_BACKING_RANGE_ISSUE,
-              GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
-              GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
+              GEMV_OPENGL_INDEX_RANGE_ASSERTIONS,
+              GEMV_OPENGL_PORTABILITY_TRACKED_ISSUES,
+              GEMV_OPENGL_SUBGROUP_WIDTH_ENFORCEMENT,
               GEMV_REPORT_WORKGROUP_SIZE_RULE,
+              GEMV_SUBGROUP_WIDTH,
               GEMV_WORKGROUP_SIZE_RULE,
               MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE,
               MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS,
@@ -1199,7 +1202,7 @@ jobs:
                   or gemv_directx["requiredWaveSize"] != 32
                   or gemv_directx["requiredWaveSizeEstablished"] is not False
                   or gemv_directx["executionContractBlockedBy"]
-                  != [GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE]
+                  != list(GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES)
                   or gemv_directx["runtimeExecutionAttempted"] is not False
                   or gemv_directx["runtimeIntegrationIncluded"] is not False
                   or gemv_directx["numericalParityClaimed"] is not False
@@ -1209,44 +1212,60 @@ jobs:
           elif "gemv-directx-compiler-frontier" in checks:
               raise SystemExit("DirectX GEMV compiler frontier ran outside Windows")
           expected_opengl_gemv = os.environ["RUNNER_OS"] == "Linux"
-          if scope["openglGemvFrontierRequired"] is not expected_opengl_gemv:
-              raise SystemExit("OpenGL GEMV frontier scope is incorrect")
+          if scope["openglGemvToolchainRequired"] is not expected_opengl_gemv:
+              raise SystemExit("OpenGL GEMV toolchain scope is incorrect")
           if expected_opengl_gemv:
-              gemv_opengl = checks["gemv-opengl-frontier"]
+              gemv_opengl = checks["gemv-opengl-toolchain"]
               if (
-                  gemv_opengl["status"] != "blocked-as-expected"
+                  gemv_opengl["status"] != "passed"
                   or gemv_opengl["source"] != MLX_GEMV_SOURCE
                   or gemv_opengl["sourceHash"] != MLX_GEMV_SHA256
-                  or gemv_opengl["artifactStatus"] != "failed"
-                  or gemv_opengl["artifactEmitted"] is not False
-                  or gemv_opengl["emittedTargetFileCount"] != 0
-                  or gemv_opengl["nativeValidationAttempted"] is not False
+                  or gemv_opengl["artifactStatus"] != "translated"
+                  or gemv_opengl["artifactCount"] != GEMV_EXPECTED_ENTRY_POINT_COUNT
+                  or gemv_opengl["emittedTargetFileCount"]
+                  != GEMV_EXPECTED_ENTRY_POINT_COUNT
+                  or gemv_opengl["reportExecutionEntryCount"]
+                  != GEMV_EXPECTED_ENTRY_POINT_COUNT
+                  or gemv_opengl["sourceMapCount"]
+                  != GEMV_EXPECTED_ENTRY_POINT_COUNT
+                  or gemv_opengl["sourceRemapCount"]
+                  != GEMV_EXPECTED_ENTRY_POINT_COUNT
+                  or gemv_opengl["nativeValidationAttempted"] is not True
+                  or gemv_opengl["nativeValidationStatus"] != "validated"
+                  or gemv_opengl["toolchainValidatedArtifactCount"]
+                  != GEMV_EXPECTED_ENTRY_POINT_COUNT
+                  or len(gemv_opengl["toolchainValidationRuns"])
+                  != GEMV_EXPECTED_ENTRY_POINT_COUNT
                   or gemv_opengl["workgroupSizeRule"]
                   != gemv_workgroup_size_rule
                   or gemv_opengl["reportWorkgroupSizeRule"]
                   != gemv_report_workgroup_size_rule
                   or gemv_opengl["reportWorkgroupSizeRuleCount"] != 1
                   or gemv_opengl["workgroupSizeRuleConfigured"] is not True
-                  or gemv_opengl["diagnosticCode"]
-                  != GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE
-                  or gemv_opengl["translationBlockedBy"]
-                  != [GEMV_OPENGL_BACKING_RANGE_ISSUE]
-                  or gemv_opengl["executionContractBlockedBy"]
-                  != [GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE]
+                  or gemv_opengl["resolvedWorkgroupSizes"]
+                  != [list(size) for size in GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES]
+                  or gemv_opengl["subgroupWidth"] != GEMV_SUBGROUP_WIDTH
+                  or gemv_opengl["subgroupWidthRuleConfigured"] is not True
+                  or gemv_opengl["subgroupWidthEnforcement"]
+                  != GEMV_OPENGL_SUBGROUP_WIDTH_ENFORCEMENT
+                  or gemv_opengl["indexRangeAssertionEvidence"]["assertionCount"]
+                  != len(GEMV_OPENGL_INDEX_RANGE_ASSERTIONS)
+                  or gemv_opengl["indexRangeAssertionEvidence"]["runtimeEnforced"]
+                  is not False
+                  or gemv_opengl["translationBlockedBy"] != []
+                  or gemv_opengl["executionContractBlockedBy"] != []
                   or gemv_opengl["trackedIssues"]
-                  != [
-                      GEMV_OPENGL_BACKING_RANGE_ISSUE,
-                      GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
-                  ]
+                  != list(GEMV_OPENGL_PORTABILITY_TRACKED_ISSUES)
                   or gemv_opengl["runtimeExecutionAttempted"] is not False
                   or gemv_opengl["runtimeIntegrationIncluded"] is not False
                   or gemv_opengl["runnableArtifactClaimed"] is not False
+                  or gemv_opengl["compilerValidatedArtifactClaimed"] is not True
                   or gemv_opengl["numericalParityClaimed"] is not False
                   or gemv_opengl["runtimeParityClaimed"] is not False
               ):
-                  raise SystemExit("OpenGL GEMV fail-closed evidence is incomplete")
-          elif "gemv-opengl-frontier" in checks:
-              raise SystemExit("OpenGL GEMV frontier ran outside Linux")
+                  raise SystemExit("OpenGL GEMV toolchain evidence is incomplete")
+          elif "gemv-opengl-toolchain" in checks:
+              raise SystemExit("OpenGL GEMV toolchain ran outside Linux")
           opengl = checks["opengl-frontier"]
           if (
               opengl["status"]

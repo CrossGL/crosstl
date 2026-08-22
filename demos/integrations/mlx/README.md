@@ -191,12 +191,13 @@ The current harness verifies:
   `cs_6_2` with `-enable-16bit-types` and zero diagnostics, then compile all
   224 functions in one `lib_6_6` invocation with the same flag, an exact
   export set, and exact profile-warning classification;
-- full project materialization of pinned `gemv.metal` for OpenGL as a strict
-  expected frontier. The project and report must retain the GEMV workgroup-size
-  rule, and all 225 source specializations must materialize, after which
-  translation must report the exact tracked workgroup-pointer diagnostic in one
-  failed artifact record and emit no target file. This check performs no native
-  validation or runtime execution;
+- full project materialization of pinned `gemv.metal` for OpenGL. The gate
+  requires all 225 specializations materialized, all 224 entry-scoped GLSL
+  artifacts emitted, exact workgroup and subgroup execution records, and the
+  five explicit host index-range preconditions used for 64-bit source indices.
+  Linux CI compiles every artifact with `glslangValidator` and validates every
+  resulting SPIR-V 1.3 module with `spirv-val`. This does not establish runtime
+  execution or numerical parity;
 - on Linux CI, full project materialization and translation of `gemv.metal` to
   Vulkan produces 225 specializations and 224 `GLCompute` entry points. The
   generated artifact passes both `spirv-as` and `spirv-val` for `vulkan1.1`
@@ -365,7 +366,7 @@ python demos/integrations/mlx/run_mlx_porting.py \
 ```
 
 On Linux, install the OpenGL, SPIR-V, and Vulkan runtime dependencies to require
-the clean OpenGL compiler gates, the pinned GEMV expected frontier, and native
+the clean OpenGL compiler gates, the pinned GEMV toolchain gate, and native
 OpenGL and Vulkan execution of the generated MLX `arange` artifacts:
 
 ```bash
@@ -375,7 +376,7 @@ python -m pip install moderngl==5.12.0 PyOpenGL==3.1.10 vulkan==1.3.275.1
 python demos/integrations/mlx/run_mlx_porting.py \
   --mlx-root /tmp/mlx \
   --require-opengl-frontier-toolchain \
-  --require-opengl-gemv-frontier \
+  --require-opengl-gemv-toolchain \
   --require-opengl-native-runtime \
   --require-vulkan-gemv-toolchain \
   --require-vulkan-toolchain \
@@ -676,35 +677,31 @@ apply that contract, so library compilation proves that DXC accepts and
 code-generates every exported function but does not establish wave semantics,
 runtime execution, numerical parity, or whole-kernel semantic validity.
 
-The separate pinned `gemv.metal` OpenGL frontier uses the same 4,096
-specialization limit and 2,097,152-item materialization work budget. It requires
-SHA-256 `c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f`,
-one source unit, one failed artifact record, zero translated artifacts, zero
-emitted target files, and all 225 specializations materialized with no
-unsupported records. Its project configuration and report must retain the exact
-`[32, "BN", "BM"]` workgroup-size rule, so workgroup-size configuration is not
-an execution blocker. The required diagnostic is
-`project.translate.opengl-workgroup-pointer-unsupported` with capability
-`opengl.workgroup-pointer-lowering`; it must retain function
-`GEMVKernel_bfloat16_t_1_8_1_32_1_4_false__run`, parameter and backing `tgp_memory`,
-offset `0`, and reason `unprovable-view-access`. The concrete index derivation is
-`sgN = simd_gid % 8`, `simdM = simd_gid / 8`, `bm = simdM`, and
-`tgp_results = tgp_memory + sgN * 2 + bm`. Under the source-required 32-lane
-subgroup width and the configured `[32, 8, 1]` workgroup, `simd_gid` is in
-`[0, 7]`, the base offset is in `[0, 14]`, and the guarded reduction reaches at
-most element `14` of the 16-element backing. Translation remains fail-closed
-because the target-independent backing-view analysis does not yet carry this
-range proof. The existing frontier also does not configure the exact subgroup
-width on the blocked artifact.
-[#1671](https://github.com/CrossGL/crosstl/issues/1671) tracks backing and range
-propagation and remains the translation blocker.
-The exact subgroup-width contract can now gate execution on a device reporting
-width 32; [#1894](https://github.com/CrossGL/crosstl/issues/1894) tracks a
-semantics-preserving fallback for devices without that native width. Because
-translation emits no GLSL artifact, this frontier does not claim an emitted or
-runnable GEMV artifact, attempts no native compiler or runtime validation, and
-makes no runtime or numerical-parity claim. Configuring the workgroup-size rule
-alone does not prove the unavailable generated-artifact execution contract.
+The pinned `gemv.metal` OpenGL gate uses the same 4,096-specialization limit and
+2,097,152-item materialization work budget. It requires SHA-256
+`c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f`, one
+source unit, all 225 specializations materialized without unsupported records,
+and all 224 entry-scoped GLSL artifacts emitted without diagnostics. Every
+artifact must retain its source entry identity, generated hash, source map,
+source remap, resolved workgroup size, and exact subgroup-width contract.
+
+The project configuration records `[32, "BN", "BM"]` as the workgroup-size
+rule and 32 as the subgroup width. Generated shaders require
+`GL_KHR_shader_subgroup_basic` and return before dispatch work when
+`gl_SubgroupSize` differs from 32; the host must also query
+`GL_SUBGROUP_SIZE_KHR` and reject a mismatch before dispatch. Five source-scoped
+index-range assertions record the host preconditions that permit MLX's 64-bit
+batch and gathered-matrix indices to narrow to OpenGL's 32-bit index domain.
+These are explicit runtime preconditions, not inferred ranges, and this harness
+does not enforce them at runtime.
+
+Linux CI compiles all 224 artifacts for OpenGL SPIR-V 1.3 with
+`glslangValidator` and validates every resulting SPIR-V 1.3 module with
+`spirv-val`. [#1894](https://github.com/CrossGL/crosstl/issues/1894) tracks a
+semantics-preserving fallback for devices without the required native subgroup
+width. The gate proves complete translation and compiler acceptance under the
+recorded project contracts; it does not establish runtime execution, host
+integration, or numerical parity.
 
 Owner-dependent `constexpr` helper calls in quantized struct static members now
 resolve for the selected pinned replay, completing CrossGL/crosstl#1672.

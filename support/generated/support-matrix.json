@@ -248,7 +248,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1525
+        "test_count": 1529
       },
       "translator_codegen": {
         "exists": true,
@@ -619,7 +619,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1645
+        "test_count": 1649
       },
       "translator_codegen": {
         "exists": true,
@@ -5710,6 +5710,9 @@
             "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_nested_workgroup_pointer_helper_rejects_out_of_bounds_view",
             "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_workgroup_pointer_helper_rejects_unbounded_runtime_offset",
             "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_workgroup_pointer_helper_proves_bounded_loop_accesses",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_exact_subgroup_branch_proves_bounded_workgroup_view",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_workgroup_view_branch_requires_exact_subgroup_width",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_address_taken_offset_rejects_stale_branch_refinement",
             "tests/test_translator/test_project_translation.py::def test_translate_project_reports_unsupported_opengl_workgroup_pointer",
             "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reachable_null_opengl_workgroup_pointer",
             "tests/test_translator/test_project_translation.py::def test_translate_project_reports_opengl_workgroup_pointer_provenance",
@@ -5717,7 +5720,7 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_workgroup_alias_offset_executes_on_vulkan",
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan"
           ],
-          "notes": "OpenGL lowers fixed arrays and indexed access, recursively materializes omitted trailing values in partial fixed-array and struct initializers, and hoists function-local workgroup arrays to module-scope shared storage. Compute workgroup pointer helpers are specialized by concrete shared backing and extent, with nested views represented as composed integer offsets instead of pointer parameters. Static expressions and bounded loop ranges are checked against the backing extent. Unbounded runtime offsets, out-of-range composed views, unresolved extents, reachable null pointers, and other unrepresentable cases fail closed with structured project diagnostics that retain available codegen provenance; statically unreachable null-pointer parameters are removed. This support row does not assert complete runtime integration or corpus parity.",
+          "notes": "OpenGL lowers fixed arrays and indexed access, recursively materializes omitted trailing values in partial fixed-array and struct initializers, and hoists function-local workgroup arrays to module-scope shared storage. Compute workgroup pointer helpers are specialized by concrete shared backing and extent, with nested views represented as composed integer offsets instead of pointer parameters. Static expressions, bounded loop ranges, and immutable branch-refined offsets derived from exact workgroup and subgroup execution contracts are checked against the backing extent. Address-taken or otherwise mutated offset dependencies disable branch refinement. Unbounded runtime offsets, out-of-range composed views, unresolved extents, reachable null pointers, and other unrepresentable cases fail closed with structured project diagnostics that retain available codegen provenance; statically unreachable null-pointer parameters are removed. This support row does not assert complete runtime integration or corpus parity.",
           "status": "supported"
         },
         "rust": {
@@ -9616,7 +9619,7 @@
     },
     {
       "category": "project",
-      "description": "Apply fixed project variants or evaluated per-source workgroup-size rules to deterministic materialized entries and preserve the resulting target execution contract in generated project artifacts and reports.",
+      "description": "Apply fixed project variants or evaluated source-wide and entry-specific workgroup-size rules to deterministic materialized entries and preserve the resulting target execution contract in generated project artifacts and reports.",
       "id": "project.workgroup_size_specialization",
       "name": "Per-entry workgroup size specialization",
       "support": {
@@ -9639,9 +9642,11 @@
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_invalid_materialization_joins",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_reports_target_limits",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_report_rejects_rehashed_parameter_tampering",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_entry_workgroup_rules_override_mixed_template_families",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_entry_workgroup_rules_reject_unmatched_entry_pattern",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_compute_workgroup_size_projects_declared_source_shape"
           ],
-          "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization, while per-source [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters. Ordinary ambiguous multi-entry sources and incomplete materialization joins fail closed. DirectX emits one HLSL library artifact with independent numthreads values per entry, while execution metadata, source-to-target identities, provenance, and report validation preserve each dispatch contract. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
+          "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization. Source-wide [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters, and [project.entry_workgroup_size_rules] can override the formula for distinct host entry families while retaining the source-wide fallback. Ordinary ambiguous multi-entry sources, unmatched configured entry patterns, uncovered entries without a fallback, and incomplete materialization joins fail closed. DirectX emits one HLSL library artifact with independent numthreads values per entry, while execution metadata, source-to-target identities, selected rule provenance, and report validation preserve each dispatch contract. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
           "status": "supported"
         },
         "hip": {
@@ -9671,12 +9676,14 @@
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_size_variants_keep_host_entry_identities_and_replay",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_size_keeps_ordinary_multi_entry_aggregate_closed",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rules_emit_directx_library_and_opengl_entries",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_entry_workgroup_rules_override_mixed_template_families",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_entry_workgroup_rules_reject_unmatched_entry_pattern",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_report_rejects_missing_opengl_split",
             "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_reuses_one_materialized_ast_per_target",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_compute_workgroup_size_projects_declared_source_shape",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers"
           ],
-          "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization, while per-source [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters. Ordinary ambiguous multi-entry sources and incomplete materialization joins fail closed. OpenGL splits materialized entries into deterministic standalone GLSL artifacts with runnable main entry points and entry-specific local-size layouts, while execution metadata, provenance, and report validation preserve each dispatch contract and reject missing splits. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
+          "notes": "A fixed project.workgroup_size or named-variant workgroup_size is joined to every deterministic host-named Metal materialization. Source-wide [project.workgroup_size_rules] expressions are evaluated against each entry's template parameters, and [project.entry_workgroup_size_rules] can override the formula for distinct host entry families while retaining the source-wide fallback. Ordinary ambiguous multi-entry sources, unmatched configured entry patterns, uncovered entries without a fallback, and incomplete materialization joins fail closed. OpenGL splits materialized entries into deterministic standalone GLSL artifacts with runnable main entry points and entry-specific local-size layouts, while execution metadata, selected rule provenance, and report validation preserve each dispatch contract and reject missing splits. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
           "status": "supported"
         },
         "rust": {

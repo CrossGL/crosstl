@@ -5834,31 +5834,67 @@ class GLSLCodeGen:
                 if key is not None:
                     intervals[key] = (value, value)
 
-        local_size = getattr(function, "_glsl_workgroup_proof_local_size", None)
-        if local_size is None:
-            return intervals
-        resolved_local_size = tuple(
-            evaluate_literal_int_expression(component, constants)
-            for component in local_size
+        builtin_intervals = {}
+        subgroup_width = getattr(
+            function,
+            "_glsl_workgroup_proof_subgroup_width",
+            None,
         )
-        if not all(
-            isinstance(component, int)
-            and not isinstance(component, bool)
-            and component > 0
-            for component in resolved_local_size
+        if (
+            isinstance(subgroup_width, int)
+            and not isinstance(subgroup_width, bool)
+            and subgroup_width > 0
         ):
-            return intervals
-        invocation_count = (
-            resolved_local_size[0] * resolved_local_size[1] * resolved_local_size[2]
-        )
+            builtin_intervals.update(
+                {
+                    "gl_SubgroupInvocationID": (0, subgroup_width - 1),
+                    "gl_SubgroupSize": (subgroup_width, subgroup_width),
+                }
+            )
+
+        local_size = getattr(function, "_glsl_workgroup_proof_local_size", None)
+        invocation_count = None
+        if local_size is not None:
+            resolved_local_size = tuple(
+                evaluate_literal_int_expression(component, constants)
+                for component in local_size
+            )
+            if all(
+                isinstance(component, int)
+                and not isinstance(component, bool)
+                and component > 0
+                for component in resolved_local_size
+            ):
+                invocation_count = (
+                    resolved_local_size[0]
+                    * resolved_local_size[1]
+                    * resolved_local_size[2]
+                )
+                builtin_intervals["gl_LocalInvocationIndex"] = (
+                    0,
+                    invocation_count - 1,
+                )
+                if subgroup_width is not None:
+                    subgroup_count = (
+                        invocation_count + subgroup_width - 1
+                    ) // subgroup_width
+                    builtin_intervals.update(
+                        {
+                            "gl_SubgroupID": (0, subgroup_count - 1),
+                            "gl_NumSubgroups": (subgroup_count, subgroup_count),
+                        }
+                    )
+
+        intervals.update(builtin_intervals)
         for parameter in (
             getattr(function, "parameters", getattr(function, "params", [])) or []
         ):
             semantic = self.semantic_from_node(parameter)
             if semantic is None:
                 continue
-            if self.map_semantic(semantic) == "gl_LocalInvocationIndex":
-                intervals[parameter.name] = (0, invocation_count - 1)
+            interval = builtin_intervals.get(self.map_semantic(semantic))
+            if interval is not None:
+                intervals[parameter.name] = interval
         return intervals
 
     def glsl_index_component_index(self, member):
@@ -5962,6 +5998,7 @@ class GLSLCodeGen:
 
     def annotate_glsl_control_flow_intervals(self, function):
         constants = self.initial_literal_int_constants(function)
+        mutated_interval_names = self.glsl_function_mutated_interval_names(function)
 
         def merge_intervals(left, right):
             return {
@@ -6352,21 +6389,57 @@ class GLSLCodeGen:
                     visit_sequence(static_body, intervals)
                     return
                 branch_intervals = []
-                then_intervals = dict(intervals)
-                visit_sequence(value.if_body, then_intervals)
-                branch_intervals.append(then_intervals)
-                fallthrough_intervals = dict(intervals)
+                then_intervals = self.glsl_private_pointer_refined_condition_intervals(
+                    condition,
+                    intervals,
+                    constants,
+                    True,
+                    excluded_names=mutated_interval_names,
+                )
+                if then_intervals is not None:
+                    visit_sequence(value.if_body, then_intervals)
+                    branch_intervals.append(then_intervals)
+                fallthrough_intervals = (
+                    self.glsl_private_pointer_refined_condition_intervals(
+                        condition,
+                        intervals,
+                        constants,
+                        False,
+                        excluded_names=mutated_interval_names,
+                    )
+                )
                 for else_if_condition, else_if_body in zip(
                     getattr(value, "else_if_conditions", []) or [],
                     getattr(value, "else_if_bodies", []) or [],
                 ):
+                    if fallthrough_intervals is None:
+                        break
                     visit(else_if_condition, fallthrough_intervals)
-                    candidate = dict(fallthrough_intervals)
-                    visit_sequence(else_if_body, candidate)
-                    branch_intervals.append(candidate)
-                else_intervals = dict(fallthrough_intervals)
-                visit_sequence(getattr(value, "else_body", None), else_intervals)
-                branch_intervals.append(else_intervals)
+                    candidate = self.glsl_private_pointer_refined_condition_intervals(
+                        else_if_condition,
+                        fallthrough_intervals,
+                        constants,
+                        True,
+                        excluded_names=mutated_interval_names,
+                    )
+                    if candidate is not None:
+                        visit_sequence(else_if_body, candidate)
+                        branch_intervals.append(candidate)
+                    fallthrough_intervals = (
+                        self.glsl_private_pointer_refined_condition_intervals(
+                            else_if_condition,
+                            fallthrough_intervals,
+                            constants,
+                            False,
+                            excluded_names=mutated_interval_names,
+                        )
+                    )
+                if fallthrough_intervals is not None:
+                    else_intervals = dict(fallthrough_intervals)
+                    visit_sequence(getattr(value, "else_body", None), else_intervals)
+                    branch_intervals.append(else_intervals)
+                if not branch_intervals:
+                    return
                 merged = branch_intervals[0]
                 for candidate in branch_intervals[1:]:
                     merged = merge_intervals(merged, candidate)
@@ -6500,11 +6573,17 @@ class GLSLCodeGen:
         self.glsl_resource_specialized_source_names = set()
         pending = []
 
-        for stage in getattr(ast, "stages", {}).values():
+        for stage_name, stage in getattr(ast, "stages", {}).items():
             entry_point = getattr(stage, "entry_point", None)
             if entry_point is not None:
                 entry_point._glsl_workgroup_proof_local_size = compute_local_size(
                     getattr(stage, "execution_config", None)
+                )
+                entry_point._glsl_workgroup_proof_subgroup_width = (
+                    self.glsl_exact_subgroup_width(
+                        entry_point,
+                        normalize_stage_name(stage_name),
+                    )
                 )
 
         def scan_function(func, aliases):
@@ -7360,6 +7439,103 @@ class GLSLCodeGen:
                 result[name] = interval
         return result
 
+    def glsl_interval_dependency_names(self, expression):
+        if isinstance(expression, str):
+            return {expression} if re.fullmatch(r"[A-Za-z_]\w*", expression) else set()
+        nodes = (
+            expression.walk()
+            if hasattr(expression, "walk")
+            else self.walk_ast(expression)
+        )
+        return {
+            name
+            for node in nodes
+            if isinstance(node, (IdentifierNode, VariableNode))
+            and isinstance(name := getattr(node, "name", None), str)
+        }
+
+    def glsl_mutation_target_names(self, target):
+        if isinstance(target, (str, IdentifierNode, VariableNode)):
+            name = self.expression_name(target)
+            return {name} if name else set()
+        if isinstance(target, ArrayAccessNode):
+            return self.glsl_mutation_target_names(target.array)
+        if isinstance(target, MemberAccessNode):
+            names = self.glsl_mutation_target_names(target.object)
+            object_name = expression_debug_name(target.object)
+            if object_name:
+                names.add(f"{object_name}.{target.member}")
+            return names
+        return set()
+
+    def glsl_function_mutated_interval_names(self, function):
+        mutated = set()
+
+        def structural_nodes(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, dict):
+                for child in value.values():
+                    yield from structural_nodes(child)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for child in value:
+                    yield from structural_nodes(child)
+                return
+            if hasattr(value, "walk"):
+                yield from value.walk()
+
+        for node in structural_nodes(getattr(function, "body", [])):
+            if isinstance(node, AssignmentNode):
+                mutated.update(
+                    self.glsl_mutation_target_names(
+                        getattr(node, "target", getattr(node, "left", None))
+                    )
+                )
+                continue
+            if isinstance(node, UnaryOpNode) and (
+                self.map_operator(node.op) in {"++", "--"}
+                or node.op
+                in {
+                    "PRE_INCREMENT",
+                    "PRE_DECREMENT",
+                    "POST_INCREMENT",
+                    "POST_DECREMENT",
+                }
+            ):
+                mutated.update(self.glsl_mutation_target_names(node.operand))
+                continue
+            if isinstance(node, UnaryOpNode) and self.map_operator(node.op) == "&":
+                mutated.update(self.glsl_mutation_target_names(node.operand))
+                continue
+            if not isinstance(node, FunctionCallNode):
+                continue
+            function_name = self.function_call_name(node)
+            candidates = list(
+                self.glsl_function_overloads_by_name.get(function_name, ())
+            )
+            fallback = self.function_definitions.get(function_name)
+            if fallback is not None and fallback not in candidates:
+                candidates.append(fallback)
+            for argument_index, argument in enumerate(node.arguments or []):
+                for candidate in candidates:
+                    parameters = list(
+                        getattr(
+                            candidate,
+                            "parameters",
+                            getattr(candidate, "params", []),
+                        )
+                        or []
+                    )
+                    if argument_index >= len(parameters):
+                        continue
+                    if set(
+                        self.glsl_parameter_qualifiers(parameters[argument_index])
+                    ).intersection({"out", "inout"}):
+                        mutated.update(self.glsl_mutation_target_names(argument))
+                        break
+        return mutated
+
     def glsl_workgroup_pointer_direct_access_intervals(
         self,
         function,
@@ -7394,6 +7570,17 @@ class GLSLCodeGen:
             for name, element_type in element_types.items()
         }
         access_intervals = {}
+        mutated_interval_names = self.glsl_function_mutated_interval_names(function)
+
+        def retain_refinable_offset(binding):
+            if binding is None:
+                return None
+            binding = dict(binding)
+            dependencies = self.glsl_interval_dependency_names(binding.get("offset", 0))
+            binding["_glsl_workgroup_proof_offset_refinable"] = not (
+                dependencies & mutated_interval_names
+            )
+            return binding
 
         def merge_intervals(left, right):
             return {
@@ -7417,6 +7604,19 @@ class GLSLCodeGen:
                 binding,
                 active_intervals,
             )
+            if binding.get("_glsl_workgroup_proof_offset_refinable"):
+                refined_interval = self.glsl_private_pointer_interval(
+                    binding.get("offset", 0),
+                    active_intervals,
+                    constants,
+                )
+                if (
+                    refined_interval is not None
+                    and base_interval is not None
+                    and refined_interval[0] >= base_interval[0]
+                    and refined_interval[1] <= base_interval[1]
+                ):
+                    base_interval = refined_interval
             index_interval = self.glsl_private_pointer_interval(
                 index,
                 active_intervals,
@@ -7472,7 +7672,7 @@ class GLSLCodeGen:
                     if binding is None:
                         active_aliases.pop(name, None)
                     else:
-                        active_aliases[name] = binding
+                        active_aliases[name] = retain_refinable_offset(binding)
                 else:
                     active_aliases.pop(name, None)
                 interval = self.glsl_private_pointer_interval(
@@ -7516,7 +7716,9 @@ class GLSLCodeGen:
                     if replacement is None:
                         active_aliases.pop(target_name, None)
                     else:
-                        active_aliases[target_name] = replacement
+                        active_aliases[target_name] = retain_refinable_offset(
+                            replacement
+                        )
                     return
                 if target_name and isinstance(
                     target, (str, IdentifierNode, VariableNode)
@@ -7583,8 +7785,13 @@ class GLSLCodeGen:
                 visit_sequence(value, dict(active_aliases), dict(active_intervals))
                 return
             if isinstance(value, IfNode):
+                condition = getattr(
+                    value,
+                    "condition",
+                    getattr(value, "if_condition", None),
+                )
                 visit(
-                    getattr(value, "condition", getattr(value, "if_condition", None)),
+                    condition,
                     active_aliases,
                     active_intervals,
                 )
@@ -7597,14 +7804,71 @@ class GLSLCodeGen:
                     )
                     return
                 branch_intervals = []
-                for body in [
-                    value.if_body,
-                    *(getattr(value, "else_if_bodies", []) or []),
-                    getattr(value, "else_body", None),
-                ]:
-                    candidate = dict(active_intervals)
-                    visit_sequence(body, dict(active_aliases), candidate)
-                    branch_intervals.append(candidate)
+                then_intervals = self.glsl_private_pointer_refined_condition_intervals(
+                    condition,
+                    active_intervals,
+                    constants,
+                    True,
+                    excluded_names=mutated_interval_names,
+                )
+                if then_intervals is not None:
+                    visit_sequence(
+                        value.if_body,
+                        dict(active_aliases),
+                        then_intervals,
+                    )
+                    branch_intervals.append(then_intervals)
+                fallthrough_intervals = (
+                    self.glsl_private_pointer_refined_condition_intervals(
+                        condition,
+                        active_intervals,
+                        constants,
+                        False,
+                        excluded_names=mutated_interval_names,
+                    )
+                )
+                for else_if_condition, else_if_body in zip(
+                    getattr(value, "else_if_conditions", []) or [],
+                    getattr(value, "else_if_bodies", []) or [],
+                ):
+                    if fallthrough_intervals is None:
+                        break
+                    visit(
+                        else_if_condition,
+                        dict(active_aliases),
+                        fallthrough_intervals,
+                    )
+                    candidate = self.glsl_private_pointer_refined_condition_intervals(
+                        else_if_condition,
+                        fallthrough_intervals,
+                        constants,
+                        True,
+                        excluded_names=mutated_interval_names,
+                    )
+                    if candidate is not None:
+                        visit_sequence(
+                            else_if_body,
+                            dict(active_aliases),
+                            candidate,
+                        )
+                        branch_intervals.append(candidate)
+                    fallthrough_intervals = (
+                        self.glsl_private_pointer_refined_condition_intervals(
+                            else_if_condition,
+                            fallthrough_intervals,
+                            constants,
+                            False,
+                            excluded_names=mutated_interval_names,
+                        )
+                    )
+                if fallthrough_intervals is not None:
+                    else_intervals = dict(fallthrough_intervals)
+                    visit_sequence(
+                        getattr(value, "else_body", None),
+                        dict(active_aliases),
+                        else_intervals,
+                    )
+                    branch_intervals.append(else_intervals)
                 if branch_intervals:
                     merged = branch_intervals[0]
                     for candidate in branch_intervals[1:]:
@@ -32015,7 +32279,7 @@ complex64_t crossgl_complex64_mod_assign(
             return None if operand is None else not operand
 
         if isinstance(expression, BinaryOpNode):
-            operator = expression.op
+            operator = self.map_operator(expression.op)
             if operator in {"&&", "and", "||", "or"}:
                 left = self.glsl_private_pointer_condition_value(
                     expression.left, intervals, constants
@@ -32027,10 +32291,240 @@ complex64_t crossgl_complex64_mod_assign(
                 right = self.glsl_private_pointer_condition_value(
                     expression.right, intervals, constants
                 )
-                if left is None or right is None:
-                    return None
-                return left and right if operator in {"&&", "and"} else left or right
+                if operator in {"&&", "and"}:
+                    if right is False:
+                        return False
+                    return True if left is True and right is True else None
+                if right is True:
+                    return True
+                return False if left is False and right is False else None
         return None
+
+    def glsl_private_pointer_refined_condition_intervals(
+        self,
+        expression,
+        intervals,
+        constants,
+        expected,
+        *,
+        excluded_names=None,
+    ):
+        refined = dict(intervals)
+        if self.glsl_private_pointer_expression_has_side_effects(expression):
+            return refined
+        excluded_names = set(excluded_names or ())
+        if self.glsl_interval_dependency_names(expression) & excluded_names:
+            return refined
+        condition = self.glsl_private_pointer_condition_value(
+            expression,
+            refined,
+            constants,
+        )
+        if condition is not None:
+            return refined if condition is expected else None
+
+        if (
+            isinstance(expression, UnaryOpNode)
+            and self.map_operator(expression.op) == "!"
+        ):
+            return self.glsl_private_pointer_refined_condition_intervals(
+                expression.operand,
+                refined,
+                constants,
+                not expected,
+                excluded_names=excluded_names,
+            )
+
+        if not isinstance(expression, BinaryOpNode):
+            return refined
+        operator = self.map_operator(expression.op)
+        if operator in {"&&", "and"}:
+            if not expected:
+                left = self.glsl_private_pointer_condition_value(
+                    expression.left,
+                    refined,
+                    constants,
+                )
+                if left is True:
+                    return self.glsl_private_pointer_refined_condition_intervals(
+                        expression.right,
+                        refined,
+                        constants,
+                        False,
+                        excluded_names=excluded_names,
+                    )
+                right = self.glsl_private_pointer_condition_value(
+                    expression.right,
+                    refined,
+                    constants,
+                )
+                if right is True:
+                    return self.glsl_private_pointer_refined_condition_intervals(
+                        expression.left,
+                        refined,
+                        constants,
+                        False,
+                        excluded_names=excluded_names,
+                    )
+                return refined
+            refined = self.glsl_private_pointer_refined_condition_intervals(
+                expression.left,
+                refined,
+                constants,
+                True,
+                excluded_names=excluded_names,
+            )
+            if refined is None:
+                return None
+            return self.glsl_private_pointer_refined_condition_intervals(
+                expression.right,
+                refined,
+                constants,
+                True,
+                excluded_names=excluded_names,
+            )
+        if operator in {"||", "or"}:
+            if expected:
+                left = self.glsl_private_pointer_condition_value(
+                    expression.left,
+                    refined,
+                    constants,
+                )
+                if left is False:
+                    return self.glsl_private_pointer_refined_condition_intervals(
+                        expression.right,
+                        refined,
+                        constants,
+                        True,
+                        excluded_names=excluded_names,
+                    )
+                right = self.glsl_private_pointer_condition_value(
+                    expression.right,
+                    refined,
+                    constants,
+                )
+                if right is False:
+                    return self.glsl_private_pointer_refined_condition_intervals(
+                        expression.left,
+                        refined,
+                        constants,
+                        True,
+                        excluded_names=excluded_names,
+                    )
+                return refined
+            refined = self.glsl_private_pointer_refined_condition_intervals(
+                expression.left,
+                refined,
+                constants,
+                False,
+                excluded_names=excluded_names,
+            )
+            if refined is None:
+                return None
+            return self.glsl_private_pointer_refined_condition_intervals(
+                expression.right,
+                refined,
+                constants,
+                False,
+                excluded_names=excluded_names,
+            )
+        if operator not in {"==", "!=", "<", "<=", ">", ">="}:
+            return refined
+
+        if not expected:
+            operator = {
+                "==": "!=",
+                "!=": "==",
+                "<": ">=",
+                "<=": ">",
+                ">": "<=",
+                ">=": "<",
+            }[operator]
+        left_expression = expression.left
+        right_expression = expression.right
+        left = self.glsl_private_pointer_interval(
+            left_expression,
+            refined,
+            constants,
+        )
+        right = self.glsl_private_pointer_interval(
+            right_expression,
+            refined,
+            constants,
+        )
+        if left is None or right is None:
+            return refined
+
+        def narrow(candidate, lower, upper):
+            name = self.expression_name(candidate)
+            if name not in refined:
+                return True
+            current = refined[name]
+            replacement = max(current[0], lower), min(current[1], upper)
+            if replacement[0] > replacement[1]:
+                return False
+            refined[name] = replacement
+            return True
+
+        if operator == "==":
+            overlap = max(left[0], right[0]), min(left[1], right[1])
+            if overlap[0] > overlap[1]:
+                return None
+            if not narrow(left_expression, *overlap) or not narrow(
+                right_expression,
+                *overlap,
+            ):
+                return None
+            return refined
+        if operator == "!=":
+            if left[0] == left[1] == right[0] == right[1]:
+                return None
+            if (
+                right[0] == right[1]
+                and self.expression_name(left_expression) in refined
+            ):
+                excluded = right[0]
+                lower, upper = refined[self.expression_name(left_expression)]
+                if lower == excluded:
+                    lower += 1
+                elif upper == excluded:
+                    upper -= 1
+                if not narrow(left_expression, lower, upper):
+                    return None
+            if left[0] == left[1] and self.expression_name(right_expression) in refined:
+                excluded = left[0]
+                lower, upper = refined[self.expression_name(right_expression)]
+                if lower == excluded:
+                    lower += 1
+                elif upper == excluded:
+                    upper -= 1
+                if not narrow(right_expression, lower, upper):
+                    return None
+            return refined
+
+        if operator == ">":
+            left_expression, right_expression = right_expression, left_expression
+            left, right = right, left
+            operator = "<"
+        elif operator == ">=":
+            left_expression, right_expression = right_expression, left_expression
+            left, right = right, left
+            operator = "<="
+        if operator == "<":
+            if not narrow(left_expression, left[0], right[1] - 1) or not narrow(
+                right_expression,
+                left[0] + 1,
+                right[1],
+            ):
+                return None
+        elif operator == "<=":
+            if not narrow(left_expression, left[0], right[1]) or not narrow(
+                right_expression,
+                left[0],
+                right[1],
+            ):
+                return None
+        return refined
 
     def glsl_private_pointer_static_binding(
         self,
@@ -32424,8 +32918,31 @@ complex64_t crossgl_complex64_mod_assign(
             if expression.op == "/" and right[0] == right[1] and right[0] > 0:
                 divisor = right[0]
                 return int(left[0] / divisor), int(left[1] / divisor)
+            if (
+                expression.op == "%"
+                and right[0] == right[1]
+                and right[0] > 0
+                and left[0] >= 0
+            ):
+                divisor = right[0]
+                if left[0] == left[1]:
+                    remainder = left[0] % divisor
+                    return remainder, remainder
+                return 0, min(divisor - 1, left[1])
             return None
         if isinstance(expression, TernaryOpNode):
+            condition = self.glsl_private_pointer_condition_value(
+                expression.condition,
+                intervals,
+                constants,
+            )
+            if condition is not None:
+                selected = expression.true_expr if condition else expression.false_expr
+                return self.glsl_private_pointer_interval(
+                    selected,
+                    intervals,
+                    constants,
+                )
             true_interval = self.glsl_private_pointer_interval(
                 expression.true_expr, intervals, constants
             )

@@ -2389,6 +2389,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
+    assert "timeout-minutes: 60" in mlx_porting
     assert re.search(r"\bschedule\s*:", mlx_porting)
     assert 'cron: "31 4 * * 1"' in mlx_porting
     assert "github.event_name != 'schedule'" in mlx_porting
@@ -2401,8 +2402,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--require-directx-toolchain" in mlx_porting
     assert "--require-directx-gemv-compiler-frontier" in mlx_porting
     assert "--require-opengl-frontier-toolchain" in mlx_porting
-    assert "--require-opengl-gemv-frontier" in mlx_porting
-    assert "--require-opengl-gemv-toolchain" not in mlx_porting
+    assert "--require-opengl-gemv-toolchain" in mlx_porting
+    assert "--require-opengl-gemv-frontier" not in mlx_porting
     assert "--require-vulkan-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-native-runtime" in mlx_porting
     assert "--require-opengl-native-runtime" in mlx_porting
@@ -2516,11 +2517,15 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "GEMV_OPENGL_WORKGROUP_SIZE_ISSUE" not in mlx_porting
     assert 'gemv_directx["numthreadsContractEstablished"] is not True' in mlx_porting
     assert 'gemv_directx["exactWorkgroupSizeEstablished"] is not True' in mlx_porting
-    assert 'checks["gemv-opengl-frontier"]' in mlx_porting
-    assert 'scope["openglGemvFrontierRequired"]' in mlx_porting
+    assert 'checks["gemv-opengl-toolchain"]' in mlx_porting
+    assert 'scope["openglGemvToolchainRequired"]' in mlx_porting
     assert 'gemv_opengl["workgroupSizeRuleConfigured"] is not True' in mlx_porting
     assert 'gemv_opengl["runnableArtifactClaimed"] is not False' in mlx_porting
-    assert "OpenGL GEMV fail-closed evidence is incomplete" in mlx_porting
+    assert 'gemv_opengl["toolchainValidatedArtifactCount"]' in mlx_porting
+    assert 'gemv_opengl["compilerValidatedArtifactClaimed"] is not True' in (
+        mlx_porting
+    )
+    assert "OpenGL GEMV toolchain evidence is incomplete" in mlx_porting
     assert 'checks["reference-accessor-lvalue-identity"]' in mlx_porting
     assert "reference accessor proof accounting is incomplete" in mlx_porting
     assert "reference accessor {target} storage evidence is incomplete" in mlx_porting
