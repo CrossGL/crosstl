@@ -534,10 +534,64 @@ assertion does not clamp, wrap, or otherwise redefine out-of-range source
 values; the application remains responsible for satisfying the precondition on
 every execution.
 
+Project Workgroup-Access Assertions
+-----------------------------------
+
+OpenGL cannot represent a source workgroup pointer directly. It specializes
+pointer-free helpers against a concrete entry-owned ``shared`` array and must
+prove that every composed access remains within that backing array. When the
+source runtime already enforces an entry-specific absolute element range,
+record that precondition explicitly:
+
+.. code-block:: toml
+
+   [[project.workgroup_access_assertions]]
+   source = "kernels/fft.metal"
+   entry_point = "fft_mem_256_*"
+   function = "ReadWriter_*"
+   parameter = "crosstl_ptr_buf"
+   minimum = 0
+   maximum = 255
+
+Each assertion table has these fields:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - Field
+     - Meaning
+   * - ``source``
+     - Repository-relative source glob. Omitting it defaults to ``*``.
+   * - ``entry_point``
+     - Required source entry-point pattern. The assertion cannot cross entry
+       ownership boundaries.
+   * - ``function``
+     - Helper-function pattern. Omitting it defaults to ``*``.
+   * - ``parameter``
+     - Workgroup-pointer parameter pattern. Omitting it defaults to ``*``.
+   * - ``minimum``
+     - Inclusive absolute element offset into the concrete backing array.
+   * - ``maximum``
+     - Inclusive absolute element offset. It must not be less than ``minimum``.
+
+The assertion does not provide backing identity, extent, element type, or a
+pointer offset. OpenGL must still derive those properties from the source call
+graph and emits the original composed runtime offset expression. Matching
+assertions are intersected with any statically derived access range; a
+contradiction or an asserted range outside the concrete backing array fails
+before artifact emission. Entries without a matching assertion continue to
+require a complete static proof.
+
+Workgroup-access assertions are host/runtime portability preconditions. CrossGL
+records them in the project report but does not emit runtime checks or change
+source indexing behavior. The application is responsible for satisfying every
+assertion on each dispatch.
+
 The portability report records the configured tables under
-``project.indexRangeAssertions`` and their count under
-``project.indexRangeAssertionCount``. Report consumers can therefore audit the
-host/runtime assumptions used during translation alongside the generated
+``project.workgroupAccessAssertions`` and their count under
+``project.workgroupAccessAssertionCount``. Report consumers can therefore audit
+the host/runtime assumptions used during translation alongside the generated
 artifacts.
 
 Exact DirectX bfloat16 Contract

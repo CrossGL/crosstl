@@ -85,6 +85,10 @@ from crosstl.translator.codegen.index_range_contracts import (
 from crosstl.translator.codegen.pointer_reinterpret import (
     validate_pointer_reinterpretation_target,
 )
+from crosstl.translator.codegen.workgroup_access_contracts import (
+    WorkgroupAccessAssertion,
+    parse_workgroup_access_assertions,
+)
 from crosstl.translator.default_arguments import lower_default_arguments
 from crosstl.translator.entry_discovery import (
     ENTRY_DISCOVERY_AVAILABLE,
@@ -1477,6 +1481,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "sourceOptionCount",
         "indexRangeAssertions",
         "indexRangeAssertionCount",
+        "workgroupAccessAssertions",
+        "workgroupAccessAssertionCount",
         "includeDirs",
         "includeDirCount",
         "includeDirStatus",
@@ -7638,6 +7644,7 @@ class ProjectConfig:
     dispatch_contracts: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
     index_range_assertions: Sequence[Any] = ()
+    workgroup_access_assertions: Sequence[Any] = ()
     translate_discovered_entry_points: Sequence[str] | str = ()
     _dispatch_contract_manifests: tuple[DispatchContractManifest, ...] = field(
         default=(), init=False, repr=False, compare=False
@@ -7758,6 +7765,25 @@ class ProjectConfig:
                     ),
                 )
                 for assertion in assertions
+            ),
+        )
+        workgroup_assertions = parse_workgroup_access_assertions(
+            self.workgroup_access_assertions,
+            field_name="ProjectConfig.workgroup_access_assertions",
+        )
+        object.__setattr__(
+            self,
+            "workgroup_access_assertions",
+            tuple(
+                replace(
+                    assertion,
+                    source=(
+                        assertion.source
+                        if assertion.source == "*"
+                        else _normalize_project_relative_path(assertion.source)
+                    ),
+                )
+                for assertion in workgroup_assertions
             ),
         )
         if not isinstance(self.variants, Mapping):
@@ -8887,6 +8913,13 @@ class ProjectPortabilityReport:
                     for assertion in self.config.index_range_assertions
                 ],
                 "indexRangeAssertionCount": len(self.config.index_range_assertions),
+                "workgroupAccessAssertions": [
+                    assertion.to_json()
+                    for assertion in self.config.workgroup_access_assertions
+                ],
+                "workgroupAccessAssertionCount": len(
+                    self.config.workgroup_access_assertions
+                ),
                 "includeDirs": list(self.config.include_dirs),
                 "includeDirCount": len(self.config.include_dirs),
                 "includeDirStatus": include_dir_status,
@@ -9115,6 +9148,10 @@ def load_project_config(
         project.get("index_range_assertions"),
         field_name="crosstl.toml [project.index_range_assertions]",
     )
+    workgroup_access_assertions = parse_workgroup_access_assertions(
+        project.get("workgroup_access_assertions"),
+        field_name="crosstl.toml [project.workgroup_access_assertions]",
+    )
     entry_points = _as_entry_point_selection_mapping(
         project.get("entry_points"),
         field_name="crosstl.toml [project.entry_points]",
@@ -9221,6 +9258,7 @@ def load_project_config(
         dispatch_contracts=dispatch_contracts,
         external_corpus_manifest=external_corpus_manifest,
         index_range_assertions=index_range_assertions,
+        workgroup_access_assertions=workgroup_access_assertions,
     )
 
 
@@ -9812,6 +9850,17 @@ def _index_range_assertions_for_unit(
     return tuple(
         assertion
         for assertion in config.index_range_assertions
+        if assertion.source == "*" or fnmatch.fnmatch(normalized_path, assertion.source)
+    )
+
+
+def _workgroup_access_assertions_for_unit(
+    config: ProjectConfig, relative_path: str
+) -> tuple[WorkgroupAccessAssertion, ...]:
+    normalized_path = _normalize_project_relative_path(relative_path)
+    return tuple(
+        assertion
+        for assertion in config.workgroup_access_assertions
         if assertion.source == "*" or fnmatch.fnmatch(normalized_path, assertion.source)
     )
 
@@ -23258,11 +23307,22 @@ def _opengl_workgroup_pointer_failure_details(
         "backingName": getattr(exc, "backing_name", None),
         "offsetExpression": getattr(exc, "offset_expression", None),
         "materializationName": getattr(exc, "materialization_name", None),
+        "entryPoint": getattr(exc, "entry_point", None),
         "reason": getattr(exc, "reason", None),
     }
     for name, value in fields.items():
         if _is_non_empty_string(value):
             pointer[name] = value
+    asserted_range = getattr(exc, "asserted_range", None)
+    if (
+        isinstance(asserted_range, tuple)
+        and len(asserted_range) == 2
+        and all(type(value) is int for value in asserted_range)
+    ):
+        pointer["assertedRange"] = {
+            "minimum": asserted_range[0],
+            "maximum": asserted_range[1],
+        }
     if pointer:
         details["workgroupPointer"] = dict(sorted(pointer.items()))
     return dict(sorted(details.items()))
@@ -25924,6 +25984,7 @@ def _generate_project_target_from_crossgl_ast(
     entry_point: str | None,
     format_output: bool,
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
+    workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
 ) -> str:
     codegen = get_codegen(target)
     if index_range_assertions:
@@ -25933,6 +25994,15 @@ def _generate_project_target_from_crossgl_ast(
                 f"Target '{target}' does not consume index range assertions"
             )
         configure_index_ranges(index_range_assertions)
+    if workgroup_access_assertions:
+        configure_workgroup_accesses = getattr(
+            codegen, "set_workgroup_access_assertions", None
+        )
+        if not callable(configure_workgroup_accesses):
+            raise ValueError(
+                f"Target '{target}' does not consume workgroup access assertions"
+            )
+        configure_workgroup_accesses(workgroup_access_assertions)
     lower_default_arguments(ast)
     validate_pointer_reinterpretation_target(ast, target)
     if entry_point is None:
@@ -26666,6 +26736,7 @@ def _translate_project_impl(
             dispatch_contracts=config.dispatch_contracts,
             external_corpus_manifest=config.external_corpus_manifest,
             index_range_assertions=config.index_range_assertions,
+            workgroup_access_assertions=config.workgroup_access_assertions,
         )
     config = _config_with_selected_variants(config, variants)
 
@@ -26874,6 +26945,14 @@ def _translate_project_impl(
                 index_range_assertions = (
                     _index_range_assertions_for_unit(config, unit.relative_path)
                     if target in {"opengl", "webgl"}
+                    else ()
+                )
+                workgroup_access_assertions = (
+                    _workgroup_access_assertions_for_unit(
+                        config,
+                        unit.relative_path,
+                    )
+                    if target == "opengl"
                     else ()
                 )
                 try:
@@ -27309,6 +27388,9 @@ def _translate_project_impl(
                                                 index_range_assertions=(
                                                     index_range_assertions
                                                 ),
+                                                workgroup_access_assertions=(
+                                                    workgroup_access_assertions
+                                                ),
                                             )
                                         )
                                     except Exception as exc:
@@ -27373,6 +27455,9 @@ def _translate_project_impl(
                                             index_range_assertions=(
                                                 index_range_assertions
                                             ),
+                                            workgroup_access_assertions=(
+                                                workgroup_access_assertions
+                                            ),
                                         )
                                     )
                                 except Exception as exc:
@@ -27395,7 +27480,9 @@ def _translate_project_impl(
                                     target=target,
                                     execution=execution,
                                 )
-                    if generated_source is None and index_range_assertions:
+                    if generated_source is None and (
+                        index_range_assertions or workgroup_access_assertions
+                    ):
                         crossgl_ast = crossgl_ast or _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
                             source_backend=translation_source_backend,
@@ -27415,6 +27502,7 @@ def _translate_project_impl(
                             entry_point=selected_entry_point,
                             format_output=format_output,
                             index_range_assertions=index_range_assertions,
+                            workgroup_access_assertions=(workgroup_access_assertions),
                         )
                     if generated_source is None:
                         generated_source = translate(
@@ -50986,6 +51074,33 @@ def _project_metadata_contract_reasons(
             reasons.append(
                 "project.indexRangeAssertionCount must match "
                 "project.indexRangeAssertions"
+            )
+
+    workgroup_access_assertions = project.get("workgroupAccessAssertions")
+    if _optional_project_field(project, "workgroupAccessAssertions", required=False):
+        try:
+            parse_workgroup_access_assertions(
+                workgroup_access_assertions,
+                field_name="project.workgroupAccessAssertions",
+            )
+        except ValueError as exc:
+            reasons.append(str(exc))
+    if _optional_project_field(
+        project,
+        "workgroupAccessAssertionCount",
+        required=False,
+    ):
+        count = project.get("workgroupAccessAssertionCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.workgroupAccessAssertionCount must be a non-negative integer"
+            )
+        elif isinstance(workgroup_access_assertions, list) and count != len(
+            workgroup_access_assertions
+        ):
+            reasons.append(
+                "project.workgroupAccessAssertionCount must match "
+                "project.workgroupAccessAssertions"
             )
 
     variants = project.get("variants")

@@ -343,6 +343,7 @@ from .stage_utils import (
     should_emit_qualified_function,
     stage_matches,
 )
+from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 
 class OpenGLTemplateTypeError(ValueError):
@@ -753,6 +754,8 @@ class OpenGLWorkgroupPointerError(ValueError):
         offset_expression=None,
         materialization_name=None,
         reason=None,
+        entry_point=None,
+        asserted_range=None,
         source_location=None,
     ):
         super().__init__(message)
@@ -762,6 +765,8 @@ class OpenGLWorkgroupPointerError(ValueError):
         self.offset_expression = offset_expression
         self.materialization_name = materialization_name
         self.reason = reason
+        self.entry_point = entry_point
+        self.asserted_range = asserted_range
         self.source_location = source_location
 
 
@@ -2261,6 +2266,7 @@ class GLSLCodeGen:
         self.local_variable_types = {}
         self.local_variable_source_types = {}
         self.index_range_assertions = ()
+        self.workgroup_access_assertions = ()
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_trailing_zero_helpers = set()
@@ -7959,6 +7965,21 @@ class GLSLCodeGen:
             function_name,
             {0: (parameter_name, binding)},
         )
+        entry_owner = binding.get("entry_owner")
+        entry_point = (
+            str(entry_owner).partition(":")[0] if entry_owner is not None else None
+        )
+        asserted_matches = [
+            assertion
+            for assertion in self.workgroup_access_assertions
+            if assertion.applies_to(entry_point, function_name, parameter_name)
+        ]
+        asserted_interval = None
+        if asserted_matches:
+            asserted_interval = (
+                max(assertion.minimum for assertion in asserted_matches),
+                min(assertion.maximum for assertion in asserted_matches),
+            )
         offset_interval = self.glsl_workgroup_pointer_offset_interval(
             binding,
             getattr(argument, "_glsl_control_flow_intervals", {}),
@@ -7975,7 +7996,55 @@ class GLSLCodeGen:
             )
 
         access_interval = access_intervals[parameter_name]
-        if offset_interval is None:
+        static_interval = None
+        if offset_interval is not None and access_interval is not None:
+            static_interval = (
+                offset_interval[0] + access_interval[0],
+                offset_interval[1] + access_interval[1],
+            )
+
+        effective_interval = static_interval
+        if asserted_interval is not None:
+            if asserted_interval[0] > asserted_interval[1]:
+                reason = "conflicting-access-assertions"
+                message = (
+                    "OpenGL workgroup access assertions conflict for "
+                    f"'{function_name}.{parameter_name}' at entry point "
+                    f"'{entry_point}'"
+                )
+            elif static_interval is not None and (
+                max(static_interval[0], asserted_interval[0])
+                > min(static_interval[1], asserted_interval[1])
+            ):
+                reason = "asserted-access-conflict"
+                message = (
+                    "OpenGL workgroup access assertion for "
+                    f"'{function_name}.{parameter_name}' at entry point "
+                    f"'{entry_point}' conflicts with the statically derived "
+                    f"range {static_interval[0]} through {static_interval[1]}"
+                )
+            else:
+                effective_interval = (
+                    max(
+                        asserted_interval[0],
+                        (
+                            static_interval[0]
+                            if static_interval is not None
+                            else asserted_interval[0]
+                        ),
+                    ),
+                    min(
+                        asserted_interval[1],
+                        (
+                            static_interval[1]
+                            if static_interval is not None
+                            else asserted_interval[1]
+                        ),
+                    ),
+                )
+                reason = None
+                message = None
+        elif offset_interval is None:
             reason = "unprovable-view-offset"
             message = (
                 "OpenGL cannot prove the workgroup pointer view offset for "
@@ -7990,8 +8059,11 @@ class GLSLCodeGen:
                 f"'{backing_name}'"
             )
         else:
-            lower = offset_interval[0] + access_interval[0]
-            upper = offset_interval[1] + access_interval[1]
+            reason = None
+            message = None
+
+        if reason is None and effective_interval is not None:
+            lower, upper = effective_interval
             extent = binding.get("array_size")
             if lower >= 0 and isinstance(extent, int) and upper < extent:
                 return
@@ -8010,6 +8082,8 @@ class GLSLCodeGen:
             offset_expression=rendered_offset,
             materialization_name=materialization_name,
             reason=reason,
+            entry_point=entry_point,
+            asserted_range=asserted_interval,
             source_location=getattr(argument, "source_location", None),
         )
 
@@ -25419,6 +25493,11 @@ complex64_t crossgl_complex64_mod_assign(
     def set_index_range_assertions(self, assertions):
         """Configure explicit source ranges used only to justify index narrowing."""
         self.index_range_assertions = parse_index_range_assertions(assertions)
+        return self
+
+    def set_workgroup_access_assertions(self, assertions):
+        """Configure explicit absolute ranges for workgroup pointer accesses."""
+        self.workgroup_access_assertions = parse_workgroup_access_assertions(assertions)
         return self
 
     def glsl_index_target_profile(self):

@@ -10012,6 +10012,7 @@ def test_translate_project_reports_nested_opengl_workgroup_pointer_bounds(tmp_pa
         "targetArtifact": "translated/opengl/out_of_bounds.glsl",
         "workgroupPointer": {
             "backingName": "sharedValues",
+            "entryPoint": "main",
             "function": "leaf",
             "materializationName": "leaf__glsl_values_main_sharedValues_float_8",
             "offsetExpression": "(values_offset + 1u) (proven 8)",

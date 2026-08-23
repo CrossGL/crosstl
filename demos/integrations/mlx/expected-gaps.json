@@ -322,6 +322,7 @@
       "message": "OpenGL cannot prove the workgroup pointer access range for 'ReadWriter_float2_float2__load.crosstl_ptr_buf' into shared backing 'shared_in'",
       "workgroup_pointer": {
         "backingName": "shared_in",
+        "entryPoint": "fft_mem_256_float2_float2",
         "function": "ReadWriter_float2_float2__load",
         "materializationName": "ReadWriter_float2_float2_load__glsl_crosstl_ptr_buf_fft_mem_256_float2_float2_shared_in_vec2_256",
         "offsetExpression": "0",

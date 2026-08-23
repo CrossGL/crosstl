@@ -928,6 +928,7 @@ FFT_OPENGL_EXPECTED_MESSAGE = (
 )
 FFT_OPENGL_EXPECTED_POINTER_EVIDENCE = {
     "backingName": "shared_in",
+    "entryPoint": "fft_mem_256_float2_float2",
     "function": "ReadWriter_float2_float2__load",
     "materializationName": (
         "ReadWriter_float2_float2_load__glsl_crosstl_ptr_buf_"
@@ -1658,6 +1659,7 @@ def _write_project_config(
     ) = None,
     subgroup_width_rules: Mapping[str, str | int] | None = None,
     index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
+    workgroup_access_assertions: Sequence[Mapping[str, str | int]] | None = None,
     dispatch_contracts: Sequence[str] | None = None,
 ) -> None:
     include_values = [include] if isinstance(include, str) else list(include)
@@ -1678,6 +1680,19 @@ def _write_project_config(
     for assertion in index_range_assertions or ():
         lines.append("[[project.index_range_assertions]]")
         for field in ("source", "function", "expression", "minimum", "maximum"):
+            if field in assertion:
+                lines.append(f"{field} = {json.dumps(assertion[field])}")
+        lines.append("")
+    for assertion in workgroup_access_assertions or ():
+        lines.append("[[project.workgroup_access_assertions]]")
+        for field in (
+            "source",
+            "entry_point",
+            "function",
+            "parameter",
+            "minimum",
+            "maximum",
+        ):
             if field in assertion:
                 lines.append(f"{field} = {json.dumps(assertion[field])}")
         lines.append("")

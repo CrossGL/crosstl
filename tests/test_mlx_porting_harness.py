@@ -94,6 +94,48 @@ def test_project_config_writer_emits_general_index_range_assertions(tmp_path):
     ) == len(assertions)
 
 
+def test_project_config_writer_emits_workgroup_access_assertions(tmp_path):
+    from crosstl.project import load_project_config
+
+    module = _load_harness()
+    config_path = tmp_path / "frontier.toml"
+    assertions = (
+        {
+            "source": "mlx/backend/metal/kernels/fft.metal",
+            "entry_point": "*mem_256_*",
+            "function": "ReadWriter_*",
+            "parameter": "crosstl_ptr_buf",
+            "minimum": 0,
+            "maximum": 255,
+        },
+    )
+
+    module._write_project_config(
+        config_path,
+        include="mlx/backend/metal/kernels/fft.metal",
+        targets=("opengl",),
+        output_dir="generated",
+        workgroup_access_assertions=assertions,
+    )
+
+    config = load_project_config(tmp_path, config_path)
+    assert [
+        assertion.to_json() for assertion in config.workgroup_access_assertions
+    ] == [
+        {
+            "source": assertions[0]["source"],
+            "entryPoint": assertions[0]["entry_point"],
+            "function": assertions[0]["function"],
+            "parameter": assertions[0]["parameter"],
+            "minimum": assertions[0]["minimum"],
+            "maximum": assertions[0]["maximum"],
+        }
+    ]
+    assert config_path.read_text(encoding="utf-8").count(
+        "[[project.workgroup_access_assertions]]"
+    ) == len(assertions)
+
+
 def test_project_config_writer_emits_entry_workgroup_size_rules(tmp_path):
     from crosstl.project import load_project_config
 
