@@ -12442,6 +12442,56 @@ def test_codegen_materializes_pinned_mlx_perform_fft_bool_specializations():
         assert "value + 2" in output
 
 
+def test_codegen_prefers_out_of_line_explicit_member_specialization(tmp_path):
+    code = """
+    template <typename In, typename Out>
+    struct Writer {
+      Out write(In value) const thread {
+        return value;
+      }
+    };
+
+    template <>
+    float Writer<float2, float>::write(float2 value) const thread {
+      return value.x;
+    }
+
+    kernel void run(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      if (index == 0) {
+        thread Writer<float2, float> writer;
+        output[0] = writer.write(float2(3.0f, 4.0f));
+      }
+    }
+    """
+
+    crossgl = convert(code)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    for generated in (crossgl, hlsl, glsl):
+        assert "return value.x;" in generated
+        assert "return value;" not in generated
+
+    assert_opengl_compute_validates_if_available(
+        glsl,
+        tmp_path,
+        "explicit_member_specialization",
+    )
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "explicit_member_specialization.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_codegen_propagates_nested_value_template_specializations():
     code = """
     template <bool Inner = false>

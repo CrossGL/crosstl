@@ -7728,6 +7728,102 @@ def test_preprocessor_prefers_explicit_operator_specialization():
     assert "return y;" not in output
 
 
+def test_preprocessor_prefers_out_of_line_explicit_member_specialization():
+    code = """
+    template <typename In, typename Out>
+    struct Writer {
+      Out write(In value) const thread {
+        return value;
+      }
+    };
+
+    template <>
+    float Writer<float2, float>::write(float2 value) const thread {
+      return value.x;
+    }
+
+    [[kernel]] void run(
+        device float* scalar_out [[buffer(0)]],
+        device float2* vector_out [[buffer(1)]]) {
+      Writer<float2, float> scalar_writer;
+      Writer<float2, float2> vector_writer;
+      scalar_out[0] = scalar_writer.write(float2(3.0f, 4.0f));
+      vector_out[0] = vector_writer.write(float2(5.0f, 6.0f));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    scalar_helper = output.split("float Writer_float2_float__write", 1)[1].split(
+        "}", 1
+    )[0]
+    vector_helper = output.split("float2 Writer_float2_float2__write", 1)[1].split(
+        "}", 1
+    )[0]
+    assert "return value.x;" in scalar_helper
+    assert "return value;" not in scalar_helper
+    assert "return value;" in vector_helper
+    assert "return value.x;" not in vector_helper
+
+
+def test_preprocessor_prefers_namespaced_explicit_call_operator_specialization():
+    code = """
+    namespace fft {
+    template <typename T>
+    struct Projector {
+      T operator()(T value) const thread {
+        return value;
+      }
+    };
+
+    template <>
+    float Projector<float>::operator()(float value) const thread {
+      return value + 1.0f;
+    }
+    }
+
+    [[kernel]] void run(device float* output [[buffer(0)]]) {
+      thread fft::Projector<float> projector;
+      output[0] = projector(3.0f);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    helper = output.split("float Projector_float__operator_call", 1)[1].split("}", 1)[0]
+    assert "return value + 1.0f;" in helper
+    assert "return value;" not in helper
+
+
+def test_preprocessor_rejects_duplicate_explicit_member_specializations():
+    code = """
+    template <typename In, typename Out>
+    struct Writer {
+      Out write(In value) const thread {
+        return value;
+      }
+    };
+
+    template <>
+    float Writer<float2, float>::write(float2 value) const thread {
+      return value.x;
+    }
+
+    template <>
+    float Writer<float2, float>::write(float2 value) const thread {
+      return value.y;
+    }
+
+    Writer<float2, float> writer;
+    """
+
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="explicit member specialization is defined more than once",
+    ):
+        MetalPreprocessor().preprocess(code)
+
+
 def test_preprocessor_instantiates_static_template_method_from_literal():
     # A static template member method called as `S::m(literal)` instantiates from
     # the literal type and lowers WITHOUT a `self` parameter.

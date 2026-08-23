@@ -526,6 +526,17 @@ class _MetalStructMethod:
 
 
 @dataclass(frozen=True)
+class _MetalExplicitMemberSpecialization:
+    """One exact out-of-line specialization of a template-owner member."""
+
+    owner_name: str
+    owner_qualified_name: str
+    owner_arguments: Tuple[str, ...]
+    method: _MetalStructMethod
+    span: Tuple[int, int]
+
+
+@dataclass(frozen=True)
 class _MetalReceiverContract:
     """Source implicit-object state retained until member overload binding."""
 
@@ -2297,7 +2308,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         try:
             try:
                 return self._lower_struct_member_functions_impl(evaluated)
-            except MetalStructMethodError:
+            except (MetalStructMethodError, MetalTemplateSpecializationError):
                 raise
             except Exception:
                 return evaluated
@@ -2312,6 +2323,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             skip_spans=template_declaration_spans,
         )
         structs = self._find_concrete_struct_definitions(code)
+        self._apply_explicit_member_specializations(code, structs)
         self._reject_unresolved_temporary_functor_calls(
             code,
             {struct.name: struct for struct in structs},
@@ -2497,6 +2509,266 @@ class MetalPreprocessor(HLSLPreprocessor):
             if not rewritten.endswith("\n"):
                 rewritten += "\n"
         return self._canonicalize_qualified_struct_alias_templates(rewritten, structs)
+
+    def _apply_explicit_member_specializations(
+        self,
+        code: str,
+        structs: Sequence[_MetalStructDefinition],
+    ) -> None:
+        specializations = self._find_explicit_member_specializations(code)
+        if not specializations:
+            return
+
+        by_owner: Dict[
+            Tuple[str, Tuple[str, ...]],
+            List[_MetalExplicitMemberSpecialization],
+        ] = {}
+        seen: Dict[
+            Tuple[str, Tuple[str, ...], Tuple[object, ...]],
+            _MetalExplicitMemberSpecialization,
+        ] = {}
+        for specialization in specializations:
+            owner_key = self._struct_specialization_comparison_key(
+                specialization.owner_name,
+                list(specialization.owner_arguments),
+            )
+            method_key = self._explicit_member_method_contract(specialization.method)
+            duplicate_key = (*owner_key, method_key)
+            previous = seen.get(duplicate_key)
+            if previous is not None:
+                requested = self._explicit_member_specialization_signature(
+                    specialization
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal explicit member specialization is defined more than "
+                    f"once for '{requested}'.",
+                    requested_signature=requested,
+                    suggested_action=(
+                        "keep one exact explicit member specialization for each "
+                        "owner and method signature"
+                    ),
+                    source_location=self._source_location_for_offsets(
+                        code,
+                        specialization.span[0],
+                        specialization.span[1],
+                    ),
+                    owner_struct_name=specialization.owner_qualified_name,
+                    requested_arguments=specialization.owner_arguments,
+                )
+            seen[duplicate_key] = specialization
+            by_owner.setdefault(owner_key, []).append(specialization)
+
+        for struct in structs:
+            materialized_owner = self._materialized_struct_specializations.get(
+                struct.name
+            )
+            if materialized_owner is None:
+                continue
+            owner_name, owner_arguments = materialized_owner
+            owner_key = self._struct_specialization_comparison_key(
+                owner_name,
+                list(owner_arguments),
+            )
+            owner_specializations = by_owner.get(owner_key, ())
+            if not owner_specializations:
+                continue
+
+            methods = list(struct.methods)
+            for specialization in owner_specializations:
+                specialization_contract = self._explicit_member_method_contract(
+                    specialization.method
+                )
+                candidates = [
+                    (index, method)
+                    for index, method in enumerate(methods)
+                    if self._explicit_member_method_contract(method)
+                    == specialization_contract
+                ]
+                if len(candidates) != 1:
+                    continue
+                index, generic_method = candidates[0]
+                methods[index] = replace(
+                    specialization.method,
+                    free_name=generic_method.free_name,
+                    span=generic_method.span,
+                )
+            struct.methods = methods
+
+    def _find_explicit_member_specializations(
+        self,
+        code: str,
+    ) -> List[_MetalExplicitMemberSpecialization]:
+        specializations: List[_MetalExplicitMemberSpecialization] = []
+        ignored_spans = self._find_comment_and_literal_spans(code)
+        position = 0
+        pattern = re.compile(r"\btemplate\s*<\s*>\s*")
+        while True:
+            match = pattern.search(code, position)
+            if match is None:
+                break
+            ignored = self._containing_span(match.start(), ignored_spans)
+            if ignored is not None:
+                position = ignored[1]
+                continue
+
+            declaration_start = match.end()
+            body_start = self._find_next_top_level_char(
+                code,
+                declaration_start,
+                "{",
+            )
+            semicolon = self._find_next_top_level_char(
+                code,
+                declaration_start,
+                ";",
+            )
+            if body_start is None or (semicolon is not None and semicolon < body_start):
+                position = declaration_start
+                continue
+            body_end = self._find_matching_brace(code, body_start)
+            if body_end is None:
+                position = body_start + 1
+                continue
+
+            header = code[declaration_start:body_start]
+            parsed_header = self._explicit_member_specialization_header(header)
+            if parsed_header is None:
+                position = body_end
+                continue
+            (
+                owner_name,
+                owner_qualified_name,
+                owner_arguments,
+                dequalified_header,
+            ) = parsed_header
+            method_source = dequalified_header + code[body_start:body_end]
+            method = self._parse_struct_method(
+                owner_name,
+                method_source,
+                0,
+                len(dequalified_header),
+            )
+            if method is not None:
+                span = (match.start(), body_end)
+                specializations.append(
+                    _MetalExplicitMemberSpecialization(
+                        owner_name=owner_name,
+                        owner_qualified_name=owner_qualified_name,
+                        owner_arguments=tuple(owner_arguments),
+                        method=method,
+                        span=span,
+                    )
+                )
+            position = body_end
+        return specializations
+
+    def _explicit_member_specialization_header(
+        self,
+        header: str,
+    ) -> Optional[Tuple[str, str, List[str], str]]:
+        if re.match(r"\s*(?:struct|class|union)\b", header):
+            return None
+
+        operator_match = re.search(r"\boperator\s*\(\s*\)", header)
+        if operator_match is not None:
+            method_start = operator_match.start()
+        else:
+            paren_start = self._function_parameter_start(header)
+            if paren_start is None:
+                return None
+            before_params = header[:paren_start]
+            method_match = re.search(
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*$",
+                before_params,
+            )
+            if method_match is None:
+                return None
+            method_start = method_match.start(1)
+
+        scope_end = method_start
+        while scope_end > 0 and header[scope_end - 1].isspace():
+            scope_end -= 1
+        if scope_end < 2 or header[scope_end - 2 : scope_end] != "::":
+            return None
+        scope_start = scope_end - 2
+        owner_end = scope_start
+        while owner_end > 0 and header[owner_end - 1].isspace():
+            owner_end -= 1
+        if owner_end == 0 or header[owner_end - 1] != ">":
+            return None
+
+        angle_end = owner_end - 1
+        angle_start = self._matching_open_angle(header, angle_end)
+        if angle_start is None:
+            return None
+        owner_match = re.search(
+            r"(?P<owner>(?:(?:[A-Za-z_][A-Za-z0-9_]*)\s*::\s*)*"
+            r"[A-Za-z_][A-Za-z0-9_]*)\s*$",
+            header[:angle_start],
+        )
+        if owner_match is None:
+            return None
+
+        owner_qualified_name = re.sub(
+            r"\s*::\s*",
+            "::",
+            owner_match.group("owner"),
+        )
+        owner_name = owner_qualified_name.rsplit("::", 1)[-1]
+        owner_arguments = self._split_top_level_commas(
+            header[angle_start + 1 : angle_end]
+        )
+        if not owner_arguments:
+            return None
+        dequalified_header = header[: owner_match.start("owner")] + header[scope_end:]
+        return (
+            owner_name,
+            owner_qualified_name,
+            owner_arguments,
+            dequalified_header,
+        )
+
+    @staticmethod
+    def _matching_open_angle(text: str, angle_end: int) -> Optional[int]:
+        depth = 0
+        for index in range(angle_end, -1, -1):
+            character = text[index]
+            if character == ">":
+                depth += 1
+            elif character == "<":
+                depth -= 1
+                if depth == 0:
+                    return index
+        return None
+
+    def _explicit_member_method_contract(
+        self,
+        method: _MetalStructMethod,
+    ) -> Tuple[object, ...]:
+        parameters = tuple(
+            self._normalize_template_argument_text(
+                self._normalize_function_parameter_type_text(parameter)
+            )
+            for parameter in self._split_top_level_commas(method.parameters)
+            if parameter.strip() and parameter.strip() != "void"
+        )
+        return (
+            method.name,
+            method.is_static,
+            method.is_operator_call,
+            self._normalize_template_argument_text(method.return_type),
+            parameters,
+            self._method_receiver_contract_key(method),
+        )
+
+    @staticmethod
+    def _explicit_member_specialization_signature(
+        specialization: _MetalExplicitMemberSpecialization,
+    ) -> str:
+        owner = specialization.owner_qualified_name
+        arguments = ", ".join(specialization.owner_arguments)
+        method = specialization.method
+        return f"{owner}<{arguments}>::{method.name}({method.parameters})"
 
     def _reject_unresolved_temporary_functor_calls(
         self,
