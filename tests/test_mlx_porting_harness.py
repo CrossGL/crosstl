@@ -9918,7 +9918,7 @@ def test_full_corpus_checkpoint_probe_records_verified_resume_coordinate():
     }
 
 
-def test_fft_directx_evidence_records_toolchain_proof_without_runtime_claims():
+def test_fft_directx_evidence_records_selected_native_runtime_proof():
     module = _load_harness()
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -9927,7 +9927,7 @@ def test_fft_directx_evidence_records_toolchain_proof_without_runtime_claims():
     )
 
     status = gaps["directx_fft_translation_status"]
-    assert status["status"] == "translated-dxc-validated"
+    assert status["status"] == "translated-dxc-validated-direct3d-executed"
     assert status["source"] == module.MLX_FFT_SOURCE
     assert status["source_sha256"] == module.MLX_FFT_SHA256
     assert status["source_size_bytes"] == module.MLX_FFT_SOURCE_SIZE_BYTES
@@ -9978,12 +9978,44 @@ def test_fft_directx_evidence_records_toolchain_proof_without_runtime_claims():
         "warnings_as_errors": True,
         "status": "passed",
     }
+    assert status["native_runtime"] == {
+        "runtime": "direct3d-12-warp",
+        "status": "passed",
+        "test": (
+            "tests/test_translator/test_mlx_fft_native_loader.py::"
+            "test_pinned_mlx_fft_executes_through_directx_native_loader"
+        ),
+        "workgroup_count": [1, 1, 1],
+        "global_size": [1, 1, 64],
+        "input": {
+            "kind": "complex-unit-impulse",
+            "index": 1,
+            "shape": [256, 2],
+        },
+        "expected_output": {
+            "kind": "forward-dft-unit-circle",
+            "shape": [256, 2],
+            "absolute_tolerance": 0.0002,
+            "relative_tolerance": 0.0002,
+        },
+        "resource_layouts": {
+            "input_element": "float2",
+            "input_stride_bytes": 8,
+            "output_element": "float2",
+            "output_stride_bytes": 8,
+            "dispatch_element": "uint3",
+            "dispatch_block_size_bytes": 16,
+        },
+        "dispatch_binding_source": "dispatch.workgroupCount",
+    }
     assert status["aggregate_source_translation"] == {
         "included": False,
         "tracked_by": "https://github.com/CrossGL/crosstl/issues/1916",
     }
     assert status["tracked_issues"] == []
-    assert status["runtime_integration_included"] is False
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 
@@ -9993,7 +10025,10 @@ def test_fft_directx_evidence_records_toolchain_proof_without_runtime_claims():
     assert "24 reachable template specializations" in readme
     assert "21 of the 22 configured function constants" in readme
     assert "contains no first-class workgroup pointer residue" in readme
-    assert "does not execute a Direct3D FFT or establish numerical parity" in readme
+    assert "Direct3D 12 WARP" in readme
+    assert "index-1 complex unit impulse" in readme
+    assert "`2e-4` absolute and relative tolerance" in readme
+    assert "does not redirect the MLX host runtime" in readme
 
 
 def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():

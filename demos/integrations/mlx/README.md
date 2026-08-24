@@ -452,6 +452,16 @@ python -m pytest -q -n auto `
   -k "directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device"
 ```
 
+The selected 256-point FFT proof uses the same pinned checkout and executes the
+translated artifact through the native loader on Direct3D 12 WARP:
+
+```powershell
+$env:CROSTL_MLX_ROOT = "C:/path/to/mlx"
+$env:CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER = "1"
+python -m pytest -q -n auto `
+  tests/test_translator/test_mlx_fft_native_loader.py::test_pinned_mlx_fft_executes_through_directx_native_loader
+```
+
 On macOS, require native compilation of the generated Metal round-trip artifact:
 
 ```bash
@@ -654,11 +664,22 @@ axis order. The replay materializes 24 reachable template specializations and
 because its Rader transform branch is unreachable for this power-of-two plan.
 The generated artifact contains no first-class workgroup pointer residue and is
 locked by SHA-256 and byte count. Windows CI compiles it with DXC using
-`cs_6_2`, `-enable-16bit-types`, and warnings as errors. This is a bounded
-entry-point translation and compiler proof. The aggregate DirectX source
-materialization limit remains tracked by
-[#1916](https://github.com/CrossGL/crosstl/issues/1916), and this check does not
-execute a Direct3D FFT or establish numerical parity with Metal.
+`cs_6_2`, `-enable-16bit-types`, and warnings as errors. It then packages and
+reflects the artifact, requiring 8-byte `float2` strides for the input and
+output resources and a 16-byte constant-buffer allocation for the generated
+`uint3` dispatch input. The native-loader request derives that input from the
+physical workgroup count before Direct3D 12 WARP dispatch and readback.
+
+The runtime check supplies an index-1 complex unit impulse and compares all 256
+complex outputs with the analytical forward DFT unit circle at `2e-4` absolute
+and relative tolerance. This verifies one bounded workload through translation,
+packaging, native execution, and numerical comparison. It does not redirect the
+MLX host runtime, run the MLX test suite, or establish broad FFT or backend
+parity. The aggregate DirectX source materialization limit remains tracked by
+[#1916](https://github.com/CrossGL/crosstl/issues/1916); broader runtime grid and
+resource-layout contracts remain tracked by
+[#1542](https://github.com/CrossGL/crosstl/issues/1542) and
+[#1543](https://github.com/CrossGL/crosstl/issues/1543).
 
 A dedicated project replay now translates the complete pinned `fft.metal`
 source to one standalone OpenGL compute shader with a 4,096-specialization

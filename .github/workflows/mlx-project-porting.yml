@@ -36,6 +36,7 @@ on:
       - "tests/test_translator/test_native_loader_dispatch_integration.py"
       - "tests/test_translator/test_mlx_arange_native_loader.py"
       - "tests/test_translator/test_mlx_binary_native_loader.py"
+      - "tests/test_translator/test_mlx_fft_native_loader.py"
       - "tests/test_translator/test_mlx_logsumexp_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
       - "tests/test_translator/test_project_translation.py"
@@ -70,6 +71,7 @@ on:
       - "tests/test_translator/test_native_loader_dispatch_integration.py"
       - "tests/test_translator/test_mlx_arange_native_loader.py"
       - "tests/test_translator/test_mlx_binary_native_loader.py"
+      - "tests/test_translator/test_mlx_fft_native_loader.py"
       - "tests/test_translator/test_mlx_logsumexp_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
       - "tests/test_translator/test_project_translation.py"
@@ -86,7 +88,7 @@ jobs:
     name: MLX Metal project porting (${{ matrix.os }})
     if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -233,6 +235,15 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_logsumexp_native_loader.py::test_pinned_mlx_logsumexp_executes_through_directx_native_loader
+
+      - name: Prove pinned MLX FFT Direct3D native-loader execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_fft_native_loader.py::test_pinned_mlx_fft_executes_through_directx_native_loader
 
       - name: Enumerate pinned MLX Metal entry points
         shell: bash
