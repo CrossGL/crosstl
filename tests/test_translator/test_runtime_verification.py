@@ -814,6 +814,48 @@ def test_prepare_runtime_execution_keeps_implicit_allocations_independent():
     assert len(set(allocation_ids)) == 2
 
 
+def test_prepare_runtime_execution_sizes_vector_resources_by_physical_elements():
+    vector_layout = {
+        "physicalType": "float2",
+        "elementType": "float32",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "vectorWidth": 2,
+        "alignmentBytes": 4,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer",
+        "runtimeSized": True,
+    }
+    plan = _prepare_allocation_plan(
+        [
+            RuntimeValue(
+                name="source",
+                dtype="float32",
+                shape=(4, 2),
+                values=[1.0, 0.0] * 4,
+            )
+        ],
+        [],
+        [
+            RuntimeResourceBinding(
+                name="source",
+                kind="buffer",
+                binding=0,
+                access="read",
+                metadata={"scalarLayout": vector_layout},
+            )
+        ],
+        target="directx",
+    )
+
+    assert plan.diagnostics == ()
+    assert plan.resource_bindings[0].allocation == RuntimeAllocationView(
+        allocation_id="binding:-:0:-:source",
+        byte_length=32,
+        allocation_byte_length=32,
+    )
+
+
 def test_prepare_runtime_execution_accepts_aligned_nonoverlapping_views():
     plan = _prepare_allocation_plan(
         [

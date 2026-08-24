@@ -1380,6 +1380,80 @@ def test_prepare_directx_buffers_maps_and_packs_descriptor_namespaces(tmp_path):
     assert prepared[2].output_name == "result"
 
 
+def test_prepare_directx_buffers_packs_reflected_vector_layouts():
+    dispatch_layout = _scalar_block_layout(
+        "hlsl-constant-buffer",
+        physicalType="uint3",
+        elementSizeBytes=12,
+        elementStrideBytes=12,
+        vectorWidth=3,
+    )
+    bindings = {
+        "dispatch_info": NativeRuntimeBufferBinding(
+            name="dispatch_info",
+            binding=RuntimeResourceBinding(
+                name="dispatch_info",
+                kind="constant-buffer",
+                type_name="DispatchInfo",
+                set=0,
+                binding=0,
+                access="read",
+                metadata={"scalarLayout": dispatch_layout, "byteStride": 12},
+            ),
+            value=[2, 3, 4],
+            source="input",
+            dtype="uint32",
+            shape=(3,),
+            allocation=RuntimeAllocationView(
+                allocation_id="binding:0:0:-:dispatch_info",
+                byte_length=16,
+                allocation_byte_length=16,
+            ),
+        ),
+        "values": NativeRuntimeBufferBinding(
+            name="values",
+            binding=RuntimeResourceBinding(
+                name="values",
+                kind="buffer",
+                type_name="StructuredBuffer<float2>",
+                set=0,
+                binding=0,
+                access="read",
+                metadata={
+                    "byteStride": 8,
+                    "scalarLayout": {
+                        "physicalType": "float2",
+                        "elementType": "float32",
+                        "elementSizeBytes": 8,
+                        "elementStrideBytes": 8,
+                        "alignmentBytes": 4,
+                        "memberOffsetBytes": 0,
+                        "storageLayout": "hlsl-structured-buffer",
+                        "runtimeSized": True,
+                        "vectorWidth": 2,
+                    },
+                },
+            ),
+            value=[1.0, 2.0, 3.0, 4.0],
+            source="input",
+            dtype="float32",
+            shape=(2, 2),
+        ),
+    }
+
+    prepared = _prepare_directx_buffers(bindings)
+
+    assert [(item.name, item.namespace, item.stride) for item in prepared] == [
+        ("dispatch_info", "cbv", 0),
+        ("values", "srv", 8),
+    ]
+    assert prepared[0].payload == struct.pack("<3I", 2, 3, 4)
+    assert prepared[0].allocation_size == 256
+    assert prepared[0].byte_length == 16
+    assert prepared[1].payload == struct.pack("<4f", 1.0, 2.0, 3.0, 4.0)
+    assert prepared[1].allocation_size == 16
+
+
 def test_prepare_directx_buffers_rejects_initialized_unwritable_outputs():
     for binding, reason_kind in (
         (

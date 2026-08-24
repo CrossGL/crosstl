@@ -298,7 +298,7 @@
     "runtime_parity_claimed": false
   },
   "directx_fft_translation_status": {
-    "status": "translated-dxc-validated",
+    "status": "translated-dxc-validated-direct3d-executed",
     "source": "mlx/backend/metal/kernels/fft.metal",
     "source_sha256": "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825",
     "source_size_bytes": 3278,
@@ -389,12 +389,55 @@
       "warnings_as_errors": true,
       "status": "passed"
     },
+    "native_runtime": {
+      "runtime": "direct3d-12-warp",
+      "status": "passed",
+      "test": "tests/test_translator/test_mlx_fft_native_loader.py::test_pinned_mlx_fft_executes_through_directx_native_loader",
+      "workgroup_count": [
+        1,
+        1,
+        1
+      ],
+      "global_size": [
+        1,
+        1,
+        64
+      ],
+      "input": {
+        "kind": "complex-unit-impulse",
+        "index": 1,
+        "shape": [
+          256,
+          2
+        ]
+      },
+      "expected_output": {
+        "kind": "forward-dft-unit-circle",
+        "shape": [
+          256,
+          2
+        ],
+        "absolute_tolerance": 0.0002,
+        "relative_tolerance": 0.0002
+      },
+      "resource_layouts": {
+        "input_element": "float2",
+        "input_stride_bytes": 8,
+        "output_element": "float2",
+        "output_stride_bytes": 8,
+        "dispatch_element": "uint3",
+        "dispatch_block_size_bytes": 16
+      },
+      "dispatch_binding_source": "dispatch.workgroupCount"
+    },
     "aggregate_source_translation": {
       "included": false,
       "tracked_by": "https://github.com/CrossGL/crosstl/issues/1916"
     },
     "tracked_issues": [],
-    "runtime_integration_included": false,
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": true,
+    "selected_workload_numerical_parity_verified": true,
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },

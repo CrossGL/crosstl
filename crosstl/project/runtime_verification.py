@@ -6334,13 +6334,22 @@ def _runtime_value_physical_byte_length(
     layout = _runtime_scalar_layout_signature(value.metadata)
     if not layout:
         layout = _runtime_scalar_layout_signature(binding.metadata)
+    vector_width = layout.get("vectorWidth", 1)
+    if (
+        not isinstance(vector_width, int)
+        or isinstance(vector_width, bool)
+        or vector_width < 1
+        or vector_width > 4
+        or element_count % vector_width
+    ):
+        return None
     stride = layout.get("elementStrideBytes")
     if not isinstance(stride, int) or isinstance(stride, bool) or stride <= 0:
         dtype = _runtime_compatible_dtype(value.dtype)
         stride = _RUNTIME_SCALAR_BYTE_SIZES.get(dtype or "")
     if stride is None:
         return None
-    byte_length = element_count * stride
+    byte_length = (element_count // vector_width) * stride
     block_size = layout.get("blockSizeBytes")
     if (
         isinstance(block_size, int)
@@ -6681,6 +6690,7 @@ def _runtime_scalar_layout_signature(metadata: Mapping[str, Any]) -> dict[str, A
         "elementType",
         "elementSizeBytes",
         "elementStrideBytes",
+        "vectorWidth",
         "alignmentBytes",
         "memberOffsetBytes",
         "storageLayout",

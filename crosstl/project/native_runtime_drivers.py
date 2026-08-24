@@ -3181,6 +3181,8 @@ def _directx_buffer_stride(
     metadata = {**dict(resource.metadata), **dict(binding.metadata)}
     type_name = str(resource.type_name or "").strip()
     normalized_type = re.sub(r"\s+", "", type_name).lower()
+    if namespace == "cbv":
+        return 0
     if namespace != "cbv" and (
         "byteaddressbuffer" in normalized_type
         or ("buffer<" in normalized_type and "structuredbuffer<" not in normalized_type)
@@ -3206,9 +3208,7 @@ def _directx_buffer_stride(
             resource=binding.name,
         )
     else:
-        if namespace == "cbv":
-            stride = 0
-        elif "structuredbuffer" in normalized_type:
+        if "structuredbuffer" in normalized_type:
             match = re.search(r"structuredbuffer<([^>]+)>", normalized_type)
             element_type = match.group(1) if match else ""
             stride = _directx_hlsl_element_stride(element_type)
@@ -4164,27 +4164,45 @@ def _scalar_block_size(
 
     element_type = str(raw_layout["elementType"] or "").strip().lower()
     physical_type = str(raw_layout["physicalType"] or "").strip().lower()
+    vector_width = raw_layout.get("vectorWidth", 1)
+    if (
+        not isinstance(vector_width, int)
+        or isinstance(vector_width, bool)
+        or vector_width < 1
+        or vector_width > 4
+    ):
+        raise _scalar_block_error(
+            target,
+            f"{target_name} scalar block {binding.name!r} has an invalid vector width.",
+            "scalar-block-layout-invalid",
+            resource=binding.name,
+            vectorWidth=vector_width,
+        )
     expected_physical_type = {
         "float32": "float",
         "int32": "int",
         "uint32": "uint",
     }[dtype]
+    if vector_width != 1:
+        expected_physical_type = f"{expected_physical_type}{vector_width}"
+    expected_element_size = _dtype_size(dtype) * vector_width
     element_size = integer_fields["elementSizeBytes"]
     element_stride = integer_fields["elementStrideBytes"]
     if (
         element_type != dtype
         or physical_type != expected_physical_type
-        or element_size != _dtype_size(dtype)
+        or element_size != expected_element_size
         or element_stride != element_size
         or payload_size != element_size
     ):
         raise _scalar_block_error(
             target,
-            f"{target_name} constant and uniform buffers support one reflected scalar value.",
+            f"{target_name} constant and uniform buffers support one reflected scalar or vector value.",
             "scalar-block-element-layout-unsupported",
             resource=binding.name,
             dtype=dtype,
             payloadSizeBytes=payload_size,
+            vectorWidth=vector_width,
             elementType=raw_layout["elementType"],
             physicalType=raw_layout["physicalType"],
             expectedPhysicalType=expected_physical_type,

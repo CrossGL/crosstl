@@ -144,7 +144,8 @@ def build_native_loader_dispatch_request(
     The descriptor remains the source of truth for artifact identity, resource
     coordinates, entry-point metadata, and specialization identities. Callers
     provide values only under the exact reflected binding names and numeric
-    specialization ids.
+    specialization ids. Reflected execution inputs are derived from validated
+    dispatch geometry rather than supplied as ordinary fixture values.
     """
 
     normalized = _validated_descriptor(descriptor)
@@ -156,6 +157,17 @@ def build_native_loader_dispatch_request(
 
     inputs = _typed_values(input_values, role="input")
     outputs = _typed_values(output_values, role="output")
+    dispatch = _dispatch_geometry(
+        dispatch_geometry,
+        entry_point=entry_point["name"],
+        reflected_workgroup_size=_reflected_workgroup_size(entry_point),
+    )
+    inputs = _with_derived_execution_inputs(
+        inputs,
+        normalized["bindings"],
+        dispatch=dispatch,
+        target=target,
+    )
     _validate_value_names(inputs, outputs, normalized["bindings"])
     resource_bindings = _resource_bindings(
         normalized["bindings"],
@@ -168,12 +180,6 @@ def build_native_loader_dispatch_request(
         specialization_values,
         target=target,
     )
-    dispatch = _dispatch_geometry(
-        dispatch_geometry,
-        entry_point=entry_point["name"],
-        reflected_workgroup_size=_reflected_workgroup_size(entry_point),
-    )
-
     runtime_entry_point = RuntimeEntryPoint(
         name=entry_point["name"],
         stage=_COMPUTE_STAGE,
@@ -848,6 +854,87 @@ def _validate_value_names(
         )
 
 
+def _with_derived_execution_inputs(
+    inputs: Mapping[str, RuntimeValue],
+    bindings: Sequence[Mapping[str, Any]],
+    *,
+    dispatch: RuntimeDispatchGeometry,
+    target: str,
+) -> dict[str, RuntimeValue]:
+    result = dict(inputs)
+    for index, binding in enumerate(bindings):
+        provenance = binding.get("provenance")
+        if not isinstance(provenance, Mapping) or "executionInput" not in provenance:
+            continue
+        path = f"$.bindings[{index}].provenance.executionInput"
+        contract = provenance.get("executionInput")
+        if not isinstance(contract, Mapping):
+            raise NativeLoaderDispatchError(
+                "execution-input-invalid",
+                "Reflected execution input metadata must be an object.",
+                path=path,
+                details={"binding": binding.get("name")},
+            )
+        expected_contract = {
+            "kind": "dispatch-workgroup-count",
+            "valueSource": "dispatch.workgroupCount",
+            "coordinateSpace": "physical",
+            "dimensions": 3,
+        }
+        if target != "directx" or any(
+            contract.get(field_name) != expected_value
+            for field_name, expected_value in expected_contract.items()
+        ):
+            raise NativeLoaderDispatchError(
+                "execution-input-unsupported",
+                "The reflected execution input cannot be derived by the selected runtime adapter.",
+                path=path,
+                details={
+                    "binding": binding.get("name"),
+                    "target": target,
+                    "contract": copy.deepcopy(dict(contract)),
+                },
+            )
+        name = binding.get("name")
+        if not isinstance(name, str) or not name:
+            raise NativeLoaderDispatchError(
+                "execution-input-invalid",
+                "Reflected execution input requires a binding name.",
+                path=f"$.bindings[{index}].name",
+            )
+        values = list(_padded_dimensions(dispatch.workgroup_count))
+        derived = RuntimeValue(
+            name=name,
+            kind="buffer",
+            dtype="uint32",
+            shape=(3,),
+            values=values,
+            metadata={
+                "source": "dispatch.workgroupCount",
+                "executionInput": copy.deepcopy(dict(contract)),
+            },
+        )
+        supplied = result.get(name)
+        if supplied is not None and (
+            supplied.dtype != derived.dtype
+            or supplied.shape != derived.shape
+            or _flatten_values(supplied.values) != values
+        ):
+            raise NativeLoaderDispatchError(
+                "execution-input-conflict",
+                "Caller-supplied execution input conflicts with validated dispatch geometry.",
+                path=f"$.inputValues.{name}",
+                details={
+                    "binding": name,
+                    "derivedDtype": derived.dtype,
+                    "derivedShape": list(derived.shape),
+                    "derivedValues": values,
+                },
+            )
+        result[name] = derived
+    return result
+
+
 def _resource_bindings(
     bindings: Sequence[Mapping[str, Any]],
     *,
@@ -1010,7 +1097,7 @@ def _validated_scalar_layout(
     if not isinstance(layout, Mapping):
         raise NativeLoaderDispatchError(
             "resource-layout-unsupported",
-            "Native runtime buffer bindings require a concrete scalar layout.",
+            "Native runtime buffer bindings require a concrete scalar or vector layout.",
             path=path,
             details={"binding": runtime_value.name},
         )
@@ -1019,6 +1106,7 @@ def _validated_scalar_layout(
     element_stride = layout.get("elementStrideBytes")
     alignment = layout.get("alignmentBytes")
     member_offset = layout.get("memberOffsetBytes")
+    vector_width = layout.get("vectorWidth", 1)
     if (
         not isinstance(element_size, int)
         or isinstance(element_size, bool)
@@ -1032,10 +1120,14 @@ def _validated_scalar_layout(
         or not isinstance(member_offset, int)
         or isinstance(member_offset, bool)
         or member_offset < 0
+        or not isinstance(vector_width, int)
+        or isinstance(vector_width, bool)
+        or vector_width < 1
+        or vector_width > 4
     ):
         raise NativeLoaderDispatchError(
             "resource-layout-invalid",
-            "Scalar layout sizes, alignment, and member offset must be concrete integers.",
+            "Resource layout sizes, alignment, vector width, and member offset must be concrete integers.",
             path=path,
             details={
                 "binding": runtime_value.name,
@@ -1043,22 +1135,26 @@ def _validated_scalar_layout(
                 "elementStrideBytes": element_stride,
                 "alignmentBytes": alignment,
                 "memberOffsetBytes": member_offset,
+                "vectorWidth": vector_width,
             },
         )
     physical_type = layout.get("physicalType")
     storage_layout = layout.get("storageLayout")
     runtime_sized = layout.get("runtimeSized")
     expected_physical_type = _PHYSICAL_TYPES[runtime_value.dtype]
+    if vector_width != 1:
+        expected_physical_type = f"{expected_physical_type}{vector_width}"
+    expected_element_size = _DTYPE_SIZES[runtime_value.dtype] * vector_width
     expected_storage_layout = _TARGET_STORAGE_LAYOUTS[target][resource_kind]
     if (
         element_type != runtime_value.dtype
-        or element_size != _DTYPE_SIZES[runtime_value.dtype]
+        or element_size != expected_element_size
         or physical_type != expected_physical_type
         or storage_layout != expected_storage_layout
     ):
         raise NativeLoaderDispatchError(
             "resource-layout-mismatch",
-            "Runtime value or target storage is incompatible with the descriptor scalar layout.",
+            "Runtime value or target storage is incompatible with the descriptor resource layout.",
             path=path,
             details={
                 "binding": runtime_value.name,
@@ -1067,6 +1163,7 @@ def _validated_scalar_layout(
                 "layoutElementSizeBytes": element_size,
                 "layoutPhysicalType": physical_type,
                 "expectedPhysicalType": expected_physical_type,
+                "vectorWidth": vector_width,
                 "layoutStorage": storage_layout,
                 "expectedStorage": expected_storage_layout,
             },
@@ -1074,7 +1171,7 @@ def _validated_scalar_layout(
     if element_stride != element_size or member_offset != 0:
         raise NativeLoaderDispatchError(
             "resource-layout-unsupported",
-            "Native loader dispatch requires a tightly packed scalar at byte offset zero.",
+            "Native loader dispatch requires a tightly packed value at byte offset zero.",
             path=path,
             details={
                 "binding": runtime_value.name,
@@ -1083,11 +1180,28 @@ def _validated_scalar_layout(
                 "memberOffsetBytes": member_offset,
             },
         )
+    scalar_count = math.prod(runtime_value.shape)
+    if scalar_count % vector_width:
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Runtime value shape does not contain complete reflected vector elements.",
+            path=path,
+            details={
+                "binding": runtime_value.name,
+                "shape": list(runtime_value.shape),
+                "scalarCount": scalar_count,
+                "vectorWidth": vector_width,
+            },
+        )
     if resource_kind == "buffer":
-        if runtime_sized is not True or alignment != element_size:
+        if (
+            runtime_sized is not True
+            or alignment > element_size
+            or element_size % alignment
+        ):
             raise NativeLoaderDispatchError(
                 "resource-layout-unsupported",
-                "Native loader storage buffers require an exact scalar runtime-array layout.",
+                "Native loader storage buffers require an exact scalar or vector runtime-array layout.",
                 path=path,
                 details={
                     "binding": runtime_value.name,
@@ -1108,10 +1222,11 @@ def _validated_scalar_layout(
         ):
             raise NativeLoaderDispatchError(
                 "resource-layout-unsupported",
-                "Native loader constant buffers require an aligned fixed-size scalar block.",
+                "Native loader constant buffers require an aligned fixed-size value block.",
                 path=path,
                 details={
                     "binding": runtime_value.name,
+                    "vectorWidth": vector_width,
                     "runtimeSized": runtime_sized,
                     "alignmentBytes": alignment,
                     "blockSizeBytes": block_size,

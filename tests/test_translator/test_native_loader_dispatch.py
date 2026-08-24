@@ -153,6 +153,48 @@ def _outputs():
     }
 
 
+def _add_directx_dispatch_info_binding(descriptor):
+    layout = {
+        "physicalType": "uint3",
+        "elementType": "uint32",
+        "elementSizeBytes": 12,
+        "elementStrideBytes": 12,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-constant-buffer",
+        "runtimeSized": False,
+        "vectorWidth": 3,
+        "memberName": "crossglNumWorkGroups",
+        "blockSizeBytes": 16,
+    }
+    provenance = {
+        "kind": "generated-execution-input",
+        "executionInput": {
+            "kind": "dispatch-workgroup-count",
+            "valueSource": "dispatch.workgroupCount",
+            "coordinateSpace": "physical",
+            "dimensions": 3,
+            "memberName": "crossglNumWorkGroups",
+        },
+    }
+    descriptor["bindings"].append(
+        {
+            "name": "CrossGLDispatchInfo",
+            "kind": "constant-buffer",
+            "type": "CrossGLDispatchInfo",
+            "namespace": "cbv",
+            "coordinates": {"set": 0, "binding": 4},
+            "access": "read",
+            "scalarLayout": copy.deepcopy(layout),
+            "provenance": provenance,
+        }
+    )
+    descriptor["scalarLayout"]["bindings"].append(
+        {"binding": "CrossGLDispatchInfo", "layout": copy.deepcopy(layout)}
+    )
+    return descriptor
+
+
 def _initialized_read_write_values():
     return {
         "dtype": "float32",
@@ -238,6 +280,241 @@ def test_builds_preflighted_native_runtime_request(
         "input",
         "expectedOutput",
     ]
+
+
+def test_builds_directx_vector_resource_request(tmp_path):
+    descriptor = _write_descriptor(tmp_path)
+    vector_layout = {
+        "physicalType": "float2",
+        "elementType": "float32",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 4,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer",
+        "runtimeSized": True,
+        "vectorWidth": 2,
+    }
+    for index in range(2):
+        descriptor["bindings"][index]["type"] = (
+            "StructuredBuffer<float2>" if index == 0 else "RWStructuredBuffer<float2>"
+        )
+        descriptor["bindings"][index]["scalarLayout"] = copy.deepcopy(vector_layout)
+        descriptor["scalarLayout"]["bindings"][index]["layout"] = copy.deepcopy(
+            vector_layout
+        )
+
+    values = [1.0, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0]
+    request = _build(
+        tmp_path,
+        descriptor=descriptor,
+        input_values={
+            "input_values": {
+                "dtype": "float32",
+                "shape": [4, 2],
+                "values": values,
+            }
+        },
+        output_values={
+            "output_values": {
+                "dtype": "float32",
+                "shape": [4, 2],
+                "values": values,
+            }
+        },
+    )
+
+    bindings = request.adapter_contract.resource_bindings
+    assert [binding.metadata["byteStride"] for binding in bindings] == [8, 8]
+    assert [binding.metadata["scalarLayout"] for binding in bindings] == [
+        vector_layout,
+        vector_layout,
+    ]
+    allocations = {
+        item.binding.name: item.allocation
+        for item in request.execution_plan.resource_bindings
+    }
+    assert allocations["input_values"].byte_length == 32
+    assert allocations["input_values"].allocation_byte_length == 32
+    assert allocations["output_values"].byte_length == 32
+    assert allocations["output_values"].allocation_byte_length == 32
+
+
+def test_builds_directx_vector_constant_buffer_request(tmp_path):
+    descriptor = _write_descriptor(tmp_path)
+    vector_layout = {
+        "physicalType": "uint3",
+        "elementType": "uint32",
+        "elementSizeBytes": 12,
+        "elementStrideBytes": 12,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-constant-buffer",
+        "runtimeSized": False,
+        "vectorWidth": 3,
+        "memberName": "workgroupCount",
+        "blockSizeBytes": 16,
+    }
+    descriptor["bindings"][0].update(
+        {
+            "kind": "constant-buffer",
+            "type": "DispatchInfo",
+            "namespace": "cbv",
+            "scalarLayout": copy.deepcopy(vector_layout),
+        }
+    )
+    descriptor["scalarLayout"]["bindings"][0]["layout"] = copy.deepcopy(vector_layout)
+
+    request = _build(
+        tmp_path,
+        descriptor=descriptor,
+        input_values={
+            "input_values": {
+                "dtype": "uint32",
+                "shape": [3],
+                "values": [2, 3, 4],
+            }
+        },
+    )
+
+    binding = request.adapter_contract.resource_bindings[0]
+    assert binding.kind == "constant-buffer"
+    assert binding.metadata["byteStride"] == 12
+    assert binding.metadata["scalarLayout"] == vector_layout
+    allocation = request.execution_plan.resource_bindings[0].allocation
+    assert allocation.byte_length == 16
+    assert allocation.allocation_byte_length == 16
+
+
+def test_derives_directx_dispatch_info_from_workgroup_counts(tmp_path):
+    descriptor = _add_directx_dispatch_info_binding(_write_descriptor(tmp_path))
+
+    request = _build(
+        tmp_path,
+        descriptor=descriptor,
+        dispatch_geometry=(2, 3, 4),
+    )
+
+    inputs = {value.name: value for value in request.fixture.inputs}
+    dispatch_info = inputs["CrossGLDispatchInfo"]
+    assert dispatch_info.dtype == "uint32"
+    assert dispatch_info.shape == (3,)
+    assert dispatch_info.values == [2, 3, 4]
+    assert dispatch_info.metadata == {
+        "source": "dispatch.workgroupCount",
+        "executionInput": {
+            "kind": "dispatch-workgroup-count",
+            "valueSource": "dispatch.workgroupCount",
+            "coordinateSpace": "physical",
+            "dimensions": 3,
+            "memberName": "crossglNumWorkGroups",
+        },
+    }
+    bound = {
+        item.binding.name: item for item in request.execution_plan.resource_bindings
+    }
+    assert bound["CrossGLDispatchInfo"].source == "input"
+    assert bound["CrossGLDispatchInfo"].value == dispatch_info
+    assert request.execution_plan.dispatch.workgroup_count == (2, 3, 4)
+    assert request.execution_plan.dispatch.global_size == (128, 3, 4)
+
+
+def test_accepts_matching_caller_dispatch_info_and_retains_derived_provenance(
+    tmp_path,
+):
+    descriptor = _add_directx_dispatch_info_binding(_write_descriptor(tmp_path))
+    input_values = {
+        **_inputs(),
+        "CrossGLDispatchInfo": {
+            "dtype": "uint32",
+            "shape": [3],
+            "values": [2, 1, 1],
+            "metadata": {"source": "caller"},
+        },
+    }
+
+    request = _build(
+        tmp_path,
+        descriptor=descriptor,
+        input_values=input_values,
+        dispatch_geometry=(2, 1, 1),
+    )
+
+    inputs = {value.name: value for value in request.fixture.inputs}
+    assert inputs["CrossGLDispatchInfo"].values == [2, 1, 1]
+    assert inputs["CrossGLDispatchInfo"].metadata["source"] == (
+        "dispatch.workgroupCount"
+    )
+
+
+def test_rejects_caller_dispatch_info_that_conflicts_with_geometry(tmp_path):
+    descriptor = _add_directx_dispatch_info_binding(_write_descriptor(tmp_path))
+    input_values = {
+        **_inputs(),
+        "CrossGLDispatchInfo": {
+            "dtype": "uint32",
+            "shape": [3],
+            "values": [1, 1, 1],
+        },
+    }
+
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(
+            tmp_path,
+            descriptor=descriptor,
+            input_values=input_values,
+            dispatch_geometry=(2, 1, 1),
+        )
+
+    assert caught.value.code.endswith(".execution-input-conflict")
+    assert caught.value.path == "$.inputValues.CrossGLDispatchInfo"
+    assert caught.value.details["derivedValues"] == [2, 1, 1]
+
+
+def test_rejects_unknown_derived_execution_input_contract(tmp_path):
+    descriptor = _add_directx_dispatch_info_binding(_write_descriptor(tmp_path))
+    descriptor["bindings"][-1]["provenance"]["executionInput"][
+        "kind"
+    ] = "logical-grid-size"
+
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, descriptor=descriptor)
+
+    assert caught.value.code.endswith(".execution-input-unsupported")
+    assert caught.value.path == "$.bindings[2].provenance.executionInput"
+
+
+def test_rejects_partial_directx_vector_resource_value(tmp_path):
+    descriptor = _write_descriptor(tmp_path)
+    vector_layout = {
+        "physicalType": "float2",
+        "elementType": "float32",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 4,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer",
+        "runtimeSized": True,
+        "vectorWidth": 2,
+    }
+    descriptor["bindings"][0]["scalarLayout"] = copy.deepcopy(vector_layout)
+    descriptor["scalarLayout"]["bindings"][0]["layout"] = copy.deepcopy(vector_layout)
+
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(
+            tmp_path,
+            descriptor=descriptor,
+            input_values={
+                "input_values": {
+                    "dtype": "float32",
+                    "shape": [3],
+                    "values": [1.0, 2.0, 3.0],
+                }
+            },
+        )
+
+    assert caught.value.code.endswith(".resource-layout-mismatch")
+    assert caught.value.details["vectorWidth"] == 2
 
 
 @pytest.mark.parametrize(
