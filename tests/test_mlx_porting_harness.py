@@ -5925,6 +5925,340 @@ def test_opengl_frontier_requires_exact_index_range_assertion_report(
         )
 
 
+def _prepare_fft_directx_toolchain_check(module, tmp_path):
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for path in (config_dir, report_dir, log_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    artifact_path = (
+        work_dir
+        / "out-fft-directx"
+        / "directx"
+        / Path(module.MLX_FFT_SOURCE).with_suffix("")
+        / f"{module.FFT_DIRECTX_ENTRY_POINT}.hlsl"
+    )
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(
+        """
+static const bool inv_ = false;
+static const bool is_power_of_2_ = true;
+static const int elems_per_thread_ = 4;
+static const int radix_4_steps_ = 4;
+groupshared float2 fft_mem_256_float2_float2_shared_in[256];
+uint3 crossglNumWorkGroups;
+int consume_native_short(int16_t value) {
+    return int(value);
+}
+[numthreads(1, 1, 64)]
+void CSMain() {
+    uint3 grid = (crossglNumWorkGroups * uint3(1, 1, 64));
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    relative_artifact_path = artifact_path.relative_to(mlx_root).as_posix()
+    expected_workgroup_assertions = [
+        {
+            "source": assertion["source"],
+            "entryPoint": assertion["entry_point"],
+            "function": assertion["function"],
+            "parameter": assertion["parameter"],
+            "minimum": assertion["minimum"],
+            "maximum": assertion["maximum"],
+        }
+        for assertion in module.FFT_DIRECTX_WORKGROUP_ACCESS_ASSERTIONS
+    ]
+    expected_rule_path = (
+        f'project.entry_workgroup_size_rules["{module.MLX_FFT_SOURCE}"].'
+        f"{module.FFT_DIRECTX_ENTRY_POINT}"
+    )
+    report = {
+        "kind": "crosstl-project-portability-report",
+        "summary": {
+            "unitCount": 1,
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+            "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+            "diagnosticsByCode": {},
+            "missingCapabilityCounts": {},
+        },
+        "project": {
+            "indexRangeAssertionCount": len(module.FFT_INDEX_RANGE_ASSERTIONS),
+            "indexRangeAssertions": list(module.FFT_INDEX_RANGE_ASSERTIONS),
+            "workgroupAccessAssertionCount": len(
+                module.FFT_DIRECTX_WORKGROUP_ACCESS_ASSERTIONS
+            ),
+            "workgroupAccessAssertions": expected_workgroup_assertions,
+        },
+        "diagnostics": [],
+        "units": [
+            {
+                "id": module.MLX_FFT_SOURCE,
+                "path": module.MLX_FFT_SOURCE,
+                "sourceBackend": "metal",
+                "sourceHash": {
+                    "algorithm": "sha256",
+                    "value": module.MLX_FFT_SHA256,
+                },
+                "sourceSizeBytes": module.MLX_FFT_SOURCE_SIZE_BYTES,
+            }
+        ],
+        "artifacts": [
+            {
+                "source": module.MLX_FFT_SOURCE,
+                "sourceBackend": "metal",
+                "target": "directx",
+                "path": relative_artifact_path,
+                "status": "translated",
+                "provenance": {
+                    "intermediate": "crossgl",
+                    "pipeline": "entry-scoped-translate",
+                },
+                "sourceHash": {
+                    "algorithm": "sha256",
+                    "value": module.MLX_FFT_SHA256,
+                },
+                "sourceSizeBytes": module.MLX_FFT_SOURCE_SIZE_BYTES,
+                "generatedHash": {
+                    "algorithm": "sha256",
+                    "value": module._sha256(artifact_path),
+                },
+                "generatedSizeBytes": artifact_path.stat().st_size,
+                "entryPoint": {
+                    "source": module.FFT_DIRECTX_ENTRY_POINT,
+                    "stage": "compute",
+                    "target": "CSMain",
+                },
+                "execution": {
+                    "sourceEntryPoints": [module.FFT_DIRECTX_ENTRY_POINT],
+                    "provenance": {
+                        "kind": "materialized-template-entry-rules",
+                        "path": (
+                            f'project.entry_workgroup_size_rules["{module.MLX_FFT_SOURCE}"]'
+                        ),
+                    },
+                    "entryPoints": [
+                        {
+                            "sourceEntryPoint": module.FFT_DIRECTX_ENTRY_POINT,
+                            "materializedEntryPoint": module.FFT_DIRECTX_ENTRY_POINT,
+                            "targetEntryPoint": "CSMain",
+                            "workgroupSize": list(module.FFT_DIRECTX_WORKGROUP_SIZE),
+                            "rule": {
+                                "components": [
+                                    str(value)
+                                    for value in module.FFT_DIRECTX_WORKGROUP_SIZE
+                                ],
+                                "entryPattern": module.FFT_DIRECTX_ENTRY_POINT,
+                                "path": expected_rule_path,
+                                "sourcePattern": module.MLX_FFT_SOURCE,
+                            },
+                        }
+                    ],
+                },
+                "specializationConstants": [
+                    {
+                        "id": constant_id,
+                        "concreteValue": value,
+                        "deferred": False,
+                    }
+                    for constant_id, value in (
+                        module.FFT_DIRECTX_REACHABLE_SPECIALIZATION_CONSTANTS.items()
+                    )
+                ],
+                "templateMaterialization": {
+                    "status": "materialized",
+                    "specializations": [
+                        {"materializedName": f"specialization_{index}"}
+                        for index in range(
+                            module.FFT_DIRECTX_EXPECTED_SPECIALIZATION_COUNT
+                        )
+                    ],
+                    "unsupported": [],
+                },
+            }
+        ],
+    }
+    (report_dir / "fft-directx-toolchain.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+    return (
+        (mlx_root, work_dir, config_dir, report_dir, log_dir),
+        artifact_path,
+        expected_workgroup_assertions,
+    )
+
+
+def test_fft_directx_toolchain_records_host_plan_and_native_validation(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, artifact_path, expected_workgroup_assertions = (
+        _prepare_fft_directx_toolchain_check(module, tmp_path)
+    )
+    generated = artifact_path.read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        module,
+        "FFT_DIRECTX_GENERATED_SHA256",
+        module._sha256(artifact_path),
+    )
+    monkeypatch.setattr(
+        module,
+        "FFT_DIRECTX_GENERATED_SIZE_BYTES",
+        artifact_path.stat().st_size,
+    )
+    commands = []
+
+    def fake_run_command(name, command, *, log_dir, **kwargs):
+        commands.append((name, list(command), kwargs))
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        if name == "translate-fft-directx":
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text(generated, encoding="utf-8")
+        if name == "validate-fft-directx":
+            output_path = Path(command[command.index("-Fo") + 1])
+            output_path.write_bytes(b"DXIL")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(
+        module.shutil,
+        "which",
+        lambda name: f"C:/tools/{name}.exe" if name == "dxc" else None,
+    )
+
+    result = module._check_fft_directx_toolchain(
+        *paths,
+        "python",
+        require_toolchain=True,
+    )
+
+    assert result == {
+        "name": "fft-directx-toolchain",
+        "status": "passed",
+        "report": ".crosstl-mlx-porting/reports/fft-directx-toolchain.json",
+        "source": module.MLX_FFT_SOURCE,
+        "sourceHash": module.MLX_FFT_SHA256,
+        "target": "directx",
+        "selectedEntryPoint": module.FFT_DIRECTX_ENTRY_POINT,
+        "targetEntryPoint": "CSMain",
+        "artifactStatus": "translated",
+        "artifactEmitted": True,
+        "generatedHash": module._sha256(artifact_path),
+        "generatedSizeBytes": artifact_path.stat().st_size,
+        "nativeValidationAttempted": True,
+        "nativeValidationStatus": "validated",
+        "nativeValidationOutput": (
+            ".crosstl-mlx-porting/validation/fft-directx-256.dxil"
+        ),
+        "nativeCompiler": "dxc",
+        "entryProfile": "cs_6_2",
+        "compilerArguments": ["-enable-16bit-types"],
+        "warningsAsErrors": True,
+        "templateMaterializationStatus": "materialized",
+        "templateSpecializationCount": 24,
+        "configuredFunctionConstantCount": 22,
+        "reachableFunctionConstantCount": 21,
+        "specializationConstants": dict(module.FFT_DIRECTX_SPECIALIZATION_CONSTANTS),
+        "workgroupSize": [1, 1, 64],
+        "indexRangeAssertions": list(module.FFT_INDEX_RANGE_ASSERTIONS),
+        "workgroupAccessAssertions": expected_workgroup_assertions,
+        "toolchainRequired": True,
+        "trackedIssues": [],
+        "maxTemplateSpecializations": 4096,
+        "maxTemplateMaterializationWork": 2097152,
+        "runtimeIntegrationIncluded": False,
+        "numericalParityClaimed": False,
+        "runtimeParityClaimed": False,
+    }
+    assert [name for name, _command, _kwargs in commands] == [
+        "translate-fft-directx",
+        "validate-fft-directx",
+    ]
+    assert commands[0][2] == {
+        "check": False,
+        "timeout_seconds": module.FFT_DIRECTX_TRANSLATION_TIMEOUT_SECONDS,
+    }
+    assert commands[1][2] == {"check": False}
+    dxc_command = commands[1][1]
+    assert dxc_command[:7] == [
+        "C:/tools/dxc.exe",
+        "-WX",
+        "-T",
+        "cs_6_2",
+        "-enable-16bit-types",
+        "-E",
+        "CSMain",
+    ]
+    config = (paths[2] / "fft-directx-toolchain.toml").read_text(encoding="utf-8")
+    assert f'include = ["{module.MLX_FFT_SOURCE}"]' in config
+    assert 'targets = ["directx"]' in config
+    assert f'"{module.MLX_FFT_SOURCE}" = "{module.FFT_DIRECTX_ENTRY_POINT}"' in config
+    assert f'[project.entry_workgroup_size_rules."{module.MLX_FFT_SOURCE}"]' in config
+    assert f'"{module.FFT_DIRECTX_ENTRY_POINT}" = [1, 1, 64]' in config
+    assert config.count("[[project.index_range_assertions]]") == len(
+        module.FFT_INDEX_RANGE_ASSERTIONS
+    )
+    assert config.count("[[project.workgroup_access_assertions]]") == 1
+    assert config.count("[[project.specialization_constants]]") == 0
+    assert "[project.specialization_constants]" in config
+    assert config.count(" = ") >= len(module.FFT_DIRECTX_SPECIALIZATION_CONSTANTS)
+
+
+def test_fft_directx_toolchain_rejects_changed_workgroup_axis(tmp_path, monkeypatch):
+    module = _load_harness()
+    paths, artifact_path, _expected_workgroup_assertions = (
+        _prepare_fft_directx_toolchain_check(module, tmp_path)
+    )
+    report_path = paths[3] / "fft-directx-toolchain.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["artifacts"][0]["execution"]["entryPoints"][0]["workgroupSize"] = [
+        64,
+        1,
+        1,
+    ]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    generated = artifact_path.read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        module,
+        "FFT_DIRECTX_GENERATED_SHA256",
+        module._sha256(artifact_path),
+    )
+    monkeypatch.setattr(
+        module,
+        "FFT_DIRECTX_GENERATED_SIZE_BYTES",
+        artifact_path.stat().st_size,
+    )
+
+    def fake_run_command(name, command, *, log_dir, **_kwargs):
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        if name == "translate-fft-directx":
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text(generated, encoding="utf-8")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    with pytest.raises(module.PortingCheckError, match="execution contract changed"):
+        module._check_fft_directx_toolchain(
+            *paths,
+            "python",
+            require_toolchain=False,
+        )
+
+
 def _prepare_fft_opengl_toolchain_check(module, tmp_path):
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / ".crosstl-mlx-porting"
@@ -5971,8 +6305,8 @@ void main() {
             "missingCapabilityCounts": {},
         },
         "project": {
-            "indexRangeAssertionCount": len(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
-            "indexRangeAssertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+            "indexRangeAssertionCount": len(module.FFT_INDEX_RANGE_ASSERTIONS),
+            "indexRangeAssertions": list(module.FFT_INDEX_RANGE_ASSERTIONS),
             "workgroupAccessAssertionCount": len(
                 module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
             ),
@@ -6099,7 +6433,7 @@ def test_fft_opengl_toolchain_records_translation_and_native_validation(
         "templateMaterializationStatus": "materialized",
         "templateSpecializationCount": 99,
         "functionConstantCount": 22,
-        "indexRangeAssertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+        "indexRangeAssertions": list(module.FFT_INDEX_RANGE_ASSERTIONS),
         "workgroupAccessAssertions": expected_workgroup_assertions,
         "toolchainRequired": True,
         "trackedIssues": [],
@@ -6127,7 +6461,7 @@ def test_fft_opengl_toolchain_records_translation_and_native_validation(
     assert f'include = ["{module.MLX_FFT_SOURCE}"]' in config
     assert 'targets = ["opengl"]' in config
     assert config.count("[[project.index_range_assertions]]") == len(
-        module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS
+        module.FFT_INDEX_RANGE_ASSERTIONS
     )
     assert config.count("[[project.workgroup_access_assertions]]") == len(
         module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
@@ -9584,6 +9918,84 @@ def test_full_corpus_checkpoint_probe_records_verified_resume_coordinate():
     }
 
 
+def test_fft_directx_evidence_records_toolchain_proof_without_runtime_claims():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["directx_fft_translation_status"]
+    assert status["status"] == "translated-dxc-validated"
+    assert status["source"] == module.MLX_FFT_SOURCE
+    assert status["source_sha256"] == module.MLX_FFT_SHA256
+    assert status["source_size_bytes"] == module.MLX_FFT_SOURCE_SIZE_BYTES
+    assert status["target"] == "directx"
+    assert status["selected_entry_point"] == module.FFT_DIRECTX_ENTRY_POINT
+    assert status["target_entry_point"] == "CSMain"
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "index_range_assertion_count": 4,
+        "workgroup_access_assertion_count": 1,
+        "max_template_specializations": 4096,
+        "max_template_materialization_work": 2097152,
+    }
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 24,
+        "unsupported_specialization_count": 0,
+        "configured_function_constant_count": 22,
+        "reachable_function_constant_count": 21,
+        "pruned_function_constant_ids": [3],
+    }
+    assert status["execution"] == {
+        "workgroup_size": list(module.FFT_DIRECTX_WORKGROUP_SIZE),
+        "host_dispatch_source": "mlx/backend/metal/fft.cpp",
+        "host_dispatch_shape": "MTL::Size(1, threadgroup_batch_size, threads_per_fft)",
+        "numthreads_declaration": "[numthreads(1, 1, 64)]",
+        "workgroup_grid_expression": "crossglNumWorkGroups * uint3(1, 1, 64)",
+    }
+    assert status["portability_preconditions"] == {
+        "index_range_assertions": list(module.FFT_INDEX_RANGE_ASSERTIONS),
+        "workgroup_access_assertions": list(
+            module.FFT_DIRECTX_WORKGROUP_ACCESS_ASSERTIONS
+        ),
+    }
+    assert status["artifact"] == {
+        "sha256": module.FFT_DIRECTX_GENERATED_SHA256,
+        "size_bytes": module.FFT_DIRECTX_GENERATED_SIZE_BYTES,
+        "first_class_workgroup_pointer_residue": False,
+    }
+    assert status["native_validation"] == {
+        "compiler": "dxc",
+        "profile": "cs_6_2",
+        "arguments": ["-enable-16bit-types"],
+        "warnings_as_errors": True,
+        "status": "passed",
+    }
+    assert status["aggregate_source_translation"] == {
+        "included": False,
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1916",
+    }
+    assert status["tracked_issues"] == []
+    assert status["runtime_integration_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "forward complex 256-point entry" in readme
+    assert "`MTL::Size(1, threadgroup_batch_size, threads_per_fft)`" in readme
+    assert "24 reachable template specializations" in readme
+    assert "21 of the 22 configured function constants" in readme
+    assert "contains no first-class workgroup pointer residue" in readme
+    assert "does not execute a Direct3D FFT or establish numerical parity" in readme
+
+
 def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():
     module = _load_harness()
     gaps = json.loads(
@@ -9616,7 +10028,7 @@ def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():
         "function_constant_count": 22,
     }
     assert status["portability_preconditions"] == {
-        "index_range_assertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+        "index_range_assertions": list(module.FFT_INDEX_RANGE_ASSERTIONS),
         "workgroup_access_assertions": list(
             module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
         ),
@@ -9892,6 +10304,13 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         module,
+        "_check_fft_directx_toolchain",
+        lambda *args, **kwargs: pytest.fail(
+            "DirectX FFT toolchain proof should not run"
+        ),
+    )
+    monkeypatch.setattr(
+        module,
         "_translate_vulkan_frontier",
         lambda *args, **kwargs: pytest.fail("reduced Vulkan frontier should not run"),
     )
@@ -9954,6 +10373,8 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     assert (
         result["scope"]["templateMemberBufferPointerNativeValidationIncluded"] is False
     )
+    assert result["scope"]["fftDirectXToolchainIncluded"] is False
+    assert result["scope"]["fftDirectXToolchainRequired"] is False
     assert result["scope"]["fftOpenGLToolchainIncluded"] is False
     assert result["scope"]["fftOpenGLToolchainRequired"] is False
     assert result["scope"]["runtimeParityClaimed"] is False
@@ -10024,6 +10445,15 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         directx_frontier_requirements.append(require_directx_toolchain)
         return {"name": "directx-frontier", "status": "passed"}
 
+    fft_directx_requirements = []
+
+    def fake_fft_directx_toolchain(*args, require_toolchain):
+        fft_directx_requirements.append(require_toolchain)
+        return {
+            "name": "fft-directx-toolchain",
+            "status": "passed",
+        }
+
     vulkan_frontier_requirements = []
 
     def fake_vulkan_frontier(*args, require_toolchain, run_optional_toolchain):
@@ -10031,6 +10461,11 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         return {"name": "vulkan-frontier", "status": "passed"}
 
     monkeypatch.setattr(module, "_translate_directx_frontier", fake_directx_frontier)
+    monkeypatch.setattr(
+        module,
+        "_check_fft_directx_toolchain",
+        fake_fft_directx_toolchain,
+    )
     monkeypatch.setattr(module, "_translate_vulkan_frontier", fake_vulkan_frontier)
     monkeypatch.setattr(
         module,
@@ -10113,7 +10548,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
             work_dir=None,
             no_clean=False,
             python="python",
-            require_directx_toolchain=False,
+            require_directx_toolchain=True,
             require_directx_gemv_compiler_frontier=True,
             require_vulkan_toolchain=False,
             require_vulkan_native_runtime=False,
@@ -10133,6 +10568,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "reference-accessor-lvalue-identity",
         "template-member-buffer-pointer",
         "directx-frontier",
+        "fft-directx-toolchain",
         "vulkan-frontier",
         "arange-opengl",
         "gemv-directx-compiler-frontier",
@@ -10142,9 +10578,10 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "gemv-vulkan-toolchain",
         "runtime-readiness",
     ]
-    assert reference_accessor_requirements == [(False, True)]
-    assert directx_frontier_requirements == [False]
-    assert vulkan_frontier_requirements == [(False, True)]
+    assert reference_accessor_requirements == [(True, True)]
+    assert directx_frontier_requirements == [True]
+    assert fft_directx_requirements == [True]
+    assert vulkan_frontier_requirements == [(False, False)]
     assert opengl_frontier_requirements == [True]
     assert fft_opengl_requirements == [True]
     assert runtime_requirements == [
@@ -10155,6 +10592,8 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     ]
     assert result["scope"]["openglFrontierToolchainRequired"] is True
     assert result["scope"]["directxGemvCompilerFrontierRequired"] is True
+    assert result["scope"]["fftDirectXToolchainIncluded"] is True
+    assert result["scope"]["fftDirectXToolchainRequired"] is True
     assert result["scope"]["fftOpenGLToolchainIncluded"] is True
     assert result["scope"]["fftOpenGLToolchainRequired"] is True
     assert result["scope"]["openglGemvToolchainRequired"] is True
@@ -10165,7 +10604,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     assert result["scope"]["nativeRuntimeExecutionIncluded"] is True
     assert result["scope"]["referenceAccessorProofIncluded"] is True
     assert result["scope"]["referenceAccessorTargets"] == ["directx", "opengl"]
-    assert result["scope"]["referenceAccessorDirectxToolchainRequired"] is False
+    assert result["scope"]["referenceAccessorDirectxToolchainRequired"] is True
     assert result["scope"]["referenceAccessorOpenglToolchainRequired"] is True
     assert result["scope"]["templateMemberBufferPointerProofIncluded"] is True
     assert result["scope"]["templateMemberBufferPointerTargets"] == [

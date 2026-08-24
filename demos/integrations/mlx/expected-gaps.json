@@ -297,6 +297,107 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
+  "directx_fft_translation_status": {
+    "status": "translated-dxc-validated",
+    "source": "mlx/backend/metal/kernels/fft.metal",
+    "source_sha256": "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825",
+    "source_size_bytes": 3278,
+    "target": "directx",
+    "selected_entry_point": "fft_mem_256_float2_float2",
+    "target_entry_point": "CSMain",
+    "project_translation": {
+      "unit_count": 1,
+      "artifact_count": 1,
+      "translated_count": 1,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "index_range_assertion_count": 4,
+      "workgroup_access_assertion_count": 1,
+      "max_template_specializations": 4096,
+      "max_template_materialization_work": 2097152
+    },
+    "materialization": {
+      "status": "materialized",
+      "specialization_count": 24,
+      "unsupported_specialization_count": 0,
+      "configured_function_constant_count": 22,
+      "reachable_function_constant_count": 21,
+      "pruned_function_constant_ids": [
+        3
+      ]
+    },
+    "execution": {
+      "workgroup_size": [
+        1,
+        1,
+        64
+      ],
+      "host_dispatch_source": "mlx/backend/metal/fft.cpp",
+      "host_dispatch_shape": "MTL::Size(1, threadgroup_batch_size, threads_per_fft)",
+      "numthreads_declaration": "[numthreads(1, 1, 64)]",
+      "workgroup_grid_expression": "crossglNumWorkGroups * uint3(1, 1, 64)"
+    },
+    "portability_preconditions": {
+      "index_range_assertions": [
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "expression": "batch_idx + index",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "expression": "batch_idx + index + 1",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "expression": "batch_idx + index + next_in",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "expression": "batch_idx + index + next_out",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      ],
+      "workgroup_access_assertions": [
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "entry_point": "fft_mem_256_float2_float2",
+          "function": "*",
+          "parameter": "*",
+          "minimum": 0,
+          "maximum": 255
+        }
+      ]
+    },
+    "artifact": {
+      "sha256": "07f9300c2e4860077b344610fbfaa2eadb330e1f9723cb519794f91272bd2289",
+      "size_bytes": 116160,
+      "first_class_workgroup_pointer_residue": false
+    },
+    "native_validation": {
+      "compiler": "dxc",
+      "profile": "cs_6_2",
+      "arguments": [
+        "-enable-16bit-types"
+      ],
+      "warnings_as_errors": true,
+      "status": "passed"
+    },
+    "aggregate_source_translation": {
+      "included": false,
+      "tracked_by": "https://github.com/CrossGL/crosstl/issues/1916"
+    },
+    "tracked_issues": [],
+    "runtime_integration_included": false,
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "opengl_fft_translation_status": {
     "status": "translated-glslang-spirv-val-validated",
     "source": "mlx/backend/metal/kernels/fft.metal",

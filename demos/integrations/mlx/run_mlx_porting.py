@@ -911,12 +911,12 @@ GEMV_OPENGL_SUBGROUP_WIDTH_ENFORCEMENT = {
     "artifactMarker": "CROSSTL_REQUIRED_SUBGROUP_WIDTH",
     "mismatchBehavior": "reject-before-dispatch",
 }
-FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS = 4096
-FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
+FFT_MAX_TEMPLATE_SPECIALIZATIONS = 4096
+FFT_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
 FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
 FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT = 99
 FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT = 22
-FFT_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
+FFT_INDEX_RANGE_ASSERTIONS = tuple(
     {
         "source": MLX_FFT_SOURCE,
         "expression": expression,
@@ -940,6 +940,54 @@ FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS = tuple(
         "maximum": extent - 1,
     }
     for extent in (256, 512, 1024, 2048, 4096)
+)
+FFT_DIRECTX_ENTRY_POINT = "fft_mem_256_float2_float2"
+FFT_DIRECTX_WORKGROUP_SIZE = (1, 1, 64)
+FFT_DIRECTX_TRANSLATION_TIMEOUT_SECONDS = 300
+FFT_DIRECTX_EXPECTED_SPECIALIZATION_COUNT = 24
+FFT_DIRECTX_EXPECTED_FUNCTION_CONSTANT_COUNT = 21
+FFT_DIRECTX_GENERATED_SHA256 = (
+    "07f9300c2e4860077b344610fbfaa2eadb330e1f9723cb519794f91272bd2289"
+)
+FFT_DIRECTX_GENERATED_SIZE_BYTES = 116160
+FFT_DIRECTX_SPECIALIZATION_CONSTANTS = {
+    "0": False,
+    "1": True,
+    "2": 4,
+    "3": 256,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 4,
+    "11": 0,
+    "12": 0,
+    "13": 0,
+    "14": 0,
+    "15": 0,
+    "16": 0,
+    "17": 0,
+    "18": 0,
+    "19": 0,
+    "20": 0,
+    "21": 0,
+}
+FFT_DIRECTX_REACHABLE_SPECIALIZATION_CONSTANTS = {
+    int(selector): value
+    for selector, value in FFT_DIRECTX_SPECIALIZATION_CONSTANTS.items()
+    if selector != "3"
+}
+FFT_DIRECTX_WORKGROUP_ACCESS_ASSERTIONS = (
+    {
+        "source": MLX_FFT_SOURCE,
+        "entry_point": FFT_DIRECTX_ENTRY_POINT,
+        "function": "*",
+        "parameter": "*",
+        "minimum": 0,
+        "maximum": 255,
+    },
 )
 OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE = (
     "https://github.com/CrossGL/crosstl/issues/1515"
@@ -6312,6 +6360,336 @@ def _check_opengl_frontier(
     }
 
 
+def _check_fft_directx_toolchain(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+    *,
+    require_toolchain: bool,
+) -> dict[str, Any]:
+    config_path = config_dir / "fft-directx-toolchain.toml"
+    report_path = report_dir / "fft-directx-toolchain.json"
+    output_dir = work_dir / "out-fft-directx"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    _write_project_config(
+        config_path,
+        include=MLX_FFT_SOURCE,
+        targets=("directx",),
+        output_dir=_relpath(output_dir, mlx_root),
+        specialization_constants=FFT_DIRECTX_SPECIALIZATION_CONSTANTS,
+        metal_source_options={
+            "max_template_specializations": FFT_MAX_TEMPLATE_SPECIALIZATIONS,
+            "max_template_materialization_work": FFT_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        },
+        entry_points={MLX_FFT_SOURCE: FFT_DIRECTX_ENTRY_POINT},
+        entry_workgroup_size_rules={
+            MLX_FFT_SOURCE: {
+                FFT_DIRECTX_ENTRY_POINT: FFT_DIRECTX_WORKGROUP_SIZE,
+            }
+        },
+        index_range_assertions=FFT_INDEX_RANGE_ASSERTIONS,
+        workgroup_access_assertions=FFT_DIRECTX_WORKGROUP_ACCESS_ASSERTIONS,
+    )
+    result = _run_command(
+        "translate-fft-directx",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            "--no-format",
+        ],
+        log_dir=log_dir,
+        check=False,
+        timeout_seconds=FFT_DIRECTX_TRANSLATION_TIMEOUT_SECONDS,
+    )
+    _require(result.returncode == 0, "DirectX FFT project translation failed")
+    _require(
+        report_path.is_file(),
+        "DirectX FFT translation did not produce a project report",
+    )
+
+    payload = _load_json(report_path)
+    _require(
+        payload.get("kind") == "crosstl-project-portability-report",
+        "DirectX FFT translation report kind changed",
+    )
+    summary = payload.get("summary", {})
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == 1
+        and summary.get("artifactCount") == 1
+        and summary.get("translatedCount") == 1
+        and summary.get("failedCount") == 0,
+        "DirectX FFT translation report did not retain one translated artifact",
+    )
+    _require(
+        summary.get("diagnosticCounts") == {"error": 0, "note": 0, "warning": 0}
+        and summary.get("diagnosticsByCode") == {}
+        and summary.get("missingCapabilityCounts") == {}
+        and payload.get("diagnostics") == [],
+        "DirectX FFT project translation must have zero diagnostics",
+    )
+
+    expected_workgroup_assertions = [
+        {
+            "source": assertion["source"],
+            "entryPoint": assertion["entry_point"],
+            "function": assertion["function"],
+            "parameter": assertion["parameter"],
+            "minimum": assertion["minimum"],
+            "maximum": assertion["maximum"],
+        }
+        for assertion in FFT_DIRECTX_WORKGROUP_ACCESS_ASSERTIONS
+    ]
+    project = payload.get("project", {})
+    _require(
+        isinstance(project, Mapping)
+        and project.get("indexRangeAssertionCount") == len(FFT_INDEX_RANGE_ASSERTIONS)
+        and project.get("indexRangeAssertions") == list(FFT_INDEX_RANGE_ASSERTIONS)
+        and project.get("workgroupAccessAssertionCount")
+        == len(FFT_DIRECTX_WORKGROUP_ACCESS_ASSERTIONS)
+        and project.get("workgroupAccessAssertions") == expected_workgroup_assertions,
+        "DirectX FFT portability preconditions changed",
+    )
+
+    units = payload.get("units", [])
+    _require(
+        isinstance(units, list)
+        and len(units) == 1
+        and isinstance(units[0], Mapping)
+        and units[0].get("id") == MLX_FFT_SOURCE
+        and units[0].get("path") == MLX_FFT_SOURCE
+        and units[0].get("sourceBackend") == "metal"
+        and units[0].get("sourceHash")
+        == {"algorithm": "sha256", "value": MLX_FFT_SHA256}
+        and units[0].get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES,
+        "DirectX FFT source-unit identity changed at the pinned MLX commit",
+    )
+
+    artifacts = payload.get("artifacts", [])
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == 1,
+        "DirectX FFT report must contain one translated artifact record",
+    )
+    artifact = artifacts[0]
+    artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
+    entry = artifact.get("entryPoint") if isinstance(artifact, Mapping) else None
+    execution = artifact.get("execution") if isinstance(artifact, Mapping) else None
+    execution_entries = (
+        execution.get("entryPoints") if isinstance(execution, Mapping) else None
+    )
+    expected_rule_path = (
+        f'project.entry_workgroup_size_rules["{MLX_FFT_SOURCE}"].'
+        f"{FFT_DIRECTX_ENTRY_POINT}"
+    )
+    _require(
+        isinstance(artifact, Mapping)
+        and artifact.get("source") == MLX_FFT_SOURCE
+        and artifact.get("sourceBackend") == "metal"
+        and artifact.get("target") == "directx"
+        and artifact.get("status") == "translated"
+        and artifact.get("provenance")
+        == {"intermediate": "crossgl", "pipeline": "entry-scoped-translate"}
+        and artifact.get("sourceHash")
+        == {"algorithm": "sha256", "value": MLX_FFT_SHA256}
+        and artifact.get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES
+        and isinstance(artifact_path, str)
+        and entry
+        == {
+            "source": FFT_DIRECTX_ENTRY_POINT,
+            "stage": "compute",
+            "target": "CSMain",
+        },
+        "DirectX FFT translated artifact contract changed",
+    )
+    _require(
+        isinstance(execution, Mapping)
+        and execution.get("sourceEntryPoints") == [FFT_DIRECTX_ENTRY_POINT]
+        and execution.get("provenance")
+        == {
+            "kind": "materialized-template-entry-rules",
+            "path": f'project.entry_workgroup_size_rules["{MLX_FFT_SOURCE}"]',
+        }
+        and isinstance(execution_entries, list)
+        and len(execution_entries) == 1
+        and execution_entries[0].get("sourceEntryPoint") == FFT_DIRECTX_ENTRY_POINT
+        and execution_entries[0].get("materializedEntryPoint")
+        == FFT_DIRECTX_ENTRY_POINT
+        and execution_entries[0].get("targetEntryPoint") == "CSMain"
+        and execution_entries[0].get("workgroupSize")
+        == list(FFT_DIRECTX_WORKGROUP_SIZE)
+        and execution_entries[0].get("rule")
+        == {
+            "components": [str(value) for value in FFT_DIRECTX_WORKGROUP_SIZE],
+            "entryPattern": FFT_DIRECTX_ENTRY_POINT,
+            "path": expected_rule_path,
+            "sourcePattern": MLX_FFT_SOURCE,
+        },
+        "DirectX FFT execution contract changed",
+    )
+
+    specialization_constants = artifact.get("specializationConstants", [])
+    constants_by_id = {
+        record.get("id"): record
+        for record in specialization_constants
+        if isinstance(record, Mapping)
+    }
+    _require(
+        len(specialization_constants) == FFT_DIRECTX_EXPECTED_FUNCTION_CONSTANT_COUNT
+        and set(constants_by_id) == set(FFT_DIRECTX_REACHABLE_SPECIALIZATION_CONSTANTS)
+        and all(
+            constants_by_id[constant_id].get("concreteValue") == expected_value
+            and constants_by_id[constant_id].get("deferred") is False
+            for constant_id, expected_value in (
+                FFT_DIRECTX_REACHABLE_SPECIALIZATION_CONSTANTS.items()
+            )
+        ),
+        "DirectX FFT function-constant materialization changed",
+    )
+    materialization = artifact.get("templateMaterialization", {})
+    _require(
+        isinstance(materialization, Mapping)
+        and materialization.get("status") == "materialized"
+        and len(materialization.get("specializations", []))
+        == FFT_DIRECTX_EXPECTED_SPECIALIZATION_COUNT
+        and materialization.get("unsupported") == [],
+        "DirectX FFT template materialization evidence changed",
+    )
+
+    generated_path = (mlx_root / artifact_path).resolve()
+    _require(
+        _is_relative_to(generated_path, output_dir.resolve()),
+        "DirectX FFT artifact path escaped its output directory",
+    )
+    _require(
+        generated_path.is_file() and generated_path.stat().st_size > 0,
+        f"DirectX FFT artifact is missing: {artifact_path}",
+    )
+    generated_hash = _sha256(generated_path)
+    generated_size = generated_path.stat().st_size
+    _require(
+        artifact.get("generatedHash")
+        == {"algorithm": "sha256", "value": generated_hash}
+        and artifact.get("generatedSizeBytes") == generated_size
+        and generated_hash == FFT_DIRECTX_GENERATED_SHA256
+        and generated_size == FFT_DIRECTX_GENERATED_SIZE_BYTES,
+        "DirectX FFT generated artifact identity changed",
+    )
+    generated = generated_path.read_text(encoding="utf-8")
+    _require(
+        len(re.findall(r"\bvoid\s+CSMain\s*\(", generated)) == 1
+        and "groupshared float2 fft_mem_256_float2_float2_shared_in[256];" in generated
+        and "[numthreads(1, 1, 64)]" in generated
+        and "crossglNumWorkGroups * uint3(1, 1, 64)" in generated
+        and "static const bool inv_ = false;" in generated
+        and "static const bool is_power_of_2_ = true;" in generated
+        and "static const int elems_per_thread_ = 4;" in generated
+        and "static const int radix_4_steps_ = 4;" in generated
+        and "rader_m_" not in generated,
+        "DirectX FFT generated execution or specialization contract changed",
+    )
+    _require(
+        re.search(r"\bgroupshared\s+[^;]*\*", generated) is None
+        and re.search(r"\bcrosstl_ptr_buf\s*[,)]", generated) is None
+        and "nullptr" not in generated,
+        "DirectX FFT artifact retained a first-class workgroup pointer",
+    )
+
+    dxc = shutil.which("dxc")
+    _require(
+        not require_toolchain or dxc is not None,
+        "DirectX FFT validation requires dxc",
+    )
+    native_validation_attempted = dxc is not None
+    native_validation_status = "not-run-tool-unavailable"
+    native_validation_output = None
+    profile = dxc_profile_for_source("cs_6_0", generated)
+    compiler_arguments = dxc_compiler_arguments_for_source(generated)
+    _require(
+        profile == "cs_6_2" and compiler_arguments == ("-enable-16bit-types",),
+        "DirectX FFT compiler requirements changed",
+    )
+    if native_validation_attempted:
+        output_path = work_dir / "validation" / "fft-directx-256.dxil"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.unlink(missing_ok=True)
+        compile_result = _run_command(
+            "validate-fft-directx",
+            [
+                str(dxc),
+                "-WX",
+                "-T",
+                profile,
+                *compiler_arguments,
+                "-E",
+                "CSMain",
+                str(generated_path),
+                "-Fo",
+                str(output_path),
+            ],
+            log_dir=log_dir,
+            check=False,
+        )
+        _require(
+            compile_result.returncode == 0,
+            "DirectX FFT native compilation failed; inspect "
+            "validate-fft-directx logs",
+        )
+        _require(
+            output_path.is_file() and output_path.stat().st_size > 0,
+            "DirectX FFT compilation succeeded without producing DXIL",
+        )
+        native_validation_status = "validated"
+        native_validation_output = _relpath(output_path, mlx_root)
+
+    return {
+        "name": "fft-directx-toolchain",
+        "status": "passed",
+        "report": _relpath(report_path, mlx_root),
+        "source": MLX_FFT_SOURCE,
+        "sourceHash": MLX_FFT_SHA256,
+        "target": "directx",
+        "selectedEntryPoint": FFT_DIRECTX_ENTRY_POINT,
+        "targetEntryPoint": "CSMain",
+        "artifactStatus": "translated",
+        "artifactEmitted": True,
+        "generatedHash": generated_hash,
+        "generatedSizeBytes": generated_size,
+        "nativeValidationAttempted": native_validation_attempted,
+        "nativeValidationStatus": native_validation_status,
+        "nativeValidationOutput": native_validation_output,
+        "nativeCompiler": "dxc",
+        "entryProfile": profile,
+        "compilerArguments": list(compiler_arguments),
+        "warningsAsErrors": True,
+        "templateMaterializationStatus": "materialized",
+        "templateSpecializationCount": FFT_DIRECTX_EXPECTED_SPECIALIZATION_COUNT,
+        "configuredFunctionConstantCount": len(FFT_DIRECTX_SPECIALIZATION_CONSTANTS),
+        "reachableFunctionConstantCount": FFT_DIRECTX_EXPECTED_FUNCTION_CONSTANT_COUNT,
+        "specializationConstants": dict(FFT_DIRECTX_SPECIALIZATION_CONSTANTS),
+        "workgroupSize": list(FFT_DIRECTX_WORKGROUP_SIZE),
+        "indexRangeAssertions": list(FFT_INDEX_RANGE_ASSERTIONS),
+        "workgroupAccessAssertions": expected_workgroup_assertions,
+        "toolchainRequired": require_toolchain,
+        "trackedIssues": [],
+        "maxTemplateSpecializations": FFT_MAX_TEMPLATE_SPECIALIZATIONS,
+        "maxTemplateMaterializationWork": FFT_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        "runtimeIntegrationIncluded": False,
+        "numericalParityClaimed": False,
+        "runtimeParityClaimed": False,
+    }
+
+
 def _check_fft_opengl_toolchain(
     mlx_root: Path,
     work_dir: Path,
@@ -6333,12 +6711,10 @@ def _check_fft_opengl_toolchain(
         targets=("opengl",),
         output_dir=_relpath(output_dir, mlx_root),
         metal_source_options={
-            "max_template_specializations": FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS,
-            "max_template_materialization_work": (
-                FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK
-            ),
+            "max_template_specializations": FFT_MAX_TEMPLATE_SPECIALIZATIONS,
+            "max_template_materialization_work": FFT_MAX_TEMPLATE_MATERIALIZATION_WORK,
         },
-        index_range_assertions=FFT_OPENGL_INDEX_RANGE_ASSERTIONS,
+        index_range_assertions=FFT_INDEX_RANGE_ASSERTIONS,
         workgroup_access_assertions=FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS,
     )
     result = _run_command(
@@ -6404,10 +6780,8 @@ def _check_fft_opengl_toolchain(
     ]
     _require(
         isinstance(project, Mapping)
-        and project.get("indexRangeAssertionCount")
-        == len(FFT_OPENGL_INDEX_RANGE_ASSERTIONS)
-        and project.get("indexRangeAssertions")
-        == list(FFT_OPENGL_INDEX_RANGE_ASSERTIONS)
+        and project.get("indexRangeAssertionCount") == len(FFT_INDEX_RANGE_ASSERTIONS)
+        and project.get("indexRangeAssertions") == list(FFT_INDEX_RANGE_ASSERTIONS)
         and project.get("workgroupAccessAssertionCount")
         == len(FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS)
         and project.get("workgroupAccessAssertions") == expected_workgroup_assertions,
@@ -6584,12 +6958,12 @@ def _check_fft_opengl_toolchain(
         "templateMaterializationStatus": "materialized",
         "templateSpecializationCount": FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT,
         "functionConstantCount": FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT,
-        "indexRangeAssertions": list(FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+        "indexRangeAssertions": list(FFT_INDEX_RANGE_ASSERTIONS),
         "workgroupAccessAssertions": expected_workgroup_assertions,
         "toolchainRequired": require_toolchain,
         "trackedIssues": [],
-        "maxTemplateSpecializations": FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS,
-        "maxTemplateMaterializationWork": FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        "maxTemplateSpecializations": FFT_MAX_TEMPLATE_SPECIALIZATIONS,
+        "maxTemplateMaterializationWork": FFT_MAX_TEMPLATE_MATERIALIZATION_WORK,
         "runtimeIntegrationIncluded": False,
         "numericalParityClaimed": False,
         "runtimeParityClaimed": False,
@@ -9160,6 +9534,18 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 require_directx_toolchain=args.require_directx_toolchain,
             )
         )
+        if args.require_directx_toolchain:
+            checks.append(
+                _check_fft_directx_toolchain(
+                    mlx_root,
+                    work_dir,
+                    config_dir,
+                    report_dir,
+                    log_dir,
+                    args.python,
+                    require_toolchain=True,
+                )
+            )
         checks.append(
             _translate_vulkan_frontier(
                 mlx_root,
@@ -9264,6 +9650,9 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     reference_accessor_included = args.mode == REDUCED_FRONTIER_MODE
     template_member_pointer_included = args.mode == REDUCED_FRONTIER_MODE
     fft_opengl_toolchain_included = args.mode == REDUCED_FRONTIER_MODE
+    fft_directx_toolchain_included = bool(
+        args.mode == REDUCED_FRONTIER_MODE and args.require_directx_toolchain
+    )
     return {
         "schema_version": 1,
         "repository": {
@@ -9337,6 +9726,8 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "directxGemvCompilerFrontierRequired": (
                 require_directx_gemv_compiler_frontier
             ),
+            "fftDirectXToolchainIncluded": fft_directx_toolchain_included,
+            "fftDirectXToolchainRequired": fft_directx_toolchain_included,
             "fftOpenGLToolchainIncluded": fft_opengl_toolchain_included,
             "fftOpenGLToolchainRequired": bool(
                 fft_opengl_toolchain_included and require_opengl_frontier_toolchain
