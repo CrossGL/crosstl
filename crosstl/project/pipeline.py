@@ -16004,6 +16004,41 @@ def _metal_function_header(source: str, function: Any) -> str:
     return masked[function.span[0] : function.body_span[0] - 1]
 
 
+def _metal_concrete_function_materializations(
+    preprocessor: Any,
+    source: str,
+    materialized_names: Mapping[tuple[str, tuple[str, ...]], str],
+) -> dict[tuple[str, tuple[str, ...], tuple[str, ...]], str]:
+    keys_by_function_name: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
+    for key, materialized_name in materialized_names.items():
+        keys_by_function_name.setdefault(materialized_name, []).append(key)
+    if not keys_by_function_name:
+        return {}
+
+    template_spans = preprocessor._find_template_declaration_spans(source)
+    signatures: dict[tuple[str, tuple[str, ...], tuple[str, ...]], str] = {}
+    for function in preprocessor._find_non_template_function_definitions(
+        source,
+        template_spans,
+    ):
+        specialization_keys = keys_by_function_name.get(function.name)
+        if not specialization_keys:
+            continue
+        declarations = _metal_function_parameter_declarations(
+            preprocessor,
+            _metal_function_header(source, function),
+        )
+        signature_key = tuple(
+            _normalize_metal_type_text(type_text)
+            for type_text, _name, _variadic in declarations
+        )
+        for template_name, arguments in specialization_keys:
+            signatures[(template_name, tuple(arguments), signature_key)] = (
+                function.name
+            )
+    return signatures
+
+
 def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     statement_start = start
@@ -19575,9 +19610,16 @@ def _inline_metal_concrete_using_template_aliases(
         known_namespaces,
     )
     concrete_structs = _metal_struct_alias_members(preprocessor, source)
-    concrete_struct_spans = [
-        struct.span for struct in preprocessor._find_concrete_struct_definitions(source)
-    ]
+    concrete_definitions = preprocessor._find_concrete_struct_definitions(source)
+    concrete_struct_spans = [struct.span for struct in concrete_definitions]
+    embedded_identifier_names = {struct.name for struct in concrete_definitions}
+    embedded_identifier_names.update(
+        function.name
+        for function in preprocessor._find_non_template_function_definitions(
+            source,
+            list(excluded_spans),
+        )
+    )
     aliases: list[dict[str, Any]] = []
     alias_spans: list[tuple[int, int]] = []
     excluded = list(excluded_spans)
@@ -19766,7 +19808,7 @@ def _inline_metal_concrete_using_template_aliases(
         if candidates:
             alias = max(candidates, key=lambda item: int(item["end"]))
             replacements.append((i, i + consumed, str(alias["type"])))
-        elif "_" in ident:
+        elif "_" in ident and ident in embedded_identifier_names:
             scope_span = _metal_enclosing_block_span(block_spans, i)
             if scope_span is not None:
                 scope_start, scope_end = scope_span
@@ -21547,6 +21589,14 @@ def _project_template_materialization_for_artifact(
     )
     materialized = inherited_materialization.text
     specializations.extend(inherited_materialization.specializations)
+    concrete_materializations = _metal_concrete_function_materializations(
+        preprocessor,
+        materialized,
+        {
+            **source_instantiation_materialized_names,
+            **call_site_materialized_names,
+        },
+    )
 
     (
         materialized,
@@ -21558,6 +21608,7 @@ def _project_template_materialization_for_artifact(
         materialized,
         work_budget=explicit_work_budget,
         known_materializations={
+            **concrete_materializations,
             **implicit_materialization.materialized_names,
             **inherited_materialization.materialized_names,
         },

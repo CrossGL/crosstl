@@ -1350,6 +1350,91 @@ def test_codegen_rebinds_lowered_struct_sibling_overload_with_resources():
     )
 
 
+def test_codegen_transports_selected_lowered_member_overload(tmp_path):
+    source = """
+    struct Reader {
+        const device float2* input;
+
+        Reader(const device float2* input_) : input(input_) {}
+
+        float2 post_in(float2 elem) const {
+            return elem;
+        }
+
+        float2 post_in(float elem) const {
+            return float2(elem, 0.0f);
+        }
+
+        float2 load() const {
+            return post_in(input[0]);
+        }
+    };
+
+    kernel void read_value(
+        const device float2* input [[buffer(0)]],
+        device float2* output [[buffer(1)]]) {
+        Reader reader(input);
+        output[0] = reader.load();
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(source))
+    normalized = normalize(crossgl)
+    vector_helper = "Reader__post_in__metal_overload_2"
+    load_body = normalized.rsplit("Reader__load", 1)[1].split("}", 1)[0]
+
+    assert f"vec2 {vector_helper}(" in normalized
+    assert f"return {vector_helper}(self, crosstl_ptr_input," in load_body
+    assert "return Reader__post_in(self, crosstl_ptr_input," not in load_body
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+
+    assert "Reader_post_in_metal_overload_2" in glsl
+    assert "Reader__post_in__metal_overload_2" in hlsl
+    assert_opengl_compute_validates_if_available(
+        glsl,
+        tmp_path,
+        "selected-lowered-member-overload",
+    )
+
+
+def test_codegen_rebinds_lowered_member_with_defaulted_owner_prefix():
+    lowered = """
+    struct Reader_float2_0_false { int tag; };
+
+    float2 Reader_float2__post_in(
+        thread const Reader_float2_0_false& self,
+        const device float2* crosstl_ptr_input,
+        float2 elem) {
+        return elem;
+    }
+
+    float2 Reader_float2__post_in(
+        thread const Reader_float2_0_false& self,
+        const device float2* crosstl_ptr_input,
+        float elem) {
+        return float2(elem, 0.0f);
+    }
+
+    float2 Reader_float2__load(
+        thread const Reader_float2_0_false& self,
+        const device float2* crosstl_ptr_input) {
+        return post_in(crosstl_ptr_input[0]);
+    }
+    """
+
+    crossgl = normalize(convert(lowered))
+    load_body = crossgl.split("Reader_float2__load", 1)[1].split("}", 1)[0]
+
+    assert (
+        "Reader_float2__post_in__metal_overload_2("
+        "self, crosstl_ptr_input, crosstl_ptr_input[0])" in load_body
+    )
+    assert "return post_in(" not in load_body
+
+
 def test_codegen_does_not_rebind_global_call_from_lowered_struct_method():
     lowered = """
     struct Reader { int bias; };

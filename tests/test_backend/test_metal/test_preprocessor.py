@@ -5576,6 +5576,68 @@ def test_preprocessor_lowering_qualifies_member_only_when_not_shadowed():
     assert "C__apply(c, out[i])" in output
 
 
+def test_preprocessor_member_qualification_respects_local_shadow_scope():
+    code = """
+    struct Reader {
+      float elem;
+      int n;
+
+      float read(bool replace) const {
+        float2 factors = {1.0f / n, -1.0f / n};
+        float result = elem + factors.x;
+        if (replace) {
+          float elem = 2.0f;
+          result += elem;
+        }
+        return result + elem;
+      }
+    };
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert output.count("/ self.n") == 2
+    assert "float result = self.elem + factors.x;" in output
+    assert "float elem = 2.0f;" in output
+    assert "result += elem;" in output
+    assert "return result + self.elem;" in output
+
+
+def test_preprocessor_promoted_member_qualification_respects_shadow_scope():
+    code = """
+    struct Reader {
+      const device float* input;
+      float elem;
+
+      Reader(const device float* input_, float elem_)
+          : input(input_), elem(elem_) {}
+
+      float read(bool replace) const {
+        float result = elem + input[0];
+        if (replace) {
+          float elem = 2.0f;
+          result += elem;
+        }
+        return result + elem;
+      }
+    };
+
+    kernel void run(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      Reader reader(input, 1.0f);
+      output[0] = reader.read(true);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float result = self.elem + crosstl_ptr_input[0];" in output
+    assert "float elem = 2.0f;" in output
+    assert "result += elem;" in output
+    assert "return result + self.elem;" in output
+
+
 def test_preprocessor_lowering_is_noop_without_struct_methods():
     # Regression-safety: a struct with no member functions (and the surrounding
     # kernel) must be byte-identical after the lowering pass.

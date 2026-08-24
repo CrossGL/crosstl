@@ -14369,6 +14369,46 @@ def test_plain_metal_helper_materialization_deduces_threadgroup_array_decay():
     assert "gemm_loop_finalize_float_MatrixOp_TileLoader(" in materialized
 
 
+def test_plain_metal_helper_reuses_existing_concrete_signature():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <int Width>
+        void radix(thread float* values) {
+          values[0] += Width;
+        }
+
+        void radix_2(thread float* values) {
+          values[0] += 2;
+        }
+
+        [[kernel]] void launch(device float* output [[buffer(0)]]) {
+          radix<2>(output);
+        }
+        """)
+    preprocessor = MetalPreprocessor()
+    known_materializations = project_pipeline._metal_concrete_function_materializations(
+        preprocessor,
+        source,
+        {("radix", ("2",)): "radix_2"},
+    )
+
+    materialized, records, _completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            preprocessor,
+            source,
+            known_materializations=known_materializations,
+        )
+    )
+
+    assert "radix_2(output)" in materialized
+    assert materialized.count("void radix_2(") == 1
+    assert records == []
+    assert materialized_names == {
+        ("radix", ("2",), ("thread float*",)): "radix_2"
+    }
+
+
 def test_plain_metal_helper_materialization_recovers_commented_function_boundary():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
@@ -16831,6 +16871,41 @@ def test_metal_concrete_alias_inlining_preserves_struct_scoped_aliases():
     assert "typedef metal::vec<float, 2> frag_type;" in output
     assert "using Scalar" not in output
     assert "float value = 1.0f;" in output
+
+
+def test_metal_concrete_alias_inlining_preserves_underscored_values():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        void consume() {
+            using Scalar = float;
+            constexpr int Width = 4;
+            int r_Width = 0;
+
+            struct Fragment_Scalar_Width {
+                Scalar value;
+            };
+
+            Fragment_Scalar_Width fragment;
+            {
+                r_Width += Width;
+            }
+        }
+        """)
+
+    output = project_pipeline._inline_metal_concrete_using_template_aliases(
+        MetalPreprocessor(),
+        source,
+        [],
+    )
+
+    assert "using Scalar" not in output
+    assert "struct Fragment_float_4" in output
+    assert "float value;" in output
+    assert "Fragment_float_4 fragment;" in output
+    assert "int r_Width = 0;" in output
+    assert "r_Width += Width;" in output
+    assert "r_4" not in output
 
 
 def test_metal_template_alias_canonicalization_preserves_lexical_lookup():

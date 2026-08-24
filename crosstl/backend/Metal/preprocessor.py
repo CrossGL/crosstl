@@ -8892,7 +8892,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 body,
             )
         shadowed = set(method.parameter_names)
-        shadowed.update(self._local_variable_names(body))
         pointer_name_set = set(pointer_member_names)
         mapping: Dict[str, str] = {}
         for name in struct.data_member_names:
@@ -8904,10 +8903,18 @@ class MetalPreprocessor(HLSLPreprocessor):
                 mapping[name] = f"self.{name}"
         if not mapping:
             return body
-        return self._substitute_bare_member_references(body, mapping)
+        return self._substitute_bare_member_references(
+            body,
+            mapping,
+            local_shadows=self._local_variable_shadow_scopes(body),
+        )
 
     def _substitute_bare_member_references(
-        self, body: str, mapping: Dict[str, str]
+        self,
+        body: str,
+        mapping: Dict[str, str],
+        *,
+        local_shadows: Optional[Dict[str, List[Tuple[int, int, int]]]] = None,
     ) -> str:
         # Walk identifiers and replace bare member references per `mapping`, while
         # leaving member accesses on OTHER objects (`obj.x`, `obj->x`), already
@@ -8944,6 +8951,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                 replacement = mapping.get(ident)
                 if (
                     replacement is not None
+                    and not any(
+                        declaration_position <= i
+                        and scope_start <= i < scope_end
+                        for declaration_position, scope_start, scope_end in (
+                            (local_shadows or {}).get(ident, ())
+                        )
+                    )
                     and not self._is_member_identifier_context(body, i)
                     and not self._identifier_is_declaration_or_call(
                         body, i, i + consumed
@@ -8978,13 +8992,21 @@ class MetalPreprocessor(HLSLPreprocessor):
             return body
 
         shadowed = set(method.parameter_names)
-        shadowed.update(self._local_variable_names(body))
         members = struct.data_member_names - shadowed
         if not members:
             return body
-        return self._qualify_member_references(body, members)
+        return self._qualify_member_references(
+            body,
+            members,
+            self._local_variable_shadow_scopes(body),
+        )
 
-    def _qualify_member_references(self, body: str, members: Set[str]) -> str:
+    def _qualify_member_references(
+        self,
+        body: str,
+        members: Set[str],
+        local_shadows: Optional[Dict[str, List[Tuple[int, int, int]]]] = None,
+    ) -> str:
         # Walk identifiers and prefix bare member references with `self.`, while
         # leaving member accesses on OTHER objects (`obj.x`, `obj->x`) and
         # already-qualified `self.x` untouched.
@@ -9018,6 +9040,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                 ident, consumed = self._read_identifier(body, i)
                 if (
                     ident in members
+                    and not any(
+                        declaration_position <= i
+                        and scope_start <= i < scope_end
+                        for declaration_position, scope_start, scope_end in (
+                            (local_shadows or {}).get(ident, ())
+                        )
+                    )
                     and not self._is_member_identifier_context(body, i)
                     and not self._identifier_is_declaration_or_call(
                         body, i, i + consumed
@@ -9031,6 +9060,47 @@ class MetalPreprocessor(HLSLPreprocessor):
             result.append(ch)
             i += 1
         return "".join(result)
+
+    def _local_variable_shadow_scopes(
+        self,
+        body: str,
+    ) -> Dict[str, List[Tuple[int, int, int]]]:
+        shadows: Dict[str, List[Tuple[int, int, int]]] = {}
+        lexical_scopes = self._find_lexical_brace_scopes(body)
+        search_start = 0
+        for statement in self._iter_simple_declarations(body):
+            statement_start = body.find(statement, search_start)
+            if statement_start == -1:
+                continue
+            search_start = statement_start + len(statement)
+            name = self._declared_local_name(statement)
+            if name is None:
+                continue
+
+            leading = len(statement) - len(statement.lstrip())
+            declarator = self._strip_top_level_default_value(statement[leading:])
+            paren = self._function_parameter_start(declarator)
+            if paren is not None:
+                declarator = declarator[:paren].rstrip()
+            while declarator.endswith("]"):
+                open_bracket = declarator.rfind("[")
+                if open_bracket == -1:
+                    break
+                declarator = declarator[:open_bracket].rstrip()
+            name_match = re.search(rf"\b{re.escape(name)}\s*$", declarator)
+            if name_match is None:
+                continue
+
+            declaration_position = statement_start + leading + name_match.start()
+            scope_start, scope_end = self._innermost_lexical_scope(
+                lexical_scopes,
+                declaration_position,
+                len(body),
+            )
+            shadows.setdefault(name, []).append(
+                (declaration_position, scope_start, scope_end)
+            )
+        return shadows
 
     def _identifier_is_declaration_or_call(
         self, body: str, start: int, end: int
@@ -9099,6 +9169,15 @@ class MetalPreprocessor(HLSLPreprocessor):
                 paren_depth = max(0, paren_depth - 1)
                 i += 1
                 continue
+            if paren_depth == 0 and ch == "{":
+                _declarator, initializer = self._split_top_level_assignment(
+                    body[segment_start:i]
+                )
+                if initializer is not None:
+                    close = self._find_matching_delimiter(body, i, "{", "}")
+                    if close is not None:
+                        i = close + 1
+                        continue
             if paren_depth == 0 and ch in ";{}":
                 statements.append(body[segment_start:i])
                 i += 1

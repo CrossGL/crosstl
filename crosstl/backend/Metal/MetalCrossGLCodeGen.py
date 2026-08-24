@@ -10724,6 +10724,23 @@ class MetalToCrossGLConverter:
             None,
         )
         if helper_prefix is None:
+            shortened_prefixes = [
+                helper_name[: match.start()]
+                for match in re.finditer(r"__", helper_name)
+                if match.start()
+            ]
+            helper_prefix = next(
+                (
+                    candidate
+                    for candidate in reversed(shortened_prefixes)
+                    if any(
+                        concrete.startswith(f"{candidate}_")
+                        for concrete in prefixes
+                    )
+                ),
+                None,
+            )
+        if helper_prefix is None:
             return None
         return {
             "owner": owner,
@@ -10970,7 +10987,8 @@ class MetalToCrossGLConverter:
         arguments.extend(
             self.generate_expression(argument, is_main) for argument in expression.args
         )
-        return f"{self.sanitize_identifier(selected.name)}({', '.join(arguments)})"
+        function_name = self.sanitize_identifier(self.function_output_name(selected))
+        return f"{function_name}({', '.join(arguments)})"
 
     def map_function_call_name(self, name, args=None):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
