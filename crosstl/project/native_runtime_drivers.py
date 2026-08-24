@@ -3181,6 +3181,8 @@ def _directx_buffer_stride(
     metadata = {**dict(resource.metadata), **dict(binding.metadata)}
     type_name = str(resource.type_name or "").strip()
     normalized_type = re.sub(r"\s+", "", type_name).lower()
+    if namespace == "cbv":
+        return 0
     if namespace != "cbv" and (
         "byteaddressbuffer" in normalized_type
         or ("buffer<" in normalized_type and "structuredbuffer<" not in normalized_type)
@@ -3206,9 +3208,7 @@ def _directx_buffer_stride(
             resource=binding.name,
         )
     else:
-        if namespace == "cbv":
-            stride = 0
-        elif "structuredbuffer" in normalized_type:
+        if "structuredbuffer" in normalized_type:
             match = re.search(r"structuredbuffer<([^>]+)>", normalized_type)
             element_type = match.group(1) if match else ""
             stride = _directx_hlsl_element_stride(element_type)

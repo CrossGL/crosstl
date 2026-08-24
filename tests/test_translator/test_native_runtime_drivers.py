@@ -1398,12 +1398,17 @@ def test_prepare_directx_buffers_packs_reflected_vector_layouts():
                 set=0,
                 binding=0,
                 access="read",
-                metadata={"scalarLayout": dispatch_layout},
+                metadata={"scalarLayout": dispatch_layout, "byteStride": 12},
             ),
             value=[2, 3, 4],
             source="input",
             dtype="uint32",
             shape=(3,),
+            allocation=RuntimeAllocationView(
+                allocation_id="binding:0:0:-:dispatch_info",
+                byte_length=16,
+                allocation_byte_length=16,
+            ),
         ),
         "values": NativeRuntimeBufferBinding(
             name="values",
@@ -1444,6 +1449,7 @@ def test_prepare_directx_buffers_packs_reflected_vector_layouts():
     ]
     assert prepared[0].payload == struct.pack("<3I", 2, 3, 4)
     assert prepared[0].allocation_size == 256
+    assert prepared[0].byte_length == 16
     assert prepared[1].payload == struct.pack("<4f", 1.0, 2.0, 3.0, 4.0)
     assert prepared[1].allocation_size == 16
 
