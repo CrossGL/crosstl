@@ -137,9 +137,7 @@ def _selector(
     return value
 
 
-def _bound(
-    record: Mapping[str, Any], primary: str, alias: str, field_name: str
-) -> int:
+def _bound(record: Mapping[str, Any], primary: str, alias: str, field_name: str) -> int:
     if primary in record and alias in record:
         raise ValueError(f"{field_name} must not define both {primary} and {alias}")
     if primary not in record and alias not in record:

@@ -14404,9 +14404,7 @@ def test_plain_metal_helper_reuses_existing_concrete_signature():
     assert "radix_2(output)" in materialized
     assert materialized.count("void radix_2(") == 1
     assert records == []
-    assert materialized_names == {
-        ("radix", ("2",), ("thread float*",)): "radix_2"
-    }
+    assert materialized_names == {("radix", ("2",), ("thread float*",)): "radix_2"}
 
 
 def test_plain_metal_helper_materialization_recovers_commented_function_boundary():

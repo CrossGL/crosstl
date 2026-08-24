@@ -8952,11 +8952,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if (
                     replacement is not None
                     and not any(
-                        declaration_position <= i
-                        and scope_start <= i < scope_end
+                        declaration_position <= i and scope_start <= i < scope_end
                         for declaration_position, scope_start, scope_end in (
-                            (local_shadows or {}).get(ident, ())
-                        )
+                            local_shadows or {}
+                        ).get(ident, ())
                     )
                     and not self._is_member_identifier_context(body, i)
                     and not self._identifier_is_declaration_or_call(
@@ -9041,11 +9040,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if (
                     ident in members
                     and not any(
-                        declaration_position <= i
-                        and scope_start <= i < scope_end
+                        declaration_position <= i and scope_start <= i < scope_end
                         for declaration_position, scope_start, scope_end in (
-                            (local_shadows or {}).get(ident, ())
-                        )
+                            local_shadows or {}
+                        ).get(ident, ())
                     )
                     and not self._is_member_identifier_context(body, i)
                     and not self._identifier_is_declaration_or_call(

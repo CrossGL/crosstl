@@ -16033,9 +16033,7 @@ def _metal_concrete_function_materializations(
             for type_text, _name, _variadic in declarations
         )
         for template_name, arguments in specialization_keys:
-            signatures[(template_name, tuple(arguments), signature_key)] = (
-                function.name
-            )
+            signatures[(template_name, tuple(arguments), signature_key)] = function.name
     return signatures
 
 

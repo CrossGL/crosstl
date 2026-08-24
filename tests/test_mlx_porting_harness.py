@@ -5971,9 +5971,7 @@ void main() {
             "missingCapabilityCounts": {},
         },
         "project": {
-            "indexRangeAssertionCount": len(
-                module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS
-            ),
+            "indexRangeAssertionCount": len(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
             "indexRangeAssertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
             "workgroupAccessAssertionCount": len(
                 module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
@@ -9910,7 +9908,9 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     monkeypatch.setattr(
         module,
         "_check_fft_opengl_toolchain",
-        lambda *args, **kwargs: pytest.fail("OpenGL FFT toolchain proof should not run"),
+        lambda *args, **kwargs: pytest.fail(
+            "OpenGL FFT toolchain proof should not run"
+        ),
     )
 
     result = module.run_checks(

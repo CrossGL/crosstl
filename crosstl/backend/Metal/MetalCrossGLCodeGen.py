@@ -10734,8 +10734,7 @@ class MetalToCrossGLConverter:
                     candidate
                     for candidate in reversed(shortened_prefixes)
                     if any(
-                        concrete.startswith(f"{candidate}_")
-                        for concrete in prefixes
+                        concrete.startswith(f"{candidate}_") for concrete in prefixes
                     )
                 ),
                 None,

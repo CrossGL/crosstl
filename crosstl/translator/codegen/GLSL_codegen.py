@@ -4277,8 +4277,8 @@ class GLSLCodeGen:
         """Render an AST to GLSL, optionally filtering stage entry points."""
         ast = self.with_glsl_builtin_option_prelude(ast)
         target_stage = normalize_stage_name(target_stage)
-        self.glsl_stage_reachable_function_names = (
-            self.stage_reachable_function_names(ast, target_stage)
+        self.glsl_stage_reachable_function_names = self.stage_reachable_function_names(
+            ast, target_stage
         )
         self.global_type_aliases = self.collect_glsl_type_aliases(ast)
         self.current_type_aliases = dict(self.global_type_aliases)

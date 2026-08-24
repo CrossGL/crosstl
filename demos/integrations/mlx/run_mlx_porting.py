@@ -6410,8 +6410,7 @@ def _check_fft_opengl_toolchain(
         == list(FFT_OPENGL_INDEX_RANGE_ASSERTIONS)
         and project.get("workgroupAccessAssertionCount")
         == len(FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS)
-        and project.get("workgroupAccessAssertions")
-        == expected_workgroup_assertions,
+        and project.get("workgroupAccessAssertions") == expected_workgroup_assertions,
         "OpenGL FFT portability preconditions changed",
     )
 
