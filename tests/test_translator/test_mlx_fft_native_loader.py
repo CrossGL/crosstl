@@ -27,9 +27,7 @@ from crosstl.project import (
 
 MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 MLX_FFT_SOURCE = "mlx/backend/metal/kernels/fft.metal"
-MLX_FFT_SHA256 = (
-    "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825"
-)
+MLX_FFT_SHA256 = "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825"
 MLX_FFT_ENTRY = "fft_mem_256_float2_float2"
 MLX_FFT_GENERATED_SHA256 = (
     "07f9300c2e4860077b344610fbfaa2eadb330e1f9723cb519794f91272bd2289"
@@ -275,9 +273,7 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     report_path = work_dir / "portability-report.json"
     report.write_json(report_path)
     runtime_artifacts = build_runtime_artifact_manifest(report_path)
-    assert runtime_artifacts["success"] is True, json.dumps(
-        runtime_artifacts, indent=2
-    )
+    assert runtime_artifacts["success"] is True, json.dumps(runtime_artifacts, indent=2)
     reflected = runtime_artifacts["artifacts"][0]
     resources = reflected["hostInterface"]["resources"]
     assert {resource["name"]: resource["scalarLayout"] for resource in resources} == (
@@ -312,12 +308,9 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
         loader_manifest,
         load_unit_id=load_unit["id"],
     )
-    assert descriptor["entryPoint"]["executionConfig"] == {
-        "numthreads": [1, 1, 64]
-    }
+    assert descriptor["entryPoint"]["executionConfig"] == {"numthreads": [1, 1, 64]}
     assert {
-        binding["name"]: binding["scalarLayout"]
-        for binding in descriptor["bindings"]
+        binding["name"]: binding["scalarLayout"] for binding in descriptor["bindings"]
     } == _expected_layouts()
     descriptor_dispatch_info = next(
         binding
@@ -385,6 +378,16 @@ def test_pinned_mlx_fft_executes_through_directx_native_loader():
         assert request.execution_plan.dispatch.workgroup_size == (1, 1, 64)
         assert request.execution_plan.dispatch.workgroup_count == (1, 1, 1)
         assert request.execution_plan.dispatch.global_size == (1, 1, 64)
+        allocations = {
+            item.binding.name: item.allocation
+            for item in request.execution_plan.resource_bindings
+        }
+        assert allocations["in_"].byte_length == MLX_FFT_SIZE * 8
+        assert allocations["in_"].allocation_byte_length == MLX_FFT_SIZE * 8
+        assert allocations["out_"].byte_length == MLX_FFT_SIZE * 8
+        assert allocations["out_"].allocation_byte_length == MLX_FFT_SIZE * 8
+        assert allocations["CrossGLDispatchInfo"].byte_length == 16
+        assert allocations["CrossGLDispatchInfo"].allocation_byte_length == 16
         fixture_inputs = {value.name: value for value in request.fixture.inputs}
         assert fixture_inputs["CrossGLDispatchInfo"].values == [1, 1, 1]
         assert fixture_inputs["CrossGLDispatchInfo"].metadata["source"] == (

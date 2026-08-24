@@ -330,6 +330,14 @@ def test_builds_directx_vector_resource_request(tmp_path):
         vector_layout,
         vector_layout,
     ]
+    allocations = {
+        item.binding.name: item.allocation
+        for item in request.execution_plan.resource_bindings
+    }
+    assert allocations["input_values"].byte_length == 32
+    assert allocations["input_values"].allocation_byte_length == 32
+    assert allocations["output_values"].byte_length == 32
+    assert allocations["output_values"].allocation_byte_length == 32
 
 
 def test_builds_directx_vector_constant_buffer_request(tmp_path):
@@ -373,6 +381,9 @@ def test_builds_directx_vector_constant_buffer_request(tmp_path):
     assert binding.kind == "constant-buffer"
     assert binding.metadata["byteStride"] == 12
     assert binding.metadata["scalarLayout"] == vector_layout
+    allocation = request.execution_plan.resource_bindings[0].allocation
+    assert allocation.byte_length == 16
+    assert allocation.allocation_byte_length == 16
 
 
 def test_derives_directx_dispatch_info_from_workgroup_counts(tmp_path):
