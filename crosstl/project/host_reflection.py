@@ -418,14 +418,18 @@ HLSL_CONSTANT_RE = re.compile(
     r"(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<value>[^;]+);",
     re.IGNORECASE,
 )
-HLSL_SCALAR_BLOCK_MEMBER_RE = re.compile(
-    r"\A\s*(?P<type>float|int|uint)\s+(?P<name>[A-Za-z_]\w*)\s*;\s*\Z",
+HLSL_VALUE_BLOCK_MEMBER_RE = re.compile(
+    r"\A\s*(?P<type>(?P<base>float|int|uint)(?P<width>[1-4])?)\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*;\s*\Z",
     re.IGNORECASE,
 )
-HLSL_STRUCTURED_SCALAR_RE = re.compile(
-    r"\A(?:RW)?StructuredBuffer\s*<\s*(?P<type>float|int|uint)\s*>\Z",
+HLSL_STRUCTURED_VALUE_RE = re.compile(
+    r"\A(?:RW)?StructuredBuffer\s*<\s*"
+    r"(?P<type>(?P<base>float|int|uint)(?P<width>[1-4])?)\s*>\Z",
     re.IGNORECASE,
 )
+HLSL_DISPATCH_INFO_BUFFER_RE = re.compile(r"\ACrossGLDispatchInfo_*\Z")
+HLSL_DISPATCH_INFO_MEMBER_RE = re.compile(r"\AcrossglNumWorkGroups_*\Z")
 
 SCALAR_PHYSICAL_TYPES = {
     "float": "float32",
@@ -707,9 +711,17 @@ def _reflect_hlsl_source(
             "access": "read",
         }
         body = _braced_body(source, match.end() - 1)
-        scalar_layout = _hlsl_scalar_block_layout(match.group("kind"), body)
+        scalar_layout = _hlsl_value_block_layout(match.group("kind"), body)
         if scalar_layout is not None:
             resource["scalarLayout"] = scalar_layout
+            execution_input = _hlsl_execution_input_contract(
+                match.group("name"), scalar_layout
+            )
+            if execution_input is not None:
+                resource["provenance"] = {
+                    "kind": "generated-execution-input",
+                    "executionInput": execution_input,
+                }
         resources.append(resource)
     for match in HLSL_RESOURCE_RE.finditer(source):
         type_name = " ".join(match.group("type").split())
@@ -722,7 +734,7 @@ def _reflect_hlsl_source(
             "binding": binding,
             "access": _hlsl_resource_access(type_name),
         }
-        scalar_layout = _hlsl_structured_scalar_layout(type_name)
+        scalar_layout = _hlsl_structured_value_layout(type_name)
         if scalar_layout is not None:
             resource["scalarLayout"] = scalar_layout
         resources.append(resource)
@@ -798,16 +810,17 @@ def _braced_body(source: str, opening_brace: int) -> str | None:
     return None
 
 
-def _hlsl_scalar_block_layout(
+def _hlsl_value_block_layout(
     block_kind: str, body: str | None
 ) -> dict[str, Any] | None:
     if block_kind.lower() != "cbuffer" or body is None:
         return None
-    match = HLSL_SCALAR_BLOCK_MEMBER_RE.fullmatch(body)
+    match = HLSL_VALUE_BLOCK_MEMBER_RE.fullmatch(body)
     if match is None:
         return None
-    return _scalar_physical_layout(
-        match.group("type"),
+    return _physical_value_layout(
+        match.group("base"),
+        vector_width=int(match.group("width") or 1),
         member_name=match.group("name"),
         storage_layout="hlsl-constant-buffer",
         alignment_bytes=16,
@@ -816,16 +829,39 @@ def _hlsl_scalar_block_layout(
     )
 
 
-def _hlsl_structured_scalar_layout(type_name: str) -> dict[str, Any] | None:
-    match = HLSL_STRUCTURED_SCALAR_RE.fullmatch(type_name)
+def _hlsl_structured_value_layout(type_name: str) -> dict[str, Any] | None:
+    match = HLSL_STRUCTURED_VALUE_RE.fullmatch(type_name)
     if match is None:
         return None
-    return _scalar_physical_layout(
-        match.group("type"),
+    return _physical_value_layout(
+        match.group("base"),
+        vector_width=int(match.group("width") or 1),
         storage_layout="hlsl-structured-buffer",
         alignment_bytes=4,
         runtime_sized=True,
     )
+
+
+def _hlsl_execution_input_contract(
+    buffer_name: str, layout: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    member_name = layout.get("memberName")
+    if (
+        HLSL_DISPATCH_INFO_BUFFER_RE.fullmatch(buffer_name) is None
+        or not isinstance(member_name, str)
+        or HLSL_DISPATCH_INFO_MEMBER_RE.fullmatch(member_name) is None
+        or layout.get("physicalType") != "uint3"
+        or layout.get("vectorWidth") != 3
+        or layout.get("storageLayout") != "hlsl-constant-buffer"
+    ):
+        return None
+    return {
+        "kind": "dispatch-workgroup-count",
+        "valueSource": "dispatch.workgroupCount",
+        "coordinateSpace": "physical",
+        "dimensions": 3,
+        "memberName": member_name,
+    }
 
 
 GLSL_LAYOUT_RE = re.compile(r"layout\s*\((?P<layout>[^)]*)\)\s*", re.IGNORECASE)
@@ -1046,7 +1082,7 @@ def _glsl_scalar_block_layout(
     if storage == "uniform":
         if runtime_sized or "std140" not in qualifiers:
             return None
-        return _scalar_physical_layout(
+        return _physical_value_layout(
             match.group("type"),
             member_name=match.group("name"),
             storage_layout="std140",
@@ -1056,7 +1092,7 @@ def _glsl_scalar_block_layout(
         )
     if not runtime_sized or "std430" not in qualifiers:
         return None
-    return _scalar_physical_layout(
+    return _physical_value_layout(
         match.group("type"),
         member_name=match.group("name"),
         storage_layout="std430",
@@ -1065,9 +1101,10 @@ def _glsl_scalar_block_layout(
     )
 
 
-def _scalar_physical_layout(
+def _physical_value_layout(
     physical_type: str,
     *,
+    vector_width: int = 1,
     storage_layout: str,
     alignment_bytes: int,
     runtime_sized: bool,
@@ -1075,16 +1112,21 @@ def _scalar_physical_layout(
     block_size_bytes: int | None = None,
 ) -> dict[str, Any]:
     normalized_type = physical_type.lower()
+    element_size_bytes = 4 * vector_width
     layout: dict[str, Any] = {
-        "physicalType": normalized_type,
+        "physicalType": (
+            normalized_type if vector_width == 1 else f"{normalized_type}{vector_width}"
+        ),
         "elementType": SCALAR_PHYSICAL_TYPES[normalized_type],
-        "elementSizeBytes": 4,
-        "elementStrideBytes": 4,
+        "elementSizeBytes": element_size_bytes,
+        "elementStrideBytes": element_size_bytes,
         "alignmentBytes": alignment_bytes,
         "memberOffsetBytes": 0,
         "storageLayout": storage_layout,
         "runtimeSized": runtime_sized,
     }
+    if vector_width != 1:
+        layout["vectorWidth"] = vector_width
     if member_name is not None:
         layout["memberName"] = member_name
     if block_size_bytes is not None:

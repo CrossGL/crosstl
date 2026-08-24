@@ -215,15 +215,68 @@ def test_glsl_reflection_records_exact_mlx_scalar_block_layouts(tmp_path):
     assert by_name["arangeuint32_step_Args"]["scalarLayout"]["memberName"] == "step"
 
 
+def test_hlsl_reflection_records_exact_vector_resource_layouts(tmp_path):
+    reflection = _reflect_hlsl(
+        tmp_path,
+        """
+        StructuredBuffer<float2> in_ : register(t0);
+        RWStructuredBuffer<float2> out_ : register(u1);
+        cbuffer CrossGLDispatchInfo : register(b4) {
+            uint3 crossglNumWorkGroups;
+        };
+        [numthreads(1, 1, 64)] void CSMain() {}
+        """,
+    )
+
+    by_name = {resource["name"]: resource for resource in reflection["resources"]}
+    vector_buffer_layout = {
+        "physicalType": "float2",
+        "elementType": "float32",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 4,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer",
+        "runtimeSized": True,
+        "vectorWidth": 2,
+    }
+    assert by_name["in_"]["scalarLayout"] == vector_buffer_layout
+    assert by_name["out_"]["scalarLayout"] == vector_buffer_layout
+    assert by_name["CrossGLDispatchInfo"]["scalarLayout"] == {
+        "physicalType": "uint3",
+        "elementType": "uint32",
+        "elementSizeBytes": 12,
+        "elementStrideBytes": 12,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-constant-buffer",
+        "runtimeSized": False,
+        "vectorWidth": 3,
+        "memberName": "crossglNumWorkGroups",
+        "blockSizeBytes": 16,
+    }
+    assert by_name["CrossGLDispatchInfo"]["provenance"] == {
+        "kind": "generated-execution-input",
+        "executionInput": {
+            "kind": "dispatch-workgroup-count",
+            "valueSource": "dispatch.workgroupCount",
+            "coordinateSpace": "physical",
+            "dimensions": 3,
+            "memberName": "crossglNumWorkGroups",
+        },
+    }
+
+
 def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts(tmp_path):
     hlsl = _reflect_hlsl(
         tmp_path,
         """
+        struct Pair { uint first; uint second; };
         cbuffer Multiple : register(b0) {
             uint first;
             uint second;
         };
-        RWStructuredBuffer<uint2> vectors : register(u0);
+        RWStructuredBuffer<Pair> pairs : register(u0);
         ByteAddressBuffer bytes : register(t0);
         [numthreads(1, 1, 1)] void CSMain() {}
         """,
