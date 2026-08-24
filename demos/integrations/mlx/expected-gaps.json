@@ -297,6 +297,98 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
+  "copy_native_runtime_status": {
+    "status": "translated-packaged-and-native-executed",
+    "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+    "source": "mlx/backend/metal/kernels/copy.metal",
+    "source_sha256": "ed8a579eb6fe6a14c36560d2c8b548baf99e66fa77d300fb4ad7554883820eba",
+    "selected_entry_point": "v_copyfloat32float32",
+    "template_materialization": {
+      "template": "copy_v",
+      "arguments": {
+        "N": "1",
+        "T": "float",
+        "U": "float"
+      },
+      "reachable_specialization_count": 1,
+      "dependency_discovery_work_count": 0,
+      "pruned_candidate_count": 69915
+    },
+    "artifacts": {
+      "directx": {
+        "target_entry_point": "CSMain",
+        "sha256": "5dcd4bee2b0075ab1bcd61f632b2d76a99a4c0978f6dae84a12c3f972c492a3f",
+        "size_bytes": 1020,
+        "workgroup_size": [
+          1,
+          1,
+          1
+        ],
+        "resource_layouts": {
+          "input_storage": "hlsl-structured-buffer",
+          "output_storage": "hlsl-structured-buffer",
+          "element_type": "float32",
+          "element_stride_bytes": 4,
+          "constant_storage": "hlsl-constant-buffer",
+          "constant_block_size_bytes": 16
+        },
+        "native_runtime": {
+          "platform": "windows-latest",
+          "runtime": "direct3d-12-warp",
+          "status": "required-on-ci",
+          "test": "tests/test_translator/test_mlx_copy_native_loader.py::test_pinned_mlx_copy_executes_through_directx_native_loader"
+        }
+      },
+      "opengl": {
+        "target_entry_point": "main",
+        "sha256": "e91b07ca10b84de624b126420b6cd216a569b639488f40b7afe2527955e226d1",
+        "size_bytes": 1434,
+        "workgroup_size": [
+          1,
+          1,
+          1
+        ],
+        "resource_layouts": {
+          "input_storage": "std430",
+          "output_storage": "std430",
+          "element_type": "float32",
+          "element_stride_bytes": 4,
+          "constant_storage": "std140",
+          "constant_block_size_bytes": 16
+        },
+        "native_runtime": {
+          "platform": "ubuntu-latest",
+          "runtime": "headless-egl-software",
+          "status": "required-on-ci",
+          "test": "tests/test_translator/test_mlx_copy_native_loader.py::test_pinned_mlx_copy_executes_through_opengl_native_loader"
+        }
+      }
+    },
+    "workload": {
+      "dtype": "float32",
+      "shape": [
+        8
+      ],
+      "dispatch_workgroup_count": [
+        8,
+        1,
+        1
+      ],
+      "expected_output": "exact-input-copy",
+      "output_element_count": 8
+    },
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": true,
+    "selected_workload_numerical_parity_verified": true,
+    "full_mlx_test_suite_included": false,
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false,
+    "remaining_aggregate_layout_scope": {
+      "entry_point": "s_copycomplex64float32",
+      "input_type": "complex64_t",
+      "tracked_by": "https://github.com/CrossGL/crosstl/issues/1543"
+    }
+  },
   "directx_fft_translation_status": {
     "status": "translated-dxc-validated-direct3d-executed",
     "source": "mlx/backend/metal/kernels/fft.metal",
@@ -982,8 +1074,7 @@
     "complete_runtime_coverage_claimed": false,
     "full_mlx_test_suite_included": false,
     "runtime_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1462",
-      "https://github.com/CrossGL/crosstl/issues/1735"
+      "https://github.com/CrossGL/crosstl/issues/1795"
     ]
   },
   "pointer_reinterpretation_status": {
@@ -2885,6 +2976,7 @@
     "https://github.com/CrossGL/crosstl/issues/1696",
     "https://github.com/CrossGL/crosstl/issues/1735",
     "https://github.com/CrossGL/crosstl/issues/1786",
+    "https://github.com/CrossGL/crosstl/issues/1795",
     "https://github.com/CrossGL/crosstl/issues/1894",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1462",

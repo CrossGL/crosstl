@@ -9918,6 +9918,102 @@ def test_full_corpus_checkpoint_probe_records_verified_resume_coordinate():
     }
 
 
+def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["copy_native_runtime_status"]
+    assert status["status"] == "translated-packaged-and-native-executed"
+    assert status["commit"] == "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+    assert status["source"] == "mlx/backend/metal/kernels/copy.metal"
+    assert status["source_sha256"] == (
+        "ed8a579eb6fe6a14c36560d2c8b548baf99e66fa77d300fb4ad7554883820eba"
+    )
+    assert status["selected_entry_point"] == "v_copyfloat32float32"
+    assert status["template_materialization"] == {
+        "template": "copy_v",
+        "arguments": {"N": "1", "T": "float", "U": "float"},
+        "reachable_specialization_count": 1,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 69915,
+    }
+    assert status["artifacts"]["directx"] == {
+        "target_entry_point": "CSMain",
+        "sha256": "5dcd4bee2b0075ab1bcd61f632b2d76a99a4c0978f6dae84a12c3f972c492a3f",
+        "size_bytes": 1020,
+        "workgroup_size": [1, 1, 1],
+        "resource_layouts": {
+            "input_storage": "hlsl-structured-buffer",
+            "output_storage": "hlsl-structured-buffer",
+            "element_type": "float32",
+            "element_stride_bytes": 4,
+            "constant_storage": "hlsl-constant-buffer",
+            "constant_block_size_bytes": 16,
+        },
+        "native_runtime": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_copy_native_loader.py::"
+                "test_pinned_mlx_copy_executes_through_directx_native_loader"
+            ),
+        },
+    }
+    assert status["artifacts"]["opengl"] == {
+        "target_entry_point": "main",
+        "sha256": "e91b07ca10b84de624b126420b6cd216a569b639488f40b7afe2527955e226d1",
+        "size_bytes": 1434,
+        "workgroup_size": [1, 1, 1],
+        "resource_layouts": {
+            "input_storage": "std430",
+            "output_storage": "std430",
+            "element_type": "float32",
+            "element_stride_bytes": 4,
+            "constant_storage": "std140",
+            "constant_block_size_bytes": 16,
+        },
+        "native_runtime": {
+            "platform": "ubuntu-latest",
+            "runtime": "headless-egl-software",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_copy_native_loader.py::"
+                "test_pinned_mlx_copy_executes_through_opengl_native_loader"
+            ),
+        },
+    }
+    assert status["workload"] == {
+        "dtype": "float32",
+        "shape": [8],
+        "dispatch_workgroup_count": [8, 1, 1],
+        "expected_output": "exact-input-copy",
+        "output_element_count": 8,
+    }
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+    assert status["remaining_aggregate_layout_scope"] == {
+        "entry_point": "s_copycomplex64float32",
+        "input_type": "complex64_t",
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1543",
+    }
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects `v_copyfloat32float32` from that same full source" in readme
+    assert "materializes only `copy_v<float, float, 1>`" in readme
+    assert "pruning 69,915 unreachable candidate pairs" in readme
+    assert "requires exact readback on both targets" in readme
+    assert "bounded execution evidence for one scalar copy entry" in readme
+    assert "does not cover the complex or bfloat16 entries" in readme
+
+
 def test_fft_directx_evidence_records_selected_native_runtime_proof():
     module = _load_harness()
     gaps = json.loads(

@@ -634,11 +634,12 @@ are currently absent from Metal round-trip artifacts.
 Native toolchain validation now runs on the target operating systems, completing
 the coverage tracked by CrossGL/crosstl#1312. The bounded Direct3D and OpenGL
 compute runtime drivers tracked by CrossGL/crosstl#1472 and
-CrossGL/crosstl#1516 are also complete. CrossGL/crosstl#1388 still tracks the
-artifact execution metadata required by runtime-test manifests and native
-adapters, and CrossGL/crosstl#1462 covers wiring those contracts to general
-device execution. OpenGL type aliases are inlined before host-interface
-reflection and are not exposed as runtime resources. CrossGL/crosstl#1471
+CrossGL/crosstl#1516 are also complete. Packaged artifacts can now be dispatched
+through the native-loader bridge; remaining source-specific execution gaps are
+recorded with the individual proofs below. CrossGL/crosstl#1388 still tracks the
+broader artifact execution metadata contract. OpenGL type aliases are inlined
+before host-interface reflection and are not exposed as runtime resources.
+CrossGL/crosstl#1471
 tracks entry-point ownership for reflected constants in runtime reports.
 CrossGL/crosstl#1474 is represented by exact per-artifact DirectX
 bfloat16 storage and conversion evidence in the pinned project report. The
@@ -870,6 +871,19 @@ warnings as errors. This proves selected-entry translation and native compiler
 acceptance; it does not execute the shader, establish numerical parity, port
 the MLX runtime dispatch path, or run the MLX test suite.
 
+A separate native-loader check selects `v_copyfloat32float32` from that same
+full source and materializes only `copy_v<float, float, 1>`, pruning 69,915
+unreachable candidate pairs. It packages one HLSL artifact and one GLSL
+artifact with exact reflected scalar buffer layouts, dispatches eight
+nonuniform float32 values through Direct3D 12 WARP on Windows and a headless
+OpenGL software context on Linux, and requires exact readback on both targets.
+The generated artifact hashes, byte counts, binding layouts, and 1-by-1-by-1
+workgroup sizes are fixed in the test. This is bounded execution evidence for
+one scalar copy entry. It does not cover the complex or bfloat16 entries,
+redirect the MLX host runtime, or run the MLX test suite. Aggregate input layout
+for `s_copycomplex64float32` remains part of the physical-resource contract
+tracked by [#1543](https://github.com/CrossGL/crosstl/issues/1543).
+
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32
 with axis size 4099 and VJP float32 with axis size 8192 and `has_w=true`. It
@@ -1046,10 +1060,11 @@ inflating the RMSNorm claim.
 
 This is translation and native compilation evidence only. It does not execute
 RMSNorm, establish numerical or runtime parity, claim complete runtime
-coverage, or claim support for the full MLX test suite. End-to-end device
-execution and host selection of packaged variants remain tracked by
-[CrossGL/crosstl#1462](https://github.com/CrossGL/crosstl/issues/1462) and
-[CrossGL/crosstl#1735](https://github.com/CrossGL/crosstl/issues/1735). The
+coverage, or claim support for the full MLX test suite. The runtime manifest
+currently restores the VJP-only `has_w` function constant onto a forward
+entry-scoped artifact, so native request construction fails closed rather than
+inventing a value. Entry-scoped specialization ownership for that path remains
+tracked by [#1795](https://github.com/CrossGL/crosstl/issues/1795). The
 translated MLX `arange.metal` Direct3D numerical proof remains a separate
 Windows CI check.
 
