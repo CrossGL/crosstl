@@ -3004,6 +3004,9 @@ class GLSLCodeGen:
         return names
 
     def entry_reachable_function_names(self, ast, entry_function):
+        return self.reachable_function_names(ast, [entry_function])
+
+    def reachable_function_names(self, ast, entry_functions):
         functions = list(getattr(ast, "functions", []) or [])
         for _stage_type, stage in getattr(ast, "stages", {}).items():
             functions.extend(getattr(stage, "local_functions", []) or [])
@@ -3014,7 +3017,7 @@ class GLSLCodeGen:
                 functions_by_name.setdefault(name, []).append(function)
 
         reachable_names = set()
-        pending = [entry_function]
+        pending = list(entry_functions)
         visited = set()
         while pending:
             function = pending.pop()
@@ -3022,9 +3025,11 @@ class GLSLCodeGen:
                 continue
             visited.add(id(function))
             for node in self.walk_ast(getattr(function, "body", [])):
-                if not isinstance(node, FunctionCallNode):
-                    continue
-                name = self.function_call_name(node)
+                name = None
+                if isinstance(node, FunctionCallNode):
+                    name = self.function_call_name(node)
+                elif isinstance(node, IdentifierNode):
+                    name = getattr(node, "name", None)
                 if not name or name in reachable_names:
                     continue
                 candidates = functions_by_name.get(name, ())
@@ -3033,6 +3038,19 @@ class GLSLCodeGen:
                 reachable_names.add(name)
                 pending.extend(candidates)
         return reachable_names
+
+    def stage_reachable_function_names(self, ast, target_stage=None):
+        entries = collect_stage_entry_records(
+            ast,
+            target_stage,
+            self.combined_stage_entry_types(),
+        )
+        if not entries:
+            return None
+        return self.reachable_function_names(
+            ast,
+            [function for _id, _stage, function in entries],
+        )
 
     def generate_stage(self, ast, shader_type):
         """Generate GLSL source for a single requested shader stage."""
@@ -4258,10 +4276,13 @@ class GLSLCodeGen:
     def generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
         ast = self.with_glsl_builtin_option_prelude(ast)
+        target_stage = normalize_stage_name(target_stage)
+        self.glsl_stage_reachable_function_names = (
+            self.stage_reachable_function_names(ast, target_stage)
+        )
         self.global_type_aliases = self.collect_glsl_type_aliases(ast)
         self.current_type_aliases = dict(self.global_type_aliases)
         self.glsl_builtin_option_available = self.glsl_ast_declares_type(ast, "Option")
-        target_stage = normalize_stage_name(target_stage)
         self.validate_stage_main_helper_conflict(ast, target_stage)
 
         self.sampler_variables = set()
@@ -5374,6 +5395,8 @@ class GLSLCodeGen:
                 continue
             if id(func) in deferred_top_level_helper_ids:
                 continue
+            if self.should_skip_unreachable_lowered_member_helper(func):
+                continue
             if self.should_skip_unresolved_top_level_helper(
                 func,
                 called_function_names,
@@ -5396,6 +5419,8 @@ class GLSLCodeGen:
             if self.should_elide_metal_simd_group_placeholder_function(func):
                 continue
             if id(func) in deferred_top_level_helper_ids:
+                continue
+            if self.should_skip_unreachable_lowered_member_helper(func):
                 continue
             if self.should_skip_unresolved_top_level_helper(
                 func,
@@ -5537,6 +5562,8 @@ class GLSLCodeGen:
                 for func in ordered_stage_helpers:
                     if self.should_elide_metal_simd_group_placeholder_function(func):
                         continue
+                    if self.should_skip_unreachable_lowered_member_helper(func):
+                        continue
                     if getattr(func, "body", []) is None:
                         continue
                     resource_specializations = (
@@ -5628,6 +5655,22 @@ class GLSLCodeGen:
             for node in self.walk_ast(root)
             if isinstance(node, FunctionCallNode) and self.function_call_name(node)
         }
+
+    def should_skip_unreachable_lowered_member_helper(self, func):
+        reachable_names = self.glsl_stage_reachable_function_names
+        if reachable_names is None:
+            return False
+
+        name = getattr(func, "name", None)
+        if not name or name in reachable_names or "__" not in name:
+            return False
+        if function_stage_name(func):
+            return False
+
+        parameters = list(
+            getattr(func, "parameters", getattr(func, "params", [])) or []
+        )
+        return bool(parameters and getattr(parameters[0], "name", None) == "self")
 
     def should_skip_unresolved_top_level_helper(self, func, called_function_names):
         if generic_function_parameters(func):
@@ -20407,6 +20450,7 @@ complex64_t crossgl_complex64_mod_assign(
             return generated
         if (
             narrow is None
+            and expected["width"] == 1
             and self.is_numeric_literal_expression(expr)
             and actual["family"] in {"int", "uint"}
             and expected["family"] in {"int", "uint", "float"}
