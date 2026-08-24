@@ -1,9 +1,11 @@
 """Preprocessor support for Metal source imports."""
 
 import ast
+import math
 import operator
 import os
 import re
+import struct as binary_struct
 from bisect import bisect_right
 from dataclasses import dataclass, field, replace
 from heapq import heappop, heappush
@@ -247,6 +249,36 @@ class MetalStaticAssertionError(ValueError):
         self.suggested_action = suggested_action
 
 
+class MetalTypeTraitError(ValueError):
+    """A concrete Metal type-trait value that cannot be evaluated safely."""
+
+    project_diagnostic_code = "project.translate.metal-type-trait-unresolved"
+    missing_capabilities = ("compile-time.type-trait-evaluation",)
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        trait: str,
+        expression: str,
+        operands: Tuple[str, ...],
+        resolved_operands: Tuple[str, ...],
+        reason: str,
+        owner: Optional[str],
+        source_location: object,
+        suggested_action: str,
+    ):
+        super().__init__(message)
+        self.trait = trait
+        self.expression = expression
+        self.operands = operands
+        self.resolved_operands = resolved_operands
+        self.reason = reason
+        self.owner = owner
+        self.source_location = source_location
+        self.suggested_action = suggested_action
+
+
 @dataclass
 class _MetalTemplateFunction:
     name: str
@@ -380,6 +412,32 @@ class _MetalConstexprFunction:
 
 
 @dataclass(frozen=True)
+class _MetalConstexprScalarValue:
+    type_name: str
+    value: Union[bool, int, float]
+
+
+@dataclass(frozen=True)
+class _MetalConstexprAggregateValue:
+    type_name: str
+    members: Tuple[Tuple[str, _MetalConstexprScalarValue], ...]
+
+    def member(self, name: str) -> Optional[_MetalConstexprScalarValue]:
+        return dict(self.members).get(name)
+
+
+@dataclass(frozen=True)
+class _MetalConstexprBinaryOperator:
+    operator: str
+    span: Tuple[int, int]
+    template_parameters: Tuple[str, ...]
+    return_type: str
+    parameter_names: Tuple[str, str]
+    parameter_types: Tuple[str, str]
+    return_expression: str
+
+
+@dataclass(frozen=True)
 class _MetalSubscriptableType:
     """Element type plus a proven address-space-qualified pointer type."""
 
@@ -465,6 +523,17 @@ class _MetalStructMethod:
     @property
     def is_template(self) -> bool:
         return bool(self.template_parameters)
+
+
+@dataclass(frozen=True)
+class _MetalExplicitMemberSpecialization:
+    """One exact out-of-line specialization of a template-owner member."""
+
+    owner_name: str
+    owner_qualified_name: str
+    owner_arguments: Tuple[str, ...]
+    method: _MetalStructMethod
+    span: Tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -2239,7 +2308,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         try:
             try:
                 return self._lower_struct_member_functions_impl(evaluated)
-            except MetalStructMethodError:
+            except (MetalStructMethodError, MetalTemplateSpecializationError):
                 raise
             except Exception:
                 return evaluated
@@ -2254,6 +2323,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             skip_spans=template_declaration_spans,
         )
         structs = self._find_concrete_struct_definitions(code)
+        self._apply_explicit_member_specializations(code, structs)
         self._reject_unresolved_temporary_functor_calls(
             code,
             {struct.name: struct for struct in structs},
@@ -2439,6 +2509,266 @@ class MetalPreprocessor(HLSLPreprocessor):
             if not rewritten.endswith("\n"):
                 rewritten += "\n"
         return self._canonicalize_qualified_struct_alias_templates(rewritten, structs)
+
+    def _apply_explicit_member_specializations(
+        self,
+        code: str,
+        structs: Sequence[_MetalStructDefinition],
+    ) -> None:
+        specializations = self._find_explicit_member_specializations(code)
+        if not specializations:
+            return
+
+        by_owner: Dict[
+            Tuple[str, Tuple[str, ...]],
+            List[_MetalExplicitMemberSpecialization],
+        ] = {}
+        seen: Dict[
+            Tuple[str, Tuple[str, ...], Tuple[object, ...]],
+            _MetalExplicitMemberSpecialization,
+        ] = {}
+        for specialization in specializations:
+            owner_key = self._struct_specialization_comparison_key(
+                specialization.owner_name,
+                list(specialization.owner_arguments),
+            )
+            method_key = self._explicit_member_method_contract(specialization.method)
+            duplicate_key = (*owner_key, method_key)
+            previous = seen.get(duplicate_key)
+            if previous is not None:
+                requested = self._explicit_member_specialization_signature(
+                    specialization
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal explicit member specialization is defined more than "
+                    f"once for '{requested}'.",
+                    requested_signature=requested,
+                    suggested_action=(
+                        "keep one exact explicit member specialization for each "
+                        "owner and method signature"
+                    ),
+                    source_location=self._source_location_for_offsets(
+                        code,
+                        specialization.span[0],
+                        specialization.span[1],
+                    ),
+                    owner_struct_name=specialization.owner_qualified_name,
+                    requested_arguments=specialization.owner_arguments,
+                )
+            seen[duplicate_key] = specialization
+            by_owner.setdefault(owner_key, []).append(specialization)
+
+        for struct in structs:
+            materialized_owner = self._materialized_struct_specializations.get(
+                struct.name
+            )
+            if materialized_owner is None:
+                continue
+            owner_name, owner_arguments = materialized_owner
+            owner_key = self._struct_specialization_comparison_key(
+                owner_name,
+                list(owner_arguments),
+            )
+            owner_specializations = by_owner.get(owner_key, ())
+            if not owner_specializations:
+                continue
+
+            methods = list(struct.methods)
+            for specialization in owner_specializations:
+                specialization_contract = self._explicit_member_method_contract(
+                    specialization.method
+                )
+                candidates = [
+                    (index, method)
+                    for index, method in enumerate(methods)
+                    if self._explicit_member_method_contract(method)
+                    == specialization_contract
+                ]
+                if len(candidates) != 1:
+                    continue
+                index, generic_method = candidates[0]
+                methods[index] = replace(
+                    specialization.method,
+                    free_name=generic_method.free_name,
+                    span=generic_method.span,
+                )
+            struct.methods = methods
+
+    def _find_explicit_member_specializations(
+        self,
+        code: str,
+    ) -> List[_MetalExplicitMemberSpecialization]:
+        specializations: List[_MetalExplicitMemberSpecialization] = []
+        ignored_spans = self._find_comment_and_literal_spans(code)
+        position = 0
+        pattern = re.compile(r"\btemplate\s*<\s*>\s*")
+        while True:
+            match = pattern.search(code, position)
+            if match is None:
+                break
+            ignored = self._containing_span(match.start(), ignored_spans)
+            if ignored is not None:
+                position = ignored[1]
+                continue
+
+            declaration_start = match.end()
+            body_start = self._find_next_top_level_char(
+                code,
+                declaration_start,
+                "{",
+            )
+            semicolon = self._find_next_top_level_char(
+                code,
+                declaration_start,
+                ";",
+            )
+            if body_start is None or (semicolon is not None and semicolon < body_start):
+                position = declaration_start
+                continue
+            body_end = self._find_matching_brace(code, body_start)
+            if body_end is None:
+                position = body_start + 1
+                continue
+
+            header = code[declaration_start:body_start]
+            parsed_header = self._explicit_member_specialization_header(header)
+            if parsed_header is None:
+                position = body_end
+                continue
+            (
+                owner_name,
+                owner_qualified_name,
+                owner_arguments,
+                dequalified_header,
+            ) = parsed_header
+            method_source = dequalified_header + code[body_start:body_end]
+            method = self._parse_struct_method(
+                owner_name,
+                method_source,
+                0,
+                len(dequalified_header),
+            )
+            if method is not None:
+                span = (match.start(), body_end)
+                specializations.append(
+                    _MetalExplicitMemberSpecialization(
+                        owner_name=owner_name,
+                        owner_qualified_name=owner_qualified_name,
+                        owner_arguments=tuple(owner_arguments),
+                        method=method,
+                        span=span,
+                    )
+                )
+            position = body_end
+        return specializations
+
+    def _explicit_member_specialization_header(
+        self,
+        header: str,
+    ) -> Optional[Tuple[str, str, List[str], str]]:
+        if re.match(r"\s*(?:struct|class|union)\b", header):
+            return None
+
+        operator_match = re.search(r"\boperator\s*\(\s*\)", header)
+        if operator_match is not None:
+            method_start = operator_match.start()
+        else:
+            paren_start = self._function_parameter_start(header)
+            if paren_start is None:
+                return None
+            before_params = header[:paren_start]
+            method_match = re.search(
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*$",
+                before_params,
+            )
+            if method_match is None:
+                return None
+            method_start = method_match.start(1)
+
+        scope_end = method_start
+        while scope_end > 0 and header[scope_end - 1].isspace():
+            scope_end -= 1
+        if scope_end < 2 or header[scope_end - 2 : scope_end] != "::":
+            return None
+        scope_start = scope_end - 2
+        owner_end = scope_start
+        while owner_end > 0 and header[owner_end - 1].isspace():
+            owner_end -= 1
+        if owner_end == 0 or header[owner_end - 1] != ">":
+            return None
+
+        angle_end = owner_end - 1
+        angle_start = self._matching_open_angle(header, angle_end)
+        if angle_start is None:
+            return None
+        owner_match = re.search(
+            r"(?P<owner>(?:(?:[A-Za-z_][A-Za-z0-9_]*)\s*::\s*)*"
+            r"[A-Za-z_][A-Za-z0-9_]*)\s*$",
+            header[:angle_start],
+        )
+        if owner_match is None:
+            return None
+
+        owner_qualified_name = re.sub(
+            r"\s*::\s*",
+            "::",
+            owner_match.group("owner"),
+        )
+        owner_name = owner_qualified_name.rsplit("::", 1)[-1]
+        owner_arguments = self._split_top_level_commas(
+            header[angle_start + 1 : angle_end]
+        )
+        if not owner_arguments:
+            return None
+        dequalified_header = header[: owner_match.start("owner")] + header[scope_end:]
+        return (
+            owner_name,
+            owner_qualified_name,
+            owner_arguments,
+            dequalified_header,
+        )
+
+    @staticmethod
+    def _matching_open_angle(text: str, angle_end: int) -> Optional[int]:
+        depth = 0
+        for index in range(angle_end, -1, -1):
+            character = text[index]
+            if character == ">":
+                depth += 1
+            elif character == "<":
+                depth -= 1
+                if depth == 0:
+                    return index
+        return None
+
+    def _explicit_member_method_contract(
+        self,
+        method: _MetalStructMethod,
+    ) -> Tuple[object, ...]:
+        parameters = tuple(
+            self._normalize_template_argument_text(
+                self._normalize_function_parameter_type_text(parameter)
+            )
+            for parameter in self._split_top_level_commas(method.parameters)
+            if parameter.strip() and parameter.strip() != "void"
+        )
+        return (
+            method.name,
+            method.is_static,
+            method.is_operator_call,
+            self._normalize_template_argument_text(method.return_type),
+            parameters,
+            self._method_receiver_contract_key(method),
+        )
+
+    @staticmethod
+    def _explicit_member_specialization_signature(
+        specialization: _MetalExplicitMemberSpecialization,
+    ) -> str:
+        owner = specialization.owner_qualified_name
+        arguments = ", ".join(specialization.owner_arguments)
+        method = specialization.method
+        return f"{owner}<{arguments}>::{method.name}({method.parameters})"
 
     def _reject_unresolved_temporary_functor_calls(
         self,
@@ -2847,6 +3177,97 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
         return rewritten
 
+    def _canonicalize_qualified_struct_type_aliases(
+        self,
+        source: str,
+        structs: List[_MetalStructDefinition],
+    ) -> str:
+        aliased_structs = [struct for struct in structs if struct.type_aliases]
+        if not aliased_structs:
+            return source
+
+        structs_by_name = {struct.name: struct for struct in structs}
+        owner_name_counts: Dict[str, int] = {}
+        for struct in structs:
+            owner_name_counts[struct.name] = owner_name_counts.get(struct.name, 0) + 1
+
+        def type_pattern(type_text: str) -> str:
+            parts = re.split(r"(\s+|::|[<>,*&])", type_text)
+            return "".join(
+                (
+                    r"\s*"
+                    if not part or part.isspace()
+                    else (
+                        rf"\s*{re.escape(part)}\s*"
+                        if part in {"::", "<", ">", ",", "*", "&"}
+                        else re.escape(part)
+                    )
+                )
+                for part in parts
+            )
+
+        rules: List[Tuple[re.Pattern[str], str]] = []
+        for struct in aliased_structs:
+            owner_patterns = (
+                {type_pattern(struct.qualified_name)}
+                if struct.qualified_name
+                else set()
+            )
+            if owner_name_counts[struct.name] == 1:
+                owner_patterns.add(type_pattern(struct.name))
+            specialization = self._materialized_struct_specializations.get(struct.name)
+            if specialization is not None:
+                source_name, source_arguments = specialization
+                owner_patterns.add(
+                    type_pattern(f"{source_name}<{', '.join(source_arguments)}>")
+                )
+            for alias in struct.type_aliases:
+                if alias in struct.type_alias_templates:
+                    continue
+                target = self._canonicalize_struct_scoped_type(
+                    alias,
+                    struct,
+                    structs_by_name,
+                )
+                if not target or target == alias:
+                    continue
+                for owner_pattern in owner_patterns:
+                    rules.append(
+                        (
+                            re.compile(
+                                rf"(?<![A-Za-z0-9_:])(?:typename\s+)?"
+                                rf"(?:::)?{owner_pattern}\s*::\s*"
+                                rf"{re.escape(alias)}\b"
+                            ),
+                            target,
+                        )
+                    )
+        if not rules:
+            return source
+
+        rewritten = source
+        for _ in range(len(rules) + 1):
+            ignored_spans = self._find_comment_and_literal_spans(rewritten)
+            replacements: List[Tuple[int, int, str]] = []
+            for pattern, target in rules:
+                for match in pattern.finditer(rewritten):
+                    if self._containing_span(match.start(), ignored_spans) is not None:
+                        continue
+                    span = (match.start(), match.end())
+                    if any(
+                        not (span[1] <= start or span[0] >= end)
+                        for start, end, _replacement in replacements
+                    ):
+                        continue
+                    replacements.append((span[0], span[1], target))
+            if not replacements:
+                break
+            updated = self._apply_text_replacements(rewritten, replacements)
+            if updated == rewritten:
+                break
+            rewritten = updated
+        return rewritten
+
     def _canonicalize_struct_scoped_type(
         self,
         type_text: str,
@@ -3115,7 +3536,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             if not candidate:
                 return None
             replacements: Dict[str, str] = {}
-            for identifier in dict.fromkeys(IDENTIFIER_RE.findall(candidate)):
+            identifiers = dict.fromkeys(
+                match.group(0)
+                for match in IDENTIFIER_RE.finditer(candidate)
+                if not self._is_member_identifier_context(candidate, match.start())
+            )
+            for identifier in identifiers:
                 if identifier in (excluded_aliases or set()):
                     continue
                 binding = self._resolve_type_alias_binding_at(
@@ -3666,6 +4092,73 @@ class MetalPreprocessor(HLSLPreprocessor):
             ):
                 continue
             replacements.append((match.start("type"), match.end("type"), canonical))
+
+        return self._apply_text_replacements(body, replacements)
+
+    def _canonicalize_struct_scoped_template_arguments(
+        self,
+        body: str,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        structs_by_name: Optional[Dict[str, _MetalStructDefinition]],
+    ) -> str:
+        alias_names = set(struct.type_aliases)
+        if not alias_names or not (set(IDENTIFIER_RE.findall(body)) & alias_names):
+            return body
+
+        ignored_spans = self._find_comment_and_literal_spans(body)
+        local_aliases = self._local_type_alias_shadow_scopes(body)
+        value_shadowed_aliases = alias_names & (
+            set(method.parameter_names) | self._local_variable_names(body)
+        )
+        # Lowered methods leave the struct's type scope before explicit helper
+        # templates are materialized, so resolve only their argument lists here.
+        replacements: List[Tuple[int, int, str]] = []
+        index = 0
+        while index < len(body):
+            ignored = self._containing_span(index, ignored_spans)
+            if ignored is not None:
+                index = ignored[1]
+                continue
+            if not (body[index].isalpha() or body[index] == "_"):
+                index += 1
+                continue
+
+            _identifier, consumed = self._read_identifier(body, index)
+            identifier_end = index + consumed
+            angle_start = identifier_end
+            while angle_start < len(body) and body[angle_start].isspace():
+                angle_start += 1
+            if angle_start >= len(body) or body[angle_start] != "<":
+                index = identifier_end
+                continue
+            angle_end = self._find_matching_angle(body, angle_start)
+            if angle_end is None:
+                index = identifier_end
+                continue
+            call_start = angle_end + 1
+            while call_start < len(body) and body[call_start].isspace():
+                call_start += 1
+            if call_start >= len(body) or body[call_start] != "(":
+                index = identifier_end
+                continue
+
+            arguments = body[angle_start + 1 : angle_end]
+            if not (set(IDENTIFIER_RE.findall(arguments)) & alias_names):
+                index = angle_end + 1
+                continue
+            excluded_aliases = value_shadowed_aliases | self._shadowed_type_aliases_at(
+                local_aliases, angle_start
+            )
+            canonical = self._canonicalize_struct_scoped_type(
+                arguments,
+                struct,
+                structs_by_name,
+                excluded_aliases=excluded_aliases,
+            )
+            if canonical and canonical != arguments.strip():
+                replacements.append((angle_start + 1, angle_end, canonical))
+            index = angle_end + 1
 
         return self._apply_text_replacements(body, replacements)
 
@@ -4362,6 +4855,29 @@ class MetalPreprocessor(HLSLPreprocessor):
         "float",
         "double",
     }
+    _METAL_FLOATING_SCALAR_TYPES: Set[str] = {
+        "half",
+        "float16_t",
+        "bfloat16_t",
+        "float",
+        "double",
+    }
+    _METAL_TYPE_TRAIT_ARITIES: Dict[str, int] = {
+        "is_same": 2,
+        "is_integral": 1,
+        "is_floating_point": 1,
+        "is_signed": 1,
+        "is_unsigned": 1,
+        "is_const": 1,
+        "is_pointer": 1,
+    }
+    _METAL_TYPE_TRAIT_START_RE = re.compile(
+        r"(?<![A-Za-z0-9_:])"
+        r"(?:(?:::)?metal\s*::\s*)?"
+        r"(?P<trait>is_same_v|is_integral_v|is_floating_point_v|is_signed_v|"
+        r"is_unsigned_v|is_const_v|is_pointer_v|is_same|is_integral|"
+        r"is_floating_point|is_signed|is_unsigned|is_const|is_pointer)\s*<"
+    )
 
     # Metal SIMD-group / quad-group built-ins that return the SAME type as their
     # first argument (a shuffle/broadcast moves a value between lanes; a prefix /
@@ -4460,6 +4976,366 @@ class MetalPreprocessor(HLSLPreprocessor):
         base, _width = decomposed
         return base in self._METAL_SIGNED_SCALAR_TYPES
 
+    def _is_floating_point_concrete_type(self, type_text: str) -> Optional[bool]:
+        decomposed = self._scalar_and_width(type_text)
+        if decomposed is None:
+            return None
+        base, _width = decomposed
+        return base in self._METAL_FLOATING_SCALAR_TYPES
+
+    def _parse_metal_type_trait_expression(
+        self,
+        expression: str,
+    ) -> Optional[Tuple[str, List[str]]]:
+        text = expression.strip()
+        match = self._METAL_TYPE_TRAIT_START_RE.match(text)
+        if match is None:
+            return None
+        angle_start = text.find("<", match.start("trait"), match.end())
+        angle_end = self._find_matching_angle(text, angle_start)
+        if angle_end is None:
+            return None
+        trait = match.group("trait")
+        suffix = text[angle_end + 1 :].strip()
+        if trait.endswith("_v"):
+            if suffix:
+                return None
+            trait = trait[:-2]
+        elif re.fullmatch(r"::\s*value", suffix) is None:
+            return None
+        operands = self._split_top_level_commas(text[angle_start + 1 : angle_end])
+        return trait, operands
+
+    def _canonical_type_trait_operand(
+        self,
+        type_text: str,
+        resolver,
+    ) -> Optional[str]:
+        resolved = resolver(type_text)
+        if resolved is None:
+            return None
+        normalized = self._normalize_template_argument_text(resolved)
+        normalized = re.sub(r"^(?:typename|struct|class|enum)\b\s*", "", normalized)
+        normalized = re.sub(
+            r"(?<![A-Za-z0-9_])(?:::)?metal::(?=[A-Za-z_])",
+            "",
+            normalized,
+        )
+        normalized = self._normalize_template_argument_text(normalized)
+        scalar_aliases = {
+            "signed": "int",
+            "signed int": "int",
+            "unsigned": "uint",
+            "unsigned int": "uint",
+            "signed short": "short",
+            "signed short int": "short",
+            "unsigned short": "ushort",
+            "unsigned short int": "ushort",
+            "signed long": "long",
+            "signed long int": "long",
+            "unsigned long": "ulong",
+            "unsigned long int": "ulong",
+        }
+        normalized = scalar_aliases.get(normalized, normalized)
+        if not re.search(r"[*&\[\]]", normalized):
+            qualifiers = {
+                token
+                for token in IDENTIFIER_RE.findall(normalized)
+                if token in {"const", "volatile"}
+            }
+            unqualified = re.sub(r"\b(?:const|volatile)\b", " ", normalized)
+            unqualified = self._normalize_template_argument_text(unqualified)
+            decomposed = self._scalar_and_width(unqualified)
+            if decomposed is not None:
+                base, width = decomposed
+                normalized = base if width == 1 else f"{base}{width}"
+                if qualifiers:
+                    normalized = " ".join((*sorted(qualifiers), normalized))
+        return normalized or None
+
+    def _type_trait_operand_is_concrete(
+        self,
+        type_text: str,
+        known_type_names: Set[str],
+        *,
+        allow_unknown_named_types: bool,
+    ) -> bool:
+        normalized = self._normalize_template_argument_text(type_text)
+        if not normalized or re.search(
+            r"\b(?:auto|decltype|typename)\b|\bis_[A-Za-z_]*\s*<",
+            normalized,
+        ):
+            return False
+
+        stripped = re.sub(
+            r"\b(?:const|volatile|restrict|device|constant|thread|threadgroup)\b",
+            " ",
+            normalized,
+        )
+        stripped = re.sub(r"(?:&&|[&*])+", " ", stripped)
+        stripped = re.sub(r"\[[^\]]*\]", " ", stripped)
+        stripped = self._normalize_template_argument_text(stripped)
+        if not stripped:
+            return False
+        if self._scalar_and_width(stripped) is not None or stripped == "void":
+            return True
+
+        angle_start = stripped.find("<")
+        if angle_start != -1:
+            angle_end = self._find_matching_angle(stripped, angle_start)
+            if angle_end != len(stripped) - 1:
+                return False
+            owner = stripped[:angle_start].split("::")[-1]
+            if owner not in known_type_names and not allow_unknown_named_types:
+                return False
+            arguments = self._split_top_level_commas(
+                stripped[angle_start + 1 : angle_end]
+            )
+            return bool(arguments) and all(
+                self._evaluate_static_integral_expression(argument)[0]
+                or self._type_trait_operand_is_concrete(
+                    argument,
+                    known_type_names,
+                    allow_unknown_named_types=allow_unknown_named_types,
+                )
+                for argument in arguments
+            )
+
+        if not re.fullmatch(r"(?:::)?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*", stripped):
+            return False
+        return (
+            allow_unknown_named_types
+            or stripped in known_type_names
+            or (stripped.split("::")[-1] in known_type_names)
+        )
+
+    def _evaluate_metal_type_trait(
+        self,
+        trait: str,
+        operands: Sequence[str],
+        *,
+        resolver,
+        known_type_names: Set[str],
+        allow_unknown_named_types: bool = False,
+    ) -> Tuple[Optional[bool], Tuple[str, ...], str]:
+        expected_arity = self._METAL_TYPE_TRAIT_ARITIES.get(trait)
+        resolved_operands = tuple(
+            self._canonical_type_trait_operand(operand, resolver) or operand.strip()
+            for operand in operands
+        )
+        if expected_arity is None or len(operands) != expected_arity:
+            return None, resolved_operands, "argument-count"
+        concrete = tuple(
+            self._type_trait_operand_is_concrete(
+                operand,
+                known_type_names,
+                allow_unknown_named_types=allow_unknown_named_types,
+            )
+            for operand in resolved_operands
+        )
+        if not all(concrete):
+            return None, resolved_operands, "operand-unresolved"
+
+        if trait == "is_same":
+            return (
+                resolved_operands[0] == resolved_operands[1],
+                resolved_operands,
+                "evaluated",
+            )
+
+        operand = resolved_operands[0]
+        if trait == "is_pointer":
+            without_reference = re.sub(r"\s*(?:&&|&)\s*$", "", operand)
+            if without_reference != operand:
+                return False, resolved_operands, "evaluated"
+            without_top_level_cv = re.sub(r"\s+(?:const|volatile)\s*$", "", operand)
+            if without_top_level_cv.endswith("*"):
+                return True, resolved_operands, "evaluated"
+            return False, resolved_operands, "evaluated"
+
+        if trait == "is_const":
+            if re.search(r"(?:&&|&)\s*$", operand):
+                return False, resolved_operands, "evaluated"
+            pointer = operand.rfind("*")
+            qualifier_region = operand[pointer + 1 :] if pointer != -1 else operand
+            if re.search(r"\bconst\b", qualifier_region):
+                return True, resolved_operands, "evaluated"
+            return False, resolved_operands, "evaluated"
+
+        value_type = re.sub(r"\b(?:const|volatile)\b", " ", operand)
+        value_type = self._normalize_template_argument_text(value_type)
+        if re.search(r"[*&\[\]]", value_type):
+            return False, resolved_operands, "evaluated"
+        if trait == "is_integral":
+            result = self._is_integral_concrete_type(value_type)
+        elif trait == "is_floating_point":
+            result = self._is_floating_point_concrete_type(value_type)
+        elif trait == "is_signed":
+            result = self._is_signed_concrete_type(value_type)
+        else:
+            integral = self._is_integral_concrete_type(value_type)
+            signed = self._is_signed_concrete_type(value_type)
+            result = (
+                None if integral is None or signed is None else integral and not signed
+            )
+        if result is None:
+            if concrete[0]:
+                return False, resolved_operands, "evaluated"
+            return None, resolved_operands, "operand-category-unsupported"
+        return result, resolved_operands, "evaluated"
+
+    def _concrete_type_trait_names(
+        self,
+        code: str,
+        structs: Optional[Sequence[_MetalStructDefinition]] = None,
+    ) -> Set[str]:
+        names = set(self._METAL_SCALAR_VECTOR_TYPES)
+        names.update(self._METAL_SCALAR_TYPE_SIZES)
+        names.update({"void", "atomic_bool", "atomic_int", "atomic_uint"})
+        for struct in structs or self._find_concrete_struct_definitions(code):
+            names.add(struct.name)
+            if struct.qualified_name:
+                names.add(struct.qualified_name)
+        names.update(template.name for template in self._find_template_structs(code))
+        template_spans = self._find_template_declaration_spans(code)
+        ignored_spans = sorted(
+            [*template_spans, *self._find_comment_and_literal_spans(code)]
+        )
+        for match in re.finditer(
+            r"\benum(?:\s+class)?\s+(?P<name>[A-Za-z_]\w*)",
+            code,
+        ):
+            if self._containing_span(match.start(), ignored_spans) is None:
+                names.add(match.group("name"))
+        return names
+
+    def _concrete_type_trait_owner(self, code: str, position: int) -> Optional[str]:
+        template_spans = self._find_template_declaration_spans(code)
+        candidates: List[Tuple[int, str]] = []
+        for function in self._find_non_template_function_definitions(
+            code,
+            template_spans,
+        ):
+            if function.span[0] <= position < function.span[1]:
+                candidates.append((function.span[1] - function.span[0], function.name))
+        for struct in self._find_concrete_struct_definitions(code):
+            if struct.span[0] <= position < struct.span[1]:
+                candidates.append(
+                    (
+                        struct.span[1] - struct.span[0],
+                        struct.qualified_name or struct.name,
+                    )
+                )
+        return min(candidates)[1] if candidates else None
+
+    def _fold_concrete_type_trait_values(self, code: str) -> str:
+        if not any(name in code for name in self._METAL_TYPE_TRAIT_ARITIES):
+            return code
+        template_spans = self._find_template_declaration_spans(code)
+        ignored_spans = sorted(
+            [*template_spans, *self._find_comment_and_literal_spans(code)]
+        )
+        aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+            skip_spans=template_spans,
+        )
+        structs = self._find_concrete_struct_definitions(code)
+        known_type_names = self._concrete_type_trait_names(code, structs)
+        owner_name_counts: Dict[str, int] = {}
+        for struct in structs:
+            owner_name_counts[struct.name] = owner_name_counts.get(struct.name, 0) + 1
+        qualified_alias_targets: Dict[str, str] = {}
+        for struct in structs:
+            owner_names = {struct.qualified_name} if struct.qualified_name else set()
+            if owner_name_counts[struct.name] == 1:
+                owner_names.add(struct.name)
+            for alias, target in struct.type_aliases.items():
+                for owner_name in owner_names:
+                    qualified_alias_targets[f"{owner_name}::{alias}"] = target
+
+        def resolve_operand(operand: str, position: int) -> Optional[str]:
+            resolved = self._canonicalize_type_aliases_at(operand, aliases, position)
+            if resolved is None:
+                return None
+            for _ in range(len(qualified_alias_targets) + 1):
+                previous = resolved
+                resolved = re.sub(r"\btypename\s+", "", resolved)
+                resolved = re.sub(r"::template\s+", "::", resolved)
+                for qualified_alias, target in qualified_alias_targets.items():
+                    resolved = re.sub(
+                        rf"(?<![A-Za-z0-9_:]){re.escape(qualified_alias)}\b",
+                        target,
+                        resolved,
+                    )
+                resolved = self._normalize_template_argument_text(resolved)
+                if resolved == previous:
+                    break
+            return resolved
+
+        replacements: List[Tuple[int, int, str]] = []
+        for match in self._METAL_TYPE_TRAIT_START_RE.finditer(code):
+            if self._containing_span(match.start(), ignored_spans) is not None:
+                continue
+            angle_start = code.find("<", match.start("trait"), match.end())
+            angle_end = self._find_matching_angle(code, angle_start)
+            if angle_end is None:
+                continue
+            trait_spelling = match.group("trait")
+            trait = (
+                trait_spelling[:-2] if trait_spelling.endswith("_v") else trait_spelling
+            )
+            expression_end = angle_end + 1
+            if not trait_spelling.endswith("_v"):
+                suffix = re.match(r"\s*::\s*value\b", code[expression_end:])
+                if suffix is None:
+                    continue
+                expression_end += suffix.end()
+            operands = self._split_top_level_commas(code[angle_start + 1 : angle_end])
+            value, resolved_operands, reason = self._evaluate_metal_type_trait(
+                trait,
+                operands,
+                resolver=lambda operand, position=match.start(): resolve_operand(
+                    operand,
+                    position,
+                ),
+                known_type_names=known_type_names,
+            )
+            if value is not None:
+                replacements.append(
+                    (match.start(), expression_end, "true" if value else "false")
+                )
+                continue
+            if not self._fail_closed_static_assertions:
+                continue
+            expression = re.sub(
+                r"\s+", " ", code[match.start() : expression_end]
+            ).strip()
+            suggested_action = (
+                "materialize every trait operand to a concrete supported type before "
+                "target translation"
+            )
+            owner = self._concrete_type_trait_owner(code, match.start())
+            owner_detail = f" in '{owner}'" if owner else ""
+            raise MetalTypeTraitError(
+                f"Metal type trait '{expression}'{owner_detail} could not be evaluated "
+                f"because {reason.replace('-', ' ')}. Suggested action: "
+                f"{suggested_action}.",
+                trait=trait,
+                expression=expression,
+                operands=tuple(operand.strip() for operand in operands),
+                resolved_operands=resolved_operands,
+                reason=reason,
+                owner=owner,
+                source_location=self._source_location_for_offsets(
+                    code,
+                    match.start(),
+                    expression_end,
+                ),
+                suggested_action=suggested_action,
+            )
+        return self._apply_text_replacements(code, replacements)
+
     def _evaluate_template_constraint(
         self, constraint: str, bindings: Dict[str, str]
     ) -> bool:
@@ -4522,6 +5398,23 @@ class MetalPreprocessor(HLSLPreprocessor):
                 self._evaluate_boolean_constraint(part, bindings)
                 for part in conjunction
             )
+
+        parsed_trait = self._parse_metal_type_trait_expression(expr)
+        if parsed_trait is not None:
+            trait, operands = parsed_trait
+            result, _resolved_operands, _reason = self._evaluate_metal_type_trait(
+                trait,
+                operands,
+                resolver=lambda operand: self._resolve_constraint_type(
+                    operand,
+                    bindings,
+                ),
+                known_type_names=set(),
+                allow_unknown_named_types=True,
+            )
+            if result is None:
+                raise self._UnrecognizedConstraint(expression)
+            return result
 
         # `is_integral_v<T>` (optionally `metal::`).
         integral_match = re.fullmatch(
@@ -5095,6 +5988,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         rewritten_body = self._canonicalize_struct_scoped_cast_types(
             rewritten_body, struct, structs_by_name
         )
+        rewritten_body = self._canonicalize_struct_scoped_template_arguments(
+            rewritten_body, struct, method, structs_by_name
+        )
         if instantiated_template_functions is not None and template_methods_by_struct:
             rewritten_body = self._lower_internal_template_member_calls(
                 struct,
@@ -5239,6 +6135,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         return self._substitute_bare_member_references(body, mapping)
 
     def _evaluate_static_assertions(self, code: str) -> str:
+        code = self._fold_concrete_type_trait_values(code)
         if "static_assert" not in code:
             return code
 
@@ -5262,6 +6159,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         structs = self._find_concrete_struct_definitions(code)
         constexpr_functions: Dict[str, List[_MetalConstexprFunction]] = {}
+        constexpr_binary_operators: Optional[List[_MetalConstexprBinaryOperator]] = None
         constexpr_index_built = False
         replacements: List[Tuple[int, int, str]] = []
         assertion_index = 0
@@ -5319,6 +6217,18 @@ class MetalPreprocessor(HLSLPreprocessor):
             folded, value = self._evaluate_static_integral_expression(
                 evaluation_condition
             )
+            if not folded:
+                if constexpr_binary_operators is None:
+                    constexpr_binary_operators = (
+                        self._static_constexpr_binary_operators(code)
+                    )
+                folded, value = self._evaluate_static_aggregate_assertion(
+                    evaluation_condition,
+                    operators=constexpr_binary_operators,
+                    structs=structs,
+                    type_aliases=type_aliases,
+                    position=condition_position,
+                )
             if folded and value:
                 replacements.append((*assertion.span, ""))
                 assertion_index += 1
@@ -5556,6 +6466,863 @@ class MetalPreprocessor(HLSLPreprocessor):
             and re.search(rf"\b{re.escape(name)}\b", masked) is not None
         )
         return tuple(sorted(dependencies))
+
+    def _evaluate_static_aggregate_assertion(
+        self,
+        expression: str,
+        *,
+        operators: Sequence[_MetalConstexprBinaryOperator],
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+    ) -> Tuple[bool, Optional[int]]:
+        comparison = self._split_static_top_level_operator(
+            expression,
+            ("==", "!="),
+        )
+        if comparison is None:
+            return False, None
+        left_text, comparison_operator, right_text = comparison
+        left = self._evaluate_static_aggregate_member_expression(
+            left_text,
+            operators=operators,
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+        right = self._evaluate_static_aggregate_member_expression(
+            right_text,
+            operators=operators,
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+        if left is None and right is None:
+            return False, None
+        if left is None:
+            if right is None:
+                return False, None
+            left = self._evaluate_static_scalar_expression(
+                left_text,
+                expected_type=right.type_name,
+            )
+        elif right is None:
+            right = self._evaluate_static_scalar_expression(
+                right_text,
+                expected_type=left.type_name,
+            )
+        if left is None or right is None or left.type_name != right.type_name:
+            return False, None
+        equal = left.value == right.value
+        return True, int(equal if comparison_operator == "==" else not equal)
+
+    def _evaluate_static_aggregate_member_expression(
+        self,
+        expression: str,
+        *,
+        operators: Sequence[_MetalConstexprBinaryOperator],
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+    ) -> Optional[_MetalConstexprScalarValue]:
+        text = self._strip_static_outer_parentheses(expression)
+        if not text.startswith("("):
+            return None
+        close_paren = self._find_matching_delimiter(text, 0, "(", ")")
+        if close_paren is None:
+            return None
+        member_match = re.fullmatch(
+            r"\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*",
+            text[close_paren + 1 :],
+        )
+        if member_match is None:
+            return None
+        operation = self._split_top_level_binary_arithmetic(text[1:close_paren].strip())
+        if operation is None:
+            return None
+        left_text, binary_operator, right_text = operation
+        left = self._evaluate_static_aggregate_constructor(
+            left_text,
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+        right = self._evaluate_static_aggregate_constructor(
+            right_text,
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+        if left is None or right is None:
+            return None
+        result = self._evaluate_static_constexpr_binary_operator(
+            binary_operator,
+            left,
+            right,
+            operators=operators,
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+        return None if result is None else result.member(member_match.group(1))
+
+    def _evaluate_static_constexpr_binary_operator(
+        self,
+        binary_operator: str,
+        left: _MetalConstexprAggregateValue,
+        right: _MetalConstexprAggregateValue,
+        *,
+        operators: Sequence[_MetalConstexprBinaryOperator],
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+    ) -> Optional[_MetalConstexprAggregateValue]:
+        results: List[_MetalConstexprAggregateValue] = []
+        for candidate in operators:
+            if candidate.operator != binary_operator:
+                continue
+            template_parameters = set(candidate.template_parameters)
+            bindings: Dict[str, str] = {}
+            compatible = True
+            for declared_type, value in zip(
+                candidate.parameter_types,
+                (left, right),
+            ):
+                self._infer_template_parameter_bindings_from_type(
+                    declared_type,
+                    value.type_name,
+                    template_parameters,
+                    bindings,
+                )
+                concrete_declared_type = self._substitute_static_type_bindings(
+                    declared_type,
+                    bindings,
+                )
+                if self._canonical_static_aggregate_type(
+                    concrete_declared_type
+                ) != self._canonical_static_aggregate_type(value.type_name):
+                    compatible = False
+                    break
+            if not compatible or not template_parameters <= set(bindings):
+                continue
+
+            concrete_return_type = self._substitute_static_type_bindings(
+                candidate.return_type,
+                bindings,
+            )
+            canonical_return_type = self._canonical_static_aggregate_type(
+                concrete_return_type
+            )
+            result_type_candidates = {
+                value.type_name
+                for value in (left, right)
+                if self._canonical_static_aggregate_type(value.type_name)
+                == canonical_return_type
+            }
+            if len(result_type_candidates) != 1:
+                continue
+            return_expression = self._replace_identifiers(
+                candidate.return_expression,
+                bindings,
+            ).strip()
+            if not return_expression.startswith("{"):
+                continue
+            close_brace = self._find_matching_delimiter(
+                return_expression,
+                0,
+                "{",
+                "}",
+            )
+            if close_brace != len(return_expression) - 1:
+                continue
+            arguments = self._split_top_level_commas(return_expression[1:close_brace])
+            result = self._construct_static_aggregate(
+                next(iter(result_type_candidates)),
+                arguments,
+                structs=structs,
+                type_aliases=type_aliases,
+                position=position,
+                aggregate_bindings={
+                    candidate.parameter_names[0]: left,
+                    candidate.parameter_names[1]: right,
+                },
+            )
+            if result is not None:
+                results.append(result)
+        return results[0] if len(results) == 1 else None
+
+    def _evaluate_static_aggregate_constructor(
+        self,
+        expression: str,
+        *,
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+    ) -> Optional[_MetalConstexprAggregateValue]:
+        text = self._strip_static_outer_parentheses(expression)
+        open_brace = self._find_next_top_level_char(text, 0, "{")
+        if open_brace is None:
+            return None
+        type_name = text[:open_brace].strip()
+        if (
+            re.fullmatch(
+                r"(?:::)?[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*",
+                type_name,
+            )
+            is None
+        ):
+            return None
+        close_brace = self._find_matching_delimiter(text, open_brace, "{", "}")
+        if close_brace != len(text) - 1:
+            return None
+        return self._construct_static_aggregate(
+            type_name,
+            self._split_top_level_commas(text[open_brace + 1 : close_brace]),
+            structs=structs,
+            type_aliases=type_aliases,
+            position=position,
+        )
+
+    def _construct_static_aggregate(
+        self,
+        type_name: str,
+        arguments: Sequence[str],
+        *,
+        structs: List[_MetalStructDefinition],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+        aggregate_bindings: Optional[
+            Mapping[str, _MetalConstexprAggregateValue]
+        ] = None,
+    ) -> Optional[_MetalConstexprAggregateValue]:
+        resolved_type = self._resolve_type_aliases_at(
+            type_name,
+            type_aliases,
+            position,
+        )
+        normalized_type = self._normalize_inferred_type(resolved_type)
+        matching_structs = [
+            struct
+            for struct in structs
+            if normalized_type in {struct.name, struct.qualified_name}
+        ]
+        if len(matching_structs) != 1:
+            return None
+        struct = matching_structs[0]
+        if not struct.data_members or any(
+            member.array_suffix or member.is_pointer for member in struct.data_members
+        ):
+            return None
+
+        results: List[_MetalConstexprAggregateValue] = []
+        for constructor in struct.constructors:
+            if (
+                not constructor.is_constexpr
+                or constructor.template_parameters
+                or len(constructor.param_names) != len(arguments)
+                or len(constructor.param_types) != len(arguments)
+                or (
+                    constructor.receiver_address_spaces
+                    and "thread" not in constructor.receiver_address_spaces
+                )
+                or self._strip_template_argument_comments(constructor.body).strip()
+            ):
+                continue
+            parameter_values: Dict[str, _MetalConstexprScalarValue] = {}
+            for name, declared_type, argument in zip(
+                constructor.param_names,
+                constructor.param_types,
+                arguments,
+            ):
+                scalar_type = self._static_constexpr_scalar_type(
+                    self._resolve_type_aliases_at(
+                        declared_type,
+                        type_aliases,
+                        position,
+                    )
+                )
+                if scalar_type is None:
+                    break
+                value = self._evaluate_static_scalar_expression(
+                    argument,
+                    expected_type=scalar_type,
+                    aggregate_bindings=aggregate_bindings,
+                )
+                if value is None:
+                    break
+                parameter_values[name] = value
+            else:
+                member_values: List[Tuple[str, _MetalConstexprScalarValue]] = []
+                for member in struct.data_members:
+                    member_type = self._static_constexpr_scalar_type(
+                        self._resolve_type_aliases_at(
+                            member.type_text,
+                            type_aliases,
+                            position,
+                        )
+                    )
+                    initializer = constructor.init_map.get(
+                        member.name,
+                        member.default,
+                    )
+                    if member_type is None or initializer is None:
+                        break
+                    value = self._evaluate_static_scalar_expression(
+                        initializer,
+                        expected_type=member_type,
+                        scalar_bindings=parameter_values,
+                        aggregate_bindings=aggregate_bindings,
+                    )
+                    if value is None:
+                        break
+                    member_values.append((member.name, value))
+                else:
+                    results.append(
+                        _MetalConstexprAggregateValue(
+                            type_name=normalized_type,
+                            members=tuple(member_values),
+                        )
+                    )
+        return results[0] if len(results) == 1 else None
+
+    def _static_constexpr_binary_operators(
+        self,
+        code: str,
+    ) -> List[_MetalConstexprBinaryOperator]:
+        template_matches = list(re.finditer(r"\btemplate\s*<", code))
+        template_starts = [match.start() for match in template_matches]
+        operators: List[_MetalConstexprBinaryOperator] = []
+        for operator_match in re.finditer(
+            r"\boperator\s*(?P<operator>[+\-*/])\s*\(",
+            code,
+        ):
+            template_index = (
+                bisect_right(
+                    template_starts,
+                    operator_match.start(),
+                )
+                - 1
+            )
+            if template_index < 0:
+                continue
+            template_match = template_matches[template_index]
+            angle_start = code.find("<", template_match.start(), template_match.end())
+            angle_end = self._find_matching_template_param_angle(code, angle_start)
+            if angle_end is None or angle_end >= operator_match.start():
+                continue
+            declaration_prefix = code[angle_end + 1 : operator_match.start()]
+            if any(character in declaration_prefix for character in ";{}"):
+                continue
+            if (
+                re.search(
+                    r"\b(?:constexpr|consteval|C10_METAL_CONSTEXPR)\b",
+                    declaration_prefix,
+                )
+                is None
+            ):
+                continue
+
+            open_paren = operator_match.end() - 1
+            close_paren = self._find_matching_delimiter(
+                code,
+                open_paren,
+                "(",
+                ")",
+            )
+            if close_paren is None:
+                continue
+            body_start = close_paren + 1
+            while body_start < len(code) and code[body_start].isspace():
+                body_start += 1
+            if body_start >= len(code) or code[body_start] != "{":
+                continue
+            body_end = self._find_matching_brace(code, body_start)
+            if body_end is None:
+                continue
+            body = self._strip_template_argument_comments(
+                code[body_start + 1 : body_end - 1]
+            ).strip()
+            return_match = re.fullmatch(
+                r"return\s+(?P<expression>.+?)\s*;",
+                body,
+                re.DOTALL,
+            )
+            if return_match is None:
+                continue
+
+            parameter_text = code[open_paren + 1 : close_paren]
+            parameter_names = self._parameter_identifier_names(parameter_text)
+            parameter_types = self._parameter_declared_types(parameter_text)
+            if len(parameter_names) != 2 or len(parameter_types) != 2:
+                continue
+            template_parameters = self._template_parameter_names(
+                code[angle_start + 1 : angle_end]
+            )
+            if not template_parameters:
+                continue
+            return_type = re.sub(
+                r"\b(?:constexpr|consteval|inline|static|METAL_FUNC|"
+                r"C10_METAL_CONSTEXPR)\b",
+                " ",
+                declaration_prefix,
+            )
+            return_type = self._normalize_template_argument_text(return_type)
+            if not return_type:
+                continue
+            operators.append(
+                _MetalConstexprBinaryOperator(
+                    operator=operator_match.group("operator"),
+                    span=(template_match.start(), body_end),
+                    template_parameters=tuple(template_parameters),
+                    return_type=return_type,
+                    parameter_names=(parameter_names[0], parameter_names[1]),
+                    parameter_types=(parameter_types[0], parameter_types[1]),
+                    return_expression=return_match.group("expression").strip(),
+                )
+            )
+        return operators
+
+    def _canonical_static_aggregate_type(self, type_name: str) -> str:
+        normalized = self._normalize_inferred_type(type_name)
+        specialization = self._materialized_struct_specializations.get(normalized)
+        if specialization is None:
+            return normalized
+        source_name, source_arguments = specialization
+        return self._normalize_template_argument_text(
+            f"{source_name}<{', '.join(source_arguments)}>"
+        )
+
+    def _substitute_static_type_bindings(
+        self,
+        type_text: str,
+        bindings: Mapping[str, str],
+    ) -> str:
+        return self._normalize_template_argument_text(
+            self._replace_identifiers(type_text, dict(bindings))
+        )
+
+    def _evaluate_static_scalar_expression(
+        self,
+        expression: str,
+        *,
+        expected_type: Optional[str] = None,
+        scalar_bindings: Optional[Mapping[str, _MetalConstexprScalarValue]] = None,
+        aggregate_bindings: Optional[
+            Mapping[str, _MetalConstexprAggregateValue]
+        ] = None,
+    ) -> Optional[_MetalConstexprScalarValue]:
+        text = self._strip_static_outer_parentheses(
+            self._strip_template_argument_comments(expression)
+        )
+        if not text or len(text) > 512:
+            return None
+        scalar_bindings = scalar_bindings or {}
+        aggregate_bindings = aggregate_bindings or {}
+
+        def finish(
+            value: Optional[_MetalConstexprScalarValue],
+        ) -> Optional[_MetalConstexprScalarValue]:
+            if value is None or expected_type is None:
+                return value
+            return self._cast_static_constexpr_scalar(value, expected_type)
+
+        if text.startswith("static_cast"):
+            angle_start = text.find("<", len("static_cast"))
+            if angle_start != -1:
+                angle_end = self._find_matching_angle(text, angle_start)
+                cursor = angle_end + 1 if angle_end is not None else -1
+                while cursor >= 0 and cursor < len(text) and text[cursor].isspace():
+                    cursor += 1
+                if cursor >= 0 and cursor < len(text) and text[cursor] == "(":
+                    close_paren = self._find_matching_delimiter(
+                        text,
+                        cursor,
+                        "(",
+                        ")",
+                    )
+                    if close_paren == len(text) - 1:
+                        cast_type = self._static_constexpr_scalar_type(
+                            text[angle_start + 1 : angle_end]
+                        )
+                        value = self._evaluate_static_scalar_expression(
+                            text[cursor + 1 : close_paren],
+                            scalar_bindings=scalar_bindings,
+                            aggregate_bindings=aggregate_bindings,
+                        )
+                        if cast_type is not None and value is not None:
+                            return finish(
+                                self._cast_static_constexpr_scalar(value, cast_type)
+                            )
+            return None
+
+        cast_match = re.match(
+            r"(?P<type>(?:::)?[A-Za-z_][A-Za-z0-9_]*"
+            r"(?:::[A-Za-z_][A-Za-z0-9_]*)*)\s*\(",
+            text,
+        )
+        if cast_match is not None:
+            open_paren = cast_match.end() - 1
+            close_paren = self._find_matching_delimiter(
+                text,
+                open_paren,
+                "(",
+                ")",
+            )
+            if close_paren == len(text) - 1:
+                cast_type = self._static_constexpr_scalar_type(cast_match.group("type"))
+                value = self._evaluate_static_scalar_expression(
+                    text[open_paren + 1 : close_paren],
+                    scalar_bindings=scalar_bindings,
+                    aggregate_bindings=aggregate_bindings,
+                )
+                if cast_type is not None and value is not None:
+                    return finish(self._cast_static_constexpr_scalar(value, cast_type))
+                return None
+
+        operation = self._split_top_level_binary_arithmetic(text)
+        if operation is not None:
+            left_text, binary_operator, right_text = operation
+            left = self._evaluate_static_scalar_expression(
+                left_text,
+                scalar_bindings=scalar_bindings,
+                aggregate_bindings=aggregate_bindings,
+            )
+            right = self._evaluate_static_scalar_expression(
+                right_text,
+                scalar_bindings=scalar_bindings,
+                aggregate_bindings=aggregate_bindings,
+            )
+            return finish(
+                self._evaluate_static_scalar_binary_operation(
+                    binary_operator,
+                    left,
+                    right,
+                )
+            )
+
+        member_match = re.fullmatch(
+            r"([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*" r"([A-Za-z_][A-Za-z0-9_]*)",
+            text,
+        )
+        if member_match is not None:
+            aggregate = aggregate_bindings.get(member_match.group(1))
+            return finish(
+                None if aggregate is None else aggregate.member(member_match.group(2))
+            )
+        if IDENTIFIER_RE.fullmatch(text):
+            if text == "true":
+                return finish(_MetalConstexprScalarValue("bool", True))
+            if text == "false":
+                return finish(_MetalConstexprScalarValue("bool", False))
+            return finish(scalar_bindings.get(text))
+        if text[0] in "+-":
+            operand = self._evaluate_static_scalar_expression(
+                text[1:],
+                scalar_bindings=scalar_bindings,
+                aggregate_bindings=aggregate_bindings,
+            )
+            if operand is None or isinstance(operand.value, bool):
+                return None
+            value = operand.value if text[0] == "+" else -operand.value
+            return finish(
+                self._cast_static_constexpr_scalar(
+                    _MetalConstexprScalarValue(operand.type_name, value),
+                    operand.type_name,
+                )
+            )
+        return finish(self._parse_static_constexpr_scalar_literal(text))
+
+    def _evaluate_static_scalar_binary_operation(
+        self,
+        binary_operator: str,
+        left: Optional[_MetalConstexprScalarValue],
+        right: Optional[_MetalConstexprScalarValue],
+    ) -> Optional[_MetalConstexprScalarValue]:
+        if left is None or right is None:
+            return None
+        result_type = self._static_constexpr_common_scalar_type(
+            left.type_name,
+            right.type_name,
+        )
+        if result_type is None:
+            return None
+        converted_left = self._cast_static_constexpr_scalar(left, result_type)
+        converted_right = self._cast_static_constexpr_scalar(right, result_type)
+        if converted_left is None or converted_right is None:
+            return None
+        left_value = converted_left.value
+        right_value = converted_right.value
+        if isinstance(left_value, bool) or isinstance(right_value, bool):
+            return None
+        try:
+            if binary_operator == "+":
+                value = left_value + right_value
+            elif binary_operator == "-":
+                value = left_value - right_value
+            elif binary_operator == "*":
+                value = left_value * right_value
+            elif binary_operator == "/":
+                if right_value == 0:
+                    return None
+                if result_type in self._METAL_INTEGRAL_SCALAR_TYPES:
+                    quotient = abs(int(left_value)) // abs(int(right_value))
+                    value = (
+                        -quotient if (left_value < 0) != (right_value < 0) else quotient
+                    )
+                else:
+                    value = left_value / right_value
+            else:
+                return None
+        except (ArithmeticError, OverflowError, ValueError):
+            return None
+        return self._cast_static_constexpr_scalar(
+            _MetalConstexprScalarValue(result_type, value),
+            result_type,
+        )
+
+    def _parse_static_constexpr_scalar_literal(
+        self,
+        text: str,
+    ) -> Optional[_MetalConstexprScalarValue]:
+        match = re.fullmatch(
+            r"(?P<number>(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)"
+            r"(?P<suffix>[fFhH]|[uUlL]*)",
+            text,
+        )
+        if match is None:
+            return None
+        number = match.group("number")
+        suffix = match.group("suffix")
+        is_floating = (
+            "." in number
+            or "e" in number.lower()
+            or suffix.lower()
+            in {
+                "f",
+                "h",
+            }
+        )
+        try:
+            if is_floating:
+                if suffix and suffix.lower() not in {"f", "h"}:
+                    return None
+                type_name = {"f": "float", "h": "half"}.get(
+                    suffix.lower(),
+                    "double",
+                )
+                value: Union[bool, int, float] = float(number)
+            else:
+                if suffix and re.fullmatch(r"[uUlL]+", suffix) is None:
+                    return None
+                type_name = "uint" if "u" in suffix.lower() else "int"
+                value = int(number, 10)
+        except (OverflowError, ValueError):
+            return None
+        return self._cast_static_constexpr_scalar(
+            _MetalConstexprScalarValue(type_name, value),
+            type_name,
+        )
+
+    def _static_constexpr_scalar_type(self, type_text: str) -> Optional[str]:
+        if any(token in type_text for token in ("*", "&", "[", "]")):
+            return None
+        normalized = self._normalize_template_argument_text(type_text)
+        normalized = re.sub(
+            r"\b(?:const|constant|constexpr|consteval|device|inline|static|"
+            r"thread|threadgroup|volatile)\b",
+            " ",
+            normalized,
+        )
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        normalized = re.sub(r"^(?:::)?metal::", "", normalized)
+        normalized = {
+            "bfloat": "bfloat16_t",
+            "bfloat16": "bfloat16_t",
+        }.get(normalized, normalized)
+        return normalized if normalized in self._METAL_SCALAR_TYPE_SIZES else None
+
+    def _static_constexpr_common_scalar_type(
+        self,
+        left_type: str,
+        right_type: str,
+    ) -> Optional[str]:
+        left = self._static_constexpr_scalar_type(left_type)
+        right = self._static_constexpr_scalar_type(right_type)
+        if left is None or right is None:
+            return None
+        if left == right:
+            return left
+        floating_rank = {
+            "half": 1,
+            "float16_t": 1,
+            "bfloat16_t": 1,
+            "float": 2,
+            "double": 3,
+        }
+        left_floating = floating_rank.get(left)
+        right_floating = floating_rank.get(right)
+        if left_floating is not None and right_floating is not None:
+            if left_floating == right_floating == 1 and {left, right} not in (
+                {"half", "float16_t"},
+            ):
+                return None
+            return left if left_floating >= right_floating else right
+        if left_floating is not None and right in self._METAL_INTEGRAL_SCALAR_TYPES:
+            return left
+        if right_floating is not None and left in self._METAL_INTEGRAL_SCALAR_TYPES:
+            return right
+        if (
+            left in self._METAL_INTEGRAL_SCALAR_TYPES
+            and right in self._METAL_INTEGRAL_SCALAR_TYPES
+        ):
+            left_size = self._METAL_SCALAR_TYPE_SIZES[left]
+            right_size = self._METAL_SCALAR_TYPE_SIZES[right]
+            left_signed = left in self._METAL_SIGNED_SCALAR_TYPES
+            right_signed = right in self._METAL_SIGNED_SCALAR_TYPES
+            if left_size == right_size and left_signed != right_signed:
+                return None
+            return left if left_size >= right_size else right
+        return None
+
+    def _cast_static_constexpr_scalar(
+        self,
+        value: _MetalConstexprScalarValue,
+        target_type: str,
+    ) -> Optional[_MetalConstexprScalarValue]:
+        target = self._static_constexpr_scalar_type(target_type)
+        if target is None:
+            return None
+        raw_value = value.value
+        if target == "bool":
+            return _MetalConstexprScalarValue(target, bool(raw_value))
+        if target in self._METAL_INTEGRAL_SCALAR_TYPES:
+            if isinstance(raw_value, float) and not math.isfinite(raw_value):
+                return None
+            try:
+                integer_value = int(raw_value)
+            except (OverflowError, TypeError, ValueError):
+                return None
+            bits = self._METAL_SCALAR_TYPE_SIZES[target] * 8
+            if target in self._METAL_SIGNED_SCALAR_TYPES:
+                minimum = -(1 << (bits - 1))
+                maximum = (1 << (bits - 1)) - 1
+            else:
+                minimum = 0
+                maximum = (1 << bits) - 1
+            if not minimum <= integer_value <= maximum:
+                return None
+            return _MetalConstexprScalarValue(target, integer_value)
+
+        try:
+            floating_value = float(raw_value)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        if not math.isfinite(floating_value):
+            return None
+        try:
+            if target in {"half", "float16_t"}:
+                floating_value = binary_struct.unpack(
+                    ">e",
+                    binary_struct.pack(">e", floating_value),
+                )[0]
+            elif target == "bfloat16_t":
+                bits = int.from_bytes(
+                    binary_struct.pack(">f", floating_value),
+                    "big",
+                )
+                rounded = bits + 0x7FFF + ((bits >> 16) & 1)
+                floating_value = binary_struct.unpack(
+                    ">f",
+                    ((rounded >> 16) << 16).to_bytes(4, "big"),
+                )[0]
+            elif target == "float":
+                floating_value = binary_struct.unpack(
+                    ">f",
+                    binary_struct.pack(">f", floating_value),
+                )[0]
+            elif target != "double":
+                return None
+        except (OverflowError, ValueError, binary_struct.error):
+            return None
+        if not math.isfinite(floating_value):
+            return None
+        return _MetalConstexprScalarValue(target, floating_value)
+
+    def _strip_static_outer_parentheses(self, expression: str) -> str:
+        text = expression.strip()
+        while text.startswith("("):
+            close_paren = self._find_matching_delimiter(text, 0, "(", ")")
+            if close_paren != len(text) - 1:
+                break
+            text = text[1:close_paren].strip()
+        return text
+
+    def _split_static_top_level_operator(
+        self,
+        expression: str,
+        operators: Sequence[str],
+    ) -> Optional[Tuple[str, str, str]]:
+        ordered_operators = sorted(operators, key=len, reverse=True)
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+        angle_depth = 0
+        found: Optional[Tuple[int, str]] = None
+        index = 0
+        while index < len(expression):
+            if expression[index] in "\"'":
+                _literal, consumed = self._read_string(expression, index)
+                index += consumed
+                continue
+            if expression.startswith("//", index):
+                end = expression.find("\n", index)
+                index = len(expression) if end == -1 else end + 1
+                continue
+            if expression.startswith("/*", index):
+                end = expression.find("*/", index + 2)
+                index = len(expression) if end == -1 else end + 2
+                continue
+            character = expression[index]
+            if character == "(":
+                paren_depth += 1
+            elif character == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif character == "[":
+                bracket_depth += 1
+            elif character == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif character == "{":
+                brace_depth += 1
+            elif character == "}":
+                brace_depth = max(0, brace_depth - 1)
+            elif character == "<":
+                angle_depth += 1
+            elif character == ">" and angle_depth:
+                angle_depth -= 1
+            elif paren_depth == bracket_depth == brace_depth == angle_depth == 0:
+                matched = next(
+                    (
+                        operator_text
+                        for operator_text in ordered_operators
+                        if expression.startswith(operator_text, index)
+                    ),
+                    None,
+                )
+                if matched is not None:
+                    if found is not None:
+                        return None
+                    found = (index, matched)
+                    index += len(matched)
+                    continue
+            index += 1
+        if found is None:
+            return None
+        operator_index, operator_text = found
+        left = expression[:operator_index].strip()
+        right = expression[operator_index + len(operator_text) :].strip()
+        if not left or not right:
+            return None
+        return left, operator_text, right
 
     def _static_constexpr_function_index(
         self, code: str
@@ -6927,6 +8694,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         rewritten_body = self._canonicalize_struct_scoped_cast_types(
             rewritten_body, struct, None
         )
+        rewritten_body = self._canonicalize_struct_scoped_template_arguments(
+            rewritten_body, struct, method, None
+        )
         params = self._canonicalize_struct_scoped_parameters(
             method.parameters, struct, None
         )
@@ -7122,7 +8892,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 body,
             )
         shadowed = set(method.parameter_names)
-        shadowed.update(self._local_variable_names(body))
         pointer_name_set = set(pointer_member_names)
         mapping: Dict[str, str] = {}
         for name in struct.data_member_names:
@@ -7134,10 +8903,18 @@ class MetalPreprocessor(HLSLPreprocessor):
                 mapping[name] = f"self.{name}"
         if not mapping:
             return body
-        return self._substitute_bare_member_references(body, mapping)
+        return self._substitute_bare_member_references(
+            body,
+            mapping,
+            local_shadows=self._local_variable_shadow_scopes(body),
+        )
 
     def _substitute_bare_member_references(
-        self, body: str, mapping: Dict[str, str]
+        self,
+        body: str,
+        mapping: Dict[str, str],
+        *,
+        local_shadows: Optional[Dict[str, List[Tuple[int, int, int]]]] = None,
     ) -> str:
         # Walk identifiers and replace bare member references per `mapping`, while
         # leaving member accesses on OTHER objects (`obj.x`, `obj->x`), already
@@ -7174,6 +8951,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 replacement = mapping.get(ident)
                 if (
                     replacement is not None
+                    and not any(
+                        declaration_position <= i and scope_start <= i < scope_end
+                        for declaration_position, scope_start, scope_end in (
+                            local_shadows or {}
+                        ).get(ident, ())
+                    )
                     and not self._is_member_identifier_context(body, i)
                     and not self._identifier_is_declaration_or_call(
                         body, i, i + consumed
@@ -7208,13 +8991,21 @@ class MetalPreprocessor(HLSLPreprocessor):
             return body
 
         shadowed = set(method.parameter_names)
-        shadowed.update(self._local_variable_names(body))
         members = struct.data_member_names - shadowed
         if not members:
             return body
-        return self._qualify_member_references(body, members)
+        return self._qualify_member_references(
+            body,
+            members,
+            self._local_variable_shadow_scopes(body),
+        )
 
-    def _qualify_member_references(self, body: str, members: Set[str]) -> str:
+    def _qualify_member_references(
+        self,
+        body: str,
+        members: Set[str],
+        local_shadows: Optional[Dict[str, List[Tuple[int, int, int]]]] = None,
+    ) -> str:
         # Walk identifiers and prefix bare member references with `self.`, while
         # leaving member accesses on OTHER objects (`obj.x`, `obj->x`) and
         # already-qualified `self.x` untouched.
@@ -7248,6 +9039,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 ident, consumed = self._read_identifier(body, i)
                 if (
                     ident in members
+                    and not any(
+                        declaration_position <= i and scope_start <= i < scope_end
+                        for declaration_position, scope_start, scope_end in (
+                            local_shadows or {}
+                        ).get(ident, ())
+                    )
                     and not self._is_member_identifier_context(body, i)
                     and not self._identifier_is_declaration_or_call(
                         body, i, i + consumed
@@ -7261,6 +9058,47 @@ class MetalPreprocessor(HLSLPreprocessor):
             result.append(ch)
             i += 1
         return "".join(result)
+
+    def _local_variable_shadow_scopes(
+        self,
+        body: str,
+    ) -> Dict[str, List[Tuple[int, int, int]]]:
+        shadows: Dict[str, List[Tuple[int, int, int]]] = {}
+        lexical_scopes = self._find_lexical_brace_scopes(body)
+        search_start = 0
+        for statement in self._iter_simple_declarations(body):
+            statement_start = body.find(statement, search_start)
+            if statement_start == -1:
+                continue
+            search_start = statement_start + len(statement)
+            name = self._declared_local_name(statement)
+            if name is None:
+                continue
+
+            leading = len(statement) - len(statement.lstrip())
+            declarator = self._strip_top_level_default_value(statement[leading:])
+            paren = self._function_parameter_start(declarator)
+            if paren is not None:
+                declarator = declarator[:paren].rstrip()
+            while declarator.endswith("]"):
+                open_bracket = declarator.rfind("[")
+                if open_bracket == -1:
+                    break
+                declarator = declarator[:open_bracket].rstrip()
+            name_match = re.search(rf"\b{re.escape(name)}\s*$", declarator)
+            if name_match is None:
+                continue
+
+            declaration_position = statement_start + leading + name_match.start()
+            scope_start, scope_end = self._innermost_lexical_scope(
+                lexical_scopes,
+                declaration_position,
+                len(body),
+            )
+            shadows.setdefault(name, []).append(
+                (declaration_position, scope_start, scope_end)
+            )
+        return shadows
 
     def _identifier_is_declaration_or_call(
         self, body: str, start: int, end: int
@@ -7329,6 +9167,15 @@ class MetalPreprocessor(HLSLPreprocessor):
                 paren_depth = max(0, paren_depth - 1)
                 i += 1
                 continue
+            if paren_depth == 0 and ch == "{":
+                _declarator, initializer = self._split_top_level_assignment(
+                    body[segment_start:i]
+                )
+                if initializer is not None:
+                    close = self._find_matching_delimiter(body, i, "{", "}")
+                    if close is not None:
+                        i = close + 1
+                        continue
             if paren_depth == 0 and ch in ";{}":
                 statements.append(body[segment_start:i])
                 i += 1
@@ -15890,6 +17737,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             code,
             local_binding_owner_spans,
         )
+        partial_match_type_aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+            skip_spans=excluded_spans,
+        )
         constexpr_functions = self._materialization_constexpr_function_index(code)
         local_integral_constants = self._collect_local_integral_constant_bindings(
             code,
@@ -15968,6 +17820,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 template_arguments = self._split_top_level_commas(
                     code[j + 1 : angle_end]
                 )
+                if self._template_arguments_contain_qualified_struct_alias(
+                    template_arguments,
+                    set(struct_templates_by_name),
+                ):
+                    i = j + 1
+                    continue
                 template_arguments = [
                     self._resolve_type_aliases_at(
                         argument,
@@ -16037,6 +17895,45 @@ class MetalPreprocessor(HLSLPreprocessor):
                     for context in owner_contexts
                     if context[0].span[0] <= i < context[0].span[1]
                 ]
+                if containing_contexts and any(
+                    self._containing_span(i, context[1]) is not None
+                    for context in containing_contexts
+                ):
+                    for owner, _method_spans, _context_constants in sorted(
+                        containing_contexts,
+                        key=lambda context: (context[0].span[1] - context[0].span[0]),
+                    ):
+                        shadowed: Set[str] = set()
+                        for method in [*owner.methods, *owner.template_methods]:
+                            if method.span[0] <= i < method.span[1]:
+                                shadowed.update(method.parameter_names)
+                                shadowed.update(self._local_variable_names(method.body))
+                        for constructor in owner.constructors:
+                            if (
+                                constructor.span is not None
+                                and constructor.span[0] <= i < constructor.span[1]
+                            ):
+                                shadowed.update(constructor.param_names)
+                                shadowed.update(
+                                    self._local_variable_names(constructor.body)
+                                )
+                        visible_aliases = set(owner.type_aliases) - shadowed
+                        if not visible_aliases:
+                            continue
+                        template_arguments = [
+                            (
+                                self._canonicalize_struct_scoped_type(
+                                    argument,
+                                    owner,
+                                    concrete_structs_by_name,
+                                    excluded_aliases=shadowed,
+                                )
+                                if set(IDENTIFIER_RE.findall(argument))
+                                & visible_aliases
+                                else argument
+                            )
+                            for argument in template_arguments
+                        ]
                 if containing_contexts and not any(
                     self._containing_span(i, context[1]) is not None
                     for context in containing_contexts
@@ -16173,6 +18070,30 @@ class MetalPreprocessor(HLSLPreprocessor):
                             )
                             for argument in template_arguments
                         ]
+                template_arguments = [
+                    self._canonicalize_qualified_struct_type_aliases(
+                        argument,
+                        concrete_structs,
+                    )
+                    for argument in template_arguments
+                ]
+                template_arguments = [
+                    self._resolve_concrete_qualified_template_struct_aliases(
+                        argument,
+                        struct_templates_by_name,
+                        partial_specializations,
+                        partial_match_type_aliases,
+                        concrete_structs,
+                        i,
+                    )
+                    for argument in template_arguments
+                ]
+                if self._template_arguments_contain_qualified_struct_alias(
+                    template_arguments,
+                    set(struct_templates_by_name),
+                ):
+                    i = angle_end + 1
+                    continue
                 resolved_arguments = (
                     self._template_arguments_with_resolved_defaults(
                         primary_template,
@@ -16187,6 +18108,17 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if key in explicit_specialization_keys:
                     i = angle_end + 1
                     continue
+                partial_match_arguments = [
+                    self._canonicalize_qualified_struct_type_aliases(
+                        self._resolve_type_aliases_at(
+                            argument,
+                            partial_match_type_aliases,
+                            i,
+                        ),
+                        concrete_structs,
+                    )
+                    for argument in resolved_arguments
+                ]
                 matching_partials: List[Tuple[_MetalTemplateStruct, Dict[str, str]]] = (
                     []
                 )
@@ -16198,13 +18130,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                     if not self._template_arguments_may_match_partial_struct_specialization(
                         partial_template,
                         specialization_arguments,
-                        resolved_arguments,
+                        partial_match_arguments,
                     ):
                         continue
                     bindings = self._partial_struct_specialization_bindings(
                         partial_template,
                         specialization_arguments,
-                        resolved_arguments,
+                        partial_match_arguments,
                     )
                     if bindings is None:
                         has_unmaterializable_partial = True
@@ -16250,6 +18182,162 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             i += 1
         return instantiations, selected_partial_specializations
+
+    def _resolve_concrete_qualified_template_struct_aliases(
+        self,
+        type_text: str,
+        struct_templates_by_name: Dict[str, _MetalTemplateStruct],
+        partial_specializations: Dict[
+            str, List[Tuple[_MetalTemplateStruct, List[str]]]
+        ],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        concrete_structs: List[_MetalStructDefinition],
+        source_position: int,
+    ) -> str:
+        resolved = self._normalize_template_argument_text(type_text)
+        max_iterations = len(struct_templates_by_name) + 1
+        for _ in range(max_iterations):
+            replacements: List[Tuple[int, int, str]] = []
+            position = 0
+            while position < len(resolved):
+                match = IDENTIFIER_RE.search(resolved, position)
+                if match is None:
+                    break
+                position = match.end()
+                name = match.group(0)
+                primary_template = struct_templates_by_name.get(name)
+                if primary_template is None:
+                    continue
+                angle_start = position
+                while angle_start < len(resolved) and resolved[angle_start].isspace():
+                    angle_start += 1
+                if angle_start >= len(resolved) or resolved[angle_start] != "<":
+                    continue
+                angle_end = self._find_matching_angle(resolved, angle_start)
+                if angle_end is None:
+                    continue
+                qualified_alias = self._qualified_template_struct_alias_at(
+                    resolved,
+                    (
+                        self._scoped_identifier_start(resolved, match.start()),
+                        angle_end + 1,
+                    ),
+                )
+                if qualified_alias is None:
+                    position = angle_start + 1
+                    continue
+                alias_name, alias_span = qualified_alias
+                arguments = self._split_top_level_commas(
+                    resolved[angle_start + 1 : angle_end]
+                )
+                arguments = (
+                    self._template_arguments_with_resolved_defaults(
+                        primary_template,
+                        arguments,
+                    )
+                    or arguments
+                )
+                partial_match_arguments = [
+                    self._canonicalize_qualified_struct_type_aliases(
+                        self._resolve_type_aliases_at(
+                            argument,
+                            type_aliases,
+                            source_position,
+                        ),
+                        concrete_structs,
+                    )
+                    for argument in arguments
+                ]
+                matching_partials: List[Tuple[_MetalTemplateStruct, Dict[str, str]]] = (
+                    []
+                )
+                has_unmaterializable_partial = False
+                for (
+                    partial_template,
+                    specialization_arguments,
+                ) in partial_specializations.get(name, []):
+                    if not self._template_arguments_may_match_partial_struct_specialization(
+                        partial_template,
+                        specialization_arguments,
+                        partial_match_arguments,
+                    ):
+                        continue
+                    bindings = self._partial_struct_specialization_bindings(
+                        partial_template,
+                        specialization_arguments,
+                        partial_match_arguments,
+                    )
+                    if bindings is None:
+                        has_unmaterializable_partial = True
+                    else:
+                        matching_partials.append((partial_template, bindings))
+                if has_unmaterializable_partial or len(matching_partials) > 1:
+                    position = angle_start + 1
+                    continue
+                if matching_partials:
+                    selected_template, bindings = matching_partials[0]
+                elif self._template_arguments_satisfy_parameters(
+                    primary_template,
+                    arguments,
+                ):
+                    selected_template = primary_template
+                    bindings, _variadic_bindings = self._template_argument_bindings(
+                        primary_template,
+                        arguments,
+                    )
+                else:
+                    position = angle_start + 1
+                    continue
+                target = self._concrete_template_struct_scalar_alias_target(
+                    selected_template,
+                    bindings,
+                    alias_name,
+                )
+                if target is None:
+                    position = angle_start + 1
+                    continue
+                replacements.append((alias_span[0], alias_span[1], target))
+                position = alias_span[1]
+            if not replacements:
+                break
+            updated = self._apply_text_replacements(resolved, replacements)
+            if updated == resolved:
+                break
+            resolved = updated
+        return self._normalize_template_argument_text(resolved)
+
+    def _template_arguments_contain_qualified_struct_alias(
+        self,
+        arguments: Sequence[str],
+        struct_template_names: Set[str],
+    ) -> bool:
+        for argument in arguments:
+            position = 0
+            while position < len(argument):
+                match = IDENTIFIER_RE.search(argument, position)
+                if match is None:
+                    break
+                position = match.end()
+                if match.group(0) not in struct_template_names:
+                    continue
+                angle_start = position
+                while angle_start < len(argument) and argument[angle_start].isspace():
+                    angle_start += 1
+                if angle_start >= len(argument) or argument[angle_start] != "<":
+                    continue
+                angle_end = self._find_matching_angle(argument, angle_start)
+                if angle_end is None:
+                    continue
+                qualified_start = angle_end + 1
+                while (
+                    qualified_start < len(argument)
+                    and argument[qualified_start].isspace()
+                ):
+                    qualified_start += 1
+                if argument.startswith("::", qualified_start):
+                    return True
+                position = angle_start + 1
+        return False
 
     def _replace_discovered_struct_template_references(
         self,
@@ -16444,17 +18532,15 @@ class MetalPreprocessor(HLSLPreprocessor):
             specialization_arguments,
             concrete_arguments,
         ):
-            normalized_pattern = self._normalize_template_argument_text(
-                specialization_argument
+            normalized_pattern = (
+                self._canonicalize_partial_struct_specialization_argument(
+                    specialization_argument
+                )
             )
-            normalized_argument = self._normalize_template_argument_text(
-                concrete_argument
-            )
-            normalized_pattern = self._normalize_struct_specialization_argument(
-                normalized_pattern
-            )
-            normalized_argument = self._normalize_struct_specialization_argument(
-                normalized_argument
+            normalized_argument = (
+                self._canonicalize_partial_struct_specialization_argument(
+                    concrete_argument
+                )
             )
             if normalized_pattern != normalized_argument and not (
                 self._equivalent_template_boolean_literals(
@@ -16481,6 +18567,50 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not parameter_names <= set(bindings):
             return None
         return bindings
+
+    def _canonicalize_partial_struct_specialization_argument(
+        self,
+        argument: str,
+    ) -> str:
+        text = self._normalize_struct_specialization_argument(
+            self._normalize_template_argument_text(argument)
+        )
+        for _ in range(len(self._materialized_struct_specializations) + 1):
+            replacements: List[Tuple[int, int, str]] = []
+            for match in IDENTIFIER_RE.finditer(text):
+                specialization = self._materialized_struct_specializations.get(
+                    match.group(0)
+                )
+                if specialization is None:
+                    continue
+                source_name, source_arguments = specialization
+                replacements.append(
+                    (
+                        match.start(),
+                        match.end(),
+                        f"{source_name}<{', '.join(source_arguments)}>",
+                    )
+                )
+            if not replacements:
+                break
+            updated = self._apply_text_replacements(text, replacements)
+            if updated == text:
+                break
+            text = updated
+        replacements: List[Tuple[int, int, str]] = []
+        for match in IDENTIFIER_RE.finditer(text):
+            decomposed = self._scalar_and_width(match.group(0))
+            if decomposed is None or decomposed[1] == 1:
+                continue
+            scalar, width = decomposed
+            replacements.append((match.start(), match.end(), f"vec<{scalar}, {width}>"))
+        text = self._apply_text_replacements(text, replacements)
+        text = re.sub(
+            r"(?<![A-Za-z0-9_:])(?:::)?metal\s*::\s*(?=vec\s*<)",
+            "",
+            text,
+        )
+        return self._normalize_template_argument_text(text)
 
     def _qualified_template_struct_alias_at(
         self,

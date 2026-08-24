@@ -39,6 +39,35 @@ def _write_two_entry_fixture(repo):
     )
 
 
+def _write_mixed_entry_fixture(repo):
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "mixed.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int BM, int BN>
+            [[kernel]] void tiled(
+                device T* output [[buffer(0)]],
+                uint3 group_size [[threads_per_threadgroup]]) {
+                output[0] = T(group_size.x + group_size.y + group_size.z);
+            }
+
+            template <typename T, int k_lanes>
+            [[kernel]] void wide(
+                device T* output [[buffer(0)]],
+                uint3 group_size [[threads_per_threadgroup]]) {
+                output[0] = T(group_size.x + group_size.y + group_size.z);
+            }
+
+            instantiate_kernel("tile_small", tiled, float, 1, 2)
+            instantiate_kernel("wide_float_kl32", wide, float, 32)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+
 def _write_ordinary_two_entry_fixture(repo):
     shader_dir = repo / "shaders"
     shader_dir.mkdir(parents=True)
@@ -253,6 +282,171 @@ def test_project_workgroup_rules_emit_directx_library_and_opengl_entries(tmp_pat
         == 4
     )
     assert all(artifact["execution"] is not None for artifact in runtime["artifacts"])
+
+
+def test_project_entry_workgroup_rules_override_mixed_template_families(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_mixed_entry_fixture(repo)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl"]
+            output_dir = "out"
+
+            [project.workgroup_size_rules]
+            "shaders/mixed.metal" = ["32", "BN", "BM"]
+
+            [project.entry_workgroup_size_rules."shaders/mixed.metal"]
+            "wide_*" = ["32", "k_lanes / 8", "1"]
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report = project_api.translate_project(
+        project_api.load_project_config(repo),
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+
+    assert payload["project"]["entryWorkgroupSizeRules"] == {
+        "shaders/mixed.metal": {
+            "wide_*": ["32", "k_lanes / 8", "1"],
+        }
+    }
+    assert payload["project"]["entryWorkgroupSizeRuleCount"] == 1
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+
+    directx = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "directx"
+    )
+    entries = {
+        entry["sourceEntryPoint"]: entry
+        for entry in directx["execution"]["entryPoints"]
+    }
+    assert {name: entry["workgroupSize"] for name, entry in entries.items()} == {
+        "tile_small": [32, 2, 1],
+        "wide_float_kl32": [32, 4, 1],
+    }
+    assert "entryPattern" not in entries["tile_small"]["rule"]
+    assert entries["wide_float_kl32"]["rule"] == {
+        "components": ["32", "k_lanes / 8", "1"],
+        "sourcePattern": "shaders/mixed.metal",
+        "entryPattern": "wide_*",
+        "path": (
+            'project.entry_workgroup_size_rules["shaders/mixed.metal"]' '["wide_*"]'
+        ),
+    }
+    assert directx["execution"]["provenance"] == {
+        "kind": "materialized-template-entry-rules",
+        "path": 'project.entry_workgroup_size_rules["shaders/mixed.metal"]',
+    }
+    generated = (repo / directx["path"]).read_text(encoding="utf-8")
+    assert "[numthreads(32, 2, 1)]" in generated
+    assert "[numthreads(32, 4, 1)]" in generated
+
+    opengl = [
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "opengl"
+    ]
+    assert len(opengl) == 2
+    assert {
+        artifact["entryPoint"]["source"]: artifact["execution"]["entryPoints"][0][
+            "workgroupSize"
+        ]
+        for artifact in opengl
+    } == {
+        "tile_small": [32, 2, 1],
+        "wide_float_kl32": [32, 4, 1],
+    }
+
+    report_path = repo / "mixed-report.json"
+    report.write_json(report_path)
+    assert project_api.validate_project_report(report_path)["success"] is True
+
+
+def test_project_entry_workgroup_rules_reject_unmatched_entry_pattern(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_mixed_entry_fixture(repo)
+    report = project_api.translate_project(
+        project_api.ProjectConfig(
+            root=repo,
+            targets=["directx"],
+            workgroup_size_rules={"shaders/mixed.metal": [32, "BN", "BM"]},
+            entry_workgroup_size_rules={
+                "shaders/mixed.metal": {
+                    "missing_*": [32, "k_lanes / 8", 1],
+                }
+            },
+        ),
+        format_output=False,
+    ).to_json()
+
+    diagnostic = _diagnostic(
+        report,
+        "project.translate.workgroup-size-entry-rule-unmatched",
+    )
+    assert diagnostic["details"]["executionSpecialization"]["reason"] == (
+        "configured-entry-pattern-unmatched"
+    )
+    assert report["summary"]["failedCount"] == 1
+
+
+def test_project_entry_workgroup_rule_report_rejects_rehashed_selector_tampering(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_mixed_entry_fixture(repo)
+    report = project_api.translate_project(
+        project_api.ProjectConfig(
+            root=repo,
+            targets=["directx"],
+            workgroup_size_rules={"shaders/mixed.metal": [32, "BN", "BM"]},
+            entry_workgroup_size_rules={
+                "shaders/mixed.metal": {
+                    "wide_*": [32, "k_lanes / 8", 1],
+                }
+            },
+        ),
+        format_output=False,
+    )
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    execution = artifact["execution"]
+    entry = next(
+        item
+        for item in execution["entryPoints"]
+        if item["sourceEntryPoint"] == "wide_float_kl32"
+    )
+    entry["rule"]["entryPattern"] = "tile_*"
+    entry["identity"] = project_pipeline._workgroup_rule_entry_identity(
+        source=artifact["source"],
+        source_hash=artifact["sourceHash"],
+        target=artifact["target"],
+        variant=None,
+        entry=entry,
+    )
+    execution["identity"] = project_pipeline._workgroup_rule_execution_identity(
+        source=artifact["source"],
+        source_hash=artifact["sourceHash"],
+        target=artifact["target"],
+        variant=None,
+        source_entry_points=execution["sourceEntryPoints"],
+        entry_points=execution["entryPoints"],
+        provenance=execution["provenance"],
+    )
+    report_path = repo / "tampered-entry-rule.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = project_api.validate_project_report(report_path)
+
+    assert validation["success"] is False
+    invalid = _diagnostic(validation, "project.validate.invalid-report")
+    assert "entryPattern must match" in invalid["message"]
 
 
 def test_project_workgroup_size_materializes_each_host_named_entry(tmp_path):
@@ -823,3 +1017,23 @@ def test_project_config_rejects_malformed_workgroup_size_rules(tmp_path, rules):
 
     with pytest.raises(ValueError, match="workgroup_size_rules"):
         project_api.ProjectConfig(root=repo, workgroup_size_rules=rules)
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        {"shaders/mixed.metal": {}},
+        {"shaders/mixed.metal": {"": [32, "K", 1]}},
+        {"shaders/mixed.metal": {"wide_*": [32, "K"]}},
+        {"shaders/mixed.metal": {"wide_*": [32, True, 1]}},
+    ],
+)
+def test_project_config_rejects_malformed_entry_workgroup_size_rules(
+    tmp_path,
+    rules,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError, match="entry_workgroup_size_rules"):
+        project_api.ProjectConfig(root=repo, entry_workgroup_size_rules=rules)

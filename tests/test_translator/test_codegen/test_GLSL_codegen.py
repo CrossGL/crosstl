@@ -34939,6 +34939,32 @@ def test_opengl_lowers_expected_scalar_and_vector_conversions(tmp_path):
     )
 
 
+def test_opengl_broadcasts_scalar_literals_to_vector_assignments(tmp_path):
+    shader = """
+    shader VectorLiteralBroadcasts {
+        compute {
+            void main() {
+                vec2 value = 0;
+                vec2 values[2];
+                value = 0;
+                values[0] = 0;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "vec2 value = vec2(0);" in generated
+    assert "value = vec2(0);" in generated
+    assert "values[0] = vec2(0);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "vector_literal_broadcasts",
+    )
+
+
 def test_opengl_lowers_scalar_boolean_compound_assignments(tmp_path):
     shader = """
     shader ScalarBooleanCompoundAssignments {
@@ -39298,6 +39324,41 @@ def test_opengl_entry_scoped_generation_prunes_unreachable_global_declarations()
     assert "selected_helper" in generated
     assert "unselectedConstant" not in generated
     assert "unselectedGlobal" not in generated
+
+
+def test_opengl_module_generation_prunes_unreachable_concrete_helpers(tmp_path):
+    source = """
+    shader ModuleReachability {
+        float Concrete__reachable_leaf(float self, float value) {
+            return value + self;
+        }
+
+        float Concrete__reachable_wrapper(float self, float value) {
+            return Concrete__reachable_leaf(self, value) * 2.0;
+        }
+
+        float Concrete__unreachable_vector_to_scalar(float self, vec2 value) {
+            return value;
+        }
+
+        compute {
+            void main(RWStructuredBuffer<float> outputValues @buffer(0)) {
+                outputValues[0] = Concrete__reachable_wrapper(1.0, 3.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(parse_code(tokenize_code(source)))
+
+    assert "Concrete_reachable_leaf" in generated
+    assert "Concrete_reachable_wrapper" in generated
+    assert "Concrete_unreachable_vector_to_scalar" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "module-reachable-concrete-helpers",
+    )
 
 
 def test_opengl_entry_scoped_generation_reports_available_entries():

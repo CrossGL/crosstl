@@ -14,6 +14,7 @@ from crosstl.backend.Metal.preprocessor import (
     MetalStaticAssertionError,
     MetalStructMethodError,
     MetalTemplateSpecializationError,
+    MetalTypeTraitError,
     _MetalIntegralConstantBinding,
 )
 
@@ -893,6 +894,142 @@ def test_preprocessor_removes_proven_static_assertion_after_specialization():
     assert "constexpr int simd_size = 32;" in output
 
 
+def test_preprocessor_folds_concrete_type_trait_values_before_assertions():
+    code = """
+    struct Payload {
+        int value;
+    };
+    struct PayloadTraits {
+        using type = Payload;
+    };
+    using PayloadAlias = Payload;
+    using ConstPayload = const PayloadAlias;
+    using PayloadPointer = device PayloadAlias*;
+
+    kernel void checked_traits(device int* out [[buffer(0)]]) {
+        constexpr bool same = metal::is_same_v<PayloadAlias, Payload>;
+        constexpr bool different = metal::is_same<PayloadAlias, int>::value;
+        constexpr bool integral = is_integral_v<uint>;
+        constexpr bool floating = metal::is_floating_point<float>::value;
+        constexpr bool signed_value = metal::is_signed_v<int>;
+        constexpr bool unsigned_value = metal::is_unsigned<uint>::value;
+        constexpr bool const_value = metal::is_const_v<ConstPayload>;
+        constexpr bool pointer_value = metal::is_pointer<PayloadPointer>::value;
+        constexpr bool qualified = metal::is_same_v<
+            typename PayloadTraits::type, PayloadAlias>;
+        static_assert(
+            same && !different && integral && floating && signed_value &&
+            unsigned_value && const_value && pointer_value && qualified);
+        out[0] = same ? 1 : 0;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    preprocessor._fail_closed_static_assertions = True
+
+    output = preprocessor._evaluate_static_assertions(code)
+
+    assert "static_assert" not in output
+    assert "is_same" not in output
+    assert "is_integral" not in output
+    assert "is_floating_point" not in output
+    assert "is_signed" not in output
+    assert "is_unsigned" not in output
+    assert "is_const" not in output
+    assert "is_pointer" not in output
+    assert "constexpr bool same = true;" in output
+    assert "constexpr bool different = false;" in output
+
+
+def test_preprocessor_folds_type_traits_with_lexically_shadowed_aliases():
+    code = """
+    using Scalar = int;
+
+    kernel void alias_traits(device int* out [[buffer(0)]]) {
+        constexpr bool outer_integral = metal::is_integral_v<Scalar>;
+        {
+            using Scalar = float;
+            constexpr bool inner_floating = metal::is_floating_point_v<Scalar>;
+            out[0] = inner_floating ? 1 : 0;
+        }
+        out[1] = outer_integral ? 1 : 0;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    preprocessor._fail_closed_static_assertions = True
+
+    output = preprocessor._evaluate_static_assertions(code)
+
+    assert "constexpr bool outer_integral = true;" in output
+    assert "constexpr bool inner_floating = true;" in output
+    assert "is_integral_v" not in output
+    assert "is_floating_point_v" not in output
+
+
+def test_preprocessor_folds_type_trait_through_qualified_member_alias():
+    code = """
+    struct FFTIOTypeTraits_float2_float2 {
+        using scalar_T = float2;
+    };
+
+    kernel void qualified_alias_trait(device int* out [[buffer(0)]]) {
+        using scalar_T = typename FFTIOTypeTraits_float2_float2::scalar_T;
+        constexpr bool matches = metal::is_same_v<scalar_T, float2>;
+        out[0] = matches ? 1 : 0;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    preprocessor._fail_closed_static_assertions = True
+
+    output = preprocessor._evaluate_static_assertions(code)
+
+    assert "constexpr bool matches = true;" in output
+    assert "is_same_v" not in output
+
+
+def test_preprocessor_keeps_residual_template_type_traits_unmaterialized():
+    code = """
+    template <typename T>
+    bool trait_value() {
+        return metal::is_same_v<T, int>;
+    }
+
+    kernel void concrete_trait(device int* out [[buffer(0)]]) {
+        out[0] = metal::is_same_v<int, int> ? 1 : 0;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    preprocessor._fail_closed_static_assertions = True
+
+    output = preprocessor._evaluate_static_assertions(code)
+
+    assert "return metal::is_same_v<T, int>;" in output
+    assert "out[0] = true ? 1 : 0;" in output
+
+
+def test_preprocessor_reports_unresolved_concrete_type_trait():
+    code = """
+    kernel void unresolved_trait(device int* out [[buffer(0)]]) {
+        constexpr bool matches = metal::is_same_v<MissingType, int>;
+        out[0] = matches ? 1 : 0;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    preprocessor._fail_closed_static_assertions = True
+
+    with pytest.raises(MetalTypeTraitError) as exc_info:
+        preprocessor._evaluate_static_assertions(code)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.metal-type-trait-unresolved"
+    )
+    assert error.trait == "is_same"
+    assert error.operands == ("MissingType", "int")
+    assert error.resolved_operands == ("MissingType", "int")
+    assert error.reason == "operand-unresolved"
+    assert error.owner == "unresolved_trait"
+
+
 def test_preprocessor_skips_constexpr_index_for_concrete_static_assertion(
     monkeypatch,
 ):
@@ -1237,6 +1374,108 @@ def test_preprocessor_removes_proven_static_assertion_for_concrete_struct_layout
     assert "static_assert" not in output
     assert "struct ScalarPair" in output
     assert "struct TaggedPair" in output
+
+
+def _evaluate_aggregate_static_assertions(
+    assertions,
+    *,
+    operator_body=(
+        "return {a.real * b.real - a.imag * b.imag, "
+        "a.real * b.imag + a.imag * b.real};"
+    ),
+    additional_operators="",
+):
+    code = f"""
+    typedef bfloat bfloat16_t;
+
+    template <typename T>
+    struct Pair {{
+        T real;
+        T imag;
+
+        constexpr Pair(T real, T imag) thread : real(real), imag(imag) {{}}
+    }};
+
+    template <typename T>
+    constexpr Pair<T> operator*(Pair<T> a, Pair<T> b) {{
+        {operator_body}
+    }}
+
+    {additional_operators}
+    {assertions}
+    """
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_explicit_template_struct_instantiations(
+        code
+    )
+    return preprocessor._evaluate_static_assertions(materialized)
+
+
+def test_preprocessor_removes_proven_aggregate_constexpr_static_assertions():
+    output = _evaluate_aggregate_static_assertions("""
+        static_assert(
+            (Pair<half>{1.0h, 2.0h} * Pair<half>{3.0h, 4.0h}).real ==
+                -5.0h);
+        static_assert(
+            (Pair<bfloat16_t>{bfloat16_t(1.0f), bfloat16_t(2.0f)} *
+             Pair<bfloat16_t>{bfloat16_t(3.0f), bfloat16_t(4.0f)}).real ==
+                bfloat16_t(-5.0f));
+        """)
+
+    assert "static_assert" not in output
+    assert "struct Pair_half" in output
+    assert "struct Pair_bfloat16_t" in output
+
+
+def test_preprocessor_rejects_false_aggregate_constexpr_static_assertion():
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        _evaluate_aggregate_static_assertions("""
+            static_assert(
+                (Pair<half>{1.0h, 2.0h} * Pair<half>{3.0h, 4.0h}).real ==
+                    -4.0h);
+            """)
+
+    error = exc_info.value
+    assert error.reason == "assertion-failed"
+    assert error.unresolved_dependencies == ()
+
+
+def test_preprocessor_keeps_stateful_aggregate_constexpr_operator_unresolved():
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        _evaluate_aggregate_static_assertions(
+            """
+            static_assert(
+                (Pair<half>{1.0h, 2.0h} * Pair<half>{3.0h, 4.0h}).real ==
+                    -5.0h);
+            """,
+            operator_body="""
+                T real = a.real * b.real - a.imag * b.imag;
+                return {real, a.real * b.imag + a.imag * b.real};
+            """,
+        )
+
+    assert exc_info.value.reason == "condition-unresolved"
+
+
+def test_preprocessor_keeps_ambiguous_aggregate_constexpr_operator_unresolved():
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        _evaluate_aggregate_static_assertions(
+            """
+            static_assert(
+                (Pair<half>{1.0h, 2.0h} * Pair<half>{3.0h, 4.0h}).real ==
+                    -5.0h);
+            """,
+            additional_operators="""
+                template <typename T, typename U>
+                constexpr Pair<T> operator*(Pair<T> a, Pair<U> b) {
+                    return {
+                        a.real * b.real - a.imag * b.imag,
+                        a.real * b.imag + a.imag * b.real};
+                }
+            """,
+        )
+
+    assert exc_info.value.reason == "condition-unresolved"
 
 
 def test_preprocessor_rejects_false_static_assertion_for_padded_struct_layout():
@@ -3523,6 +3762,244 @@ def test_preprocessor_resolves_scalar_alias_from_selected_partial_specialization
     assert "struct ConditionalType_0_uint_uchar" not in output
 
 
+def test_preprocessor_resolves_file_alias_before_partial_specialization():
+    code = """
+    template <typename T>
+    struct Wrapper {};
+
+    using HalfWrapper = Wrapper<half>;
+
+    template <typename T>
+    struct StorageTraits {
+        using scalar_type = T;
+    };
+
+    template <typename T>
+    struct StorageTraits<Wrapper<T>> {
+        using scalar_type = T;
+    };
+
+    using Scalar = typename StorageTraits<HalfWrapper>::scalar_type;
+    Scalar value;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "using Scalar = half;" in output
+    assert "StorageTraits_HalfWrapper" not in output
+
+
+def test_preprocessor_matches_partial_specialization_through_materialized_alias():
+    code = """
+    template <typename T>
+    struct Complex {
+        T real;
+        T imag;
+    };
+
+    using ComplexHalf = Complex<half>;
+
+    template <typename T>
+    struct StorageTraits {
+        using scalar_type = T;
+    };
+
+    template <typename T>
+    struct StorageTraits<Complex<T>> {
+        using scalar_type = T;
+    };
+
+    using Scalar = typename StorageTraits<ComplexHalf>::scalar_type;
+    Scalar value;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "using Scalar = half;" in output
+    assert "StorageTraits_ComplexHalf" not in output
+
+
+def test_preprocessor_resolves_struct_alias_in_nested_method_parameter_template():
+    code = """
+    template <typename T>
+    struct Packed {
+        T value;
+    };
+
+    template <typename T>
+    struct Reader {
+        using scalar_type = T;
+
+        T read(Packed<scalar_type> value) {
+            return value.value;
+        }
+
+        int shadowed() {
+            using scalar_type = int;
+            Packed<scalar_type> value;
+            return value.value;
+        }
+    };
+
+    Reader<half> reader;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Packed_half" in output
+    assert "struct Packed_int" in output
+    assert "Packed_scalar_type" not in output
+    assert "Packed_half value" in output
+    assert "Packed_int value" in output
+
+
+def test_preprocessor_canonicalizes_vector_partial_specialization_arguments():
+    code = """
+    template <typename T>
+    struct StorageTraits {
+        using scalar_type = T;
+    };
+
+    template <typename T>
+    struct StorageTraits<metal::vec<T, 2>> {
+        using scalar_type = T;
+    };
+
+    template <typename T>
+    struct StorageTraits<vec<T, 3>> {
+        using scalar_type = T;
+    };
+
+    template <typename T>
+    struct StorageTraits<vec<T, 4>> {
+        using scalar_type = T;
+    };
+
+    using FloatScalar = typename StorageTraits<float2>::scalar_type;
+    using HalfScalar = typename StorageTraits<half4>::scalar_type;
+    using UIntScalar = typename StorageTraits<uint3>::scalar_type;
+    using IntScalar = typename StorageTraits<int>::scalar_type;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "using FloatScalar = float;" in output
+    assert "using HalfScalar = half;" in output
+    assert "using UIntScalar = uint;" in output
+    assert "using IntScalar = int;" in output
+
+
+def test_preprocessor_materializes_template_through_qualified_struct_alias():
+    code = """
+    template <typename T>
+    struct Box {
+        T value;
+    };
+
+    struct Traits {
+        using scalar_type = float;
+    };
+
+    Box<typename Traits::scalar_type> value;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Box_float" in output
+    assert "Box_float value;" in output
+    assert "typename Traits::scalar_type" not in output
+
+
+def test_preprocessor_materializes_template_through_specialized_owner_alias():
+    code = """
+    template <typename T>
+    struct Box {
+        T value;
+    };
+
+    template <typename T>
+    struct Traits {
+        using scalar_type = T;
+    };
+
+    Box<typename Traits<float>::scalar_type> value;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Box_float" in output
+    assert "Box_float value;" in output
+    assert "Box_typename_Traits_float_scalar_type" not in output
+    assert "typename Traits<float>::scalar_type" not in output
+
+
+def test_preprocessor_materializes_template_through_nested_owner_aliases():
+    code = """
+    template <typename T>
+    struct Complex {
+        T real;
+        T imag;
+    };
+
+    template <typename T>
+    struct StorageTraits {
+        using scalar_type = T;
+    };
+
+    template <typename T>
+    struct StorageTraits<vec<T, 2>> {
+        using scalar_type = T;
+    };
+
+    template <typename In, typename Out>
+    struct IOTypeTraits {
+        using scalar_type = typename StorageTraits<In>::scalar_type;
+    };
+
+    Complex<typename IOTypeTraits<float2, float2>::scalar_type> value;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Complex_float" in output
+    assert "Complex_float value;" in output
+    assert "Complex_StorageTraits_float2_scalar_type" not in output
+    assert "IOTypeTraits<float2, float2>::scalar_type" not in output
+    assert "StorageTraits<float2>::scalar_type" not in output
+
+
+def test_preprocessor_resolves_local_alias_before_struct_materialization():
+    code = """
+    template <typename T>
+    struct Complex {
+        T real;
+        T imag;
+    };
+
+    template <typename T>
+    struct StorageTraits {
+        using scalar_type = T;
+    };
+
+    template <typename T>
+    struct StorageTraits<vec<T, 2>> {
+        using scalar_type = T;
+    };
+
+    kernel void materialize_local_alias(device float* out [[buffer(0)]]) {
+        using scalar_type = typename StorageTraits<float2>::scalar_type;
+        Complex<scalar_type> value;
+        out[0] = value.real;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Complex_float" in output
+    assert "Complex_float value;" in output
+    assert "Complex_StorageTraits_float2_scalar_type" not in output
+
+
 def test_preprocessor_deduces_partial_struct_specialization_pattern():
     code = """
     template <typename T>
@@ -5099,6 +5576,68 @@ def test_preprocessor_lowering_qualifies_member_only_when_not_shadowed():
     assert "C__apply(c, out[i])" in output
 
 
+def test_preprocessor_member_qualification_respects_local_shadow_scope():
+    code = """
+    struct Reader {
+      float elem;
+      int n;
+
+      float read(bool replace) const {
+        float2 factors = {1.0f / n, -1.0f / n};
+        float result = elem + factors.x;
+        if (replace) {
+          float elem = 2.0f;
+          result += elem;
+        }
+        return result + elem;
+      }
+    };
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert output.count("/ self.n") == 2
+    assert "float result = self.elem + factors.x;" in output
+    assert "float elem = 2.0f;" in output
+    assert "result += elem;" in output
+    assert "return result + self.elem;" in output
+
+
+def test_preprocessor_promoted_member_qualification_respects_shadow_scope():
+    code = """
+    struct Reader {
+      const device float* input;
+      float elem;
+
+      Reader(const device float* input_, float elem_)
+          : input(input_), elem(elem_) {}
+
+      float read(bool replace) const {
+        float result = elem + input[0];
+        if (replace) {
+          float elem = 2.0f;
+          result += elem;
+        }
+        return result + elem;
+      }
+    };
+
+    kernel void run(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      Reader reader(input, 1.0f);
+      output[0] = reader.read(true);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float result = self.elem + crosstl_ptr_input[0];" in output
+    assert "float elem = 2.0f;" in output
+    assert "result += elem;" in output
+    assert "return result + self.elem;" in output
+
+
 def test_preprocessor_lowering_is_noop_without_struct_methods():
     # Regression-safety: a struct with no member functions (and the surrounding
     # kernel) must be byte-identical after the lowering pass.
@@ -6251,6 +6790,37 @@ def test_preprocessor_preserves_local_alias_shadow_in_explicit_cast():
     assert "static_cast<value_type>(value)" in output
 
 
+def test_preprocessor_resolves_struct_scoped_aliases_in_template_helper_calls():
+    code = """
+    template <typename T>
+    T convert(T value) { return value; }
+
+    template <typename T>
+    struct Reader {
+      using scalar_type = T;
+
+      scalar_type read(scalar_type value) {
+        return convert<scalar_type>(value);
+      }
+
+      scalar_type read_shadowed(scalar_type value) {
+        using scalar_type = int;
+        return T(convert<scalar_type>(int(value)));
+      }
+    };
+
+    Reader<half> reader;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "return convert_half(value);" in output
+    assert "return half(convert_int(int(value)));" in output
+    assert "half convert_half(half value)" in output
+    assert "int convert_int(int value)" in output
+    assert "convert_scalar_type" not in output
+
+
 def test_preprocessor_resolves_qualified_owner_alias_with_pointer_target():
     code = """
     template <typename T>
@@ -7218,6 +7788,102 @@ def test_preprocessor_prefers_explicit_operator_specialization():
     assert "complex64_t Remainder__operator_call" in output
     assert "return x % y;" in output
     assert "return y;" not in output
+
+
+def test_preprocessor_prefers_out_of_line_explicit_member_specialization():
+    code = """
+    template <typename In, typename Out>
+    struct Writer {
+      Out write(In value) const thread {
+        return value;
+      }
+    };
+
+    template <>
+    float Writer<float2, float>::write(float2 value) const thread {
+      return value.x;
+    }
+
+    [[kernel]] void run(
+        device float* scalar_out [[buffer(0)]],
+        device float2* vector_out [[buffer(1)]]) {
+      Writer<float2, float> scalar_writer;
+      Writer<float2, float2> vector_writer;
+      scalar_out[0] = scalar_writer.write(float2(3.0f, 4.0f));
+      vector_out[0] = vector_writer.write(float2(5.0f, 6.0f));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    scalar_helper = output.split("float Writer_float2_float__write", 1)[1].split(
+        "}", 1
+    )[0]
+    vector_helper = output.split("float2 Writer_float2_float2__write", 1)[1].split(
+        "}", 1
+    )[0]
+    assert "return value.x;" in scalar_helper
+    assert "return value;" not in scalar_helper
+    assert "return value;" in vector_helper
+    assert "return value.x;" not in vector_helper
+
+
+def test_preprocessor_prefers_namespaced_explicit_call_operator_specialization():
+    code = """
+    namespace fft {
+    template <typename T>
+    struct Projector {
+      T operator()(T value) const thread {
+        return value;
+      }
+    };
+
+    template <>
+    float Projector<float>::operator()(float value) const thread {
+      return value + 1.0f;
+    }
+    }
+
+    [[kernel]] void run(device float* output [[buffer(0)]]) {
+      thread fft::Projector<float> projector;
+      output[0] = projector(3.0f);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    helper = output.split("float Projector_float__operator_call", 1)[1].split("}", 1)[0]
+    assert "return value + 1.0f;" in helper
+    assert "return value;" not in helper
+
+
+def test_preprocessor_rejects_duplicate_explicit_member_specializations():
+    code = """
+    template <typename In, typename Out>
+    struct Writer {
+      Out write(In value) const thread {
+        return value;
+      }
+    };
+
+    template <>
+    float Writer<float2, float>::write(float2 value) const thread {
+      return value.x;
+    }
+
+    template <>
+    float Writer<float2, float>::write(float2 value) const thread {
+      return value.y;
+    }
+
+    Writer<float2, float> writer;
+    """
+
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="explicit member specialization is defined more than once",
+    ):
+        MetalPreprocessor().preprocess(code)
 
 
 def test_preprocessor_instantiates_static_template_method_from_literal():
@@ -9333,10 +9999,20 @@ def test_sfinae_constraint_evaluation_size_and_integral_tables():
         pp._evaluate_template_constraint("!metal::is_integral_v<T>", {"T": "float"})
         is True
     )
-    # An unrecognized constraint / type clean-fails (raises, never guesses).
-    with pytest.raises(MetalPreprocessor._UnrecognizedConstraint):
+    assert (
         pp._evaluate_template_constraint(
             "metal::is_floating_point_v<T>", {"T": "float"}
+        )
+        is True
+    )
+    assert (
+        pp._evaluate_template_constraint("metal::is_same_v<T, float>", {"T": "float"})
+        is True
+    )
+    # An unsupported constraint or unresolved type still clean-fails.
+    with pytest.raises(MetalPreprocessor._UnrecognizedConstraint):
+        pp._evaluate_template_constraint(
+            "metal::is_convertible_v<T, float>", {"T": "float"}
         )
     with pytest.raises(MetalPreprocessor._UnrecognizedConstraint):
         pp._evaluate_template_constraint(less8, {"T": "complex64_t"})

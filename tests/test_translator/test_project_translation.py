@@ -10012,6 +10012,7 @@ def test_translate_project_reports_nested_opengl_workgroup_pointer_bounds(tmp_pa
         "targetArtifact": "translated/opengl/out_of_bounds.glsl",
         "workgroupPointer": {
             "backingName": "sharedValues",
+            "entryPoint": "main",
             "function": "leaf",
             "materializationName": "leaf__glsl_values_main_sharedValues_float_8",
             "offsetExpression": "(values_offset + 1u) (proven 8)",
@@ -14368,6 +14369,44 @@ def test_plain_metal_helper_materialization_deduces_threadgroup_array_decay():
     assert "gemm_loop_finalize_float_MatrixOp_TileLoader(" in materialized
 
 
+def test_plain_metal_helper_reuses_existing_concrete_signature():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <int Width>
+        void radix(thread float* values) {
+          values[0] += Width;
+        }
+
+        void radix_2(thread float* values) {
+          values[0] += 2;
+        }
+
+        [[kernel]] void launch(device float* output [[buffer(0)]]) {
+          radix<2>(output);
+        }
+        """)
+    preprocessor = MetalPreprocessor()
+    known_materializations = project_pipeline._metal_concrete_function_materializations(
+        preprocessor,
+        source,
+        {("radix", ("2",)): "radix_2"},
+    )
+
+    materialized, records, _completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            preprocessor,
+            source,
+            known_materializations=known_materializations,
+        )
+    )
+
+    assert "radix_2(output)" in materialized
+    assert materialized.count("void radix_2(") == 1
+    assert records == []
+    assert materialized_names == {("radix", ("2",), ("thread float*",)): "radix_2"}
+
+
 def test_plain_metal_helper_materialization_recovers_commented_function_boundary():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
@@ -16830,6 +16869,41 @@ def test_metal_concrete_alias_inlining_preserves_struct_scoped_aliases():
     assert "typedef metal::vec<float, 2> frag_type;" in output
     assert "using Scalar" not in output
     assert "float value = 1.0f;" in output
+
+
+def test_metal_concrete_alias_inlining_preserves_underscored_values():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        void consume() {
+            using Scalar = float;
+            constexpr int Width = 4;
+            int r_Width = 0;
+
+            struct Fragment_Scalar_Width {
+                Scalar value;
+            };
+
+            Fragment_Scalar_Width fragment;
+            {
+                r_Width += Width;
+            }
+        }
+        """)
+
+    output = project_pipeline._inline_metal_concrete_using_template_aliases(
+        MetalPreprocessor(),
+        source,
+        [],
+    )
+
+    assert "using Scalar" not in output
+    assert "struct Fragment_float_4" in output
+    assert "float value;" in output
+    assert "Fragment_float_4 fragment;" in output
+    assert "int r_Width = 0;" in output
+    assert "r_Width += Width;" in output
+    assert "r_4" not in output
 
 
 def test_metal_template_alias_canonicalization_preserves_lexical_lookup():
@@ -48285,6 +48359,115 @@ def test_translate_project_removes_proven_metal_static_assertions(tmp_path, targ
     assert "templateMaterialization" not in payload["artifacts"][0]
     output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
     assert "static_assert" not in output
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_folds_materialized_metal_type_traits(tmp_path, target):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "traits.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            struct StorageTraits {
+                using scalar_T = T;
+            };
+
+            template <typename In, typename Out>
+            struct IOTypeTraits {
+                using scalar_T = typename StorageTraits<In>::scalar_T;
+                static_assert(
+                    metal::is_same_v<
+                        scalar_T,
+                        typename StorageTraits<Out>::scalar_T>,
+                    "Storage types must share a scalar type.");
+                int value;
+            };
+
+            template <typename T>
+            [[kernel]] void trait_kernel(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                IOTypeTraits<T, T> traits;
+                traits.value = 1;
+                constexpr bool integral = metal::is_integral_v<T>;
+                out[gid] = integral ? T(traits.value) : T(0);
+            }
+
+            instantiate_kernel("trait_kernel_int", trait_kernel, int)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "is_same" not in output
+    assert "is_integral" not in output
+    assert "static_assert" not in output
+    if target == "directx":
+        assert_directx_compute_validates_if_available(output, tmp_path)
+    else:
+        assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_reports_unresolved_metal_type_trait(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "unresolved_trait.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void unresolved_trait(device int* out [[buffer(0)]]) {
+                static_assert(
+                    metal::is_same_v<MissingType, int>,
+                    "The source type must be materialized.");
+                out[0] = 1;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.metal-type-trait-unresolved"
+    )
+    assert diagnostic["missingCapabilities"] == ["compile-time.type-trait-evaluation"]
+    assert diagnostic["location"]["file"] == "unresolved_trait.metal"
+    assert diagnostic["details"]["typeTrait"] == {
+        "expression": "metal::is_same_v<MissingType, int>",
+        "operands": ["MissingType", "int"],
+        "owner": "unresolved_trait",
+        "reason": "operand-unresolved",
+        "resolvedOperands": ["MissingType", "int"],
+        "suggestedAction": (
+            "materialize every trait operand to a concrete supported type before "
+            "target translation"
+        ),
+        "trait": "is_same",
+    }
+    assert not (repo / payload["artifacts"][0]["path"]).exists()
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])

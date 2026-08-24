@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+CURRENT_MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 HARNESS_PATH = ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
 RMS_NORM_HARNESS_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "prove_rms_norm_specialization.py"
@@ -47,7 +48,9 @@ def test_mlx_porting_contract_uses_exact_pinned_revision():
         )
     )
 
-    assert module.MLX_COMMIT == PINNED_MLX_COMMIT
+    assert module.MLX_REFERENCE_COMMIT == PINNED_MLX_COMMIT
+    assert module.MLX_CORPUS_COMMIT == CURRENT_MLX_COMMIT
+    assert module.MLX_COMMIT == module.MLX_REFERENCE_COMMIT
     assert expected_gaps["commit"] == PINNED_MLX_COMMIT
 
 
@@ -77,16 +80,103 @@ def test_project_config_writer_emits_general_index_range_assertions(tmp_path):
         include=tuple(assertion["source"] for assertion in assertions),
         targets=("opengl",),
         output_dir="generated",
+        subgroup_width_rules={"kernels/a.metal": 32},
         index_range_assertions=assertions,
     )
 
     config = load_project_config(tmp_path, config_path)
+    assert config.subgroup_width_rules == {"kernels/a.metal": "32"}
     assert [assertion.to_json() for assertion in config.index_range_assertions] == list(
         assertions
     )
     assert config_path.read_text(encoding="utf-8").count(
         "[[project.index_range_assertions]]"
     ) == len(assertions)
+
+
+def test_project_config_writer_emits_workgroup_access_assertions(tmp_path):
+    from crosstl.project import load_project_config
+
+    module = _load_harness()
+    config_path = tmp_path / "frontier.toml"
+    assertions = (
+        {
+            "source": "mlx/backend/metal/kernels/fft.metal",
+            "entry_point": "*mem_256_*",
+            "function": "ReadWriter_*",
+            "parameter": "crosstl_ptr_buf",
+            "minimum": 0,
+            "maximum": 255,
+        },
+    )
+
+    module._write_project_config(
+        config_path,
+        include="mlx/backend/metal/kernels/fft.metal",
+        targets=("opengl",),
+        output_dir="generated",
+        workgroup_access_assertions=assertions,
+    )
+
+    config = load_project_config(tmp_path, config_path)
+    assert [
+        assertion.to_json() for assertion in config.workgroup_access_assertions
+    ] == [
+        {
+            "source": assertions[0]["source"],
+            "entryPoint": assertions[0]["entry_point"],
+            "function": assertions[0]["function"],
+            "parameter": assertions[0]["parameter"],
+            "minimum": assertions[0]["minimum"],
+            "maximum": assertions[0]["maximum"],
+        }
+    ]
+    assert config_path.read_text(encoding="utf-8").count(
+        "[[project.workgroup_access_assertions]]"
+    ) == len(assertions)
+
+
+def test_project_config_writer_emits_entry_workgroup_size_rules(tmp_path):
+    from crosstl.project import load_project_config
+
+    module = _load_harness()
+    config_path = tmp_path / "frontier.toml"
+    source = "mlx/backend/metal/kernels/gemv.metal"
+
+    module._write_project_config(
+        config_path,
+        include=source,
+        targets=("directx",),
+        output_dir="generated",
+        variant_specialization_constants={
+            "wide_plain": {
+                "gemv_wide_has_batch": False,
+                "gemv_wide_do_axpby": False,
+            },
+            "wide_batch_axpby": {
+                "gemv_wide_has_batch": True,
+                "gemv_wide_do_axpby": True,
+            },
+        },
+        workgroup_size_rules={source: (32, "BN", "BM")},
+        entry_workgroup_size_rules={source: {"gemv_wide*": (32, "k_lanes / 8", 1)}},
+    )
+
+    config = load_project_config(tmp_path, config_path)
+    assert config.workgroup_size_rules == {source: ("32", "BN", "BM")}
+    assert config.entry_workgroup_size_rules == {
+        source: {"gemv_wide*": ("32", "k_lanes / 8", "1")}
+    }
+    assert config.variant_specialization_constants == {
+        "wide_plain": {
+            "gemv_wide_has_batch": False,
+            "gemv_wide_do_axpby": False,
+        },
+        "wide_batch_axpby": {
+            "gemv_wide_has_batch": True,
+            "gemv_wide_do_axpby": True,
+        },
+    }
 
 
 def test_project_config_writer_emits_dispatch_contracts(tmp_path):
@@ -365,25 +455,32 @@ template <int TAG>
 def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=False):
     per_target = {
         target: {
-            "translatedCount": module.EXPECTED_METAL_KERNEL_COUNT - 1,
+            "translatedCount": module.FULL_CORPUS_EXPECTED_UNIT_COUNT - 1,
             "failedCount": 1,
         }
         for target in module.FULL_CORPUS_TARGETS
     }
     diagnostics_by_code = {
         contract["diagnosticCode"]: 1
-        for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
+        for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
+        if target in module.FULL_CORPUS_TARGETS
     }
-    diagnostics_by_code["project.validate.failed-artifact"] = 3
+    diagnostics_by_code["project.validate.failed-artifact"] = (
+        module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
+    )
     missing_capability_counts = {
         contract["missingCapability"]: 1
-        for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
+        for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items()
+        if target in module.FULL_CORPUS_TARGETS
     }
-    missing_capability_counts["batch.translation"] = 3
+    missing_capability_counts["batch.translation"] = (
+        module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
+    )
     diagnostics = []
     artifacts = []
     extensions = {"directx": ".hlsl", "opengl": ".glsl", "vulkan": ".spvasm"}
-    for target, contract in module.MLX_FENCE_TARGET_CONTRACTS.items():
+    for target in module.FULL_CORPUS_TARGETS:
+        contract = module.MLX_FENCE_TARGET_CONTRACTS[target]
         message = module._atomic_fence_expected_message(contract)
         artifact_path = (
             work_dir
@@ -428,7 +525,7 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
     failed_count = module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
     if include_extra_failure:
         per_target["directx"] = {
-            "translatedCount": module.EXPECTED_METAL_KERNEL_COUNT - 2,
+            "translatedCount": module.FULL_CORPUS_EXPECTED_UNIT_COUNT - 2,
             "failedCount": 2,
         }
         translated_count -= 1
@@ -474,7 +571,7 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
         )
 
     summary = {
-        "unitCount": module.EXPECTED_METAL_KERNEL_COUNT,
+        "unitCount": module.FULL_CORPUS_EXPECTED_UNIT_COUNT,
         "artifactCount": module.FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
         "translatedCount": translated_count,
         "failedCount": failed_count,
@@ -2145,7 +2242,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     arg_reduce = expected_gaps["arg_reduce_status"]
     assert arg_reduce["status"] == "target-dependent"
     assert arg_reduce["source"] == module.MLX_ARG_REDUCE_SOURCE
-    assert arg_reduce["artifact_records"] == len(module.FULL_CORPUS_TARGETS)
+    assert arg_reduce["artifact_records"] == len(module.MLX_REFERENCE_TARGETS)
     assert arg_reduce["translated_artifacts"] == 1
     assert arg_reduce["failed_artifacts"] == 2
     assert arg_reduce["translated_targets"] == ["vulkan"]
@@ -2425,7 +2522,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     pointer_reinterpretation = expected_gaps["pointer_reinterpretation_status"]
     assert pointer_reinterpretation["status"] == "partial"
-    assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert pointer_reinterpretation["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert pointer_reinterpretation["next_kernel_blocked_by"] == [
         "https://github.com/CrossGL/crosstl/issues/1574",
         "https://github.com/CrossGL/crosstl/issues/1544",
@@ -2436,7 +2533,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     callback = expected_gaps["captured_callback_status"]
     assert callback["status"] == "partial"
-    assert callback["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert callback["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert callback["remaining_callback_helpers_blocked_by"] == [
         "https://github.com/CrossGL/crosstl/issues/1554"
     ]
@@ -2446,7 +2543,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     compile_time_loop = expected_gaps["compile_time_loop_status"]
     assert compile_time_loop["status"] == "partial"
-    assert compile_time_loop["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert compile_time_loop["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert "verified integral_constant" in compile_time_loop["supported_contract"]
     assert compile_time_loop["native_validation"] == {
         "directx": "generated-reduced-fixture-dxc-not-run",
@@ -2530,7 +2627,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     struct_scoped_cast_alias = expected_gaps["struct_scoped_cast_alias_status"]
     assert struct_scoped_cast_alias["status"] == "partial"
-    assert struct_scoped_cast_alias["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert struct_scoped_cast_alias["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert struct_scoped_cast_alias["concrete_specializations"] == ["float", "int"]
     assert struct_scoped_cast_alias["qualifier_transport"] == "retained-in-metal-ast"
     assert struct_scoped_cast_alias["strict_crossgl_function_body_parse"] == (
@@ -2558,7 +2655,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     function_local_alias = expected_gaps["function_local_alias_status"]
     assert function_local_alias["status"] == "partial"
-    assert function_local_alias["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert function_local_alias["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert function_local_alias["entry_count"] == 42
     assert function_local_alias["resolved_use_counts"] == {
         "declaration_types": 402,
@@ -2585,7 +2682,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "mlx/backend/metal/kernels/fp_quantized.metal",
         "mlx/backend/metal/kernels/quantized_nax.metal",
     ]
-    assert generic_member_call["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert generic_member_call["targets"] == list(module.MLX_REFERENCE_TARGETS)
     assert generic_member_call["native_validation"] == {
         "directx": "validated-with-glslang-hlsl",
         "opengl": "validated-with-glslang",
@@ -2636,13 +2733,15 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     )
 
     full_corpus = expected_gaps["full_corpus_scout"]
-    assert full_corpus["artifacts"] == module.FULL_CORPUS_EXPECTED_ARTIFACT_COUNT
+    reference_artifact_count = module.EXPECTED_METAL_KERNEL_COUNT * len(
+        module.MLX_REFERENCE_TARGETS
+    )
+    reference_fence_failure_count = len(module.MLX_REFERENCE_TARGETS)
+    assert full_corpus["artifacts"] == reference_artifact_count
     assert full_corpus["expected_translated_artifacts"] == (
-        module.FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT
+        reference_artifact_count - reference_fence_failure_count
     )
-    assert full_corpus["expected_fence_failures"] == (
-        module.FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
-    )
+    assert full_corpus["expected_fence_failures"] == (reference_fence_failure_count)
     assert full_corpus["expected_fence_diagnostics"] == {
         contract["diagnosticCode"]: 1
         for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
@@ -5826,7 +5925,7 @@ def test_opengl_frontier_requires_exact_index_range_assertion_report(
         )
 
 
-def _prepare_fft_opengl_pointer_check(module, tmp_path, *, pointer_overrides=None):
+def _prepare_fft_opengl_toolchain_check(module, tmp_path):
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / ".crosstl-mlx-porting"
     config_dir = work_dir / "configs"
@@ -5836,38 +5935,60 @@ def _prepare_fft_opengl_pointer_check(module, tmp_path, *, pointer_overrides=Non
         path.mkdir(parents=True, exist_ok=True)
 
     artifact_path = (
-        work_dir / "out-fft-opengl-workgroup-pointer" / "opengl" / module.MLX_FFT_SOURCE
+        work_dir / "out-fft-opengl" / "opengl" / module.MLX_FFT_SOURCE
     ).with_suffix(".glsl")
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(
+        """#version 450 core
+void radix_butterfly_2_radix2(vec2 value) {
+}
+void main() {
+}
+""",
+        encoding="utf-8",
+    )
     relative_artifact_path = artifact_path.relative_to(mlx_root).as_posix()
-    pointer_evidence = dict(module.FFT_OPENGL_EXPECTED_POINTER_EVIDENCE)
-    pointer_evidence.update(pointer_overrides or {})
+    expected_workgroup_assertions = [
+        {
+            "source": assertion["source"],
+            "entryPoint": assertion["entry_point"],
+            "function": assertion["function"],
+            "parameter": assertion["parameter"],
+            "minimum": assertion["minimum"],
+            "maximum": assertion["maximum"],
+        }
+        for assertion in module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
+    ]
     report = {
         "kind": "crosstl-project-portability-report",
         "summary": {
             "unitCount": 1,
             "artifactCount": 1,
-            "translatedCount": 0,
-            "failedCount": 1,
-            "diagnosticCounts": {"error": 1, "note": 0, "warning": 0},
-            "diagnosticsByCode": {module.FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1},
-            "missingCapabilityCounts": {
-                module.FFT_OPENGL_EXPECTED_MISSING_CAPABILITY: 1
-            },
+            "translatedCount": 1,
+            "failedCount": 0,
+            "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+            "diagnosticsByCode": {},
+            "missingCapabilityCounts": {},
         },
-        "diagnostics": [
+        "project": {
+            "indexRangeAssertionCount": len(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+            "indexRangeAssertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+            "workgroupAccessAssertionCount": len(
+                module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
+            ),
+            "workgroupAccessAssertions": expected_workgroup_assertions,
+        },
+        "diagnostics": [],
+        "units": [
             {
-                "severity": "error",
-                "code": module.FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
-                "message": module.FFT_OPENGL_EXPECTED_MESSAGE,
-                "location": {"file": module.MLX_FFT_SOURCE},
-                "target": "opengl",
+                "id": module.MLX_FFT_SOURCE,
+                "path": module.MLX_FFT_SOURCE,
                 "sourceBackend": "metal",
-                "missingCapabilities": [module.FFT_OPENGL_EXPECTED_MISSING_CAPABILITY],
-                "details": {
-                    "sourcePath": module.MLX_FFT_SOURCE,
-                    "targetArtifact": relative_artifact_path,
-                    "workgroupPointer": pointer_evidence,
+                "sourceHash": {
+                    "algorithm": "sha256",
+                    "value": module.MLX_FFT_SHA256,
                 },
+                "sourceSizeBytes": module.MLX_FFT_SOURCE_SIZE_BYTES,
             }
         ],
         "artifacts": [
@@ -5876,13 +5997,21 @@ def _prepare_fft_opengl_pointer_check(module, tmp_path, *, pointer_overrides=Non
                 "sourceBackend": "metal",
                 "target": "opengl",
                 "path": relative_artifact_path,
-                "status": "failed",
-                "error": module.FFT_OPENGL_EXPECTED_MESSAGE,
+                "status": "translated",
+                "provenance": {
+                    "intermediate": "crossgl",
+                    "pipeline": "single-file-translate",
+                },
                 "sourceHash": {
                     "algorithm": "sha256",
                     "value": module.MLX_FFT_SHA256,
                 },
                 "sourceSizeBytes": module.MLX_FFT_SOURCE_SIZE_BYTES,
+                "generatedHash": {
+                    "algorithm": "sha256",
+                    "value": module._sha256(artifact_path),
+                },
+                "generatedSizeBytes": artifact_path.stat().st_size,
                 "specializationConstants": [
                     {"id": index}
                     for index in range(
@@ -5902,19 +6031,26 @@ def _prepare_fft_opengl_pointer_check(module, tmp_path, *, pointer_overrides=Non
             }
         ],
     }
-    (report_dir / "fft-opengl-workgroup-pointer.json").write_text(
+    (report_dir / "fft-opengl-toolchain.json").write_text(
         json.dumps(report),
         encoding="utf-8",
     )
-    return mlx_root, work_dir, config_dir, report_dir, log_dir
+    return (
+        (mlx_root, work_dir, config_dir, report_dir, log_dir),
+        artifact_path,
+        expected_workgroup_assertions,
+    )
 
 
-def test_fft_opengl_pointer_frontier_records_next_fail_closed_root(
+def test_fft_opengl_toolchain_records_translation_and_native_validation(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
-    paths = _prepare_fft_opengl_pointer_check(module, tmp_path)
+    paths, artifact_path, expected_workgroup_assertions = (
+        _prepare_fft_opengl_toolchain_check(module, tmp_path)
+    )
+    generated = artifact_path.read_text(encoding="utf-8")
     commands = []
 
     def fake_run_command(name, command, *, log_dir, **kwargs):
@@ -5923,81 +6059,127 @@ def test_fft_opengl_pointer_frontier_records_next_fail_closed_root(
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(name, list(command), 1, stdout_path, stderr_path)
+        if name == "translate-fft-opengl":
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text(generated, encoding="utf-8")
+        if name == "validate-fft-opengl":
+            output_path = Path(command[command.index("-o") + 1])
+            output_path.write_bytes(b"SPIR-V")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(
+        module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}",
+    )
 
-    result = module._check_fft_opengl_workgroup_pointer_frontier(
+    result = module._check_fft_opengl_toolchain(
         *paths,
         "python",
+        require_toolchain=True,
     )
 
     assert result == {
-        "name": "fft-opengl-workgroup-pointer-frontier",
-        "status": "blocked-as-expected",
-        "report": ".crosstl-mlx-porting/reports/fft-opengl-workgroup-pointer.json",
+        "name": "fft-opengl-toolchain",
+        "status": "passed",
+        "report": ".crosstl-mlx-porting/reports/fft-opengl-toolchain.json",
         "source": module.MLX_FFT_SOURCE,
         "sourceHash": module.MLX_FFT_SHA256,
         "target": "opengl",
-        "artifactStatus": "failed",
-        "artifactEmitted": False,
-        "nativeValidationAttempted": False,
-        "nativeValidationStatus": "not-run-no-artifact",
+        "artifactStatus": "translated",
+        "artifactEmitted": True,
+        "generatedHash": module._sha256(artifact_path),
+        "generatedSizeBytes": artifact_path.stat().st_size,
+        "nativeValidationAttempted": True,
+        "nativeValidationStatus": "validated",
+        "nativeValidationOutput": ".crosstl-mlx-porting/validation/fft-opengl.spv",
+        "nativeCompiler": "glslangValidator",
+        "spirvValidator": "spirv-val",
         "templateMaterializationStatus": "materialized",
-        "templateSpecializationCount": 117,
+        "templateSpecializationCount": 99,
         "functionConstantCount": 22,
-        "workgroupPointer": module.FFT_OPENGL_EXPECTED_POINTER_EVIDENCE,
-        "provenanceStatus": "concrete-backing-preserved",
-        "accessRangeStatus": "unprovable",
-        "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1671",
+        "indexRangeAssertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+        "workgroupAccessAssertions": expected_workgroup_assertions,
+        "toolchainRequired": True,
+        "trackedIssues": [],
         "maxTemplateSpecializations": 4096,
         "maxTemplateMaterializationWork": 2097152,
         "runtimeIntegrationIncluded": False,
+        "numericalParityClaimed": False,
         "runtimeParityClaimed": False,
     }
     assert [name for name, _command, _kwargs in commands] == [
-        "translate-fft-opengl-workgroup-pointer"
+        "translate-fft-opengl",
+        "validate-fft-opengl",
+        "validate-fft-opengl-spirv",
     ]
     assert commands[0][2]["check"] is False
-    assert commands[0][2]["timeout_seconds"] == 900
-    assert commands[0][1][-1] == "--no-format"
-    config = (paths[2] / "fft-opengl-workgroup-pointer.toml").read_text(
-        encoding="utf-8"
+    assert (
+        commands[0][2]["timeout_seconds"]
+        == module.FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS
+        == 900
     )
+    assert commands[0][1][-1] == "--no-format"
+    assert commands[1][2] == {"check": False}
+    assert commands[2][2] == {"check": False}
+    config = (paths[2] / "fft-opengl-toolchain.toml").read_text(encoding="utf-8")
     assert f'include = ["{module.MLX_FFT_SOURCE}"]' in config
     assert 'targets = ["opengl"]' in config
+    assert config.count("[[project.index_range_assertions]]") == len(
+        module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS
+    )
+    assert config.count("[[project.workgroup_access_assertions]]") == len(
+        module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
+    )
     assert "max_template_specializations = 4096" in config
     assert "max_template_materialization_work = 2097152" in config
 
 
-def test_fft_opengl_pointer_frontier_rejects_changed_provenance(
+def test_fft_opengl_toolchain_rejects_changed_portability_precondition(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
-    paths = _prepare_fft_opengl_pointer_check(
-        module,
-        tmp_path,
-        pointer_overrides={"backingName": "unknown_shared_storage"},
+    paths, _artifact_path, _expected_workgroup_assertions = (
+        _prepare_fft_opengl_toolchain_check(module, tmp_path)
     )
+    report_path = paths[3] / "fft-opengl-toolchain.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["project"]["workgroupAccessAssertions"][0]["maximum"] -= 1
+    report_path.write_text(json.dumps(report), encoding="utf-8")
 
     def fake_run_command(name, command, *, log_dir, **_kwargs):
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(name, list(command), 1, stdout_path, stderr_path)
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
     with pytest.raises(
         module.PortingCheckError,
-        match="lost concrete workgroup-pointer provenance",
+        match="portability preconditions changed",
     ):
-        module._check_fft_opengl_workgroup_pointer_frontier(*paths, "python")
+        module._check_fft_opengl_toolchain(
+            *paths,
+            "python",
+            require_toolchain=False,
+        )
 
 
-def _prepare_gemv_opengl_frontier_check(module, tmp_path):
+def _configure_small_gemv_opengl_toolchain(module, monkeypatch):
+    monkeypatch.setattr(module, "GEMV_EXPECTED_ENTRY_POINT_COUNT", 2)
+    monkeypatch.setattr(module, "GEMV_EXPECTED_SPECIALIZATION_COUNT", 3)
+    monkeypatch.setattr(
+        module,
+        "GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES",
+        ((32, 1, 1), (32, 8, 1)),
+    )
+
+
+def _prepare_gemv_opengl_toolchain_check(module, tmp_path):
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / ".crosstl-mlx-porting"
     config_dir = work_dir / "configs"
@@ -6006,11 +6188,124 @@ def _prepare_gemv_opengl_frontier_check(module, tmp_path):
     for path in (config_dir, report_dir, log_dir):
         path.mkdir(parents=True, exist_ok=True)
 
-    artifact_path = (
-        work_dir / "out-gemv-opengl-frontier" / "opengl" / module.MLX_GEMV_SOURCE
-    ).with_suffix(".glsl")
-    relative_artifact_path = artifact_path.relative_to(mlx_root).as_posix()
     source_hash = {"algorithm": "sha256", "value": module.MLX_GEMV_SHA256}
+    workgroup_rule_path = f'project.workgroup_size_rules["{module.MLX_GEMV_SOURCE}"]'
+    subgroup_rule_path = f'project.subgroup_width_rules["{module.MLX_GEMV_SOURCE}"]'
+    generated_files = {}
+    artifacts = []
+    for index, workgroup_size in enumerate(
+        module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES,
+        start=1,
+    ):
+        source_entry = f"gemv_fixture_{index}"
+        artifact_path = (
+            work_dir
+            / "out-gemv-opengl"
+            / "opengl"
+            / "mlx/backend/metal/kernels/gemv"
+            / f"{source_entry}.glsl"
+        )
+        relative_artifact_path = artifact_path.relative_to(mlx_root).as_posix()
+        generated = "\n".join(
+            (
+                "#version 450 core",
+                "#extension GL_KHR_shader_subgroup_basic : require",
+                f"#define CROSSTL_REQUIRED_SUBGROUP_WIDTH {module.GEMV_SUBGROUP_WIDTH}u",
+                (
+                    "layout(local_size_x = "
+                    f"{workgroup_size[0]}, local_size_y = {workgroup_size[1]}, "
+                    f"local_size_z = {workgroup_size[2]}) in;"
+                ),
+                "void main() {",
+                "    if (gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH) {",
+                "        return;",
+                "    }",
+                "}",
+                "",
+            )
+        )
+        generated_files[artifact_path] = generated
+        artifacts.append(
+            {
+                "source": module.MLX_GEMV_SOURCE,
+                "sourceBackend": "metal",
+                "target": "opengl",
+                "path": relative_artifact_path,
+                "status": "translated",
+                "sourceHash": source_hash,
+                "sourceSizeBytes": module.MLX_GEMV_SOURCE_SIZE_BYTES,
+                "generatedHash": {
+                    "algorithm": "sha256",
+                    "value": hashlib.sha256(generated.encode("utf-8")).hexdigest(),
+                },
+                "generatedSizeBytes": len(generated.encode("utf-8")),
+                "provenance": {
+                    "intermediate": "crossgl",
+                    "pipeline": "entry-scoped-translate",
+                },
+                "entryPoint": {
+                    "source": source_entry,
+                    "stage": "compute",
+                    "target": "main",
+                },
+                "execution": {
+                    "entryPoints": [
+                        {
+                            "identity": _test_contract_identity(
+                                f"entry-{source_entry}"
+                            ),
+                            "materialization": {
+                                "hostName": source_entry,
+                                "materializedName": source_entry,
+                                "name": "gemv",
+                            },
+                            "materializedEntryPoint": source_entry,
+                            "sourceEntryPoint": source_entry,
+                            "targetEntryPoint": "main",
+                            "parameters": {},
+                            "parameterSources": {},
+                            "rule": {
+                                "components": list(
+                                    module.GEMV_REPORT_WORKGROUP_SIZE_RULE
+                                ),
+                                "path": workgroup_rule_path,
+                                "sourcePattern": module.MLX_GEMV_SOURCE,
+                            },
+                            "subgroupWidth": module.GEMV_SUBGROUP_WIDTH,
+                            "subgroupWidthRule": {
+                                "expression": str(module.GEMV_SUBGROUP_WIDTH),
+                                "path": subgroup_rule_path,
+                                "sourcePattern": module.MLX_GEMV_SOURCE,
+                            },
+                            "workgroupSize": list(workgroup_size),
+                        }
+                    ],
+                    "identity": _test_contract_identity(f"artifact-{source_entry}"),
+                    "provenance": {
+                        "kind": "materialized-template-rule",
+                        "path": workgroup_rule_path,
+                    },
+                    "sourceEntryPoints": [source_entry],
+                    "subgroupWidthEnforcement": dict(
+                        module.GEMV_OPENGL_SUBGROUP_WIDTH_ENFORCEMENT
+                    ),
+                    "subgroupWidthProvenance": {
+                        "kind": "materialized-template-rule",
+                        "path": subgroup_rule_path,
+                    },
+                },
+                "templateMaterialization": {
+                    "status": "materialized",
+                    "specializationCount": module.GEMV_EXPECTED_SPECIALIZATION_COUNT,
+                    "specializations": [
+                        {"materializedName": f"specialization_{item}"}
+                        for item in range(module.GEMV_EXPECTED_SPECIALIZATION_COUNT)
+                    ],
+                    "unsupported": [],
+                },
+            }
+        )
+
     report = {
         "kind": "crosstl-project-portability-report",
         "project": {
@@ -6018,21 +6313,34 @@ def _prepare_gemv_opengl_frontier_check(module, tmp_path):
                 module.MLX_GEMV_SOURCE: list(module.GEMV_REPORT_WORKGROUP_SIZE_RULE),
             },
             "workgroupSizeRuleCount": 1,
+            "subgroupWidthRules": {
+                module.MLX_GEMV_SOURCE: str(module.GEMV_SUBGROUP_WIDTH),
+            },
+            "subgroupWidthRuleCount": 1,
+            "indexRangeAssertions": [
+                {"source": module.MLX_GEMV_SOURCE, **assertion}
+                for assertion in module.GEMV_OPENGL_INDEX_RANGE_ASSERTIONS
+            ],
+            "indexRangeAssertionCount": len(module.GEMV_OPENGL_INDEX_RANGE_ASSERTIONS),
         },
         "summary": {
             "unitCount": 1,
             "skippedCount": 0,
             "targetCount": 1,
-            "artifactCount": 1,
-            "translatedCount": 0,
-            "failedCount": 1,
-            "diagnosticCounts": {"error": 1, "note": 0, "warning": 0},
-            "diagnosticsByCode": {module.GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1},
-            "missingCapabilityCounts": {
-                module.GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY: 1
+            "artifactCount": module.GEMV_EXPECTED_ENTRY_POINT_COUNT,
+            "translatedCount": module.GEMV_EXPECTED_ENTRY_POINT_COUNT,
+            "failedCount": 0,
+            "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+            "diagnosticsByCode": {},
+            "missingCapabilityCounts": {},
+            "artifactProvenanceByPipeline": {
+                "entry-scoped-translate": module.GEMV_EXPECTED_ENTRY_POINT_COUNT,
             },
-            "artifactProvenanceByPipeline": {"single-file-translate": 1},
-            "artifactProvenanceByIntermediate": {"crossgl": 1},
+            "artifactProvenanceByIntermediate": {
+                "crossgl": module.GEMV_EXPECTED_ENTRY_POINT_COUNT,
+            },
+            "sourceMapCount": module.GEMV_EXPECTED_ENTRY_POINT_COUNT,
+            "sourceRemapCount": module.GEMV_EXPECTED_ENTRY_POINT_COUNT,
         },
         "units": [
             {
@@ -6044,49 +6352,10 @@ def _prepare_gemv_opengl_frontier_check(module, tmp_path):
                 "sourceSizeBytes": module.MLX_GEMV_SOURCE_SIZE_BYTES,
             }
         ],
-        "diagnostics": [
-            {
-                "severity": "error",
-                "code": module.GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
-                "message": module.GEMV_OPENGL_EXPECTED_MESSAGE,
-                "location": {"file": module.MLX_GEMV_SOURCE},
-                "target": "opengl",
-                "sourceBackend": "metal",
-                "missingCapabilities": [module.GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY],
-                "details": {
-                    "sourcePath": module.MLX_GEMV_SOURCE,
-                    "targetArtifact": relative_artifact_path,
-                    "workgroupPointer": module.GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE,
-                },
-            }
-        ],
-        "artifacts": [
-            {
-                "source": module.MLX_GEMV_SOURCE,
-                "sourceBackend": "metal",
-                "target": "opengl",
-                "path": relative_artifact_path,
-                "status": "failed",
-                "error": module.GEMV_OPENGL_EXPECTED_MESSAGE,
-                "sourceHash": source_hash,
-                "sourceSizeBytes": module.MLX_GEMV_SOURCE_SIZE_BYTES,
-                "provenance": {
-                    "intermediate": "crossgl",
-                    "pipeline": "single-file-translate",
-                },
-                "templateMaterialization": {
-                    "status": "materialized",
-                    "specializationCount": module.GEMV_EXPECTED_SPECIALIZATION_COUNT,
-                    "specializations": [
-                        {"materializedName": f"specialization_{index}"}
-                        for index in range(module.GEMV_EXPECTED_SPECIALIZATION_COUNT)
-                    ],
-                    "unsupported": [],
-                },
-            }
-        ],
+        "diagnostics": [],
+        "artifacts": artifacts,
     }
-    report_path = report_dir / "gemv-opengl-frontier.json"
+    report_path = report_dir / "gemv-opengl.json"
     report_path.write_text(
         json.dumps(report),
         encoding="utf-8",
@@ -6094,20 +6363,23 @@ def _prepare_gemv_opengl_frontier_check(module, tmp_path):
     return (
         (mlx_root, work_dir, config_dir, report_dir, log_dir),
         report_path,
-        artifact_path,
+        generated_files,
     )
 
 
-def _stub_gemv_opengl_frontier(
+def _stub_gemv_opengl_toolchain(
     module,
     monkeypatch,
     commands,
     report_path,
+    generated_files,
     *,
-    returncode=1,
-    emitted_path=None,
+    returncodes=None,
 ):
     report_text = report_path.read_text(encoding="utf-8")
+    returncodes = returncodes or {}
+
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/tools/{name}")
 
     def fake_run_command(name, command, *, log_dir, **kwargs):
         commands.append((name, list(command), kwargs))
@@ -6115,14 +6387,19 @@ def _stub_gemv_opengl_frontier(
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
-        report_path.write_text(report_text, encoding="utf-8")
-        if emitted_path is not None:
-            emitted_path.parent.mkdir(parents=True, exist_ok=True)
-            emitted_path.write_text("#version 450 core\n", encoding="utf-8")
+        if name == "translate-gemv-opengl":
+            report_path.write_text(report_text, encoding="utf-8")
+            for path, generated in generated_files.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(generated, encoding="utf-8")
+        elif name.startswith("compile-gemv-opengl-"):
+            output_path = Path(command[command.index("-o") + 1])
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"SPIR-V fixture")
         return module.CommandResult(
             name,
             list(command),
-            returncode,
+            returncodes.get(name, 0),
             stdout_path,
             stderr_path,
         )
@@ -6130,206 +6407,172 @@ def _stub_gemv_opengl_frontier(
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
 
-def test_gemv_opengl_frontier_accepts_exact_pinned_failure(
+def test_gemv_opengl_toolchain_accepts_complete_compiler_validation(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
-    paths, report_path, artifact_path = _prepare_gemv_opengl_frontier_check(
+    _configure_small_gemv_opengl_toolchain(module, monkeypatch)
+    paths, report_path, generated_files = _prepare_gemv_opengl_toolchain_check(
         module, tmp_path
     )
     commands = []
-    _stub_gemv_opengl_frontier(module, monkeypatch, commands, report_path)
+    _stub_gemv_opengl_toolchain(
+        module,
+        monkeypatch,
+        commands,
+        report_path,
+        generated_files,
+    )
 
-    result = module._check_gemv_opengl_frontier(*paths, "python")
+    result = module._check_gemv_opengl_toolchain(*paths, "python")
 
-    assert result == {
-        "name": "gemv-opengl-frontier",
-        "status": "blocked-as-expected",
-        "report": ".crosstl-mlx-porting/reports/gemv-opengl-frontier.json",
-        "source": module.MLX_GEMV_SOURCE,
-        "sourceHash": module.MLX_GEMV_SHA256,
-        "target": "opengl",
-        "artifactStatus": "failed",
-        "artifactEmitted": False,
-        "emittedTargetFileCount": 0,
-        "nativeValidationAttempted": False,
-        "nativeValidationStatus": "not-run-no-artifact",
-        "templateMaterializationStatus": "materialized",
-        "templateSpecializationCount": 225,
-        "workgroupSizeRule": [32, "BN", "BM"],
-        "reportWorkgroupSizeRule": ["32", "BN", "BM"],
-        "reportWorkgroupSizeRuleCount": 1,
-        "workgroupSizeRuleConfigured": True,
-        "diagnosticCode": module.GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
-        "missingCapability": module.GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY,
-        "workgroupPointer": module.GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE,
-        "provenanceStatus": "concrete-backing-preserved",
-        "accessRangeStatus": "unprovable",
-        "trackedIssues": [
-            "https://github.com/CrossGL/crosstl/issues/1671",
-            "https://github.com/CrossGL/crosstl/issues/1786",
-        ],
-        "translationBlockedBy": ["https://github.com/CrossGL/crosstl/issues/1671"],
-        "executionContractBlockedBy": [
-            "https://github.com/CrossGL/crosstl/issues/1786",
-        ],
-        "maxTemplateSpecializations": 4096,
-        "maxTemplateMaterializationWork": 2097152,
-        "runtimeExecutionAttempted": False,
-        "runtimeIntegrationIncluded": False,
-        "runnableArtifactClaimed": False,
-        "numericalParityClaimed": False,
-        "runtimeParityClaimed": False,
-    }
+    assert result["name"] == "gemv-opengl-toolchain"
+    assert result["status"] == "passed"
+    assert result["artifactStatus"] == "translated"
+    assert result["artifactCount"] == 2
+    assert result["emittedTargetFileCount"] == 2
+    assert result["reportExecutionEntryCount"] == 2
+    assert result["nativeValidationStatus"] == "validated"
+    assert result["toolchainValidatedArtifactCount"] == 2
+    assert len(result["toolchainValidationRuns"]) == 2
+    assert result["resolvedWorkgroupSizes"] == [[32, 1, 1], [32, 8, 1]]
+    assert result["subgroupWidth"] == 32
+    assert result["subgroupWidthRuleConfigured"] is True
+    assert result["translationBlockedBy"] == []
+    assert result["executionContractBlockedBy"] == []
+    assert result["runtimeExecutionAttempted"] is False
+    assert result["runtimeIntegrationIncluded"] is False
+    assert result["numericalParityClaimed"] is False
+    assert result["runtimeParityClaimed"] is False
     assert [name for name, _command, _kwargs in commands] == [
-        "translate-gemv-opengl-frontier"
+        "translate-gemv-opengl",
+        "compile-gemv-opengl-001",
+        "validate-gemv-opengl-001",
+        "compile-gemv-opengl-002",
+        "validate-gemv-opengl-002",
     ]
     assert commands[0][2]["check"] is False
-    assert commands[0][2]["timeout_seconds"] == 900
+    assert (
+        commands[0][2]["timeout_seconds"]
+        == module.GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS
+        == 1500
+    )
     assert commands[0][1][-1] == "--no-format"
-    assert not artifact_path.exists()
-    config = (paths[2] / "gemv-opengl-frontier.toml").read_text(encoding="utf-8")
+    assert all(path.is_file() for path in generated_files)
+    config = (paths[2] / "gemv-opengl.toml").read_text(encoding="utf-8")
     assert f'include = ["{module.MLX_GEMV_SOURCE}"]' in config
     assert 'targets = ["opengl"]' in config
     assert "[project.workgroup_size_rules]" in config
     assert f'"{module.MLX_GEMV_SOURCE}" = [32, "BN", "BM"]' in config
+    assert "[project.subgroup_width_rules]" in config
+    assert f'"{module.MLX_GEMV_SOURCE}" = "32"' in config
+    assert config.count("[[project.index_range_assertions]]") == len(
+        module.GEMV_OPENGL_INDEX_RANGE_ASSERTIONS
+    )
     assert "max_template_specializations = 4096" in config
     assert "max_template_materialization_work = 2097152" in config
 
 
-def test_gemv_opengl_frontier_rejects_wrong_diagnostic(
+def test_gemv_opengl_toolchain_rejects_incomplete_artifact_accounting(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
-    paths, report_path, _artifact_path = _prepare_gemv_opengl_frontier_check(
+    _configure_small_gemv_opengl_toolchain(module, monkeypatch)
+    paths, report_path, generated_files = _prepare_gemv_opengl_toolchain_check(
         module, tmp_path
     )
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["summary"]["diagnosticsByCode"] = {"project.translate.other": 1}
-    report["diagnostics"][0]["code"] = "project.translate.other"
+    report["summary"]["translatedCount"] = 1
     report_path.write_text(json.dumps(report), encoding="utf-8")
     commands = []
-    _stub_gemv_opengl_frontier(module, monkeypatch, commands, report_path)
+    _stub_gemv_opengl_toolchain(
+        module, monkeypatch, commands, report_path, generated_files
+    )
 
-    with pytest.raises(module.PortingCheckError, match="diagnostic summary changed"):
-        module._check_gemv_opengl_frontier(*paths, "python")
+    with pytest.raises(module.PortingCheckError, match="every entry-scoped artifact"):
+        module._check_gemv_opengl_toolchain(*paths, "python")
 
-    assert [name for name, _command, _kwargs in commands] == [
-        "translate-gemv-opengl-frontier"
-    ]
+    assert [name for name, _command, _kwargs in commands] == ["translate-gemv-opengl"]
 
 
-def test_gemv_opengl_frontier_rejects_missing_report_workgroup_rule(
+def test_gemv_opengl_toolchain_rejects_missing_subgroup_rule(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
-    paths, report_path, _artifact_path = _prepare_gemv_opengl_frontier_check(
+    _configure_small_gemv_opengl_toolchain(module, monkeypatch)
+    paths, report_path, generated_files = _prepare_gemv_opengl_toolchain_check(
         module, tmp_path
     )
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["project"]["workgroupSizeRules"] = {}
-    report["project"]["workgroupSizeRuleCount"] = 0
+    report["project"]["subgroupWidthRules"] = {}
+    report["project"]["subgroupWidthRuleCount"] = 0
     report_path.write_text(json.dumps(report), encoding="utf-8")
     commands = []
-    _stub_gemv_opengl_frontier(module, monkeypatch, commands, report_path)
+    _stub_gemv_opengl_toolchain(
+        module, monkeypatch, commands, report_path, generated_files
+    )
 
-    with pytest.raises(module.PortingCheckError, match="exact workgroup-size rule"):
-        module._check_gemv_opengl_frontier(*paths, "python")
+    with pytest.raises(module.PortingCheckError, match="exact subgroup-width rule"):
+        module._check_gemv_opengl_toolchain(*paths, "python")
 
 
-def test_gemv_opengl_frontier_rejects_emitted_artifact(
+def test_gemv_opengl_toolchain_rejects_generated_hash_mismatch(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
-    paths, report_path, artifact_path = _prepare_gemv_opengl_frontier_check(
+    _configure_small_gemv_opengl_toolchain(module, monkeypatch)
+    paths, report_path, generated_files = _prepare_gemv_opengl_toolchain_check(
+        module, tmp_path
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["artifacts"][0]["generatedHash"]["value"] = "0" * 64
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    commands = []
+    _stub_gemv_opengl_toolchain(
+        module, monkeypatch, commands, report_path, generated_files
+    )
+
+    with pytest.raises(module.PortingCheckError, match="hash or size"):
+        module._check_gemv_opengl_toolchain(*paths, "python")
+
+
+def test_gemv_opengl_toolchain_rejects_native_compile_failure(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    _configure_small_gemv_opengl_toolchain(module, monkeypatch)
+    paths, report_path, generated_files = _prepare_gemv_opengl_toolchain_check(
         module, tmp_path
     )
     commands = []
-    _stub_gemv_opengl_frontier(
+    _stub_gemv_opengl_toolchain(
         module,
         monkeypatch,
         commands,
         report_path,
-        emitted_path=artifact_path,
+        generated_files,
+        returncodes={"compile-gemv-opengl-002": 1},
     )
 
-    with pytest.raises(module.PortingCheckError, match="emitted GLSL"):
-        module._check_gemv_opengl_frontier(*paths, "python")
+    with pytest.raises(module.PortingCheckError, match="failed to compile"):
+        module._check_gemv_opengl_toolchain(*paths, "python")
 
 
-def test_gemv_opengl_frontier_rejects_translation_success(
-    tmp_path,
-    monkeypatch,
-):
-    module = _load_harness()
-    paths, report_path, _artifact_path = _prepare_gemv_opengl_frontier_check(
-        module, tmp_path
-    )
-    commands = []
-    _stub_gemv_opengl_frontier(
-        module,
-        monkeypatch,
-        commands,
-        report_path,
-        returncode=0,
-    )
-
-    with pytest.raises(module.PortingCheckError, match="must remain fail-closed"):
-        module._check_gemv_opengl_frontier(*paths, "python")
-
-
-def test_gemv_opengl_frontier_rejects_missing_report_provenance(
-    tmp_path,
-    monkeypatch,
-):
-    module = _load_harness()
-    paths, report_path, _artifact_path = _prepare_gemv_opengl_frontier_check(
-        module, tmp_path
-    )
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["artifacts"][0].pop("provenance")
-    report_path.write_text(json.dumps(report), encoding="utf-8")
-    commands = []
-    _stub_gemv_opengl_frontier(module, monkeypatch, commands, report_path)
-
-    with pytest.raises(module.PortingCheckError, match="artifact provenance changed"):
-        module._check_gemv_opengl_frontier(*paths, "python")
-
-
-def test_gemv_opengl_frontier_rejects_changed_specialization_count(
-    tmp_path,
-    monkeypatch,
-):
-    module = _load_harness()
-    paths, report_path, _artifact_path = _prepare_gemv_opengl_frontier_check(
-        module, tmp_path
-    )
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    materialization = report["artifacts"][0]["templateMaterialization"]
-    materialization["specializationCount"] -= 1
-    materialization["specializations"].pop()
-    report_path.write_text(json.dumps(report), encoding="utf-8")
-    commands = []
-    _stub_gemv_opengl_frontier(module, monkeypatch, commands, report_path)
-
-    with pytest.raises(module.PortingCheckError, match="specialization count changed"):
-        module._check_gemv_opengl_frontier(*paths, "python")
-
-
-def test_gemv_opengl_frontier_flag_replaces_toolchain_flag():
+def test_gemv_opengl_toolchain_flag_is_available(tmp_path, monkeypatch):
     module = _load_harness()
 
     args = module.parse_args(
-        ["--mlx-root", "/tmp/mlx", "--require-opengl-gemv-frontier"]
+        ["--mlx-root", "/tmp/mlx", "--require-opengl-gemv-toolchain"]
     )
 
-    assert args.require_opengl_gemv_frontier is True
+    assert args.require_opengl_gemv_toolchain is True
     with pytest.raises(SystemExit):
-        module.parse_args(["--mlx-root", "/tmp/mlx", "--require-opengl-gemv-toolchain"])
+        module.parse_args(["--mlx-root", "/tmp/mlx", "--require-opengl-gemv-frontier"])
 
 
 def _test_contract_identity(value):
@@ -7834,7 +8077,7 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
 
     config = (config_dir / "full-corpus.toml").read_text(encoding="utf-8")
     assert 'include = ["mlx/backend/metal/kernels/**/*.metal"]' in config
-    assert 'targets = ["directx", "opengl", "vulkan"]' in config
+    assert 'targets = ["directx", "opengl"]' in config
     assert "max_template_specializations = 4096" in config
     assert "max_template_materialization_work = 131072" in config
     assert commands == [
@@ -7856,22 +8099,20 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
         ]
     ]
     assert "--run-toolchains" not in commands[0]
-    assert result["unitCount"] == 40
-    assert result["artifactCount"] == 120
-    assert result["translatedCount"] == 117
-    assert result["failedCount"] == 3
+    assert result["unitCount"] == 42
+    assert result["artifactCount"] == 84
+    assert result["translatedCount"] == 82
+    assert result["failedCount"] == 2
     assert result["status"] == "passed-with-expected-fence-blockers"
     assert result["jobTimeoutSeconds"] == 120
     assert result["targetCounts"] == {
-        "directx": {"translatedCount": 39, "failedCount": 1},
-        "opengl": {"translatedCount": 39, "failedCount": 1},
-        "vulkan": {"translatedCount": 39, "failedCount": 1},
+        "directx": {"translatedCount": 41, "failedCount": 1},
+        "opengl": {"translatedCount": 41, "failedCount": 1},
     }
     assert result["fenceContract"]["status"] == "blocked-as-expected"
     assert set(result["fenceContract"]["targetContracts"]) == {
         "directx",
         "opengl",
-        "vulkan",
     }
     assert result["shaderArtifactsOnly"] is True
     assert result["runtimeIntegrationIncluded"] is False
@@ -8025,9 +8266,9 @@ def test_full_corpus_mode_reports_tracked_translation_errors(tmp_path, monkeypat
     )
 
     assert result["status"] == "blocked-by-tracked-issues"
-    assert result["translatedCount"] == 116
-    assert result["failedCount"] == 4
-    assert result["expectedFenceFailureCount"] == 3
+    assert result["translatedCount"] == 81
+    assert result["failedCount"] == 3
+    assert result["expectedFenceFailureCount"] == 2
     assert result["unexpectedFailedCount"] == 1
     assert result["unexpectedErrorDiagnosticsByCode"] == {
         "project.translate.failed": 1,
@@ -8076,7 +8317,7 @@ def test_full_corpus_mode_reports_tracked_timeout_without_report(tmp_path, monke
     assert result["jobTimeoutSeconds"] == 120
     assert result["checkpoint"]["produced"] is True
     assert result["checkpoint"]["state"] == "running"
-    assert result["checkpoint"]["completedCount"] == 3
+    assert result["checkpoint"]["completedCount"] == 2
     assert result["checkpoint"]["activeCoordinate"] == {
         "source": module.MLX_ARG_REDUCE_SOURCE,
         "target": "directx",
@@ -9343,7 +9584,7 @@ def test_full_corpus_checkpoint_probe_records_verified_resume_coordinate():
     }
 
 
-def test_fft_opengl_evidence_records_provenance_without_artifact_claims():
+def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():
     module = _load_harness()
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -9351,44 +9592,54 @@ def test_fft_opengl_evidence_records_provenance_without_artifact_claims():
         )
     )
 
-    status = gaps["opengl_fft_workgroup_pointer_status"]
-    assert status["status"] == "blocked-after-provenance"
+    status = gaps["opengl_fft_translation_status"]
+    assert status["status"] == "translated-glslang-spirv-val-validated"
     assert status["source"] == module.MLX_FFT_SOURCE
     assert status["source_sha256"] == module.MLX_FFT_SHA256
+    assert status["source_size_bytes"] == module.MLX_FFT_SOURCE_SIZE_BYTES
     assert status["target"] == "opengl"
     assert status["project_translation"] == {
         "unit_count": 1,
         "artifact_count": 1,
-        "translated_count": 0,
-        "failed_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "index_range_assertion_count": 4,
+        "workgroup_access_assertion_count": 5,
         "max_template_specializations": 4096,
         "max_template_materialization_work": 2097152,
     }
     assert status["materialization"] == {
         "status": "materialized",
-        "specialization_count": 117,
+        "specialization_count": 99,
         "unsupported_specialization_count": 0,
         "function_constant_count": 22,
     }
-    assert status["diagnostic"] == {
-        "code": module.FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
-        "missing_capability": module.FFT_OPENGL_EXPECTED_MISSING_CAPABILITY,
-        "message": module.FFT_OPENGL_EXPECTED_MESSAGE,
-        "workgroup_pointer": module.FFT_OPENGL_EXPECTED_POINTER_EVIDENCE,
+    assert status["portability_preconditions"] == {
+        "index_range_assertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+        "workgroup_access_assertions": list(
+            module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
+        ),
     }
-    assert status["provenance_status"] == "concrete-backing-preserved"
-    assert status["access_range_status"] == "unprovable"
-    assert status["artifact_emitted"] is False
-    assert status["native_validation_status"] == "not-run-no-artifact"
-    assert status["blocked_by"] == [module.FFT_OPENGL_WORKGROUP_POINTER_ISSUE]
+    assert status["artifact_emitted"] is True
+    assert status["native_validation"] == {
+        "compiler": "glslangValidator",
+        "compiler_target": "OpenGL SPIR-V 1.3",
+        "validator": "spirv-val",
+        "validator_target": "SPIR-V 1.3",
+        "status": "passed",
+    }
+    assert status["tracked_issues"] == []
     assert status["runtime_integration_included"] is False
+    assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "the complete pinned `fft.metal` source for OpenGL" in readme
-    assert "All 117 reachable template specializations materialize" in readme
-    assert "workgroup access range cannot be proven" in readme
-    assert "No GLSL artifact is emitted" in readme
+    assert "the complete pinned `fft.metal` source to one standalone OpenGL" in readme
+    assert "99 unique reachable template specializations" in readme
+    assert "five entry-point-scoped workgroup access assertions" in readme
+    assert "validates the binary with `spirv-val`" in readme
+    assert "OpenGL runtime dispatch and numerical parity" in readme
 
 
 def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims():
@@ -9496,7 +9747,7 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
     assert "does not establish wave semantics" in readme
 
 
-def test_gemv_opengl_gap_records_strict_expected_frontier():
+def test_gemv_opengl_evidence_records_all_entry_toolchain_validation():
     module = _load_harness()
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -9504,97 +9755,106 @@ def test_gemv_opengl_gap_records_strict_expected_frontier():
         )
     )
 
-    status = gaps["opengl_gemv_frontier_status"]
-    assert status["status"] == "blocked-as-expected"
+    status = gaps["opengl_gemv_toolchain_status"]
+    assert status["status"] == "all-entry-points-validated"
     assert status["source"] == module.MLX_GEMV_SOURCE
     assert status["source_sha256"] == module.MLX_GEMV_SHA256
     assert status["source_size_bytes"] == module.MLX_GEMV_SOURCE_SIZE_BYTES
     assert status["target"] == "opengl"
     assert status["project_translation"] == {
         "unit_count": 1,
-        "artifact_count": 1,
-        "translated_count": 0,
-        "failed_count": 1,
-        "emitted_target_file_count": 0,
+        "artifact_count": 224,
+        "translated_count": 224,
+        "failed_count": 0,
+        "emitted_target_file_count": 224,
         "max_template_specializations": 4096,
         "max_template_materialization_work": 2097152,
         "workgroup_size_rule": [32, "BN", "BM"],
         "report_workgroup_size_rule": ["32", "BN", "BM"],
+        "subgroup_width_rule": 32,
+        "index_range_assertion_count": len(module.GEMV_OPENGL_INDEX_RANGE_ASSERTIONS),
     }
     assert status["materialization"] == {
         "status": "materialized",
         "specialization_count": 225,
         "unsupported_specialization_count": 0,
+        "artifact_packaging": "entry-scoped-artifacts",
     }
-    assert status["diagnostic"] == {
-        "code": module.GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
-        "missing_capability": module.GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY,
-        "message": module.GEMV_OPENGL_EXPECTED_MESSAGE,
-        "workgroup_pointer": module.GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE,
+    assert status["compiler"] == {
+        "name": "glslangValidator",
+        "target_environment": "OpenGL SPIR-V 1.3",
+        "compiled_artifact_count": 224,
+        "validator": "spirv-val",
+        "validator_target_environment": "spv1.3",
+        "validated_artifact_count": 224,
     }
-    assert status["range_derivation"] == {
-        "sgN": "simd_gid % 8",
-        "simdM": "simd_gid / 8",
-        "bm": "simdM * 1",
-        "tgp_results": "tgp_memory + sgN * 2 + bm",
-        "source_required_subgroup_width": 32,
-        "configured_workgroup_size": [32, 8, 1],
-        "source_reachable_simd_gid": [0, 7],
-        "base_offset_range": [0, 14],
-        "guarded_reduction_max_element_index": 14,
-        "backing_element_count": 16,
-        "highest_valid_element_index": 15,
-    }
-    assert status["artifact_emitted"] is False
-    assert status["native_validation_attempted"] is False
-    assert status["native_validation_status"] == "not-run-no-artifact"
-    assert status["translation_blocked_by"] == [module.GEMV_OPENGL_BACKING_RANGE_ISSUE]
-    assert status["execution_contracts"] == {
-        "workgroup_size_specialization": {
-            "status": "configured-in-project-report",
-            "rule": [32, "BN", "BM"],
-            "report_rule": ["32", "BN", "BM"],
-            "emitted_artifact_contract_claimed": False,
-        },
-        "subgroup_width_specialization": {
-            "status": "not-established",
-            "blocked_by": module.GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
-        },
-    }
-    assert status["blocked_by"] == list(module.GEMV_OPENGL_FRONTIER_TRACKED_ISSUES)
+    execution = status["execution_contracts"]
+    assert execution["workgroup_size_specialization"]["status"] == "established"
+    assert execution["workgroup_size_specialization"]["resolved_sizes"] == [
+        list(size) for size in module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+    ]
+    subgroup = execution["subgroup_width_specialization"]
+    assert subgroup["status"] == "guarded"
+    assert subgroup["required_width"] == module.GEMV_SUBGROUP_WIDTH
+    assert subgroup["enforcement"] == module.GEMV_OPENGL_SUBGROUP_WIDTH_ENFORCEMENT
+    assert (
+        subgroup["fallback_tracked_by"]
+        == module.GEMV_OPENGL_SUBGROUP_WIDTH_FALLBACK_ISSUE
+    )
+    index_ranges = execution["index_range_assertions"]
+    assert index_ranges["count"] == len(module.GEMV_OPENGL_INDEX_RANGE_ASSERTIONS)
+    assert index_ranges["contract_kind"] == (
+        "explicit-host-runtime-portability-preconditions"
+    )
+    assert index_ranges["inferred"] is False
+    assert index_ranges["runtime_enforced"] is False
+    assert status["translation_blocked_by"] == []
+    assert status["native_validation_attempted"] is True
+    assert status["native_validation_status"] == "validated"
+    assert status["tracked_issues"] == list(
+        module.GEMV_OPENGL_PORTABILITY_TRACKED_ISSUES
+    )
     assert status["runtime_execution_attempted"] is False
     assert status["runtime_integration_included"] is False
     assert status["runnable_artifact_claimed"] is False
+    assert status["compiler_validated_artifact_claimed"] is True
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
-    assert module.GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE in gaps["tracked_issues"]
+    assert module.GEMV_OPENGL_SUBGROUP_WIDTH_FALLBACK_ISSUE in gaps["tracked_issues"]
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "--require-opengl-gemv-frontier" in readme
-    assert "--require-opengl-gemv-toolchain" not in readme
+    assert "--require-opengl-gemv-toolchain" in readme
     assert "all 225 specializations materialized" in readme
-    assert "the base offset is in `[0, 14]`" in readme
-    assert "at most element `14` of the 16-element backing" in readme
-    assert "does not configure the exact subgroup width" in readme
-    assert "can now gate execution on a device reporting width 32" in readme
-    assert "attempts no native compiler" in readme
-    assert "does not claim an emitted or runnable GEMV artifact" in readme
+    assert "all 224 entry-scoped GLSL artifacts" in readme
+    assert "validates every resulting SPIR-V 1.3 module" in readme
+    assert "five explicit host index-range preconditions" in readme
+    assert "does not establish runtime execution or numerical parity" in readme
 
 
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):
     module = _load_harness()
     mlx_root = tmp_path / "mlx"
     mlx_root.mkdir()
+    verification_options = []
+    scan_options = []
+
+    def verify_checkout(*args, **kwargs):
+        verification_options.append(kwargs)
+        return {"name": "mlx-checkout", "status": "passed"}
+
+    def scan_kernels(*args, **kwargs):
+        scan_options.append(kwargs)
+        return {"name": "metal-kernel-scan", "status": "passed"}
 
     monkeypatch.setattr(
         module,
         "_verify_mlx_checkout",
-        lambda *args: {"name": "mlx-checkout", "status": "passed"},
+        verify_checkout,
     )
     monkeypatch.setattr(
         module,
         "_scan_metal_kernels",
-        lambda *args: {"name": "metal-kernel-scan", "status": "passed"},
+        scan_kernels,
     )
     monkeypatch.setattr(
         module,
@@ -9647,8 +9907,10 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         module,
-        "_check_fft_opengl_workgroup_pointer_frontier",
-        lambda *args: pytest.fail("OpenGL FFT pointer frontier should not run"),
+        "_check_fft_opengl_toolchain",
+        lambda *args, **kwargs: pytest.fail(
+            "OpenGL FFT toolchain proof should not run"
+        ),
     )
 
     result = module.run_checks(
@@ -9670,11 +9932,19 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
         "full-corpus",
     ]
     assert result["scope"]["mode"] == module.FULL_CORPUS_MODE
+    assert verification_options == [{"expected_commit": CURRENT_MLX_COMMIT}]
+    assert scan_options == [
+        {
+            "expected_unit_count": 42,
+            "targets": ("directx", "opengl"),
+        }
+    ]
     assert result["scope"]["metalRoundTripIncluded"] is True
-    assert result["scope"]["fullCorpusExpectedUnitCount"] == 40
-    assert result["scope"]["fullCorpusExpectedArtifactCount"] == 120
-    assert result["scope"]["fullCorpusExpectedTranslatedArtifactCount"] == 117
-    assert result["scope"]["fullCorpusExpectedFenceFailureCount"] == 3
+    assert result["repository"]["commit"] == CURRENT_MLX_COMMIT
+    assert result["scope"]["fullCorpusExpectedUnitCount"] == 42
+    assert result["scope"]["fullCorpusExpectedArtifactCount"] == 84
+    assert result["scope"]["fullCorpusExpectedTranslatedArtifactCount"] == 82
+    assert result["scope"]["fullCorpusExpectedFenceFailureCount"] == 2
     assert result["scope"]["referenceAccessorProofIncluded"] is False
     assert result["scope"]["referenceAccessorTargets"] == []
     assert result["scope"]["referenceAccessorDirectxToolchainRequired"] is False
@@ -9684,7 +9954,8 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     assert (
         result["scope"]["templateMemberBufferPointerNativeValidationIncluded"] is False
     )
-    assert result["scope"]["fftOpenGLWorkgroupPointerFrontierIncluded"] is False
+    assert result["scope"]["fftOpenGLToolchainIncluded"] is False
+    assert result["scope"]["fftOpenGLToolchainRequired"] is False
     assert result["scope"]["runtimeParityClaimed"] is False
 
 
@@ -9696,12 +9967,15 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     monkeypatch.setattr(
         module,
         "_verify_mlx_checkout",
-        lambda *args: {"name": "mlx-checkout", "status": "passed"},
+        lambda *args, **kwargs: {"name": "mlx-checkout", "status": "passed"},
     )
     monkeypatch.setattr(
         module,
         "_scan_metal_kernels",
-        lambda *args: {"name": "metal-kernel-scan", "status": "passed"},
+        lambda *args, **kwargs: {
+            "name": "metal-kernel-scan",
+            "status": "passed",
+        },
     )
     monkeypatch.setattr(
         module,
@@ -9783,20 +10057,26 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "_check_opengl_frontier",
         fake_opengl_frontier_check,
     )
+    fft_opengl_requirements = []
+
+    def fake_fft_opengl_toolchain(*args, require_toolchain):
+        fft_opengl_requirements.append(require_toolchain)
+        return {
+            "name": "fft-opengl-toolchain",
+            "status": "passed",
+        }
+
     monkeypatch.setattr(
         module,
-        "_check_fft_opengl_workgroup_pointer_frontier",
-        lambda *args: {
-            "name": "fft-opengl-workgroup-pointer-frontier",
-            "status": "blocked-as-expected",
-        },
+        "_check_fft_opengl_toolchain",
+        fake_fft_opengl_toolchain,
     )
     monkeypatch.setattr(
         module,
-        "_check_gemv_opengl_frontier",
+        "_check_gemv_opengl_toolchain",
         lambda *args: {
-            "name": "gemv-opengl-frontier",
-            "status": "blocked-as-expected",
+            "name": "gemv-opengl-toolchain",
+            "status": "passed",
         },
     )
     monkeypatch.setattr(
@@ -9839,7 +10119,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
             require_vulkan_native_runtime=False,
             require_opengl_native_runtime=True,
             require_opengl_frontier_toolchain=True,
-            require_opengl_gemv_frontier=True,
+            require_opengl_gemv_toolchain=True,
             require_vulkan_gemv_toolchain=True,
             mode=module.REDUCED_FRONTIER_MODE,
         )
@@ -9857,8 +10137,8 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "arange-opengl",
         "gemv-directx-compiler-frontier",
         "opengl-frontier",
-        "fft-opengl-workgroup-pointer-frontier",
-        "gemv-opengl-frontier",
+        "fft-opengl-toolchain",
+        "gemv-opengl-toolchain",
         "gemv-vulkan-toolchain",
         "runtime-readiness",
     ]
@@ -9866,6 +10146,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     assert directx_frontier_requirements == [False]
     assert vulkan_frontier_requirements == [(False, True)]
     assert opengl_frontier_requirements == [True]
+    assert fft_opengl_requirements == [True]
     assert runtime_requirements == [
         {
             "require_vulkan_native_runtime": False,
@@ -9874,8 +10155,9 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     ]
     assert result["scope"]["openglFrontierToolchainRequired"] is True
     assert result["scope"]["directxGemvCompilerFrontierRequired"] is True
-    assert result["scope"]["fftOpenGLWorkgroupPointerFrontierIncluded"] is True
-    assert result["scope"]["openglGemvFrontierRequired"] is True
+    assert result["scope"]["fftOpenGLToolchainIncluded"] is True
+    assert result["scope"]["fftOpenGLToolchainRequired"] is True
+    assert result["scope"]["openglGemvToolchainRequired"] is True
     assert result["scope"]["openglNativeRuntimeRequired"] is True
     assert result["scope"]["vulkanGemvToolchainRequired"] is True
     assert result["scope"]["runtimeReadinessIncluded"] is True

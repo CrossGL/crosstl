@@ -2383,12 +2383,21 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     harness = (
         ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
     ).read_text(encoding="utf-8")
-    mlx_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+    mlx_reference_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+    mlx_corpus_commit = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
     assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
-    assert mlx_commit in mlx_porting
+    assert f'MLX_COMMIT: "{mlx_reference_commit}"' in mlx_porting
+    assert f'MLX_CORPUS_COMMIT: "{mlx_corpus_commit}"' in mlx_porting
+    assert 'git -C mlx-upstream checkout "$MLX_COMMIT"' in mlx_porting
+    assert 'git -C mlx-upstream checkout "$MLX_CORPUS_COMMIT"' in mlx_porting
+    assert '--expected-commit "$MLX_COMMIT"' in mlx_porting
+    assert "--expected-unit-count 40" in mlx_porting
+    assert "--expected-entry-count 16446" in mlx_porting
+    assert "Enumerate current MLX Metal entry points" in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
+    assert "timeout-minutes: 60" in mlx_porting
     assert re.search(r"\bschedule\s*:", mlx_porting)
     assert 'cron: "31 4 * * 1"' in mlx_porting
     assert "github.event_name != 'schedule'" in mlx_porting
@@ -2401,8 +2410,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--require-directx-toolchain" in mlx_porting
     assert "--require-directx-gemv-compiler-frontier" in mlx_porting
     assert "--require-opengl-frontier-toolchain" in mlx_porting
-    assert "--require-opengl-gemv-frontier" in mlx_porting
-    assert "--require-opengl-gemv-toolchain" not in mlx_porting
+    assert "--require-opengl-gemv-toolchain" in mlx_porting
+    assert "--require-opengl-gemv-frontier" not in mlx_porting
     assert "--require-vulkan-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-native-runtime" in mlx_porting
     assert "--require-opengl-native-runtime" in mlx_porting
@@ -2516,11 +2525,15 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "GEMV_OPENGL_WORKGROUP_SIZE_ISSUE" not in mlx_porting
     assert 'gemv_directx["numthreadsContractEstablished"] is not True' in mlx_porting
     assert 'gemv_directx["exactWorkgroupSizeEstablished"] is not True' in mlx_porting
-    assert 'checks["gemv-opengl-frontier"]' in mlx_porting
-    assert 'scope["openglGemvFrontierRequired"]' in mlx_porting
+    assert 'checks["gemv-opengl-toolchain"]' in mlx_porting
+    assert 'scope["openglGemvToolchainRequired"]' in mlx_porting
     assert 'gemv_opengl["workgroupSizeRuleConfigured"] is not True' in mlx_porting
     assert 'gemv_opengl["runnableArtifactClaimed"] is not False' in mlx_porting
-    assert "OpenGL GEMV fail-closed evidence is incomplete" in mlx_porting
+    assert 'gemv_opengl["toolchainValidatedArtifactCount"]' in mlx_porting
+    assert 'gemv_opengl["compilerValidatedArtifactClaimed"] is not True' in (
+        mlx_porting
+    )
+    assert "OpenGL GEMV toolchain evidence is incomplete" in mlx_porting
     assert 'checks["reference-accessor-lvalue-identity"]' in mlx_porting
     assert "reference accessor proof accounting is incomplete" in mlx_porting
     assert "reference accessor {target} storage evidence is incomplete" in mlx_porting

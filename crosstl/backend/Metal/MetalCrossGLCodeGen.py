@@ -10724,6 +10724,22 @@ class MetalToCrossGLConverter:
             None,
         )
         if helper_prefix is None:
+            shortened_prefixes = [
+                helper_name[: match.start()]
+                for match in re.finditer(r"__", helper_name)
+                if match.start()
+            ]
+            helper_prefix = next(
+                (
+                    candidate
+                    for candidate in reversed(shortened_prefixes)
+                    if any(
+                        concrete.startswith(f"{candidate}_") for concrete in prefixes
+                    )
+                ),
+                None,
+            )
+        if helper_prefix is None:
             return None
         return {
             "owner": owner,
@@ -10970,7 +10986,8 @@ class MetalToCrossGLConverter:
         arguments.extend(
             self.generate_expression(argument, is_main) for argument in expression.args
         )
-        return f"{self.sanitize_identifier(selected.name)}({', '.join(arguments)})"
+        function_name = self.sanitize_identifier(self.function_output_name(selected))
+        return f"{function_name}({', '.join(arguments)})"
 
     def map_function_call_name(self, name, args=None):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
@@ -12407,6 +12424,11 @@ class MetalToCrossGLConverter:
             wide_vector_alias = self.wide_vector_type_info(resolved_alias)
             if wide_vector_alias is not None:
                 return f"{wide_vector_alias['type_name']}{alias_suffix}"
+            canonical_struct = self.canonical_concrete_struct_alias_target(
+                resolved_alias
+            )
+            if canonical_struct is not None:
+                return f"{self.map_type(canonical_struct)}{alias_suffix}"
 
         array_type = self.metal_array_type_parts(metal_type)
         if array_type:
@@ -12495,6 +12517,45 @@ class MetalToCrossGLConverter:
             return f"{mapped}{suffix}"
         mapped = self.map_scoped_type_name(base)
         return f"{mapped}{suffix}"
+
+    def canonical_concrete_struct_alias_target(self, metal_type):
+        candidate = str(metal_type or "").strip()
+        array_type = self.metal_array_type_parts(candidate)
+        if array_type:
+            element_type, size = array_type
+            canonical_element = self.canonical_concrete_struct_alias_target(
+                element_type
+            )
+            if canonical_element is None:
+                return None
+            return f"{canonical_element}[{self.format_array_extent(size)}]"
+        suffix = ""
+        while candidate.endswith(("*", "&")):
+            suffix = candidate[-1] + suffix
+            candidate = candidate[:-1].strip()
+        candidate = re.sub(
+            r"^(?:(?:const|device|thread|threadgroup|constant|volatile|restrict)\s+)+",
+            "",
+            candidate,
+        )
+        for tag_prefix in ("struct ", "union "):
+            if candidate.startswith(tag_prefix):
+                candidate = candidate[len(tag_prefix) :].strip()
+                break
+        if (
+            candidate in self.struct_name_map
+            or candidate in self.struct_name_map.values()
+        ):
+            return f"{candidate}{suffix}"
+        if "::" not in candidate:
+            return None
+        unqualified = candidate.rsplit("::", 1)[-1]
+        if (
+            unqualified in self.struct_name_map
+            and unqualified not in self.ambiguous_struct_names
+        ):
+            return f"{unqualified}{suffix}"
+        return None
 
     def metal_cooperative_matrix_type_parts(self, metal_type):
         candidate = self.metal_source_overload_value_type(metal_type)

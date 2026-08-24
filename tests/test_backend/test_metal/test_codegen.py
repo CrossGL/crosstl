@@ -1350,6 +1350,91 @@ def test_codegen_rebinds_lowered_struct_sibling_overload_with_resources():
     )
 
 
+def test_codegen_transports_selected_lowered_member_overload(tmp_path):
+    source = """
+    struct Reader {
+        const device float2* input;
+
+        Reader(const device float2* input_) : input(input_) {}
+
+        float2 post_in(float2 elem) const {
+            return elem;
+        }
+
+        float2 post_in(float elem) const {
+            return float2(elem, 0.0f);
+        }
+
+        float2 load() const {
+            return post_in(input[0]);
+        }
+    };
+
+    kernel void read_value(
+        const device float2* input [[buffer(0)]],
+        device float2* output [[buffer(1)]]) {
+        Reader reader(input);
+        output[0] = reader.load();
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(source))
+    normalized = normalize(crossgl)
+    vector_helper = "Reader__post_in__metal_overload_2"
+    load_body = normalized.rsplit("Reader__load", 1)[1].split("}", 1)[0]
+
+    assert f"vec2 {vector_helper}(" in normalized
+    assert f"return {vector_helper}(self, crosstl_ptr_input," in load_body
+    assert "return Reader__post_in(self, crosstl_ptr_input," not in load_body
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+
+    assert "Reader_post_in_metal_overload_2" in glsl
+    assert "Reader__post_in__metal_overload_2" in hlsl
+    assert_opengl_compute_validates_if_available(
+        glsl,
+        tmp_path,
+        "selected-lowered-member-overload",
+    )
+
+
+def test_codegen_rebinds_lowered_member_with_defaulted_owner_prefix():
+    lowered = """
+    struct Reader_float2_0_false { int tag; };
+
+    float2 Reader_float2__post_in(
+        thread const Reader_float2_0_false& self,
+        const device float2* crosstl_ptr_input,
+        float2 elem) {
+        return elem;
+    }
+
+    float2 Reader_float2__post_in(
+        thread const Reader_float2_0_false& self,
+        const device float2* crosstl_ptr_input,
+        float elem) {
+        return float2(elem, 0.0f);
+    }
+
+    float2 Reader_float2__load(
+        thread const Reader_float2_0_false& self,
+        const device float2* crosstl_ptr_input) {
+        return post_in(crosstl_ptr_input[0]);
+    }
+    """
+
+    crossgl = normalize(convert(lowered))
+    load_body = crossgl.split("Reader_float2__load", 1)[1].split("}", 1)[0]
+
+    assert (
+        "Reader_float2__post_in__metal_overload_2("
+        "self, crosstl_ptr_input, crosstl_ptr_input[0])" in load_body
+    )
+    assert "return post_in(" not in load_body
+
+
 def test_codegen_does_not_rebind_global_call_from_lowered_struct_method():
     lowered = """
     struct Reader { int bias; };
@@ -5653,9 +5738,9 @@ def test_codegen_size_t_typedef_uses_parseable_crossgl_alias_from_moltenvk():
     assert parse_crossgl(crossgl) is not None
 
 
-def test_codegen_omits_user_type_aliases_from_public_metal_headers():
-    # Reduced from MetalPetal's MTIShaderLib.h: CrossGL can use the user type
-    # directly, but cannot parse a typedef whose source is another user type.
+def test_codegen_canonicalizes_user_type_aliases_from_public_metal_headers():
+    # Reduced from MetalPetal's MTIShaderLib.h: CrossGL uses the declared user
+    # type directly because it cannot represent a typedef to another user type.
     code = """
     typedef MTIVertex VertexIn;
 
@@ -5670,7 +5755,8 @@ def test_codegen_omits_user_type_aliases_from_public_metal_headers():
     crossgl = convert(code)
 
     assert "typedef MTIVertex VertexIn;" not in crossgl
-    assert "VertexIn in_" in crossgl
+    assert "vec4 passthrough(MTIVertex in_)" in crossgl
+    assert "VertexIn" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -6988,6 +7074,83 @@ def test_codegen_using_alias():
     """
     result = convert(code)
     assert "typedef uint Index;" in result
+
+
+def test_codegen_canonicalizes_global_alias_to_concrete_struct(tmp_path):
+    code = """
+    struct Value_float {
+        float value;
+        Value_float(float input) : value(input) {}
+    };
+
+    using ValueAlias = Value_float;
+    using ChainedValueAlias = ValueAlias;
+
+    ChainedValueAlias make_value(ValueAlias input) {
+        ValueAlias local = (ValueAlias)input;
+        ChainedValueAlias values[1] = {local};
+        return ChainedValueAlias(values[0].value);
+    }
+
+    kernel void alias_kernel(
+        const device ValueAlias* input [[buffer(0)]],
+        device ChainedValueAlias* output [[buffer(1)]]) {
+        output[0] = make_value(input[0]);
+    }
+    """
+
+    result = convert(code)
+
+    assert "ValueAlias" not in result
+    assert "ChainedValueAlias" not in result
+    assert "Value_float make_value(Value_float input)" in result
+    assert "Value_float local = input;" in result
+    assert "Value_float[1] values;" in result
+    assert "crosstl_ctor_Value_float_1(values[0].value)" in result
+    assert "StructuredBuffer<Value_float> input @buffer(0)" in result
+    assert "RWStructuredBuffer<Value_float> output @buffer(1)" in result
+    assert parse_crossgl(result) is not None
+
+    source_path = tmp_path / "concrete-struct-alias.metal"
+    source_path.write_text(code, encoding="utf-8")
+    outputs = {
+        target: crosstl.translate(
+            str(source_path),
+            backend=target,
+            format_output=False,
+        )
+        for target in ("directx", "opengl")
+    }
+    assert all("ValueAlias" not in output for output in outputs.values())
+    HLSLParser(HLSLLexer(outputs["directx"]).tokenize()).parse()
+    assert_opengl_compute_validates_if_available(
+        outputs["opengl"],
+        tmp_path,
+        "concrete-struct-alias",
+    )
+
+
+def test_codegen_canonicalizes_qualified_concrete_struct_alias():
+    code = """
+    namespace values {
+    struct Value_float {
+        float value;
+    };
+    }
+
+    using QualifiedAlias = values::Value_float;
+
+    QualifiedAlias identity(QualifiedAlias input) {
+        return input;
+    }
+    """
+
+    result = convert(code)
+
+    assert "Value_float identity(Value_float input)" in result
+    assert "QualifiedAlias" not in result
+    assert "values::Value_float" not in result
+    assert parse_crossgl(result) is not None
 
 
 def test_codegen_function_table_call_and_icb_methods():
@@ -12362,6 +12525,56 @@ def test_codegen_materializes_pinned_mlx_perform_fft_bool_specializations():
         assert "true ?" in output
         assert "value + 11" in output
         assert "value + 2" in output
+
+
+def test_codegen_prefers_out_of_line_explicit_member_specialization(tmp_path):
+    code = """
+    template <typename In, typename Out>
+    struct Writer {
+      Out write(In value) const thread {
+        return value;
+      }
+    };
+
+    template <>
+    float Writer<float2, float>::write(float2 value) const thread {
+      return value.x;
+    }
+
+    kernel void run(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      if (index == 0) {
+        thread Writer<float2, float> writer;
+        output[0] = writer.write(float2(3.0f, 4.0f));
+      }
+    }
+    """
+
+    crossgl = convert(code)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    for generated in (crossgl, hlsl, glsl):
+        assert "return value.x;" in generated
+        assert "return value;" not in generated
+
+    assert_opengl_compute_validates_if_available(
+        glsl,
+        tmp_path,
+        "explicit_member_specialization",
+    )
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "explicit_member_specialization.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_codegen_propagates_nested_value_template_specializations():

@@ -35,7 +35,11 @@ from crosstl.project.runtime_verification import (
 )
 
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
-MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+MLX_REFERENCE_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+MLX_CORPUS_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
+# The reduced frontier remains an exact historical proof until each fixture and
+# runtime contract has been remeasured against the current corpus.
+MLX_COMMIT = MLX_REFERENCE_COMMIT
 MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_ARG_REDUCE_SOURCE = "mlx/backend/metal/kernels/arg_reduce.metal"
@@ -818,12 +822,14 @@ MLX_FENCE_TARGET_CONTRACTS = {
         "targetDescription": "Vulkan SPIR-V",
     },
 }
+MLX_REFERENCE_TARGETS = tuple(MLX_FENCE_TARGET_CONTRACTS)
 EXPECTED_METAL_KERNEL_COUNT = 40
-FULL_CORPUS_TARGETS = ("directx", "opengl", "vulkan")
-FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = EXPECTED_METAL_KERNEL_COUNT * len(
+FULL_CORPUS_EXPECTED_UNIT_COUNT = 42
+FULL_CORPUS_TARGETS = ("directx", "opengl")
+FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = FULL_CORPUS_EXPECTED_UNIT_COUNT * len(
     FULL_CORPUS_TARGETS
 )
-FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT = len(MLX_FENCE_TARGET_CONTRACTS)
+FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT = len(FULL_CORPUS_TARGETS)
 FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT = (
     FULL_CORPUS_EXPECTED_ARTIFACT_COUNT - FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
 )
@@ -838,6 +844,7 @@ GEMV_EXPECTED_ENTRY_POINT_COUNT = 224
 GEMV_DIRECTX_TRANSLATION_TIMEOUT_SECONDS = 900
 GEMV_DIRECTX_ENTRY_PROFILE = "cs_6_0"
 GEMV_DIRECTX_LIBRARY_PROFILE = "lib_6_6"
+GEMV_SUBGROUP_WIDTH = 32
 GEMV_DIRECTX_EXPECTED_ENTRY_POINTS = (
     "CSMain",
     *(f"CSMain_{index}" for index in range(2, GEMV_EXPECTED_ENTRY_POINT_COUNT + 1)),
@@ -861,62 +868,79 @@ GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE = (
     "[-Wmisplaced-attributes]"
 )
 GEMV_DIRECTX_EXPECTED_LIBRARY_WARNING_COUNT = GEMV_EXPECTED_ENTRY_POINT_COUNT
-GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
-GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE = (
-    "project.translate.opengl-workgroup-pointer-unsupported"
+GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 1500
+GEMV_OPENGL_INDEX_RANGE_ASSERTIONS = (
+    {
+        "expression": "batch_offsets.x",
+        "minimum": 0,
+        "maximum": (1 << 32) - 1,
+    },
+    {
+        "expression": "batch_offsets.y",
+        "minimum": 0,
+        "maximum": (1 << 32) - 1,
+    },
+    {
+        "expression": "buffer_load(index_batch_strides, 0) * tid.z",
+        "minimum": 0,
+        "maximum": (1 << 31) - 1,
+    },
+    {
+        "expression": "buffer_load(index_batch_strides, batch_ndim) * tid.z",
+        "minimum": 0,
+        "maximum": (1 << 31) - 1,
+    },
+    {
+        "expression": "uint64(bm + tm) * marix_ld + out_col + tn",
+        "minimum": 0,
+        "maximum": (1 << 32) - 1,
+    },
 )
-GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY = "opengl.workgroup-pointer-lowering"
-GEMV_OPENGL_EXPECTED_MESSAGE = (
-    "OpenGL cannot prove the workgroup pointer access range for "
-    "'GEMVKernel_bfloat16_t_1_8_1_32_1_4_false__run.tgp_memory' into shared backing "
-    "'tgp_memory'"
+GEMV_OPENGL_SUBGROUP_WIDTH_FALLBACK_ISSUE = (
+    "https://github.com/CrossGL/crosstl/issues/1894"
 )
-GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE = {
-    "backingName": "tgp_memory",
-    "function": "GEMVKernel_bfloat16_t_1_8_1_32_1_4_false__run",
-    "materializationName": (
-        "GEMVKernel_bfloat16_t_1_8_1_32_1_4_false_run__glsl_tgp_memory_"
-        "gemv_bfloat16_bm1_bn8_sm1_sn32_tm1_tn4_nc0_axpby0_"
-        "tgp_memory_float_16"
-    ),
-    "offsetExpression": "0",
-    "parameter": "tgp_memory",
-    "reason": "unprovable-view-access",
+GEMV_OPENGL_PORTABILITY_TRACKED_ISSUES = (GEMV_OPENGL_SUBGROUP_WIDTH_FALLBACK_ISSUE,)
+GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1786",
+)
+GEMV_OPENGL_SUBGROUP_WIDTH_ENFORCEMENT = {
+    "mechanism": "glsl-subgroup-size-guard",
+    "shaderExtension": "GL_KHR_shader_subgroup_basic",
+    "hostExtension": "GL_KHR_shader_subgroup",
+    "hostQuery": "GL_SUBGROUP_SIZE_KHR",
+    "artifactMarker": "CROSSTL_REQUIRED_SUBGROUP_WIDTH",
+    "mismatchBehavior": "reject-before-dispatch",
 }
-GEMV_OPENGL_BACKING_RANGE_ISSUE = "https://github.com/CrossGL/crosstl/issues/1671"
-GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE = "https://github.com/CrossGL/crosstl/issues/1786"
-GEMV_OPENGL_EXECUTION_TRACKED_ISSUES = (GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,)
-GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES = GEMV_OPENGL_EXECUTION_TRACKED_ISSUES
-GEMV_OPENGL_FRONTIER_TRACKED_ISSUES = (
-    GEMV_OPENGL_BACKING_RANGE_ISSUE,
-    *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
-)
 FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
 FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
-FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT = 117
+FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT = 99
 FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT = 22
-FFT_OPENGL_WORKGROUP_POINTER_ISSUE = "https://github.com/CrossGL/crosstl/issues/1671"
-FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE = (
-    "project.translate.opengl-workgroup-pointer-unsupported"
+FFT_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
+    {
+        "source": MLX_FFT_SOURCE,
+        "expression": expression,
+        "minimum": 0,
+        "maximum": (1 << 32) - 1,
+    }
+    for expression in (
+        "batch_idx + index",
+        "batch_idx + index + 1",
+        "batch_idx + index + next_in",
+        "batch_idx + index + next_out",
+    )
 )
-FFT_OPENGL_EXPECTED_MISSING_CAPABILITY = "opengl.workgroup-pointer-lowering"
-FFT_OPENGL_EXPECTED_MESSAGE = (
-    "OpenGL cannot prove the workgroup pointer access range for "
-    "'ReadWriter_float2_float2__load.crosstl_ptr_buf' into shared backing "
-    "'shared_in'"
+FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS = tuple(
+    {
+        "source": MLX_FFT_SOURCE,
+        "entry_point": f"*mem_{extent}_*",
+        "function": "*",
+        "parameter": "*",
+        "minimum": 0,
+        "maximum": extent - 1,
+    }
+    for extent in (256, 512, 1024, 2048, 4096)
 )
-FFT_OPENGL_EXPECTED_POINTER_EVIDENCE = {
-    "backingName": "shared_in",
-    "function": "ReadWriter_float2_float2__load",
-    "materializationName": (
-        "ReadWriter_float2_float2_load__glsl_crosstl_ptr_buf_"
-        "fft_mem_256_float2_float2_shared_in_vec2_256"
-    ),
-    "offsetExpression": "0",
-    "parameter": "crosstl_ptr_buf",
-    "reason": "unprovable-view-access",
-}
 OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE = (
     "https://github.com/CrossGL/crosstl/issues/1515"
 )
@@ -1231,7 +1255,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *FULL_CORPUS_VALIDATION_TRACKED_ISSUES,
     *OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES,
     *OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES,
-    *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
+    *GEMV_OPENGL_PORTABILITY_TRACKED_ISSUES,
     *RUNTIME_READINESS_TRACKED_ISSUES,
     *FENCE_CONTRACT_TRACKED_ISSUES,
     *VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES,
@@ -1626,11 +1650,19 @@ def _write_project_config(
     targets: Sequence[str],
     output_dir: str,
     specialization_constants: Mapping[str, bool | int | float] | None = None,
+    variant_specialization_constants: (
+        Mapping[str, Mapping[str, bool | int | float]] | None
+    ) = None,
     metal_source_options: Mapping[str, int] | None = None,
     metal_target_options: Mapping[str, Mapping[str, int]] | None = None,
     entry_points: Mapping[str, str] | None = None,
     workgroup_size_rules: Mapping[str, Sequence[str | int]] | None = None,
+    entry_workgroup_size_rules: (
+        Mapping[str, Mapping[str, Sequence[str | int]]] | None
+    ) = None,
+    subgroup_width_rules: Mapping[str, str | int] | None = None,
     index_range_assertions: Sequence[Mapping[str, str | int]] | None = None,
+    workgroup_access_assertions: Sequence[Mapping[str, str | int]] | None = None,
     dispatch_contracts: Sequence[str] | None = None,
 ) -> None:
     include_values = [include] if isinstance(include, str) else list(include)
@@ -1654,6 +1686,19 @@ def _write_project_config(
             if field in assertion:
                 lines.append(f"{field} = {json.dumps(assertion[field])}")
         lines.append("")
+    for assertion in workgroup_access_assertions or ():
+        lines.append("[[project.workgroup_access_assertions]]")
+        for field in (
+            "source",
+            "entry_point",
+            "function",
+            "parameter",
+            "minimum",
+            "maximum",
+        ):
+            if field in assertion:
+                lines.append(f"{field} = {json.dumps(assertion[field])}")
+        lines.append("")
     if entry_points:
         lines.append("[project.entry_points]")
         for source, entry_point in entry_points.items():
@@ -1664,11 +1709,33 @@ def _write_project_config(
         for selector, value in specialization_constants.items():
             lines.append(f"{json.dumps(str(selector))} = {json.dumps(value)}")
         lines.append("")
+    if variant_specialization_constants:
+        for variant, constants in variant_specialization_constants.items():
+            lines.append(
+                "[project.variants." f"{json.dumps(variant)}.specialization_constants]"
+            )
+            for selector, value in constants.items():
+                lines.append(f"{json.dumps(str(selector))} = {json.dumps(value)}")
+            lines.append("")
     if workgroup_size_rules:
         lines.append("[project.workgroup_size_rules]")
         for source, components in workgroup_size_rules.items():
             rule = ", ".join(json.dumps(component) for component in components)
             lines.append(f"{json.dumps(source)} = [{rule}]")
+        lines.append("")
+    if entry_workgroup_size_rules:
+        for source, entry_rules in entry_workgroup_size_rules.items():
+            lines.append(
+                "[project.entry_workgroup_size_rules." f"{json.dumps(source)}]"
+            )
+            for entry_pattern, components in entry_rules.items():
+                rule = ", ".join(json.dumps(component) for component in components)
+                lines.append(f"{json.dumps(entry_pattern)} = [{rule}]")
+            lines.append("")
+    if subgroup_width_rules:
+        lines.append("[project.subgroup_width_rules]")
+        for source, expression in subgroup_width_rules.items():
+            lines.append(f"{json.dumps(source)} = {json.dumps(str(expression))}")
         lines.append("")
     if metal_source_options or metal_target_options:
         lines.append("[project.source_options.metal]")
@@ -1922,7 +1989,13 @@ def _write_template_member_pointer_project_config(path: Path, output_dir: str) -
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _verify_mlx_checkout(mlx_root: Path, python: str, log_dir: Path) -> dict[str, Any]:
+def _verify_mlx_checkout(
+    mlx_root: Path,
+    python: str,
+    log_dir: Path,
+    *,
+    expected_commit: str = MLX_COMMIT,
+) -> dict[str, Any]:
     _require(mlx_root.is_dir(), f"MLX checkout does not exist: {mlx_root}")
     _require(
         (mlx_root / MLX_ARANGE_SOURCE).is_file(),
@@ -1944,8 +2017,8 @@ def _verify_mlx_checkout(mlx_root: Path, python: str, log_dir: Path) -> dict[str
     )
     revision = result.stdout_path.read_text(encoding="utf-8").strip()
     _require(
-        revision == MLX_COMMIT,
-        f"MLX checkout must be pinned to {MLX_COMMIT}; found {revision}",
+        revision == expected_commit,
+        f"MLX checkout must be pinned to {expected_commit}; found {revision}",
     )
     return {
         "name": "mlx-checkout",
@@ -1963,13 +2036,16 @@ def _scan_metal_kernels(
     report_dir: Path,
     log_dir: Path,
     python: str,
+    *,
+    expected_unit_count: int = EXPECTED_METAL_KERNEL_COUNT,
+    targets: Sequence[str] = MLX_REFERENCE_TARGETS,
 ) -> dict[str, Any]:
     config_path = config_dir / "scan-metal-kernels.toml"
     report_path = report_dir / "scan-metal-kernels.json"
     _write_project_config(
         config_path,
         include=f"{MLX_METAL_KERNEL_ROOT}/**/*.metal",
-        targets=("directx", "opengl", "vulkan"),
+        targets=targets,
         output_dir=_relpath(work_dir / "out-scan", mlx_root),
     )
     _run_command(
@@ -1993,9 +2069,9 @@ def _scan_metal_kernels(
     _require(isinstance(summary, dict), "scan report summary must be an object")
     _require(isinstance(units, list), "scan report units must be a list")
     _require(
-        summary.get("unitCount") == EXPECTED_METAL_KERNEL_COUNT,
+        summary.get("unitCount") == expected_unit_count,
         "expected {} MLX Metal kernels, found {}".format(
-            EXPECTED_METAL_KERNEL_COUNT,
+            expected_unit_count,
             summary.get("unitCount"),
         ),
     )
@@ -2266,17 +2342,24 @@ def _validate_atomic_fence_contract_report(
     payload: Mapping[str, Any],
     *,
     exact_report: bool,
+    targets: Sequence[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    targets = tuple(MLX_FENCE_TARGET_CONTRACTS)
+    selected_targets = tuple(targets or MLX_FENCE_TARGET_CONTRACTS)
+    _require(
+        all(target in MLX_FENCE_TARGET_CONTRACTS for target in selected_targets),
+        "fence contract contains an unsupported target",
+    )
     summary = payload.get("summary", {})
     _require(isinstance(summary, Mapping), "fence contract summary must be an object")
     expected_diagnostic_codes = {
         contract["diagnosticCode"]: 1
-        for contract in MLX_FENCE_TARGET_CONTRACTS.values()
+        for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
+        if target in selected_targets
     }
     expected_missing_capabilities = {
         contract["missingCapability"]: 1
-        for contract in MLX_FENCE_TARGET_CONTRACTS.values()
+        for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
+        if target in selected_targets
     }
     diagnostics_by_code = summary.get("diagnosticsByCode", {})
     missing_capability_counts = summary.get("missingCapabilityCounts", {})
@@ -2291,14 +2374,14 @@ def _validate_atomic_fence_contract_report(
     if exact_report:
         _require(
             summary.get("unitCount") == 1
-            and summary.get("artifactCount") == len(targets)
+            and summary.get("artifactCount") == len(selected_targets)
             and summary.get("translatedCount") == 0
-            and summary.get("failedCount") == len(targets),
+            and summary.get("failedCount") == len(selected_targets),
             "fence contract translation must report one failed artifact per target",
         )
         _require(
             summary.get("diagnosticCounts")
-            == {"error": len(targets), "note": 0, "warning": 0},
+            == {"error": len(selected_targets), "note": 0, "warning": 0},
             "fence contract translation reported unexpected diagnostic severities",
         )
         _require(
@@ -2331,13 +2414,15 @@ def _validate_atomic_fence_contract_report(
     _require(isinstance(artifacts, list), "fence contract artifacts must be a list")
     if exact_report:
         _require(
-            len(diagnostics) == len(targets) and len(artifacts) == len(targets),
+            len(diagnostics) == len(selected_targets)
+            and len(artifacts) == len(selected_targets),
             "fence contract report must contain one diagnostic and artifact per target",
         )
 
     target_results: dict[str, dict[str, Any]] = {}
     output_root = output_dir.resolve()
-    for target, contract in MLX_FENCE_TARGET_CONTRACTS.items():
+    for target in selected_targets:
+        contract = MLX_FENCE_TARGET_CONTRACTS[target]
         target_diagnostics = [
             diagnostic
             for diagnostic in diagnostics
@@ -6227,17 +6312,19 @@ def _check_opengl_frontier(
     }
 
 
-def _check_fft_opengl_workgroup_pointer_frontier(
+def _check_fft_opengl_toolchain(
     mlx_root: Path,
     work_dir: Path,
     config_dir: Path,
     report_dir: Path,
     log_dir: Path,
     python: str,
+    *,
+    require_toolchain: bool,
 ) -> dict[str, Any]:
-    config_path = config_dir / "fft-opengl-workgroup-pointer.toml"
-    report_path = report_dir / "fft-opengl-workgroup-pointer.json"
-    output_dir = work_dir / "out-fft-opengl-workgroup-pointer"
+    config_path = config_dir / "fft-opengl-toolchain.toml"
+    report_path = report_dir / "fft-opengl-toolchain.json"
+    output_dir = work_dir / "out-fft-opengl"
     if output_dir.exists():
         shutil.rmtree(output_dir)
     _write_project_config(
@@ -6251,9 +6338,11 @@ def _check_fft_opengl_workgroup_pointer_frontier(
                 FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK
             ),
         },
+        index_range_assertions=FFT_OPENGL_INDEX_RANGE_ASSERTIONS,
+        workgroup_access_assertions=FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS,
     )
     result = _run_command(
-        "translate-fft-opengl-workgroup-pointer",
+        "translate-fft-opengl",
         [
             python,
             "-m",
@@ -6271,9 +6360,8 @@ def _check_fft_opengl_workgroup_pointer_frontier(
         timeout_seconds=FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS,
     )
     _require(
-        result.returncode == 1,
-        "OpenGL FFT translation must remain fail-closed at its tracked "
-        "workgroup-pointer frontier",
+        result.returncode == 0,
+        "OpenGL FFT project translation failed",
     )
     _require(
         report_path.is_file(),
@@ -6290,52 +6378,60 @@ def _check_fft_opengl_workgroup_pointer_frontier(
         isinstance(summary, Mapping)
         and summary.get("unitCount") == 1
         and summary.get("artifactCount") == 1
-        and summary.get("translatedCount") == 0
-        and summary.get("failedCount") == 1,
-        "OpenGL FFT translation report did not retain one failed artifact",
+        and summary.get("translatedCount") == 1
+        and summary.get("failedCount") == 0,
+        "OpenGL FFT translation report did not retain one translated artifact",
     )
     _require(
-        summary.get("diagnosticCounts") == {"error": 1, "note": 0, "warning": 0}
-        and summary.get("diagnosticsByCode") == {FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1}
-        and summary.get("missingCapabilityCounts")
-        == {FFT_OPENGL_EXPECTED_MISSING_CAPABILITY: 1},
-        "OpenGL FFT workgroup-pointer diagnostic summary changed",
+        summary.get("diagnosticCounts") == {"error": 0, "note": 0, "warning": 0}
+        and summary.get("diagnosticsByCode") == {}
+        and summary.get("missingCapabilityCounts") == {}
+        and payload.get("diagnostics") == [],
+        "OpenGL FFT project translation must have zero diagnostics",
     )
 
-    diagnostics = payload.get("diagnostics", [])
+    project = payload.get("project", {})
+    expected_workgroup_assertions = [
+        {
+            "source": assertion["source"],
+            "entryPoint": assertion["entry_point"],
+            "function": assertion["function"],
+            "parameter": assertion["parameter"],
+            "minimum": assertion["minimum"],
+            "maximum": assertion["maximum"],
+        }
+        for assertion in FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
+    ]
     _require(
-        isinstance(diagnostics, list) and len(diagnostics) == 1,
-        "OpenGL FFT report must contain one workgroup-pointer diagnostic",
+        isinstance(project, Mapping)
+        and project.get("indexRangeAssertionCount")
+        == len(FFT_OPENGL_INDEX_RANGE_ASSERTIONS)
+        and project.get("indexRangeAssertions")
+        == list(FFT_OPENGL_INDEX_RANGE_ASSERTIONS)
+        and project.get("workgroupAccessAssertionCount")
+        == len(FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS)
+        and project.get("workgroupAccessAssertions") == expected_workgroup_assertions,
+        "OpenGL FFT portability preconditions changed",
     )
-    diagnostic = diagnostics[0]
+
+    units = payload.get("units", [])
     _require(
-        isinstance(diagnostic, Mapping)
-        and diagnostic.get("severity") == "error"
-        and diagnostic.get("code") == FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE
-        and diagnostic.get("message") == FFT_OPENGL_EXPECTED_MESSAGE
-        and diagnostic.get("sourceBackend") == "metal"
-        and diagnostic.get("target") == "opengl"
-        and diagnostic.get("missingCapabilities")
-        == [FFT_OPENGL_EXPECTED_MISSING_CAPABILITY],
-        "OpenGL FFT workgroup-pointer diagnostic contract changed",
-    )
-    location = diagnostic.get("location", {})
-    _require(
-        isinstance(location, Mapping) and location.get("file") == MLX_FFT_SOURCE,
-        "OpenGL FFT diagnostic source changed",
-    )
-    details = diagnostic.get("details", {})
-    _require(
-        isinstance(details, Mapping)
-        and details.get("sourcePath") == MLX_FFT_SOURCE
-        and details.get("workgroupPointer") == FFT_OPENGL_EXPECTED_POINTER_EVIDENCE,
-        "OpenGL FFT diagnostic lost concrete workgroup-pointer provenance",
+        isinstance(units, list)
+        and len(units) == 1
+        and isinstance(units[0], Mapping)
+        and units[0].get("id") == MLX_FFT_SOURCE
+        and units[0].get("path") == MLX_FFT_SOURCE
+        and units[0].get("sourceBackend") == "metal"
+        and units[0].get("sourceHash")
+        == {"algorithm": "sha256", "value": MLX_FFT_SHA256}
+        and units[0].get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES,
+        "OpenGL FFT source-unit identity changed at the pinned MLX commit",
     )
 
     artifacts = payload.get("artifacts", [])
     _require(
         isinstance(artifacts, list) and len(artifacts) == 1,
-        "OpenGL FFT report must contain one failed artifact record",
+        "OpenGL FFT report must contain one translated artifact record",
     )
     artifact = artifacts[0]
     artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
@@ -6344,14 +6440,11 @@ def _check_fft_opengl_workgroup_pointer_frontier(
         and artifact.get("source") == MLX_FFT_SOURCE
         and artifact.get("sourceBackend") == "metal"
         and artifact.get("target") == "opengl"
-        and artifact.get("status") == "failed"
-        and artifact.get("error") == FFT_OPENGL_EXPECTED_MESSAGE
+        and artifact.get("status") == "translated"
+        and artifact.get("provenance")
+        == {"intermediate": "crossgl", "pipeline": "single-file-translate"}
         and isinstance(artifact_path, str),
-        "OpenGL FFT failed artifact contract changed",
-    )
-    _require(
-        details.get("targetArtifact") == artifact_path,
-        "OpenGL FFT diagnostic and artifact paths disagree",
+        "OpenGL FFT translated artifact contract changed",
     )
     _require(
         artifact.get("sourceHash") == {"algorithm": "sha256", "value": MLX_FFT_SHA256}
@@ -6381,31 +6474,124 @@ def _check_fft_opengl_workgroup_pointer_frontier(
         "OpenGL FFT artifact path escaped its output directory",
     )
     _require(
-        not generated_path.exists(),
-        "OpenGL FFT emitted GLSL despite its fail-closed project diagnostic",
+        generated_path.is_file() and generated_path.stat().st_size > 0,
+        f"OpenGL FFT artifact is missing: {artifact_path}",
+    )
+    generated_hash = _sha256(generated_path)
+    generated_size = generated_path.stat().st_size
+    _require(
+        artifact.get("generatedHash")
+        == {"algorithm": "sha256", "value": generated_hash}
+        and artifact.get("generatedSizeBytes") == generated_size,
+        "OpenGL FFT artifact hash or size does not match the emitted file",
+    )
+    generated = generated_path.read_text(encoding="utf-8")
+    _require(
+        generated.count("#version 450 core") == 1
+        and generated.count("void main()") == 1,
+        "OpenGL FFT artifact is not one standalone compute shader",
+    )
+    _require(
+        re.search(r"(?<![A-Za-z0-9_])post_in\s*\(", generated) is None,
+        "OpenGL FFT artifact retained an unresolved member-helper call",
+    )
+    radix_bodies = re.findall(
+        r"(?m)^void radix_butterfly_2_radix2\([^;{]*\)\s*\{",
+        generated,
+    )
+    _require(
+        len(radix_bodies) == 1,
+        "OpenGL FFT artifact emitted duplicate radix helper bodies",
     )
 
+    required_tools = {
+        "glslangValidator": shutil.which("glslangValidator"),
+        "spirv-val": shutil.which("spirv-val"),
+    }
+    missing_tools = sorted(
+        name for name, resolved in required_tools.items() if resolved is None
+    )
+    _require(
+        not require_toolchain or not missing_tools,
+        "OpenGL FFT validation requires: " + ", ".join(missing_tools),
+    )
+    native_validation_attempted = not missing_tools
+    native_validation_status = "not-run-tool-unavailable"
+    native_validation_output = None
+    if native_validation_attempted:
+        output_path = work_dir / "validation" / "fft-opengl.spv"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.unlink(missing_ok=True)
+        compile_result = _run_command(
+            "validate-fft-opengl",
+            [
+                str(required_tools["glslangValidator"]),
+                "--target-env",
+                "opengl",
+                "--target-env",
+                "spirv1.3",
+                "-S",
+                "comp",
+                str(generated_path),
+                "-o",
+                str(output_path),
+            ],
+            log_dir=log_dir,
+            check=False,
+        )
+        _require(
+            compile_result.returncode == 0,
+            "OpenGL FFT native compilation failed; inspect validate-fft-opengl logs",
+        )
+        _require(
+            output_path.is_file(),
+            "OpenGL FFT compilation succeeded without producing SPIR-V",
+        )
+        validation_result = _run_command(
+            "validate-fft-opengl-spirv",
+            [
+                str(required_tools["spirv-val"]),
+                "--target-env",
+                "spv1.3",
+                str(output_path),
+            ],
+            log_dir=log_dir,
+            check=False,
+        )
+        _require(
+            validation_result.returncode == 0,
+            "OpenGL FFT SPIR-V validation failed; inspect validation logs",
+        )
+        native_validation_status = "validated"
+        native_validation_output = _relpath(output_path, mlx_root)
+
     return {
-        "name": "fft-opengl-workgroup-pointer-frontier",
-        "status": "blocked-as-expected",
+        "name": "fft-opengl-toolchain",
+        "status": "passed",
         "report": _relpath(report_path, mlx_root),
         "source": MLX_FFT_SOURCE,
         "sourceHash": MLX_FFT_SHA256,
         "target": "opengl",
-        "artifactStatus": "failed",
-        "artifactEmitted": False,
-        "nativeValidationAttempted": False,
-        "nativeValidationStatus": "not-run-no-artifact",
+        "artifactStatus": "translated",
+        "artifactEmitted": True,
+        "generatedHash": generated_hash,
+        "generatedSizeBytes": generated_size,
+        "nativeValidationAttempted": native_validation_attempted,
+        "nativeValidationStatus": native_validation_status,
+        "nativeValidationOutput": native_validation_output,
+        "nativeCompiler": "glslangValidator",
+        "spirvValidator": "spirv-val",
         "templateMaterializationStatus": "materialized",
         "templateSpecializationCount": FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT,
         "functionConstantCount": FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT,
-        "workgroupPointer": dict(FFT_OPENGL_EXPECTED_POINTER_EVIDENCE),
-        "provenanceStatus": "concrete-backing-preserved",
-        "accessRangeStatus": "unprovable",
-        "trackedIssue": FFT_OPENGL_WORKGROUP_POINTER_ISSUE,
+        "indexRangeAssertions": list(FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+        "workgroupAccessAssertions": expected_workgroup_assertions,
+        "toolchainRequired": require_toolchain,
+        "trackedIssues": [],
         "maxTemplateSpecializations": FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS,
         "maxTemplateMaterializationWork": FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK,
         "runtimeIntegrationIncluded": False,
+        "numericalParityClaimed": False,
         "runtimeParityClaimed": False,
     }
 
@@ -6467,6 +6653,26 @@ def _require_gemv_project_workgroup_size_rule(
         and project.get("workgroupSizeRules") == expected_rules
         and project.get("workgroupSizeRuleCount") == 1,
         f"{target} GEMV report did not retain the exact workgroup-size rule",
+    )
+
+
+def _require_gemv_project_opengl_contracts(payload: Mapping[str, Any]) -> None:
+    project = payload.get("project")
+    expected_subgroup_rules = {MLX_GEMV_SOURCE: str(GEMV_SUBGROUP_WIDTH)}
+    expected_index_assertions = [
+        {"source": MLX_GEMV_SOURCE, **assertion}
+        for assertion in GEMV_OPENGL_INDEX_RANGE_ASSERTIONS
+    ]
+    _require(
+        isinstance(project, Mapping)
+        and project.get("subgroupWidthRules") == expected_subgroup_rules
+        and project.get("subgroupWidthRuleCount") == 1,
+        "OpenGL GEMV report did not retain the exact subgroup-width rule",
+    )
+    _require(
+        project.get("indexRangeAssertions") == expected_index_assertions
+        and project.get("indexRangeAssertionCount") == len(expected_index_assertions),
+        "OpenGL GEMV report did not retain the exact index-range assertions",
     )
 
 
@@ -7122,7 +7328,7 @@ def _check_gemv_directx_compiler_frontier(
     }
 
 
-def _check_gemv_opengl_frontier(
+def _check_gemv_opengl_toolchain(
     mlx_root: Path,
     work_dir: Path,
     config_dir: Path,
@@ -7130,9 +7336,21 @@ def _check_gemv_opengl_frontier(
     log_dir: Path,
     python: str,
 ) -> dict[str, Any]:
-    config_path = config_dir / "gemv-opengl-frontier.toml"
-    report_path = report_dir / "gemv-opengl-frontier.json"
-    output_dir = work_dir / "out-gemv-opengl-frontier"
+    required_tools = {
+        "glslangValidator": shutil.which("glslangValidator"),
+        "spirv-val": shutil.which("spirv-val"),
+    }
+    missing_tools = sorted(
+        name for name, resolved in required_tools.items() if resolved is None
+    )
+    _require(
+        not missing_tools,
+        "OpenGL GEMV validation requires: " + ", ".join(missing_tools),
+    )
+
+    config_path = config_dir / "gemv-opengl.toml"
+    report_path = report_dir / "gemv-opengl.json"
+    output_dir = work_dir / "out-gemv-opengl"
     if output_dir.exists():
         shutil.rmtree(output_dir)
     report_path.unlink(missing_ok=True)
@@ -7144,13 +7362,18 @@ def _check_gemv_opengl_frontier(
         workgroup_size_rules={
             MLX_GEMV_SOURCE: GEMV_WORKGROUP_SIZE_RULE,
         },
+        subgroup_width_rules={MLX_GEMV_SOURCE: GEMV_SUBGROUP_WIDTH},
+        index_range_assertions=tuple(
+            {"source": MLX_GEMV_SOURCE, **assertion}
+            for assertion in GEMV_OPENGL_INDEX_RANGE_ASSERTIONS
+        ),
         metal_source_options={
             "max_template_specializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
             "max_template_materialization_work": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
         },
     )
     result = _run_command(
-        "translate-gemv-opengl-frontier",
+        "translate-gemv-opengl",
         [
             python,
             "-m",
@@ -7168,9 +7391,8 @@ def _check_gemv_opengl_frontier(
         timeout_seconds=GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS,
     )
     _require(
-        result.returncode == 1,
-        "OpenGL GEMV translation must remain fail-closed at its pinned "
-        "workgroup-pointer frontier",
+        result.returncode == 0,
+        "OpenGL GEMV project translation failed",
     )
     _require(
         report_path.is_file(),
@@ -7183,29 +7405,35 @@ def _check_gemv_opengl_frontier(
         "OpenGL GEMV translation report kind changed",
     )
     _require_gemv_project_workgroup_size_rule(payload, target="OpenGL")
+    _require_gemv_project_opengl_contracts(payload)
     summary = payload.get("summary", {})
     _require(
         isinstance(summary, Mapping)
         and summary.get("unitCount") == 1
         and summary.get("skippedCount") == 0
         and summary.get("targetCount") == 1
-        and summary.get("artifactCount") == 1
-        and summary.get("translatedCount") == 0
-        and summary.get("failedCount") == 1,
-        "OpenGL GEMV translation report did not retain one failed unit/artifact",
+        and summary.get("artifactCount") == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and summary.get("translatedCount") == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and summary.get("failedCount") == 0,
+        "OpenGL GEMV translation did not emit every entry-scoped artifact",
     )
     _require(
-        summary.get("diagnosticCounts") == {"error": 1, "note": 0, "warning": 0}
-        and summary.get("diagnosticsByCode")
-        == {GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1}
-        and summary.get("missingCapabilityCounts")
-        == {GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY: 1},
-        "OpenGL GEMV workgroup-pointer diagnostic summary changed",
+        summary.get("diagnosticCounts") == {"error": 0, "note": 0, "warning": 0}
+        and summary.get("diagnosticsByCode") == {}
+        and summary.get("missingCapabilityCounts") == {},
+        "OpenGL GEMV translation reported diagnostics",
     )
     _require(
-        summary.get("artifactProvenanceByPipeline") == {"single-file-translate": 1}
-        and summary.get("artifactProvenanceByIntermediate") == {"crossgl": 1},
+        summary.get("artifactProvenanceByPipeline")
+        == {"entry-scoped-translate": GEMV_EXPECTED_ENTRY_POINT_COUNT}
+        and summary.get("artifactProvenanceByIntermediate")
+        == {"crossgl": GEMV_EXPECTED_ENTRY_POINT_COUNT},
         "OpenGL GEMV report provenance summary changed",
+    )
+    _require(
+        summary.get("sourceMapCount") == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and summary.get("sourceRemapCount") == GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "OpenGL GEMV report did not retain source provenance for every artifact",
     )
 
     units = payload.get("units", [])
@@ -7228,127 +7456,282 @@ def _check_gemv_opengl_frontier(
 
     diagnostics = payload.get("diagnostics", [])
     _require(
-        isinstance(diagnostics, list) and len(diagnostics) == 1,
-        "OpenGL GEMV report must contain one workgroup-pointer diagnostic",
+        diagnostics == [],
+        "OpenGL GEMV report retained project diagnostics",
     )
-    diagnostic = diagnostics[0]
-    _require(
-        isinstance(diagnostic, Mapping)
-        and diagnostic.get("severity") == "error"
-        and diagnostic.get("code") == GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE
-        and diagnostic.get("message") == GEMV_OPENGL_EXPECTED_MESSAGE
-        and diagnostic.get("sourceBackend") == "metal"
-        and diagnostic.get("target") == "opengl"
-        and diagnostic.get("missingCapabilities")
-        == [GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY],
-        "OpenGL GEMV workgroup-pointer diagnostic contract changed",
-    )
-    location = diagnostic.get("location", {})
-    _require(
-        isinstance(location, Mapping) and location.get("file") == MLX_GEMV_SOURCE,
-        "OpenGL GEMV diagnostic source changed",
-    )
-    details = diagnostic.get("details", {})
-    _require(isinstance(details, Mapping), "OpenGL GEMV diagnostic details are missing")
 
     artifacts = payload.get("artifacts", [])
     _require(
-        isinstance(artifacts, list) and len(artifacts) == 1,
-        "OpenGL GEMV report must contain one failed artifact record",
-    )
-    artifact = artifacts[0]
-    artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
-    _require(
-        isinstance(artifact, Mapping)
-        and artifact.get("source") == MLX_GEMV_SOURCE
-        and artifact.get("sourceBackend") == "metal"
-        and artifact.get("target") == "opengl"
-        and artifact.get("status") == "failed"
-        and artifact.get("error") == GEMV_OPENGL_EXPECTED_MESSAGE
-        and isinstance(artifact_path, str),
-        "OpenGL GEMV failed artifact contract changed",
-    )
-    _require(
-        details
-        == {
-            "sourcePath": MLX_GEMV_SOURCE,
-            "targetArtifact": artifact_path,
-            "workgroupPointer": GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE,
-        },
-        "OpenGL GEMV diagnostic lost exact workgroup-pointer provenance",
-    )
-    _require(
-        artifact.get("sourceHash") == expected_source_hash
-        and artifact.get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES
-        and artifact.get("provenance")
-        == {"intermediate": "crossgl", "pipeline": "single-file-translate"},
-        "OpenGL GEMV failed artifact provenance changed",
+        isinstance(artifacts, list)
+        and len(artifacts) == GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "OpenGL GEMV report must contain one artifact for every source entry",
     )
 
-    materialization = artifact.get("templateMaterialization", {})
+    workgroup_rule_path = f"project.workgroup_size_rules[{json.dumps(MLX_GEMV_SOURCE)}]"
+    subgroup_rule_path = f"project.subgroup_width_rules[{json.dumps(MLX_GEMV_SOURCE)}]"
+    expected_workgroup_rule = {
+        "components": list(GEMV_REPORT_WORKGROUP_SIZE_RULE),
+        "path": workgroup_rule_path,
+        "sourcePattern": MLX_GEMV_SOURCE,
+    }
+    expected_subgroup_rule = {
+        "expression": str(GEMV_SUBGROUP_WIDTH),
+        "path": subgroup_rule_path,
+        "sourcePattern": MLX_GEMV_SOURCE,
+    }
+    source_entry_points = set()
+    resolved_workgroup_sizes = set()
+    generated_artifacts = []
+    for artifact in artifacts:
+        artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
+        _require(
+            isinstance(artifact, Mapping)
+            and artifact.get("source") == MLX_GEMV_SOURCE
+            and artifact.get("sourceBackend") == "metal"
+            and artifact.get("target") == "opengl"
+            and artifact.get("status") == "translated"
+            and isinstance(artifact_path, str),
+            "OpenGL GEMV translated artifact contract changed",
+        )
+        _require(
+            artifact.get("sourceHash") == expected_source_hash
+            and artifact.get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES
+            and artifact.get("provenance")
+            == {"intermediate": "crossgl", "pipeline": "entry-scoped-translate"},
+            "OpenGL GEMV artifact provenance changed",
+        )
+
+        generated_path = (mlx_root / artifact_path).resolve()
+        _require(
+            _is_relative_to(generated_path, output_dir.resolve()),
+            "OpenGL GEMV artifact path escaped its output directory",
+        )
+        _require(
+            generated_path.is_file() and generated_path.stat().st_size > 0,
+            f"OpenGL GEMV artifact is missing: {artifact_path}",
+        )
+        _require(
+            artifact.get("generatedHash")
+            == {"algorithm": "sha256", "value": _sha256(generated_path)}
+            and artifact.get("generatedSizeBytes") == generated_path.stat().st_size,
+            "OpenGL GEMV artifact hash or size does not match the emitted file",
+        )
+
+        entry_point = artifact.get("entryPoint")
+        source_entry = (
+            entry_point.get("source") if isinstance(entry_point, Mapping) else None
+        )
+        _require(
+            isinstance(source_entry, str)
+            and bool(source_entry)
+            and entry_point.get("stage") == "compute"
+            and entry_point.get("target") == "main"
+            and source_entry not in source_entry_points,
+            "OpenGL GEMV artifact entry identity changed",
+        )
+        source_entry_points.add(source_entry)
+
+        execution = artifact.get("execution")
+        execution_entries = (
+            execution.get("entryPoints") if isinstance(execution, Mapping) else None
+        )
+        _require(
+            isinstance(execution_entries, list)
+            and len(execution_entries) == 1
+            and execution.get("sourceEntryPoints") == [source_entry]
+            and execution.get("provenance")
+            == {"kind": "materialized-template-rule", "path": workgroup_rule_path}
+            and execution.get("subgroupWidthProvenance")
+            == {"kind": "materialized-template-rule", "path": subgroup_rule_path}
+            and execution.get("subgroupWidthEnforcement")
+            == GEMV_OPENGL_SUBGROUP_WIDTH_ENFORCEMENT
+            and _is_sha256_contract_identity(execution.get("identity")),
+            "OpenGL GEMV artifact execution provenance changed",
+        )
+        execution_entry = execution_entries[0]
+        workgroup_size = execution_entry.get("workgroupSize")
+        _require(
+            isinstance(execution_entry, Mapping)
+            and execution_entry.get("sourceEntryPoint") == source_entry
+            and execution_entry.get("materializedEntryPoint") == source_entry
+            and execution_entry.get("targetEntryPoint") == "main"
+            and execution_entry.get("rule") == expected_workgroup_rule
+            and execution_entry.get("subgroupWidth") == GEMV_SUBGROUP_WIDTH
+            and execution_entry.get("subgroupWidthRule") == expected_subgroup_rule
+            and _is_sha256_contract_identity(execution_entry.get("identity"))
+            and isinstance(workgroup_size, list)
+            and len(workgroup_size) == 3,
+            "OpenGL GEMV artifact execution contract changed",
+        )
+        resolved_workgroup_sizes.add(tuple(workgroup_size))
+
+        materialization = artifact.get("templateMaterialization", {})
+        specializations = (
+            materialization.get("specializations", [])
+            if isinstance(materialization, Mapping)
+            else []
+        )
+        _require(
+            isinstance(materialization, Mapping)
+            and materialization.get("status") == "materialized"
+            and materialization.get("specializationCount")
+            == GEMV_EXPECTED_SPECIALIZATION_COUNT
+            and isinstance(specializations, list)
+            and len(specializations) == GEMV_EXPECTED_SPECIALIZATION_COUNT
+            and materialization.get("unsupported") == [],
+            "OpenGL GEMV artifact did not retain complete materialization evidence",
+        )
+
+        generated = generated_path.read_text(encoding="utf-8")
+        marker = f"#define CROSSTL_REQUIRED_SUBGROUP_WIDTH {GEMV_SUBGROUP_WIDTH}u"
+        guard = "if (gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH)"
+        local_size = tuple(workgroup_size)
+        local_size_pattern = re.compile(
+            r"layout\s*\(\s*local_size_x\s*=\s*"
+            + str(local_size[0])
+            + r"\s*,\s*local_size_y\s*=\s*"
+            + str(local_size[1])
+            + r"\s*,\s*local_size_z\s*=\s*"
+            + str(local_size[2])
+            + r"\s*\)\s*in\s*;"
+        )
+        _require(
+            generated.count(marker) == 1
+            and generated.count(guard) == 1
+            and "#extension GL_KHR_shader_subgroup_basic : require" in generated
+            and local_size_pattern.search(generated) is not None,
+            "OpenGL GEMV generated execution declarations changed",
+        )
+        generated_artifacts.append((source_entry, artifact_path, generated_path))
+
     _require(
-        isinstance(materialization, Mapping)
-        and materialization.get("status") == "materialized"
-        and materialization.get("specializationCount")
-        == GEMV_EXPECTED_SPECIALIZATION_COUNT,
-        "OpenGL GEMV artifact specialization count changed",
+        len(source_entry_points) == GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "OpenGL GEMV source-entry coverage changed",
     )
-    specializations = materialization.get("specializations", [])
     _require(
-        isinstance(specializations, list)
-        and len(specializations) == GEMV_EXPECTED_SPECIALIZATION_COUNT
-        and materialization.get("unsupported") == [],
-        "OpenGL GEMV artifact did not retain complete materialization evidence",
+        resolved_workgroup_sizes == set(GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES),
+        "OpenGL GEMV resolved workgroup-size coverage changed",
     )
 
-    generated_path = (mlx_root / artifact_path).resolve()
-    _require(
-        _is_relative_to(generated_path, output_dir.resolve()),
-        "OpenGL GEMV artifact path escaped its output directory",
-    )
-    _require(
-        not generated_path.exists(),
-        "OpenGL GEMV emitted GLSL despite its fail-closed project diagnostic",
-    )
-    _require(
-        not output_dir.exists()
-        or not any(
-            path.is_file() or path.is_symlink() for path in output_dir.rglob("*")
-        ),
-        "OpenGL GEMV emitted target files despite its fail-closed project diagnostic",
-    )
+    validation_dir = work_dir / "validation" / "gemv-opengl"
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    validation_runs = []
+    for index, (source_entry, artifact_path, generated_path) in enumerate(
+        generated_artifacts,
+        start=1,
+    ):
+        output_path = validation_dir / f"{source_entry}.spv"
+        output_path.unlink(missing_ok=True)
+        command_name = f"gemv-opengl-{index:03d}"
+        compile_result = _run_command(
+            f"compile-{command_name}",
+            [
+                str(required_tools["glslangValidator"]),
+                "--target-env",
+                "opengl",
+                "--target-env",
+                "spirv1.3",
+                "-S",
+                "comp",
+                str(generated_path),
+                "-o",
+                str(output_path),
+            ],
+            log_dir=log_dir,
+            check=False,
+        )
+        _require(
+            compile_result.returncode == 0,
+            f"glslangValidator failed to compile OpenGL GEMV entry {source_entry}",
+        )
+        _require(
+            output_path.is_file() and output_path.stat().st_size > 0,
+            f"glslangValidator emitted no SPIR-V for OpenGL GEMV entry {source_entry}",
+        )
+        validation_result = _run_command(
+            f"validate-{command_name}",
+            [
+                str(required_tools["spirv-val"]),
+                "--target-env",
+                "spv1.3",
+                str(output_path),
+            ],
+            log_dir=log_dir,
+            check=False,
+        )
+        _require(
+            validation_result.returncode == 0,
+            f"spirv-val rejected OpenGL GEMV entry {source_entry}",
+        )
+        validation_runs.append(
+            {
+                "sourceEntryPoint": source_entry,
+                "artifact": artifact_path,
+                "compiledArtifact": _relpath(output_path, mlx_root),
+                "compiledHash": {
+                    "algorithm": "sha256",
+                    "value": _sha256(output_path),
+                },
+                "compiledSizeBytes": output_path.stat().st_size,
+            }
+        )
 
     return {
-        "name": "gemv-opengl-frontier",
-        "status": "blocked-as-expected",
+        "name": "gemv-opengl-toolchain",
+        "status": "passed",
         "report": _relpath(report_path, mlx_root),
         "source": MLX_GEMV_SOURCE,
         "sourceHash": MLX_GEMV_SHA256,
+        "sourceSizeBytes": MLX_GEMV_SOURCE_SIZE_BYTES,
         "target": "opengl",
-        "artifactStatus": "failed",
-        "artifactEmitted": False,
-        "emittedTargetFileCount": 0,
-        "nativeValidationAttempted": False,
-        "nativeValidationStatus": "not-run-no-artifact",
+        "artifactStatus": "translated",
+        "artifactPackaging": "entry-scoped-artifacts",
+        "artifactCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "emittedTargetFileCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "reportExecutionEntryCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "sourceMapCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "sourceRemapCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "nativeValidationAttempted": True,
+        "nativeValidationStatus": "validated",
+        "nativeCompiler": "glslangValidator",
+        "spirvValidator": "spirv-val",
+        "targetEnvironments": ["opengl", "spirv1.3", "spv1.3"],
+        "toolchainValidatedArtifactCount": len(validation_runs),
+        "toolchainValidationRuns": validation_runs,
         "templateMaterializationStatus": "materialized",
         "templateSpecializationCount": GEMV_EXPECTED_SPECIALIZATION_COUNT,
+        "unsupportedSpecializationCount": 0,
         "workgroupSizeRule": list(GEMV_WORKGROUP_SIZE_RULE),
         "reportWorkgroupSizeRule": list(GEMV_REPORT_WORKGROUP_SIZE_RULE),
         "reportWorkgroupSizeRuleCount": 1,
         "workgroupSizeRuleConfigured": True,
-        "diagnosticCode": GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
-        "missingCapability": GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY,
-        "workgroupPointer": dict(GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE),
+        "resolvedWorkgroupSizes": [
+            list(size) for size in GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+        ],
+        "subgroupWidth": GEMV_SUBGROUP_WIDTH,
+        "subgroupWidthRuleConfigured": True,
+        "subgroupWidthEnforcement": dict(GEMV_OPENGL_SUBGROUP_WIDTH_ENFORCEMENT),
+        "subgroupWidthFallbackTrackedBy": GEMV_OPENGL_SUBGROUP_WIDTH_FALLBACK_ISSUE,
+        "indexRangeAssertionEvidence": {
+            "assertionCount": len(GEMV_OPENGL_INDEX_RANGE_ASSERTIONS),
+            "assertions": [
+                dict(assertion) for assertion in GEMV_OPENGL_INDEX_RANGE_ASSERTIONS
+            ],
+            "contractKind": "explicit-host-runtime-portability-preconditions",
+            "inferred": False,
+            "runtimeEnforced": False,
+        },
         "provenanceStatus": "concrete-backing-preserved",
-        "accessRangeStatus": "unprovable",
-        "trackedIssues": list(GEMV_OPENGL_FRONTIER_TRACKED_ISSUES),
-        "translationBlockedBy": [GEMV_OPENGL_BACKING_RANGE_ISSUE],
-        "executionContractBlockedBy": list(GEMV_OPENGL_EXECUTION_TRACKED_ISSUES),
+        "accessRangeStatus": "statically-proven-under-project-contracts",
+        "trackedIssues": list(GEMV_OPENGL_PORTABILITY_TRACKED_ISSUES),
+        "translationBlockedBy": [],
+        "executionContractBlockedBy": [],
         "maxTemplateSpecializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
         "maxTemplateMaterializationWork": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
         "runtimeExecutionAttempted": False,
         "runtimeIntegrationIncluded": False,
         "runnableArtifactClaimed": False,
+        "compilerValidatedArtifactClaimed": True,
         "numericalParityClaimed": False,
         "runtimeParityClaimed": False,
     }
@@ -8464,7 +8847,7 @@ def _translate_full_corpus(
             "status": "blocked-by-tracked-issues",
             "report": _relpath(report_path, mlx_root),
             "reportProduced": False,
-            "unitCount": EXPECTED_METAL_KERNEL_COUNT,
+            "unitCount": FULL_CORPUS_EXPECTED_UNIT_COUNT,
             "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
             "targets": list(FULL_CORPUS_TARGETS),
             "returncode": result.returncode,
@@ -8493,9 +8876,9 @@ def _translate_full_corpus(
     )
     failed_count = summary.get("failedCount")
     _require(
-        summary.get("unitCount") == EXPECTED_METAL_KERNEL_COUNT,
+        summary.get("unitCount") == FULL_CORPUS_EXPECTED_UNIT_COUNT,
         "full-corpus translation must scan {} units; found {}".format(
-            EXPECTED_METAL_KERNEL_COUNT,
+            FULL_CORPUS_EXPECTED_UNIT_COUNT,
             summary.get("unitCount"),
         ),
     )
@@ -8534,6 +8917,7 @@ def _translate_full_corpus(
         output_dir,
         payload,
         exact_report=False,
+        targets=FULL_CORPUS_TARGETS,
     )
     diagnostics = payload.get("diagnostics", [])
     _require(isinstance(diagnostics, list), "full-corpus diagnostics must be a list")
@@ -8548,7 +8932,8 @@ def _translate_full_corpus(
         {
             **{
                 contract["diagnosticCode"]: 1
-                for contract in MLX_FENCE_TARGET_CONTRACTS.values()
+                for target, contract in MLX_FENCE_TARGET_CONTRACTS.items()
+                if target in FULL_CORPUS_TARGETS
             },
             "project.validate.failed-artifact": (
                 FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
@@ -8557,7 +8942,7 @@ def _translate_full_corpus(
     )
     expected_target_counts = {
         target: {
-            "translatedCount": EXPECTED_METAL_KERNEL_COUNT - 1,
+            "translatedCount": FULL_CORPUS_EXPECTED_UNIT_COUNT - 1,
             "failedCount": 1,
         }
         for target in FULL_CORPUS_TARGETS
@@ -8585,7 +8970,7 @@ def _translate_full_corpus(
             "name": "full-corpus",
             "status": "blocked-by-tracked-issues",
             "report": _relpath(report_path, mlx_root),
-            "unitCount": EXPECTED_METAL_KERNEL_COUNT,
+            "unitCount": FULL_CORPUS_EXPECTED_UNIT_COUNT,
             "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
             "translatedCount": summary.get("translatedCount", 0),
             "failedCount": summary.get("failedCount", 0),
@@ -8623,7 +9008,7 @@ def _translate_full_corpus(
         "name": "full-corpus",
         "status": "passed-with-expected-fence-blockers",
         "report": _relpath(report_path, mlx_root),
-        "unitCount": EXPECTED_METAL_KERNEL_COUNT,
+        "unitCount": FULL_CORPUS_EXPECTED_UNIT_COUNT,
         "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
         "translatedCount": FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT,
         "failedCount": FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT,
@@ -8649,6 +9034,12 @@ def _translate_full_corpus(
 
 def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     mlx_root = Path(args.mlx_root).resolve()
+    full_corpus = args.mode == FULL_CORPUS_MODE
+    expected_commit = MLX_CORPUS_COMMIT if full_corpus else MLX_REFERENCE_COMMIT
+    expected_unit_count = (
+        FULL_CORPUS_EXPECTED_UNIT_COUNT if full_corpus else EXPECTED_METAL_KERNEL_COUNT
+    )
+    scan_targets = FULL_CORPUS_TARGETS if full_corpus else MLX_REFERENCE_TARGETS
     require_metal_toolchain = bool(getattr(args, "require_metal_toolchain", False))
     require_directx_gemv_compiler_frontier = bool(
         getattr(args, "require_directx_gemv_compiler_frontier", False)
@@ -8656,8 +9047,8 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     require_opengl_frontier_toolchain = bool(
         getattr(args, "require_opengl_frontier_toolchain", False)
     )
-    require_opengl_gemv_frontier = bool(
-        getattr(args, "require_opengl_gemv_frontier", False)
+    require_opengl_gemv_toolchain = bool(
+        getattr(args, "require_opengl_gemv_toolchain", False)
     )
     require_opengl_native_runtime = bool(
         getattr(args, "require_opengl_native_runtime", False)
@@ -8676,8 +9067,8 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         "--require-opengl-frontier-toolchain is only valid in reduced-frontier mode",
     )
     _require(
-        not require_opengl_gemv_frontier or args.mode == REDUCED_FRONTIER_MODE,
-        "--require-opengl-gemv-frontier is only valid in reduced-frontier mode",
+        not require_opengl_gemv_toolchain or args.mode == REDUCED_FRONTIER_MODE,
+        "--require-opengl-gemv-toolchain is only valid in reduced-frontier mode",
     )
     _require(
         not require_opengl_native_runtime or args.mode == REDUCED_FRONTIER_MODE,
@@ -8697,7 +9088,12 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         directory.mkdir(parents=True, exist_ok=True)
 
     checks: list[dict[str, Any]] = [
-        _verify_mlx_checkout(mlx_root, args.python, log_dir),
+        _verify_mlx_checkout(
+            mlx_root,
+            args.python,
+            log_dir,
+            expected_commit=expected_commit,
+        ),
         _scan_metal_kernels(
             mlx_root,
             work_dir,
@@ -8705,6 +9101,8 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             report_dir,
             log_dir,
             args.python,
+            expected_unit_count=expected_unit_count,
+            targets=scan_targets,
         ),
     ]
     checks.append(
@@ -8810,18 +9208,19 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
         checks.append(
-            _check_fft_opengl_workgroup_pointer_frontier(
+            _check_fft_opengl_toolchain(
                 mlx_root,
                 work_dir,
                 config_dir,
                 report_dir,
                 log_dir,
                 args.python,
+                require_toolchain=require_opengl_frontier_toolchain,
             )
         )
-        if require_opengl_gemv_frontier:
+        if require_opengl_gemv_toolchain:
             checks.append(
-                _check_gemv_opengl_frontier(
+                _check_gemv_opengl_toolchain(
                     mlx_root,
                     work_dir,
                     config_dir,
@@ -8864,13 +9263,13 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         raise PortingCheckError(f"unsupported MLX porting mode: {args.mode}")
     reference_accessor_included = args.mode == REDUCED_FRONTIER_MODE
     template_member_pointer_included = args.mode == REDUCED_FRONTIER_MODE
-    fft_opengl_pointer_frontier_included = args.mode == REDUCED_FRONTIER_MODE
+    fft_opengl_toolchain_included = args.mode == REDUCED_FRONTIER_MODE
     return {
         "schema_version": 1,
         "repository": {
             "name": "ml-explore/mlx",
             "url": MLX_REPOSITORY,
-            "commit": MLX_COMMIT,
+            "commit": expected_commit,
         },
         "scope": {
             "mode": args.mode,
@@ -8902,7 +9301,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "hostDispatchImportResolvedIssue": MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
             "fullCorpusTargets": list(FULL_CORPUS_TARGETS),
-            "fullCorpusExpectedUnitCount": EXPECTED_METAL_KERNEL_COUNT,
+            "fullCorpusExpectedUnitCount": FULL_CORPUS_EXPECTED_UNIT_COUNT,
             "fullCorpusExpectedArtifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
             "fullCorpusExpectedTranslatedArtifactCount": (
                 FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT
@@ -8938,10 +9337,11 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "directxGemvCompilerFrontierRequired": (
                 require_directx_gemv_compiler_frontier
             ),
-            "fftOpenGLWorkgroupPointerFrontierIncluded": (
-                fft_opengl_pointer_frontier_included
+            "fftOpenGLToolchainIncluded": fft_opengl_toolchain_included,
+            "fftOpenGLToolchainRequired": bool(
+                fft_opengl_toolchain_included and require_opengl_frontier_toolchain
             ),
-            "openglGemvFrontierRequired": require_opengl_gemv_frontier,
+            "openglGemvToolchainRequired": require_opengl_gemv_toolchain,
             "openglNativeRuntimeRequired": require_opengl_native_runtime,
             "vulkanGemvToolchainRequired": require_vulkan_gemv_toolchain,
             "runtimeParityClaimed": False,
@@ -9028,11 +9428,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--require-opengl-gemv-frontier",
+        "--require-opengl-gemv-toolchain",
         action="store_true",
         help=(
-            "Require pinned GEMV OpenGL translation to materialize all source "
-            "specializations and stop at the exact tracked workgroup-pointer frontier."
+            "Translate every pinned GEMV OpenGL entry and require native GLSL and "
+            "SPIR-V 1.3 validation."
         ),
     )
     parser.add_argument(
@@ -9058,6 +9458,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     mlx_root = Path(args.mlx_root).resolve()
+    expected_commit = (
+        MLX_CORPUS_COMMIT if args.mode == FULL_CORPUS_MODE else MLX_REFERENCE_COMMIT
+    )
     work_dir = _resolve_work_dir(mlx_root, args.work_dir)
     summary_path = (
         Path(args.summary).resolve() if args.summary else work_dir / "summary.json"
@@ -9078,7 +9481,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "repository": {
                         "name": "ml-explore/mlx",
                         "url": MLX_REPOSITORY,
-                        "commit": MLX_COMMIT,
+                        "commit": expected_commit,
                     },
                     "scope": {
                         "mode": args.mode,

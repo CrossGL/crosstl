@@ -398,6 +398,150 @@ def test_nested_workgroup_pointer_helpers_preserve_bounded_backing_view(tmp_path
     )
 
 
+def test_exact_subgroup_branch_proves_bounded_workgroup_view(tmp_path):
+    shader = """
+    shader ExactSubgroupWorkgroupView {
+        void accumulate(threadgroup float* values, uint subgroup_id) {
+            uint segment = subgroup_id % 8u;
+            threadgroup float* view = values + segment * 2u;
+            if (segment == 0u) {
+                for (uint peer = 1u; peer < 8u; peer++) {
+                    view[peer * 2u] += 1.0;
+                }
+            }
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
+
+            void main(uint subgroup_id @ gl_SubgroupID) @ WaveSize(32) {
+                threadgroup float storage[16];
+                accumulate(storage, subgroup_id);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 32u" in generated
+    assert "if (gl_SubgroupSize != CROSSTL_REQUIRED_SUBGROUP_WIDTH)" in generated
+    assert "gl_SubgroupID" in generated
+    assert "uint segment = (subgroup_id % 8u);" in generated
+    assert "if ((segment == 0u))" in generated
+
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "exact_subgroup_workgroup_view",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_exact_subgroup_range_rejects_unconditional_out_of_bounds_view():
+    shader = """
+    shader ExactSubgroupOutOfBoundsWorkgroupView {
+        void accumulate(threadgroup float* values, uint subgroup_id) {
+            uint segment = subgroup_id % 8u;
+            threadgroup float* view = values + segment * 2u;
+            for (uint peer = 1u; peer < 8u; peer++) {
+                view[peer * 2u] += 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
+
+            void main(uint subgroup_id @ gl_SubgroupID) @ WaveSize(32) {
+                threadgroup float storage[16];
+                accumulate(storage, subgroup_id);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "accumulate"
+    assert error.parameter_name == "values"
+    assert error.reason == "view-out-of-bounds"
+
+
+def test_workgroup_view_branch_requires_exact_subgroup_width():
+    shader = """
+    shader UnspecifiedSubgroupWorkgroupView {
+        void accumulate(threadgroup float* values, uint subgroup_id) {
+            uint segment = subgroup_id % 8u;
+            threadgroup float* view = values + segment * 2u;
+            if (segment == 0u) {
+                for (uint peer = 1u; peer < 8u; peer++) {
+                    view[peer * 2u] += 1.0;
+                }
+            }
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
+
+            void main(uint subgroup_id @ gl_SubgroupID) {
+                threadgroup float storage[16];
+                accumulate(storage, subgroup_id);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "accumulate"
+    assert error.parameter_name == "values"
+    assert error.reason == "unprovable-view-access"
+
+
+def test_address_taken_offset_rejects_stale_branch_refinement():
+    shader = """
+    shader AddressTakenWorkgroupViewOffset {
+        void reset(thread uint* value) {
+            *value = 0u;
+        }
+
+        void accumulate(threadgroup float* values, uint subgroup_id) {
+            uint segment = subgroup_id % 8u;
+            threadgroup float* view = values + segment * 2u;
+            reset(&segment);
+            if (segment == 0u) {
+                for (uint peer = 1u; peer < 8u; peer++) {
+                    view[peer * 2u] += 1.0;
+                }
+            }
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
+
+            void main(uint subgroup_id @ gl_SubgroupID) @ WaveSize(32) {
+                threadgroup float storage[16];
+                accumulate(storage, subgroup_id);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "accumulate"
+    assert error.parameter_name == "values"
+    assert error.reason == "view-out-of-bounds"
+
+
 def test_nested_workgroup_pointer_helper_rejects_out_of_bounds_view():
     shader = """
     shader OutOfBoundsWorkgroupPointerHelpers {
@@ -634,6 +778,127 @@ def test_workgroup_pointer_helper_rejects_min_with_unprovable_operand():
         "sharedValues"
     )
     assert error.reason == "unprovable-view-access"
+
+
+def test_entry_scoped_workgroup_access_assertion_proves_runtime_range(tmp_path):
+    shader = """
+    shader AssertedWorkgroupPointerAccess {
+        void store_value(threadgroup float* values, uint index) {
+            values[index] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 group @ gl_WorkGroupID) {
+                threadgroup float sharedValues[8];
+                store_value(sharedValues, group.x);
+            }
+        }
+    }
+    """
+
+    generated = (
+        GLSLCodeGen()
+        .set_workgroup_access_assertions(
+            [
+                {
+                    "entry_point": "main",
+                    "function": "store_*",
+                    "parameter": "values",
+                    "minimum": 0,
+                    "maximum": 7,
+                }
+            ]
+        )
+        .generate(crosstl.translator.parse(shader))
+    )
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "gl_WorkGroupID.x" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "asserted_workgroup_pointer_access",
+    )
+
+
+def test_workgroup_access_assertion_does_not_apply_to_another_entry():
+    shader = """
+    shader UnmatchedWorkgroupPointerAccess {
+        void store_value(threadgroup float* values, uint index) {
+            values[index] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 group @ gl_WorkGroupID) {
+                threadgroup float sharedValues[8];
+                store_value(sharedValues, group.x);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        (
+            GLSLCodeGen()
+            .set_workgroup_access_assertions(
+                [
+                    {
+                        "entry_point": "other_entry",
+                        "function": "store_value",
+                        "parameter": "values",
+                        "minimum": 0,
+                        "maximum": 7,
+                    }
+                ]
+            )
+            .generate(crosstl.translator.parse(shader))
+        )
+
+    assert exc_info.value.entry_point == "main"
+    assert exc_info.value.reason == "unprovable-view-access"
+
+
+def test_workgroup_access_assertion_rejects_static_contradiction():
+    shader = """
+    shader ContradictoryWorkgroupPointerAccess {
+        void store_value(threadgroup float* values) {
+            values[9] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float sharedValues[8];
+                store_value(sharedValues);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        (
+            GLSLCodeGen()
+            .set_workgroup_access_assertions(
+                [
+                    {
+                        "entry_point": "main",
+                        "function": "store_value",
+                        "parameter": "values",
+                        "minimum": 0,
+                        "maximum": 7,
+                    }
+                ]
+            )
+            .generate(crosstl.translator.parse(shader))
+        )
+
+    assert exc_info.value.asserted_range == (0, 7)
+    assert exc_info.value.reason == "asserted-access-conflict"
 
 
 def test_workgroup_pointer_helper_proves_max_limited_accesses(tmp_path):
