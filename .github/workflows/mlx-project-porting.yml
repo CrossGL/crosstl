@@ -137,7 +137,7 @@ jobs:
         run: |
           python -m pip install pytest
           python -m pytest -q -n auto tests/test_translator/test_codegen/test_GLSL_codegen.py \
-            -k "opengl_lowers_expected_scalar_and_vector_conversions or opengl_preserves_metal_arithmetic_conversion_order or opengl_helper_parameters_preserve_out_and_inout_qualifiers or glsl_atomic_thread_fence"
+            -k "opengl_lowers_expected_scalar_and_vector_conversions or opengl_broadcasts_scalar_literals_to_vector_assignments or opengl_preserves_metal_arithmetic_conversion_order or opengl_helper_parameters_preserve_out_and_inout_qualifiers or glsl_atomic_thread_fence"
           python -m pytest -q -n auto tests/test_translator/test_project_translation.py \
             -k "translate_project_reports_unrepresentable_atomic_fence_contract"
 

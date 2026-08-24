@@ -297,47 +297,110 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
-  "opengl_fft_workgroup_pointer_status": {
-    "status": "blocked-after-provenance",
+  "opengl_fft_translation_status": {
+    "status": "translated-glslang-spirv-val-validated",
     "source": "mlx/backend/metal/kernels/fft.metal",
     "source_sha256": "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825",
+    "source_size_bytes": 3278,
     "target": "opengl",
     "project_translation": {
       "unit_count": 1,
       "artifact_count": 1,
-      "translated_count": 0,
-      "failed_count": 1,
+      "translated_count": 1,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "index_range_assertion_count": 4,
+      "workgroup_access_assertion_count": 5,
       "max_template_specializations": 4096,
       "max_template_materialization_work": 2097152
     },
     "materialization": {
       "status": "materialized",
-      "specialization_count": 117,
+      "specialization_count": 99,
       "unsupported_specialization_count": 0,
       "function_constant_count": 22
     },
-    "diagnostic": {
-      "code": "project.translate.opengl-workgroup-pointer-unsupported",
-      "missing_capability": "opengl.workgroup-pointer-lowering",
-      "message": "OpenGL cannot prove the workgroup pointer access range for 'ReadWriter_float2_float2__load.crosstl_ptr_buf' into shared backing 'shared_in'",
-      "workgroup_pointer": {
-        "backingName": "shared_in",
-        "entryPoint": "fft_mem_256_float2_float2",
-        "function": "ReadWriter_float2_float2__load",
-        "materializationName": "ReadWriter_float2_float2_load__glsl_crosstl_ptr_buf_fft_mem_256_float2_float2_shared_in_vec2_256",
-        "offsetExpression": "0",
-        "parameter": "crosstl_ptr_buf",
-        "reason": "unprovable-view-access"
-      }
+    "portability_preconditions": {
+      "index_range_assertions": [
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "expression": "batch_idx + index",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "expression": "batch_idx + index + 1",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "expression": "batch_idx + index + next_in",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "expression": "batch_idx + index + next_out",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      ],
+      "workgroup_access_assertions": [
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "entry_point": "*mem_256_*",
+          "function": "*",
+          "parameter": "*",
+          "minimum": 0,
+          "maximum": 255
+        },
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "entry_point": "*mem_512_*",
+          "function": "*",
+          "parameter": "*",
+          "minimum": 0,
+          "maximum": 511
+        },
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "entry_point": "*mem_1024_*",
+          "function": "*",
+          "parameter": "*",
+          "minimum": 0,
+          "maximum": 1023
+        },
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "entry_point": "*mem_2048_*",
+          "function": "*",
+          "parameter": "*",
+          "minimum": 0,
+          "maximum": 2047
+        },
+        {
+          "source": "mlx/backend/metal/kernels/fft.metal",
+          "entry_point": "*mem_4096_*",
+          "function": "*",
+          "parameter": "*",
+          "minimum": 0,
+          "maximum": 4095
+        }
+      ]
     },
-    "provenance_status": "concrete-backing-preserved",
-    "access_range_status": "unprovable",
-    "artifact_emitted": false,
-    "native_validation_status": "not-run-no-artifact",
-    "blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1671"
-    ],
+    "artifact_emitted": true,
+    "native_validation": {
+      "compiler": "glslangValidator",
+      "compiler_target": "OpenGL SPIR-V 1.3",
+      "validator": "spirv-val",
+      "validator_target": "SPIR-V 1.3",
+      "status": "passed"
+    },
+    "tracked_issues": [],
     "runtime_integration_included": false,
+    "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
   "opengl_quantized_frontier_status": {

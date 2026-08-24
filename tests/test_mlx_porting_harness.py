@@ -5925,7 +5925,7 @@ def test_opengl_frontier_requires_exact_index_range_assertion_report(
         )
 
 
-def _prepare_fft_opengl_pointer_check(module, tmp_path, *, pointer_overrides=None):
+def _prepare_fft_opengl_toolchain_check(module, tmp_path):
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / ".crosstl-mlx-porting"
     config_dir = work_dir / "configs"
@@ -5935,38 +5935,62 @@ def _prepare_fft_opengl_pointer_check(module, tmp_path, *, pointer_overrides=Non
         path.mkdir(parents=True, exist_ok=True)
 
     artifact_path = (
-        work_dir / "out-fft-opengl-workgroup-pointer" / "opengl" / module.MLX_FFT_SOURCE
+        work_dir / "out-fft-opengl" / "opengl" / module.MLX_FFT_SOURCE
     ).with_suffix(".glsl")
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(
+        """#version 450 core
+void radix_butterfly_2_radix2(vec2 value) {
+}
+void main() {
+}
+""",
+        encoding="utf-8",
+    )
     relative_artifact_path = artifact_path.relative_to(mlx_root).as_posix()
-    pointer_evidence = dict(module.FFT_OPENGL_EXPECTED_POINTER_EVIDENCE)
-    pointer_evidence.update(pointer_overrides or {})
+    expected_workgroup_assertions = [
+        {
+            "source": assertion["source"],
+            "entryPoint": assertion["entry_point"],
+            "function": assertion["function"],
+            "parameter": assertion["parameter"],
+            "minimum": assertion["minimum"],
+            "maximum": assertion["maximum"],
+        }
+        for assertion in module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
+    ]
     report = {
         "kind": "crosstl-project-portability-report",
         "summary": {
             "unitCount": 1,
             "artifactCount": 1,
-            "translatedCount": 0,
-            "failedCount": 1,
-            "diagnosticCounts": {"error": 1, "note": 0, "warning": 0},
-            "diagnosticsByCode": {module.FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1},
-            "missingCapabilityCounts": {
-                module.FFT_OPENGL_EXPECTED_MISSING_CAPABILITY: 1
-            },
+            "translatedCount": 1,
+            "failedCount": 0,
+            "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+            "diagnosticsByCode": {},
+            "missingCapabilityCounts": {},
         },
-        "diagnostics": [
+        "project": {
+            "indexRangeAssertionCount": len(
+                module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS
+            ),
+            "indexRangeAssertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+            "workgroupAccessAssertionCount": len(
+                module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
+            ),
+            "workgroupAccessAssertions": expected_workgroup_assertions,
+        },
+        "diagnostics": [],
+        "units": [
             {
-                "severity": "error",
-                "code": module.FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
-                "message": module.FFT_OPENGL_EXPECTED_MESSAGE,
-                "location": {"file": module.MLX_FFT_SOURCE},
-                "target": "opengl",
+                "id": module.MLX_FFT_SOURCE,
+                "path": module.MLX_FFT_SOURCE,
                 "sourceBackend": "metal",
-                "missingCapabilities": [module.FFT_OPENGL_EXPECTED_MISSING_CAPABILITY],
-                "details": {
-                    "sourcePath": module.MLX_FFT_SOURCE,
-                    "targetArtifact": relative_artifact_path,
-                    "workgroupPointer": pointer_evidence,
+                "sourceHash": {
+                    "algorithm": "sha256",
+                    "value": module.MLX_FFT_SHA256,
                 },
+                "sourceSizeBytes": module.MLX_FFT_SOURCE_SIZE_BYTES,
             }
         ],
         "artifacts": [
@@ -5975,13 +5999,21 @@ def _prepare_fft_opengl_pointer_check(module, tmp_path, *, pointer_overrides=Non
                 "sourceBackend": "metal",
                 "target": "opengl",
                 "path": relative_artifact_path,
-                "status": "failed",
-                "error": module.FFT_OPENGL_EXPECTED_MESSAGE,
+                "status": "translated",
+                "provenance": {
+                    "intermediate": "crossgl",
+                    "pipeline": "single-file-translate",
+                },
                 "sourceHash": {
                     "algorithm": "sha256",
                     "value": module.MLX_FFT_SHA256,
                 },
                 "sourceSizeBytes": module.MLX_FFT_SOURCE_SIZE_BYTES,
+                "generatedHash": {
+                    "algorithm": "sha256",
+                    "value": module._sha256(artifact_path),
+                },
+                "generatedSizeBytes": artifact_path.stat().st_size,
                 "specializationConstants": [
                     {"id": index}
                     for index in range(
@@ -6001,19 +6033,26 @@ def _prepare_fft_opengl_pointer_check(module, tmp_path, *, pointer_overrides=Non
             }
         ],
     }
-    (report_dir / "fft-opengl-workgroup-pointer.json").write_text(
+    (report_dir / "fft-opengl-toolchain.json").write_text(
         json.dumps(report),
         encoding="utf-8",
     )
-    return mlx_root, work_dir, config_dir, report_dir, log_dir
+    return (
+        (mlx_root, work_dir, config_dir, report_dir, log_dir),
+        artifact_path,
+        expected_workgroup_assertions,
+    )
 
 
-def test_fft_opengl_pointer_frontier_records_next_fail_closed_root(
+def test_fft_opengl_toolchain_records_translation_and_native_validation(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
-    paths = _prepare_fft_opengl_pointer_check(module, tmp_path)
+    paths, artifact_path, expected_workgroup_assertions = (
+        _prepare_fft_opengl_toolchain_check(module, tmp_path)
+    )
+    generated = artifact_path.read_text(encoding="utf-8")
     commands = []
 
     def fake_run_command(name, command, *, log_dir, **kwargs):
@@ -6022,78 +6061,114 @@ def test_fft_opengl_pointer_frontier_records_next_fail_closed_root(
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(name, list(command), 1, stdout_path, stderr_path)
+        if name == "translate-fft-opengl":
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text(generated, encoding="utf-8")
+        if name == "validate-fft-opengl":
+            output_path = Path(command[command.index("-o") + 1])
+            output_path.write_bytes(b"SPIR-V")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(
+        module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}",
+    )
 
-    result = module._check_fft_opengl_workgroup_pointer_frontier(
+    result = module._check_fft_opengl_toolchain(
         *paths,
         "python",
+        require_toolchain=True,
     )
 
     assert result == {
-        "name": "fft-opengl-workgroup-pointer-frontier",
-        "status": "blocked-as-expected",
-        "report": ".crosstl-mlx-porting/reports/fft-opengl-workgroup-pointer.json",
+        "name": "fft-opengl-toolchain",
+        "status": "passed",
+        "report": ".crosstl-mlx-porting/reports/fft-opengl-toolchain.json",
         "source": module.MLX_FFT_SOURCE,
         "sourceHash": module.MLX_FFT_SHA256,
         "target": "opengl",
-        "artifactStatus": "failed",
-        "artifactEmitted": False,
-        "nativeValidationAttempted": False,
-        "nativeValidationStatus": "not-run-no-artifact",
+        "artifactStatus": "translated",
+        "artifactEmitted": True,
+        "generatedHash": module._sha256(artifact_path),
+        "generatedSizeBytes": artifact_path.stat().st_size,
+        "nativeValidationAttempted": True,
+        "nativeValidationStatus": "validated",
+        "nativeValidationOutput": ".crosstl-mlx-porting/validation/fft-opengl.spv",
+        "nativeCompiler": "glslangValidator",
+        "spirvValidator": "spirv-val",
         "templateMaterializationStatus": "materialized",
-        "templateSpecializationCount": 117,
+        "templateSpecializationCount": 99,
         "functionConstantCount": 22,
-        "workgroupPointer": module.FFT_OPENGL_EXPECTED_POINTER_EVIDENCE,
-        "provenanceStatus": "concrete-backing-preserved",
-        "accessRangeStatus": "unprovable",
-        "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1671",
+        "indexRangeAssertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+        "workgroupAccessAssertions": expected_workgroup_assertions,
+        "toolchainRequired": True,
+        "trackedIssues": [],
         "maxTemplateSpecializations": 4096,
         "maxTemplateMaterializationWork": 2097152,
         "runtimeIntegrationIncluded": False,
+        "numericalParityClaimed": False,
         "runtimeParityClaimed": False,
     }
     assert [name for name, _command, _kwargs in commands] == [
-        "translate-fft-opengl-workgroup-pointer"
+        "translate-fft-opengl",
+        "validate-fft-opengl",
+        "validate-fft-opengl-spirv",
     ]
     assert commands[0][2]["check"] is False
-    assert commands[0][2]["timeout_seconds"] == 900
-    assert commands[0][1][-1] == "--no-format"
-    config = (paths[2] / "fft-opengl-workgroup-pointer.toml").read_text(
-        encoding="utf-8"
+    assert (
+        commands[0][2]["timeout_seconds"]
+        == module.FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS
+        == 900
     )
+    assert commands[0][1][-1] == "--no-format"
+    assert commands[1][2] == {"check": False}
+    assert commands[2][2] == {"check": False}
+    config = (paths[2] / "fft-opengl-toolchain.toml").read_text(encoding="utf-8")
     assert f'include = ["{module.MLX_FFT_SOURCE}"]' in config
     assert 'targets = ["opengl"]' in config
+    assert config.count("[[project.index_range_assertions]]") == len(
+        module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS
+    )
+    assert config.count("[[project.workgroup_access_assertions]]") == len(
+        module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
+    )
     assert "max_template_specializations = 4096" in config
     assert "max_template_materialization_work = 2097152" in config
 
 
-def test_fft_opengl_pointer_frontier_rejects_changed_provenance(
+def test_fft_opengl_toolchain_rejects_changed_portability_precondition(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
-    paths = _prepare_fft_opengl_pointer_check(
-        module,
-        tmp_path,
-        pointer_overrides={"backingName": "unknown_shared_storage"},
+    paths, _artifact_path, _expected_workgroup_assertions = (
+        _prepare_fft_opengl_toolchain_check(module, tmp_path)
     )
+    report_path = paths[3] / "fft-opengl-toolchain.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["project"]["workgroupAccessAssertions"][0]["maximum"] -= 1
+    report_path.write_text(json.dumps(report), encoding="utf-8")
 
     def fake_run_command(name, command, *, log_dir, **_kwargs):
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(name, list(command), 1, stdout_path, stderr_path)
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
     with pytest.raises(
         module.PortingCheckError,
-        match="lost concrete workgroup-pointer provenance",
+        match="portability preconditions changed",
     ):
-        module._check_fft_opengl_workgroup_pointer_frontier(*paths, "python")
+        module._check_fft_opengl_toolchain(
+            *paths,
+            "python",
+            require_toolchain=False,
+        )
 
 
 def _configure_small_gemv_opengl_toolchain(module, monkeypatch):
@@ -6380,7 +6455,11 @@ def test_gemv_opengl_toolchain_accepts_complete_compiler_validation(
         "validate-gemv-opengl-002",
     ]
     assert commands[0][2]["check"] is False
-    assert commands[0][2]["timeout_seconds"] == 900
+    assert (
+        commands[0][2]["timeout_seconds"]
+        == module.GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS
+        == 1500
+    )
     assert commands[0][1][-1] == "--no-format"
     assert all(path.is_file() for path in generated_files)
     config = (paths[2] / "gemv-opengl.toml").read_text(encoding="utf-8")
@@ -9507,7 +9586,7 @@ def test_full_corpus_checkpoint_probe_records_verified_resume_coordinate():
     }
 
 
-def test_fft_opengl_evidence_records_provenance_without_artifact_claims():
+def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():
     module = _load_harness()
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -9515,44 +9594,54 @@ def test_fft_opengl_evidence_records_provenance_without_artifact_claims():
         )
     )
 
-    status = gaps["opengl_fft_workgroup_pointer_status"]
-    assert status["status"] == "blocked-after-provenance"
+    status = gaps["opengl_fft_translation_status"]
+    assert status["status"] == "translated-glslang-spirv-val-validated"
     assert status["source"] == module.MLX_FFT_SOURCE
     assert status["source_sha256"] == module.MLX_FFT_SHA256
+    assert status["source_size_bytes"] == module.MLX_FFT_SOURCE_SIZE_BYTES
     assert status["target"] == "opengl"
     assert status["project_translation"] == {
         "unit_count": 1,
         "artifact_count": 1,
-        "translated_count": 0,
-        "failed_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "index_range_assertion_count": 4,
+        "workgroup_access_assertion_count": 5,
         "max_template_specializations": 4096,
         "max_template_materialization_work": 2097152,
     }
     assert status["materialization"] == {
         "status": "materialized",
-        "specialization_count": 117,
+        "specialization_count": 99,
         "unsupported_specialization_count": 0,
         "function_constant_count": 22,
     }
-    assert status["diagnostic"] == {
-        "code": module.FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
-        "missing_capability": module.FFT_OPENGL_EXPECTED_MISSING_CAPABILITY,
-        "message": module.FFT_OPENGL_EXPECTED_MESSAGE,
-        "workgroup_pointer": module.FFT_OPENGL_EXPECTED_POINTER_EVIDENCE,
+    assert status["portability_preconditions"] == {
+        "index_range_assertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+        "workgroup_access_assertions": list(
+            module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
+        ),
     }
-    assert status["provenance_status"] == "concrete-backing-preserved"
-    assert status["access_range_status"] == "unprovable"
-    assert status["artifact_emitted"] is False
-    assert status["native_validation_status"] == "not-run-no-artifact"
-    assert status["blocked_by"] == [module.FFT_OPENGL_WORKGROUP_POINTER_ISSUE]
+    assert status["artifact_emitted"] is True
+    assert status["native_validation"] == {
+        "compiler": "glslangValidator",
+        "compiler_target": "OpenGL SPIR-V 1.3",
+        "validator": "spirv-val",
+        "validator_target": "SPIR-V 1.3",
+        "status": "passed",
+    }
+    assert status["tracked_issues"] == []
     assert status["runtime_integration_included"] is False
+    assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "the complete pinned `fft.metal` source for OpenGL" in readme
-    assert "All 117 reachable template specializations materialize" in readme
-    assert "workgroup access range cannot be proven" in readme
-    assert "No GLSL artifact is emitted" in readme
+    assert "the complete pinned `fft.metal` source to one standalone OpenGL" in readme
+    assert "99 unique reachable template specializations" in readme
+    assert "five entry-point-scoped workgroup access assertions" in readme
+    assert "validates the binary with `spirv-val`" in readme
+    assert "OpenGL runtime dispatch and numerical parity" in readme
 
 
 def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims():
@@ -9820,8 +9909,8 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         module,
-        "_check_fft_opengl_workgroup_pointer_frontier",
-        lambda *args: pytest.fail("OpenGL FFT pointer frontier should not run"),
+        "_check_fft_opengl_toolchain",
+        lambda *args, **kwargs: pytest.fail("OpenGL FFT toolchain proof should not run"),
     )
 
     result = module.run_checks(
@@ -9865,7 +9954,8 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     assert (
         result["scope"]["templateMemberBufferPointerNativeValidationIncluded"] is False
     )
-    assert result["scope"]["fftOpenGLWorkgroupPointerFrontierIncluded"] is False
+    assert result["scope"]["fftOpenGLToolchainIncluded"] is False
+    assert result["scope"]["fftOpenGLToolchainRequired"] is False
     assert result["scope"]["runtimeParityClaimed"] is False
 
 
@@ -9967,13 +10057,19 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "_check_opengl_frontier",
         fake_opengl_frontier_check,
     )
+    fft_opengl_requirements = []
+
+    def fake_fft_opengl_toolchain(*args, require_toolchain):
+        fft_opengl_requirements.append(require_toolchain)
+        return {
+            "name": "fft-opengl-toolchain",
+            "status": "passed",
+        }
+
     monkeypatch.setattr(
         module,
-        "_check_fft_opengl_workgroup_pointer_frontier",
-        lambda *args: {
-            "name": "fft-opengl-workgroup-pointer-frontier",
-            "status": "blocked-as-expected",
-        },
+        "_check_fft_opengl_toolchain",
+        fake_fft_opengl_toolchain,
     )
     monkeypatch.setattr(
         module,
@@ -10041,7 +10137,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "arange-opengl",
         "gemv-directx-compiler-frontier",
         "opengl-frontier",
-        "fft-opengl-workgroup-pointer-frontier",
+        "fft-opengl-toolchain",
         "gemv-opengl-toolchain",
         "gemv-vulkan-toolchain",
         "runtime-readiness",
@@ -10050,6 +10146,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     assert directx_frontier_requirements == [False]
     assert vulkan_frontier_requirements == [(False, True)]
     assert opengl_frontier_requirements == [True]
+    assert fft_opengl_requirements == [True]
     assert runtime_requirements == [
         {
             "require_vulkan_native_runtime": False,
@@ -10058,7 +10155,8 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     ]
     assert result["scope"]["openglFrontierToolchainRequired"] is True
     assert result["scope"]["directxGemvCompilerFrontierRequired"] is True
-    assert result["scope"]["fftOpenGLWorkgroupPointerFrontierIncluded"] is True
+    assert result["scope"]["fftOpenGLToolchainIncluded"] is True
+    assert result["scope"]["fftOpenGLToolchainRequired"] is True
     assert result["scope"]["openglGemvToolchainRequired"] is True
     assert result["scope"]["openglNativeRuntimeRequired"] is True
     assert result["scope"]["vulkanGemvToolchainRequired"] is True
