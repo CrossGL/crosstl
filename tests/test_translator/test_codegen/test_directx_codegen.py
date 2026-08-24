@@ -44008,6 +44008,57 @@ def test_hlsl_workgroup_pointer_nested_helpers_specialize_by_backing_identity(
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_workgroup_pointer_mapped_overloads_retain_pointer_contracts(tmp_path):
+    shader = """
+    shader WorkgroupPointerMappedOverloads {
+        float adjust(
+            device float* input,
+            threadgroup float* values,
+            device float* output,
+            float value
+        ) {
+            return input[0] + values[0] + output[0] + value;
+        }
+
+        float adjust(
+            device float* input,
+            threadgroup float* values,
+            device float* output,
+            float value,
+            int divisor
+        ) {
+            return input[0] + values[1] + output[0] + value / divisor;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(device float* input, device float* output) {
+                threadgroup float values[8];
+                values[2] = adjust(input, values, output, 3.0);
+                values[3] = adjust(input, values, output, 4.0, 2);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    base_names = (
+        "adjust_float_float_float_float",
+        "adjust_float_float_float_float_int",
+    )
+    for base_name in base_names:
+        specialized = f"{base_name}__crosstl_workgroup_values_main_values_8"
+        assert f"float {specialized}(" in generated
+        assert f"{specialized}(input, int64_t(0), int(0), output," in generated
+        assert f"{base_name}(input" not in generated
+
+    assert ", main_values, output," not in generated
+    assert "float*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_workgroup_pointer_static_nullable_calls_preserve_specialization(
     tmp_path,
 ):
