@@ -29161,6 +29161,44 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             function_name: tuple(sorted(function_variants))
             for function_name, function_variants in variants.items()
         }
+        self.register_hlsl_mapped_workgroup_pointer_variants(functions)
+
+    def register_hlsl_mapped_workgroup_pointer_variants(self, functions):
+        """Expose analyzed pointer contracts under mapped overload names."""
+
+        for function in functions:
+            source_name = getattr(function, "name", None)
+            target_name = self.hlsl_function_declaration_name(function)
+            if not source_name or not target_name or source_name == target_name:
+                continue
+            variants = self.function_hlsl_workgroup_pointer_backing_variants.get(
+                source_name
+            )
+            if variants is None:
+                continue
+
+            parameters = list(
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            workgroup_parameters = [
+                parameter
+                for parameter in parameters
+                if self.hlsl_workgroup_pointer_declaration(parameter)
+            ]
+            if not workgroup_parameters:
+                continue
+
+            self.function_hlsl_workgroup_pointer_parameters[target_name] = (
+                workgroup_parameters
+            )
+            self.function_hlsl_workgroup_pointer_parameter_indices[target_name] = {
+                index: parameter.name
+                for index, parameter in enumerate(parameters)
+                if self.hlsl_workgroup_pointer_declaration(parameter)
+            }
+            self.function_hlsl_workgroup_pointer_backing_variants[target_name] = (
+                variants
+            )
 
     def hlsl_analyze_workgroup_pointer_function(
         self,

@@ -404,9 +404,9 @@ python demos/integrations/mlx/prove_quantized_opengl.py \
 ```
 
 On Windows, install DXC to require DirectX HLSL validation for the reduced
-frontier, the pinned GEMV compiler frontier, all three reference-accessor
-artifact proofs, the selected LayerNorm entries, and the selected complex-copy
-entry:
+frontier, the selected 256-point FFT entry, the pinned GEMV compiler frontier,
+all three reference-accessor artifact proofs, the selected LayerNorm entries,
+and the selected complex-copy entry:
 
 ```bash
 python demos/integrations/mlx/run_mlx_porting.py \
@@ -645,10 +645,25 @@ compiler selection. CrossGL/crosstl#1669 tracks
 the fixed arrays of resource aliases introduced by the pinned revision's wide
 quantized matrix-vector helpers. CrossGL/crosstl#1671 originally tracked
 workgroup backing provenance through nested FFT helper parameters. A dedicated
-project replay now translates the complete pinned `fft.metal` source to one
-standalone OpenGL compute shader with a 4,096-specialization limit and a
-2,097,152-item materialization work budget. The report records 99 unique
-reachable template specializations, 22 function constants, no unsupported
+DirectX project replay now selects the forward complex 256-point entry
+`fft_mem_256_float2_float2` from the complete pinned `fft.metal` source. The
+host planner's `MTL::Size(1, threadgroup_batch_size, threads_per_fft)` dispatch
+maps to `[numthreads(1, 1, 64)]`; the report and generated HLSL must retain that
+axis order. The replay materializes 24 reachable template specializations and
+21 of the 22 configured function constants. Function constant 3 is pruned
+because its Rader transform branch is unreachable for this power-of-two plan.
+The generated artifact contains no first-class workgroup pointer residue and is
+locked by SHA-256 and byte count. Windows CI compiles it with DXC using
+`cs_6_2`, `-enable-16bit-types`, and warnings as errors. This is a bounded
+entry-point translation and compiler proof. The aggregate DirectX source
+materialization limit remains tracked by
+[#1916](https://github.com/CrossGL/crosstl/issues/1916), and this check does not
+execute a Direct3D FFT or establish numerical parity with Metal.
+
+A dedicated project replay now translates the complete pinned `fft.metal`
+source to one standalone OpenGL compute shader with a 4,096-specialization
+limit and a 2,097,152-item materialization work budget. The report records 99
+unique reachable template specializations, 22 function constants, no unsupported
 materializations, and no project diagnostics. Four unsigned host-index
 assertions and five entry-point-scoped workgroup access assertions make the
 required dispatch preconditions explicit for memory extents from 256 through
