@@ -26,7 +26,7 @@ from crosstl.project import (
     translate_project,
 )
 
-MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_BINARY_SOURCE = "mlx/backend/metal/kernels/binary.metal"
 MLX_BINARY_SHA256 = "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e"
 MLX_BINARY_ENTRY = "ss_Addfloat32"

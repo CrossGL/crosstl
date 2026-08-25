@@ -229,6 +229,18 @@ jobs:
           git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
           git -C mlx-upstream checkout "$MLX_COMMIT"
 
+      - name: Checkout current MLX scalar proof corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf mlx-current-upstream
+          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
+          git -C mlx-current-upstream config core.autocrlf false
+          git -C mlx-current-upstream sparse-checkout init --cone
+          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
+          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
+          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+
       - name: Prove pinned MLX LogSumExp Direct3D native-loader execution
         if: runner.os == 'Windows'
         env:
@@ -435,7 +447,7 @@ jobs:
       - name: Prove pinned MLX arange Direct3D native-loader execution
         if: runner.os == 'Windows'
         env:
-          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_ARANGE_DIRECTX_NATIVE_LOADER: "1"
         run: >-
           python -m pytest -q -n auto
@@ -444,7 +456,7 @@ jobs:
       - name: Prove pinned MLX binary add Direct3D native-loader execution
         if: runner.os == 'Windows'
         env:
-          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_BINARY_DIRECTX_NATIVE_LOADER: "1"
         run: >-
           python -m pytest -q -n auto
@@ -453,7 +465,7 @@ jobs:
       - name: Prove pinned MLX copy Direct3D native-loader execution
         if: runner.os == 'Windows'
         env:
-          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_COPY_DIRECTX_NATIVE_LOADER: "1"
         run: >-
           python -m pytest -q -n auto
@@ -538,7 +550,7 @@ jobs:
       - name: Prove pinned MLX arange OpenGL native-loader execution
         if: runner.os == 'Linux'
         env:
-          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_ARANGE_OPENGL_NATIVE_LOADER: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -550,7 +562,7 @@ jobs:
       - name: Prove pinned MLX binary add OpenGL native-loader execution
         if: runner.os == 'Linux'
         env:
-          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_BINARY_OPENGL_NATIVE_LOADER: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -562,7 +574,7 @@ jobs:
       - name: Prove pinned MLX copy OpenGL native-loader execution
         if: runner.os == 'Linux'
         env:
-          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_COPY_OPENGL_NATIVE_LOADER: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"

@@ -153,6 +153,11 @@ The current harness verifies:
   runs the GLSL artifact through a surfaceless Mesa OpenGL context. This proves
   one real binary operator entry and does not claim coverage of the other
   materialized binary variants or the upstream MLX host runtime;
+- the `arangeuint32` and `ss_Addfloat32` native-loader checks above, together
+  with the scalar copy check described below, use the current corpus at commit
+  `846d176227a0ac13d266ce4644fd93d20223b6e`. The broader 40-unit frontier and
+  its remaining proofs retain their recorded historical revision until each
+  source contract is remeasured;
 - Vulkan assembly and validator checks for the existing non-fence regression
   frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
   deferred; the separate `fence.metal` contract check prevents generated
@@ -871,10 +876,11 @@ warnings as errors. This proves selected-entry translation and native compiler
 acceptance; it does not execute the shader, establish numerical parity, port
 the MLX runtime dispatch path, or run the MLX test suite.
 
-A separate native-loader check selects `v_copyfloat32float32` from that same
-full source and materializes only `copy_v<float, float, 1>`, pruning 69,915
-unreachable candidate pairs. It packages one HLSL artifact and one GLSL
-artifact with exact reflected scalar buffer layouts, dispatches eight
+A separate native-loader check selects `v_copyfloat32float32` from the current
+corpus at commit `846d176227a0ac13d2667e58d2bb68b322109ab0`. It materializes
+`copy_v<float, float, 1>` and the reachable `cast_to<float, float>` helper while
+pruning 62,424 unreachable candidate pairs. It packages one HLSL artifact and
+one GLSL artifact with exact reflected scalar buffer layouts, dispatches eight
 nonuniform float32 values through Direct3D 12 WARP on Windows and a headless
 OpenGL software context on Linux, and requires exact readback on both targets.
 The generated artifact hashes, byte counts, binding layouts, and 1-by-1-by-1

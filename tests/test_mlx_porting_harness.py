@@ -9927,7 +9927,7 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
 
     status = gaps["copy_native_runtime_status"]
     assert status["status"] == "translated-packaged-and-native-executed"
-    assert status["commit"] == "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+    assert status["commit"] == "846d176227a0ac13d2667e58d2bb68b322109ab0"
     assert status["source"] == "mlx/backend/metal/kernels/copy.metal"
     assert status["source_sha256"] == (
         "ed8a579eb6fe6a14c36560d2c8b548baf99e66fa77d300fb4ad7554883820eba"
@@ -9936,14 +9936,28 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     assert status["template_materialization"] == {
         "template": "copy_v",
         "arguments": {"N": "1", "T": "float", "U": "float"},
-        "reachable_specialization_count": 1,
-        "dependency_discovery_work_count": 0,
-        "pruned_candidate_count": 69915,
+        "specializations": [
+            {
+                "template": "copy_v",
+                "arguments": {"N": "1", "T": "float", "U": "float"},
+                "source": "source-instantiation",
+            },
+            {
+                "template": "cast_to",
+                "materialized_name": "cast_to_float_float",
+                "arguments": {"T": "float", "U": "float"},
+                "source": "call-site",
+            },
+        ],
+        "specialization_count": 2,
+        "reachable_specialization_count": 5,
+        "dependency_discovery_work_count": 7,
+        "pruned_candidate_count": 62424,
     }
     assert status["artifacts"]["directx"] == {
         "target_entry_point": "CSMain",
-        "sha256": "5dcd4bee2b0075ab1bcd61f632b2d76a99a4c0978f6dae84a12c3f972c492a3f",
-        "size_bytes": 1020,
+        "sha256": "023227a86b82cfeff6c32219e2526efbb658d018a4679b47f06c8369186a3495",
+        "size_bytes": 1234,
         "workgroup_size": [1, 1, 1],
         "resource_layouts": {
             "input_storage": "hlsl-structured-buffer",
@@ -9965,8 +9979,8 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     }
     assert status["artifacts"]["opengl"] == {
         "target_entry_point": "main",
-        "sha256": "e91b07ca10b84de624b126420b6cd216a569b639488f40b7afe2527955e226d1",
-        "size_bytes": 1434,
+        "sha256": "fac13358ba17271c622634c3e42f9b3cd0863adb75bcfe71aca7ce13aa5628cb",
+        "size_bytes": 1619,
         "workgroup_size": [1, 1, 1],
         "resource_layouts": {
             "input_storage": "std430",
@@ -10006,9 +10020,10 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     }
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "selects `v_copyfloat32float32` from that same full source" in readme
-    assert "materializes only `copy_v<float, float, 1>`" in readme
-    assert "pruning 69,915 unreachable candidate pairs" in readme
+    assert "selects `v_copyfloat32float32` from the current corpus" in readme
+    assert "materializes `copy_v<float, float, 1>`" in readme
+    assert "`cast_to<float, float>`" in readme
+    assert "pruning 62,424 unreachable candidate pairs" in readme
     assert "requires exact readback on both targets" in readme
     assert "bounded execution evidence for one scalar copy entry" in readme
     assert "does not cover the complex or bfloat16 entries" in readme

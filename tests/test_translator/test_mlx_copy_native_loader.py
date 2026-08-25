@@ -25,19 +25,19 @@ from crosstl.project import (
     translate_project,
 )
 
-MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_COPY_SOURCE = "mlx/backend/metal/kernels/copy.metal"
 MLX_COPY_SHA256 = "ed8a579eb6fe6a14c36560d2c8b548baf99e66fa77d300fb4ad7554883820eba"
 MLX_COPY_ENTRY = "v_copyfloat32float32"
 MLX_COPY_TEMPLATE_ARGUMENTS = {"N": "1", "T": "float", "U": "float"}
 MLX_COPY_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "5dcd4bee2b0075ab1bcd61f632b2d76a99a4c0978f6dae84a12c3f972c492a3f",
-        "sizeBytes": 1020,
+        "sha256": "023227a86b82cfeff6c32219e2526efbb658d018a4679b47f06c8369186a3495",
+        "sizeBytes": 1234,
     },
     "opengl": {
-        "sha256": "e91b07ca10b84de624b126420b6cd216a569b639488f40b7afe2527955e226d1",
-        "sizeBytes": 1434,
+        "sha256": "fac13358ba17271c622634c3e42f9b3cd0863adb75bcfe71aca7ce13aa5628cb",
+        "sizeBytes": 1619,
     },
 }
 REQUIRE_PROOF_ENVS = {
@@ -193,12 +193,12 @@ def _build_runtime_package(
     )
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
-    assert materialization["specializationCount"] == 1
+    assert materialization["specializationCount"] == 2
     assert materialization["unsupported"] == []
     assert materialization["accounting"] == {
-        "reachableSpecializationCount": 1,
-        "dependencyDiscoveryWorkCount": 0,
-        "prunedCandidateCount": 69915,
+        "reachableSpecializationCount": 5,
+        "dependencyDiscoveryWorkCount": 7,
+        "prunedCandidateCount": 62424,
     }
     assert materialization["specializations"] == [
         {
@@ -212,14 +212,29 @@ def _build_runtime_package(
                 "U": "source-instantiation",
             },
             "source": "source-instantiation",
-        }
+        },
+        {
+            "name": "cast_to",
+            "materializedName": "cast_to_float_float",
+            "parameters": {"T": "float", "U": "float"},
+            "parameterSources": {"T": "call-site", "U": "call-site"},
+            "source": "call-site",
+        },
     ]
 
     generated = (mlx_root / artifact["path"]).read_text(encoding="utf-8")
     if target == "directx":
-        assert "src.Load((index + i))" in generated
+        assert "float cast_to_float_float(float val)" in generated
+        assert (
+            "dst[(index + i)] = cast_to_float_float(src.Load((index + i)));"
+            in generated
+        )
     else:
-        assert "src[(index + uint(i))]" in generated
+        assert "float cast_to_float_float(float val)" in generated
+        assert (
+            "dst[(index + uint(i))] = "
+            "cast_to_float_float(src[(index + uint(i))]);" in generated
+        )
 
     report_path = work_dir / "portability-report.json"
     report.write_json(report_path)
