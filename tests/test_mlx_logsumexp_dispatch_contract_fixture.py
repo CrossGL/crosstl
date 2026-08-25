@@ -5,6 +5,7 @@ from pathlib import Path
 import crosstl.project as project_api
 
 MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+CURRENT_MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
 MLX_HOST_SOURCE = "mlx/backend/metal/logsumexp.cpp"
 MLX_KERNEL_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
@@ -16,8 +17,12 @@ FIXTURE = (
     / "contracts"
     / "logsumexp.dispatch.json"
 )
+NATIVE_LOADER_FIXTURE = FIXTURE.with_name("logsumexp.native-loader.dispatch.json")
 EXPECTED_MANIFEST_DIGEST = (
     "db762a188e05786e206d9aa5a340b6f9095a8a3e938b85a7c04836f300e97c95"
+)
+EXPECTED_NATIVE_LOADER_MANIFEST_DIGEST = (
+    "3cfc400f25cf49cb16d028fdba59ebe8b56b729ade919f711de4b8b67bfa5ab4"
 )
 EXPECTED_VARIANTS = {
     "block-float32-axis-32": {
@@ -88,6 +93,31 @@ def test_logsumexp_dispatch_fixture_pins_schema_identity_and_provenance():
     }
     assert manifest.contracts[0].provenance["hostSource"] == MLX_HOST_SOURCE
     assert manifest.contracts[0].provenance["kernelSource"] == MLX_KERNEL_SOURCE
+
+
+def test_logsumexp_native_loader_fixture_tracks_current_corpus_revision():
+    historical = project_api.load_dispatch_contract(FIXTURE)
+    current = project_api.load_dispatch_contract(NATIVE_LOADER_FIXTURE)
+
+    assert current.content_identity.to_json() == {
+        "algorithm": "sha256",
+        "value": EXPECTED_NATIVE_LOADER_MANIFEST_DIGEST,
+    }
+    assert current.provenance["commit"] == CURRENT_MLX_COMMIT
+
+    def executable_fields(manifest):
+        variants = []
+        for variant in manifest.evaluate():
+            payload = variant.to_json()
+            payload.pop("provenance")
+            variants.append(payload)
+        return variants
+
+    assert executable_fields(current) == executable_fields(historical)
+
+    expected = historical.to_json()
+    expected["provenance"]["commit"] = CURRENT_MLX_COMMIT
+    assert current.to_json() == expected
 
 
 def test_logsumexp_dispatch_fixture_evaluates_unit_test_variants_exactly():

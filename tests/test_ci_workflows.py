@@ -2392,19 +2392,19 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert f'MLX_CORPUS_COMMIT: "{mlx_corpus_commit}"' in mlx_porting
     assert 'git -C mlx-upstream checkout "$MLX_COMMIT"' in mlx_porting
     assert 'git -C mlx-upstream checkout "$MLX_CORPUS_COMMIT"' in mlx_porting
-    current_scalar_checkout = _load_ci_coverage_module().workflow_step_section(
+    current_runtime_checkout = _load_ci_coverage_module().workflow_step_section(
         mlx_porting,
-        "Checkout current MLX scalar proof corpus",
+        "Checkout current MLX runtime proof corpus",
     )
-    assert "git clone --filter=blob:none --no-checkout" in current_scalar_checkout
-    assert "mlx-current-upstream" in current_scalar_checkout
+    assert "git clone --filter=blob:none --no-checkout" in current_runtime_checkout
+    assert "mlx-current-upstream" in current_runtime_checkout
     assert (
         'git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"'
-        in current_scalar_checkout
+        in current_runtime_checkout
     )
     assert (
         'test "$(git -C mlx-current-upstream rev-parse HEAD)" = '
-        '"$MLX_CORPUS_COMMIT"' in current_scalar_checkout
+        '"$MLX_CORPUS_COMMIT"' in current_runtime_checkout
     )
     assert '--expected-commit "$MLX_COMMIT"' in mlx_porting
     assert "--expected-unit-count 40" in mlx_porting
@@ -3059,8 +3059,7 @@ def test_mlx_project_porting_workflow_runs_pinned_arange_native_loader_proof():
     )
     assert "if: runner.os == 'Windows'" in directx_step
     assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in directx_step
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
     )
     assert 'CROSTL_REQUIRE_MLX_ARANGE_DIRECTX_NATIVE_LOADER: "1"' in directx_step
     assert (
@@ -3103,8 +3102,7 @@ def test_mlx_project_porting_workflow_runs_pinned_binary_native_loader_proof():
     )
     assert "if: runner.os == 'Windows'" in directx_step
     assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in directx_step
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
     )
     assert 'CROSTL_REQUIRE_MLX_BINARY_DIRECTX_NATIVE_LOADER: "1"' in directx_step
     assert (
@@ -3147,8 +3145,7 @@ def test_mlx_project_porting_workflow_runs_pinned_copy_native_loader_proof():
     )
     assert "if: runner.os == 'Windows'" in directx_step
     assert (
-        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
-        in directx_step
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
     )
     assert 'CROSTL_REQUIRE_MLX_COPY_DIRECTX_NATIVE_LOADER: "1"' in directx_step
     assert (
@@ -3170,7 +3167,7 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
         "Prove pinned MLX LogSumExp Direct3D native-loader execution",
     )
     assert "if: runner.os == 'Windows'" in step
-    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream" in step
+    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in step
     assert 'CROSTL_REQUIRE_MLX_LOGSUMEXP_DIRECTX_NATIVE_LOADER: "1"' in step
     assert (
         f"{test_path}::"
@@ -3181,7 +3178,7 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
     assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX LogSumExp Direct3D native-loader execution",
-        "Checkout pinned MLX",
+        "Checkout current MLX runtime proof corpus",
     )
     assert mlx_porting.index(
         "- name: Prove pinned MLX LogSumExp Direct3D native-loader execution"
@@ -3192,7 +3189,9 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
         "Validate pinned MLX LogSumExp OpenGL dispatch artifacts",
     )
     assert "if: runner.os == 'Linux'" in opengl_step
-    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream" in opengl_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
+    )
     assert 'CROSTL_REQUIRE_MLX_LOGSUMEXP_OPENGL_TOOLCHAIN: "1"' in opengl_step
     assert (
         f"{test_path}::"
@@ -3204,7 +3203,7 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
     assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Validate pinned MLX LogSumExp OpenGL dispatch artifacts",
-        "Checkout pinned MLX",
+        "Checkout current MLX runtime proof corpus",
     )
 
 

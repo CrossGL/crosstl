@@ -948,6 +948,16 @@ distinct results of the pinned host formula
 select `block_logsumexp_float32`. The looped path for axis sizes above 4096 and
 the float16 and bfloat16 entries remain outside this bounded contract.
 
+The companion
+[`contracts/logsumexp.native-loader.dispatch.json`](contracts/logsumexp.native-loader.dispatch.json)
+pins the same bounded workloads to current corpus commit
+`846d176227a0ac13d2667e58d2bb68b322109ab0`. The upstream kernel, host dispatch
+formula, and referenced workload coverage are unchanged between the two
+revisions, so the two evaluated variant sets are identical; only revision
+provenance differs. Current-corpus Direct3D execution and OpenGL toolchain tests
+use this companion contract. The historical contract remains attached to the
+recorded 40-unit frontier.
+
 The repository harness evaluates both records against the unchanged pinned
 `logsumexp.metal` source and emits one standalone DirectX artifact per workload.
 It verifies source, contract, dispatch, template-materialization, and artifact
@@ -957,7 +967,8 @@ requires official DXC `cs_6_6` compilation with warnings as errors on Windows.
 This establishes translation and native compiler acceptance for the two listed
 test-derived dispatches.
 
-The same checked-in contract also produces two standalone OpenGL artifacts.
+Both revision-specific contracts produce the same two dispatch variants as
+standalone OpenGL artifacts.
 Each generated GLSL file requires `GL_KHR_shader_subgroup_basic`, declares
 `CROSSTL_REQUIRED_SUBGROUP_WIDTH` as 32, and checks `gl_SubgroupSize` before any
 translated kernel work. The portability report records the matching
@@ -977,13 +988,14 @@ numerical parity therefore remains dependent on compatible hardware or a
 semantics-preserving subgroup emulation strategy tracked by
 [#1894](https://github.com/CrossGL/crosstl/issues/1894).
 
-A separate Windows native-loader test packages the axis-size-32 artifact,
-builds its reflected DirectX ABI, binds 32 nonuniform float32 inputs and the
-axis-size constant, dispatches one 32-thread workgroup, and compares the
-readback with a stable CPU LogSumExp reference under explicit float tolerance.
-That is numerical runtime evidence for one finite workload. It does not redirect
-the MLX runtime, cover the axis-size-1025 artifact or looped reduction path, or
-establish parity for other dtypes, shapes, devices, or the full MLX test suite.
+A separate Windows native-loader test uses the current-corpus contract to
+package the axis-size-32 artifact, builds its reflected DirectX ABI, binds 32
+nonuniform float32 inputs and the axis-size constant, dispatches one 32-thread
+workgroup, and compares the readback with a stable CPU LogSumExp reference
+under explicit float tolerance. That is numerical runtime evidence for one
+finite workload. It does not redirect the MLX runtime, cover the axis-size-1025
+artifact or looped reduction path, or establish parity for other dtypes,
+shapes, devices, or the full MLX test suite.
 
 Validate the LogSumExp contract schema, provenance, deterministic identities,
 and bounded workload set with:

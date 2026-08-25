@@ -22,13 +22,14 @@ from crosstl.project import (
     build_runtime_artifact_manifest,
     build_runtime_loader_manifest,
     build_runtime_package,
+    load_dispatch_contract,
     load_project_config,
     translate_project,
     validate_project_report,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
 MLX_LOGSUMEXP_SHA256 = (
     "f9bec5e1e5a23d20bedf9ff8d29a8c03bbb5144bc5d751bbfe906d32ee894817"
@@ -37,8 +38,46 @@ MLX_LOGSUMEXP_ENTRY = "block_logsumexp_float32"
 MLX_LOGSUMEXP_AXIS_32_ARTIFACT = (
     "sha256:f51ab67b8a9ad3240e3fbb52f6de00cdf4a8532e58790758e59aa50fb95e2c52"
 )
+MLX_LOGSUMEXP_GENERATED_ARTIFACTS = {
+    "directx": {
+        "sha256:ae512c102a88628c05a49f28a872c44ab582bacf74584e8ca7e6ae765263afe0": {
+            "sha256": (
+                "5e21981d80e5d546d1cadd0d245e998d0be78a2be8dba16cd864d60ca71bb8e6"
+            ),
+            "sizeBytes": 3229,
+        },
+        MLX_LOGSUMEXP_AXIS_32_ARTIFACT: {
+            "sha256": (
+                "120f3d9c6460f241fe25b8edcc1b96d624192417b60bffb44363772027708e64"
+            ),
+            "sizeBytes": 3228,
+        },
+    },
+    "opengl": {
+        "sha256:ae512c102a88628c05a49f28a872c44ab582bacf74584e8ca7e6ae765263afe0": {
+            "sha256": (
+                "b3d42d7a2b68055521e0f53adc4f9e33063addd0c7c40832ea9af6b2783fa84b"
+            ),
+            "sizeBytes": 3755,
+        },
+        MLX_LOGSUMEXP_AXIS_32_ARTIFACT: {
+            "sha256": (
+                "78119c00bd63be34c940d708d337e25405391245ae1a987c42cf4fcbd357cb44"
+            ),
+            "sizeBytes": 3754,
+        },
+    },
+}
+MLX_LOGSUMEXP_DISPATCH_IDENTITY = (
+    "3cfc400f25cf49cb16d028fdba59ebe8b56b729ade919f711de4b8b67bfa5ab4"
+)
 MLX_LOGSUMEXP_DISPATCH_CONTRACT = (
-    ROOT / "demos" / "integrations" / "mlx" / "contracts" / "logsumexp.dispatch.json"
+    ROOT
+    / "demos"
+    / "integrations"
+    / "mlx"
+    / "contracts"
+    / "logsumexp.native-loader.dispatch.json"
 )
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_LOGSUMEXP_DIRECTX_NATIVE_LOADER"
 REQUIRE_OPENGL_PROOF_ENV = "CROSTL_REQUIRE_MLX_LOGSUMEXP_OPENGL_TOOLCHAIN"
@@ -66,6 +105,16 @@ def _write_json(path: Path, payload: dict) -> None:
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _copy_dispatch_contract(destination: Path) -> None:
+    manifest = load_dispatch_contract(MLX_LOGSUMEXP_DISPATCH_CONTRACT)
+    assert manifest.provenance["commit"] == MLX_COMMIT
+    assert manifest.content_identity.to_json() == {
+        "algorithm": "sha256",
+        "value": MLX_LOGSUMEXP_DISPATCH_IDENTITY,
+    }
+    shutil.copyfile(MLX_LOGSUMEXP_DISPATCH_CONTRACT, destination)
 
 
 def _skip_or_fail(message: str) -> None:
@@ -142,7 +191,7 @@ def test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts():
     ) as temporary_directory:
         work_dir = Path(temporary_directory)
         contract_path = work_dir / "logsumexp.dispatch.json"
-        shutil.copyfile(MLX_LOGSUMEXP_DISPATCH_CONTRACT, contract_path)
+        _copy_dispatch_contract(contract_path)
         output_dir = work_dir / "out"
         config_path = work_dir / "crosstl.toml"
         config_path.write_text(
@@ -174,6 +223,15 @@ def test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts():
             for artifact in artifacts
         } == {(32, 1, 1), (288, 1, 1)}
         for artifact in artifacts:
+            artifact_id = artifact["dispatchArtifact"]["artifactId"]
+            generated_identity = MLX_LOGSUMEXP_GENERATED_ARTIFACTS["opengl"][
+                artifact_id
+            ]
+            assert artifact["generatedHash"] == {
+                "algorithm": "sha256",
+                "value": generated_identity["sha256"],
+            }
+            assert artifact["generatedSizeBytes"] == generated_identity["sizeBytes"]
             assert artifact["entryPoint"] == {
                 "source": MLX_LOGSUMEXP_ENTRY,
                 "target": "main",
@@ -249,7 +307,7 @@ def _expected_scalar_layouts() -> dict[str, dict]:
 
 def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     contract_path = work_dir / "logsumexp.dispatch.json"
-    shutil.copyfile(MLX_LOGSUMEXP_DISPATCH_CONTRACT, contract_path)
+    _copy_dispatch_contract(contract_path)
     output_dir = work_dir / "out"
     config_path = work_dir / "crosstl.toml"
     config_path.write_text(
@@ -272,6 +330,14 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     assert report_payload["summary"]["unitCount"] == 1
     assert report_payload["summary"]["translatedCount"] == 2
     assert report_payload["summary"]["failedCount"] == 0
+    for artifact in report_payload["artifacts"]:
+        artifact_id = artifact["dispatchArtifact"]["artifactId"]
+        generated_identity = MLX_LOGSUMEXP_GENERATED_ARTIFACTS["directx"][artifact_id]
+        assert artifact["generatedHash"] == {
+            "algorithm": "sha256",
+            "value": generated_identity["sha256"],
+        }
+        assert artifact["generatedSizeBytes"] == generated_identity["sizeBytes"]
     axis_32_artifact = next(
         artifact
         for artifact in report_payload["artifacts"]
