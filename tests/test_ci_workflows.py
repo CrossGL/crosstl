@@ -3207,6 +3207,29 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
     )
 
 
+def test_mlx_project_porting_workflow_records_current_fft_directx_boundary():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    step_name = "Record current MLX FFT DirectX boundary"
+    step = ci_coverage.workflow_step_section(mlx_porting, step_name)
+
+    assert "if: runner.os == 'Windows'" in step
+    assert (
+        "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-upstream" in step
+    )
+    assert "python -m pytest -q -n auto" in step
+    assert (
+        "tests/test_translator/test_mlx_fft_native_loader.py::"
+        "test_current_mlx_fft_reports_directx_workgroup_alias_blocker" in step
+    )
+    assert "-k" not in step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        step_name,
+        "Checkout current MLX runtime proof corpus",
+    )
+
+
 def test_mlx_project_porting_workflow_installs_pinned_warp_runtime():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()

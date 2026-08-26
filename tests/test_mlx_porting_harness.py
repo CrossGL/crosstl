@@ -10142,6 +10142,85 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     assert "does not redirect the MLX host runtime" in readme
 
 
+def test_fft_current_corpus_evidence_records_workgroup_alias_blocker():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["directx_fft_current_corpus_status"]
+    assert status == {
+        "status": "blocked-at-reachable-workgroup-alias",
+        "commit": CURRENT_MLX_COMMIT,
+        "source": "mlx/backend/metal/kernels/fft.metal",
+        "source_sha256": (
+            "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e"
+        ),
+        "source_size_bytes": 3436,
+        "target": "directx",
+        "selected_entry_point": "fft_mem_256_float2_float2",
+        "workgroup_size": [1, 1, 64],
+        "project_translation": {
+            "unit_count": 1,
+            "artifact_count": 1,
+            "translated_count": 0,
+            "failed_count": 1,
+            "project_diagnostic_count": 1,
+            "artifact_emitted": False,
+        },
+        "specialization": {
+            "configured_function_constant_count": 23,
+            "reachable_function_constant_count": 21,
+            "pruned_function_constant_ids": [3, 22],
+            "new_function_constant": {
+                "id": 22,
+                "name": "use_bluestein_twiddle_table_",
+                "value": False,
+            },
+        },
+        "materialization": {
+            "status": "materialized",
+            "specialization_count": 37,
+            "unsupported_specialization_count": 0,
+            "reachable_specialization_count": 42,
+            "dependency_discovery_work_count": 0,
+            "pruned_candidate_count": 2120,
+        },
+        "diagnostic": {
+            "code": "project.translate.directx-workgroup-pointer-unsupported",
+            "missing_capability": "directx.workgroup-pointer-lowering",
+            "message": (
+                "DirectX cannot emit a workgroup pointer as a first-class value: "
+                "crosstl_ptr_buf"
+            ),
+            "workgroup_pointer": {
+                "function": "ReadWriter_float2_float2__load",
+                "parameter": "crosstl_ptr_buf",
+                "reason": "bare-pointer-expression",
+            },
+            "tracked_by": "https://github.com/CrossGL/crosstl/issues/1518",
+        },
+        "previous_verified_proof": {
+            "commit": PINNED_MLX_COMMIT,
+            "status_key": "directx_fft_translation_status",
+        },
+        "mlx_host_runtime_included": False,
+        "runtime_integration_included": False,
+        "numerical_parity_claimed": False,
+        "runtime_parity_claimed": False,
+    }
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "successful runtime proof remains revision-specific" in readme
+    assert "adds function constant 22" in readme
+    assert "materializes 37 specializations" in readme
+    assert "`ReadWriter_float2_float2__load`" in readme
+    assert "`crosstl_ptr_buf` remains a first-class workgroup pointer" in readme
+    assert "current-corpus CI check requires this exact diagnostic" in readme
+    assert "historical FFT execution result is not evidence" in readme
+
+
 def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():
     module = _load_harness()
     gaps = json.loads(

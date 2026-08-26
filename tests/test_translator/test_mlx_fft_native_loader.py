@@ -26,8 +26,12 @@ from crosstl.project import (
 )
 
 MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+CURRENT_MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_FFT_SOURCE = "mlx/backend/metal/kernels/fft.metal"
 MLX_FFT_SHA256 = "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825"
+CURRENT_MLX_FFT_SHA256 = (
+    "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e"
+)
 MLX_FFT_ENTRY = "fft_mem_256_float2_float2"
 MLX_FFT_GENERATED_SHA256 = (
     "07f9300c2e4860077b344610fbfaa2eadb330e1f9723cb519794f91272bd2289"
@@ -35,6 +39,7 @@ MLX_FFT_GENERATED_SHA256 = (
 MLX_FFT_GENERATED_SIZE_BYTES = 116160
 MLX_FFT_SIZE = 256
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER"
+CURRENT_MLX_ROOT_ENV = "CROSTL_MLX_CURRENT_ROOT"
 
 FFT_SPECIALIZATION_CONSTANTS = {
     0: False,
@@ -60,6 +65,10 @@ FFT_SPECIALIZATION_CONSTANTS = {
     20: 0,
     21: 0,
 }
+CURRENT_FFT_SPECIALIZATION_CONSTANTS = {
+    **FFT_SPECIALIZATION_CONSTANTS,
+    22: False,
+}
 
 
 def _toml_value(value: object) -> str:
@@ -68,10 +77,14 @@ def _toml_value(value: object) -> str:
     return str(value)
 
 
-def _project_config(output_dir: str) -> str:
+def _project_config(
+    output_dir: str,
+    *,
+    specialization_constants: dict[int, object] = FFT_SPECIALIZATION_CONSTANTS,
+) -> str:
     constants = "\n".join(
         f'"{constant_id}" = {_toml_value(value)}'
-        for constant_id, value in FFT_SPECIALIZATION_CONSTANTS.items()
+        for constant_id, value in specialization_constants.items()
     )
     return f"""
 [project]
@@ -160,6 +173,137 @@ def _pinned_mlx_root() -> Path:
     assert checkout_commit == MLX_COMMIT
     assert hashlib.sha256(source_path.read_bytes()).hexdigest() == MLX_FFT_SHA256
     return mlx_root
+
+
+def _current_mlx_root() -> Path:
+    root_value = os.environ.get(CURRENT_MLX_ROOT_ENV)
+    if not root_value:
+        pytest.skip(f"{CURRENT_MLX_ROOT_ENV} is not configured")
+
+    mlx_root = Path(root_value).resolve()
+    source_path = mlx_root / MLX_FFT_SOURCE
+    if not source_path.is_file():
+        pytest.fail(f"Current MLX FFT source is missing: {source_path}")
+
+    checkout_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=mlx_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert checkout_commit == CURRENT_MLX_COMMIT
+    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == (
+        CURRENT_MLX_FFT_SHA256
+    )
+    return mlx_root
+
+
+def test_current_mlx_fft_reports_directx_workgroup_alias_blocker():
+    mlx_root = _current_mlx_root()
+    with tempfile.TemporaryDirectory(
+        prefix=".crosstl-fft-current-frontier-",
+        dir=mlx_root,
+    ) as temporary_directory:
+        work_dir = Path(temporary_directory)
+        output_dir = work_dir / "out"
+        config_path = work_dir / "crosstl.toml"
+        config_path.write_text(
+            _project_config(
+                output_dir.relative_to(mlx_root).as_posix(),
+                specialization_constants=CURRENT_FFT_SPECIALIZATION_CONSTANTS,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        report = translate_project(
+            load_project_config(mlx_root, config_path),
+            targets=("directx",),
+            output_dir=output_dir.relative_to(mlx_root).as_posix(),
+            format_output=False,
+            validate=False,
+        )
+        payload = report.to_json()
+
+        assert payload["summary"]["unitCount"] == 1
+        assert payload["summary"]["artifactCount"] == 1
+        assert payload["summary"]["translatedCount"] == 0
+        assert payload["summary"]["failedCount"] == 1
+        assert payload["summary"]["diagnosticCounts"] == {
+            "error": 1,
+            "note": 0,
+            "warning": 0,
+        }
+        artifact = payload["artifacts"][0]
+        assert artifact["sourceHash"] == {
+            "algorithm": "sha256",
+            "value": CURRENT_MLX_FFT_SHA256,
+        }
+        assert artifact["sourceSizeBytes"] == 3436
+        assert artifact["status"] == "failed"
+        assert artifact["entryPoint"] == {
+            "source": MLX_FFT_ENTRY,
+            "target": MLX_FFT_ENTRY,
+        }
+        assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [
+            1,
+            1,
+            64,
+        ]
+        assert artifact["specializationMaterialization"] == {
+            "status": "concrete",
+            "mode": "concrete-crossgl-variant",
+            "source": "shared-crossgl-specialization",
+            "constantCount": 21,
+            "requiredCount": 21,
+            "concreteCount": 21,
+            "overriddenCount": 21,
+            "targetSupportsDeferredSpecialization": False,
+        }
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["specializationCount"] == 37
+        assert materialization["unsupported"] == []
+        assert materialization["accounting"] == {
+            "reachableSpecializationCount": 42,
+            "dependencyDiscoveryWorkCount": 0,
+            "prunedCandidateCount": 2120,
+        }
+        assert artifact["error"] == (
+            "DirectX cannot emit a workgroup pointer as a first-class value: "
+            "crosstl_ptr_buf"
+        )
+        assert not (mlx_root / artifact["path"]).exists()
+
+        assert payload["diagnostics"] == [
+            {
+                "code": "project.translate.directx-workgroup-pointer-unsupported",
+                "message": artifact["error"],
+                "severity": "error",
+                "sourceBackend": "metal",
+                "target": "directx",
+                "location": {
+                    "file": MLX_FFT_SOURCE,
+                    "line": 1,
+                    "column": 1,
+                    "endLine": 1,
+                    "endColumn": 1,
+                    "offset": 0,
+                    "endOffset": 0,
+                    "length": 0,
+                },
+                "missingCapabilities": ["directx.workgroup-pointer-lowering"],
+                "details": {
+                    "sourcePath": MLX_FFT_SOURCE,
+                    "targetArtifact": artifact["path"],
+                    "workgroupPointer": {
+                        "function": "ReadWriter_float2_float2__load",
+                        "parameter": "crosstl_ptr_buf",
+                        "reason": "bare-pointer-expression",
+                    },
+                },
+            }
+        ]
 
 
 def _expected_layouts() -> dict[str, dict]:

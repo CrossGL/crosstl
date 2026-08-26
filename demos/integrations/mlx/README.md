@@ -687,6 +687,20 @@ resource-layout contracts remain tracked by
 [#1542](https://github.com/CrossGL/crosstl/issues/1542) and
 [#1543](https://github.com/CrossGL/crosstl/issues/1543).
 
+That successful runtime proof remains revision-specific. At current corpus
+commit `846d176227a0ac13d266ce4644fd93d20223b6e`, MLX generalizes FFT workgroup
+storage through `FFTIOTypeTraits` and adds function constant 22 for the
+Bluestein twiddle-table path. Replaying the same 256-point entry with that new
+constant set to `false` materializes 37 specializations and reaches the
+concrete `ReadWriter_float2_float2__load` helper, then fails closed with
+`project.translate.directx-workgroup-pointer-unsupported` because parameter
+`crosstl_ptr_buf` remains a first-class workgroup pointer expression. The
+current-corpus CI check requires this exact diagnostic and emits no HLSL
+artifact. [#1518](https://github.com/CrossGL/crosstl/issues/1518) tracks the
+required groupshared-root-plus-offset lowering. Until that boundary is fixed
+and the native workload passes again, the historical FFT execution result is
+not evidence for the current source revision.
+
 A dedicated project replay now translates the complete pinned `fft.metal`
 source to one standalone OpenGL compute shader with a 4,096-specialization
 limit and a 2,097,152-item materialization work budget. The report records 99

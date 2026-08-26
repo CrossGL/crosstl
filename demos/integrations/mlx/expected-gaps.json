@@ -554,6 +554,68 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
+  "directx_fft_current_corpus_status": {
+    "status": "blocked-at-reachable-workgroup-alias",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/fft.metal",
+    "source_sha256": "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e",
+    "source_size_bytes": 3436,
+    "target": "directx",
+    "selected_entry_point": "fft_mem_256_float2_float2",
+    "workgroup_size": [
+      1,
+      1,
+      64
+    ],
+    "project_translation": {
+      "unit_count": 1,
+      "artifact_count": 1,
+      "translated_count": 0,
+      "failed_count": 1,
+      "project_diagnostic_count": 1,
+      "artifact_emitted": false
+    },
+    "specialization": {
+      "configured_function_constant_count": 23,
+      "reachable_function_constant_count": 21,
+      "pruned_function_constant_ids": [
+        3,
+        22
+      ],
+      "new_function_constant": {
+        "id": 22,
+        "name": "use_bluestein_twiddle_table_",
+        "value": false
+      }
+    },
+    "materialization": {
+      "status": "materialized",
+      "specialization_count": 37,
+      "unsupported_specialization_count": 0,
+      "reachable_specialization_count": 42,
+      "dependency_discovery_work_count": 0,
+      "pruned_candidate_count": 2120
+    },
+    "diagnostic": {
+      "code": "project.translate.directx-workgroup-pointer-unsupported",
+      "missing_capability": "directx.workgroup-pointer-lowering",
+      "message": "DirectX cannot emit a workgroup pointer as a first-class value: crosstl_ptr_buf",
+      "workgroup_pointer": {
+        "function": "ReadWriter_float2_float2__load",
+        "parameter": "crosstl_ptr_buf",
+        "reason": "bare-pointer-expression"
+      },
+      "tracked_by": "https://github.com/CrossGL/crosstl/issues/1518"
+    },
+    "previous_verified_proof": {
+      "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+      "status_key": "directx_fft_translation_status"
+    },
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": false,
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "opengl_fft_translation_status": {
     "status": "translated-glslang-spirv-val-validated",
     "source": "mlx/backend/metal/kernels/fft.metal",
