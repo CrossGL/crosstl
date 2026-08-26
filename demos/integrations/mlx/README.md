@@ -154,10 +154,11 @@ The current harness verifies:
   one real binary operator entry and does not claim coverage of the other
   materialized binary variants or the upstream MLX host runtime;
 - the `arangeuint32` and `ss_Addfloat32` native-loader checks above, together
-  with the scalar copy and float32 dot-product checks described below, use the
-  current corpus at commit `846d176227a0ac13d266ce4644fd93d20223b6e`. The
-  broader 40-unit frontier and its remaining proofs retain their recorded
-  historical revision until each source contract is remeasured;
+  with the scalar copy, float32 dot-product, and unary Square checks described
+  below, use the current corpus at commit
+  `846d176227a0ac13d2667e58d2bb68b322109ab0`. The broader 40-unit frontier and
+  its remaining proofs retain their recorded historical revision until each
+  source contract is remeasured;
 - Vulkan assembly and validator checks for the existing non-fence regression
   frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
   deferred; the separate `fence.metal` contract check prevents generated
@@ -1042,6 +1043,25 @@ round trip still fails closed at storage-backed vector pointer lowering under
 Metal compiler acceptance. These checks establish one selected kernel workload
 and do not redirect MLX host dispatch, cover the float16 or bfloat16 dot
 entries, or run the MLX test suite.
+
+The current-corpus unary proof selects `v_Squarefloat32float32` from the full
+include-expanded `unary.metal` source. Entry-scoped materialization emits exactly
+one `unary_v<T=float, U=float, Op=Square, N=1>` specialization and does not
+require lowering unrelated complex unary function bodies. Both generated
+artifacts retain the reachable `x * x` operation, a one-thread workgroup, the
+source and output buffers, and the size constant in their reflected runtime
+interfaces. Deterministic artifact hashes and the pinned upstream source hash
+are checked before packaging.
+
+Windows CI compiles the selected HLSL entry with DXC and executes it through the
+native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entry with
+`glslangValidator` and executes it through the same loader contract on a
+surfaceless Mesa OpenGL context. Five float32 inputs
+`[-3.0, -1.5, 0.0, 2.0, 4.25]` must produce
+`[9.0, 2.25, 0.0, 4.0, 18.0625]` under explicit tolerance on both platforms.
+This is numerical evidence for one selected unary specialization. It does not
+cover the other unary operations or dtypes, redirect the MLX host runtime, or
+run the MLX test suite.
 
 The checked-in
 [`contracts/rms_norm.dispatch.json`](contracts/rms_norm.dispatch.json) fixture

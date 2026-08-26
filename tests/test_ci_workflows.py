@@ -3274,6 +3274,71 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     )
 
 
+def test_mlx_project_porting_workflow_runs_pinned_unary_square_proofs():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_unary_native_loader.py"
+
+    assert mlx_porting.count(f'"{test_path}"') == 2
+    translation_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Translate pinned MLX unary Square entry",
+    )
+    assert "if: runner.os" not in translation_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
+        in translation_step
+    )
+    assert (
+        f"{test_path}::test_pinned_mlx_unary_square_translates_to_selected_target"
+        in translation_step
+    )
+    assert "-n auto" in translation_step
+    assert "-k" not in translation_step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Translate pinned MLX unary Square entry",
+        "Checkout current MLX runtime proof corpus",
+    )
+
+    directx_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX unary Square Direct3D native-loader execution",
+    )
+    assert "if: runner.os == 'Windows'" in directx_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_UNARY_DIRECTX_NATIVE_LOADER: "1"' in directx_step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_unary_square_executes_through_directx_native_loader"
+        in directx_step
+    )
+    assert "-n auto" in directx_step
+    assert "-k" not in directx_step
+
+    opengl_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX unary Square OpenGL native-loader execution",
+    )
+    assert "if: runner.os == 'Linux'" in opengl_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_UNARY_OPENGL_NATIVE_LOADER: "1"' in opengl_step
+    assert "EGL_PLATFORM: surfaceless" in opengl_step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
+    assert "PYOPENGL_PLATFORM: egl" in opengl_step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_unary_square_executes_through_opengl_native_loader"
+        in opengl_step
+    )
+    assert "-n auto" in opengl_step
+    assert "-k" not in opengl_step
+
+
 def test_mlx_project_porting_workflow_records_current_fft_directx_boundary():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()

@@ -634,6 +634,94 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
+  "unary_square_native_runtime_status": {
+    "status": "translated-packaged-and-executed",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/unary.metal",
+    "source_sha256": "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b",
+    "selected_entry_point": "v_Squarefloat32float32",
+    "specialization": {
+      "name": "unary_v",
+      "arguments": {
+        "T": "float",
+        "U": "float",
+        "Op": "Square",
+        "N": 1
+      },
+      "specialization_count": 1,
+      "unsupported_specialization_count": 0,
+      "pruned_candidate_count": 39509
+    },
+    "entry_reachability": {
+      "unreachable_member_lowering_pruned": true,
+      "reachable_unresolved_calls_fail_closed": true,
+      "tracked_by": "https://github.com/CrossGL/crosstl/issues/1922"
+    },
+    "execution": {
+      "workgroup_size": [
+        1,
+        1,
+        1
+      ],
+      "dispatch_workgroup_count": [
+        5,
+        1,
+        1
+      ]
+    },
+    "artifacts": {
+      "directx": {
+        "target_entry_point": "CSMain",
+        "sha256": "64540a89c95e39914a4d616aff9bec98b939a5209fa4caef5cc1425511abb4e5",
+        "size_bytes": 2314,
+        "native_runtime": {
+          "platform": "windows-latest",
+          "runtime": "direct3d-12-warp",
+          "compiler": "dxc",
+          "status": "required-on-ci",
+          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_square_executes_through_directx_native_loader"
+        }
+      },
+      "opengl": {
+        "target_entry_point": "main",
+        "sha256": "2bb46a3bb0858eb849e533bfe46eff1d59b9192436e15b2639c7998698db6a48",
+        "size_bytes": 3613,
+        "native_runtime": {
+          "platform": "ubuntu-latest",
+          "runtime": "mesa-opengl-4.3",
+          "compiler": "glslangValidator",
+          "status": "required-on-ci",
+          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_square_executes_through_opengl_native_loader"
+        }
+      }
+    },
+    "workload": {
+      "dtype": "float32",
+      "input": [
+        -3.0,
+        -1.5,
+        0.0,
+        2.0,
+        4.25
+      ],
+      "expected_output": [
+        9.0,
+        2.25,
+        0.0,
+        4.0,
+        18.0625
+      ],
+      "absolute_tolerance": 0.000001,
+      "relative_tolerance": 0.000001
+    },
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": true,
+    "selected_workload_numerical_parity_verified": true,
+    "other_unary_specializations_included": false,
+    "full_mlx_test_suite_included": false,
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "directx_fft_current_corpus_status": {
     "status": "blocked-at-reachable-workgroup-alias",
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",

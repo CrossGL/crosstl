@@ -8951,6 +8951,56 @@ def test_preprocessor_template_method_uninferable_argument_clean_fails():
     )
 
 
+def test_preprocessor_skips_unreachable_uninferable_template_method_call():
+    code = """
+    struct Log {
+      template <typename T> T operator()(T value) thread { return value; }
+    };
+
+    float opaque(float value) { return value; }
+
+    float unused(float value) {
+      return Log{}(opaque(value));
+    }
+
+    kernel void selected(device float* out [[buffer(0)]]) {
+      out[0] = 1.0;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "kernel void selected" in output
+    assert "Log{}(opaque(value))" in output
+
+    repeated_output = MetalPreprocessor()._lower_struct_member_functions(output)
+    assert "kernel void selected" in repeated_output
+    assert "Log{}(opaque(value))" in repeated_output
+
+
+def test_preprocessor_reachable_uninferable_template_method_call_clean_fails():
+    code = """
+    struct Log {
+      template <typename T> T operator()(T value) thread { return value; }
+    };
+
+    float opaque(float value) { return value; }
+
+    kernel void selected(device float* out [[buffer(0)]]) {
+      out[0] = Log{}(opaque(1.0));
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == "Log"
+    assert error.method_name == "operator()"
+    assert error.requested_signature == "Log(opaque(1.0))"
+
+
 def test_preprocessor_addressed_element_side_effect_clean_fails_structured():
     code = """
     struct Fragment {

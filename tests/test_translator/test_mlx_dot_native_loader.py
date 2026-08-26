@@ -47,8 +47,7 @@ REQUIRE_PROOF_ENVS = {
 
 
 def _project_config(target: str, output_dir: str) -> str:
-    sections = [
-        textwrap.dedent(f"""
+    sections = [textwrap.dedent(f"""
             [project]
             source_roots = ["mlx/backend/metal/kernels"]
             include = ["{MLX_DOT_SOURCE}"]
@@ -61,8 +60,7 @@ def _project_config(target: str, output_dir: str) -> str:
 
             [project.entry_points]
             "{MLX_DOT_SOURCE}" = "{MLX_DOT_ENTRY}"
-            """).strip()
-    ]
+            """).strip()]
     if target in {"directx", "opengl"}:
         sections.append(textwrap.dedent(f"""
             [project.entry_workgroup_size_rules."{MLX_DOT_SOURCE}"]
@@ -200,9 +198,7 @@ def _translate_dot_artifact(
     assert runtime_artifacts["summary"]["artifactCount"] == 1
     assert runtime_artifacts["summary"]["entryPointCount"] == 1
     reflected = runtime_artifacts["artifacts"][0]
-    execution_config = reflected["hostInterface"]["entryPoints"][0][
-        "executionConfig"
-    ]
+    execution_config = reflected["hostInterface"]["entryPoints"][0]["executionConfig"]
     if target == "directx":
         assert execution_config == {
             "numthreads": [512, 1, 1],

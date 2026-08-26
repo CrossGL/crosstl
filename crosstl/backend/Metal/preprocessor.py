@@ -2324,10 +2324,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         structs = self._find_concrete_struct_definitions(code)
         self._apply_explicit_member_specializations(code, structs)
+        function_excluded_spans = sorted(
+            template_declaration_spans + [struct.span for struct in structs]
+        )
+        unresolved_call_skip_spans = sorted(
+            template_declaration_spans
+            + self._unreachable_function_spans(code, function_excluded_spans)
+        )
         self._reject_unresolved_temporary_functor_calls(
             code,
             {struct.name: struct for struct in structs},
-            template_declaration_spans,
+            unresolved_call_skip_spans,
         )
         if not structs:
             return code
@@ -9269,10 +9276,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         # still reference unbound template parameters (`U a`, `static_cast<U>(b)`),
         # so their aliases and call sites must not participate in concrete
         # inference. Concrete and template spans are disjoint.
-        scan_skip_spans = all_struct_spans
+        scan_skip_spans = list(all_struct_spans)
         template_declaration_spans = self._find_template_declaration_spans(code)
         if template_declaration_spans:
             scan_skip_spans = sorted(all_struct_spans + template_declaration_spans)
+        scan_skip_spans = sorted(
+            scan_skip_spans + self._unreachable_function_spans(code, scan_skip_spans)
+        )
         # Member specialization uses the same proven lexical constants as nested
         # struct materialization; unresolved or runtime bindings remain absent.
         local_constant_owner_spans = [
@@ -9301,7 +9311,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
 
         variable_types = self._collect_struct_variable_types(
-            code, struct_names, struct_spans
+            code, struct_names, scan_skip_spans
         )
         # Struct-typed locals for EVERY struct/union type (used for `obj.member`
         # inference), resolved over the full struct span set so member-access
@@ -9309,7 +9319,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         field_variable_types = self._collect_struct_variable_types(
             code,
             all_struct_names,
-            all_struct_spans,
+            scan_skip_spans,
             include_indirect=True,
         )
         aliased_variable_types = self._collect_aliased_struct_variable_types(
@@ -9329,12 +9339,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if entry[1] in struct_names and entry not in method_entries
             )
             method_entries.sort(key=lambda item: item[0])
-        buffer_element_types = self._collect_buffer_element_types(
-            code, all_struct_spans
-        )
-        local_variable_types = self._collect_local_variable_types(
-            code, all_struct_spans
-        )
+        buffer_element_types = self._collect_buffer_element_types(code, scan_skip_spans)
+        local_variable_types = self._collect_local_variable_types(code, scan_skip_spans)
         for name, entries in field_variable_types.items():
             local_entries = local_variable_types.setdefault(name, [])
             for entry in entries:
@@ -9346,7 +9352,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # inferable.
         self._collect_function_parameter_types(
             code,
-            all_struct_spans,
+            scan_skip_spans,
             buffer_element_types,
             local_variable_types,
         )
@@ -9355,7 +9361,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # tracked struct set for construction / functor-call initializers).
         self._collect_auto_local_variable_types(
             code,
-            all_struct_spans,
+            scan_skip_spans,
             buffer_element_types,
             local_variable_types,
             field_structs_by_name,
@@ -19126,30 +19132,81 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not functions:
             return None
 
-        roots = {function.name for function in functions if function.is_entry}
+        roots = [function for function in functions if function.is_entry]
         if not roots:
             return None
 
         by_name: Dict[str, List[_MetalFunctionDefinition]] = {}
+        by_owner: Dict[str, List[_MetalFunctionDefinition]] = {}
         for function in functions:
             by_name.setdefault(function.name, []).append(function)
+            header = code[function.span[0] : function.body_span[0] - 1]
+            owner = self._qualified_function_owner(header)
+            if owner is not None:
+                by_owner.setdefault(owner.split("::")[-1], []).append(function)
 
         known_names = set(by_name)
-        reachable = set(roots)
+        known_owners = set(by_owner)
+        reachable: Set[Tuple[int, int]] = set()
         pending = list(roots)
         while pending:
-            name = pending.pop()
-            for function in by_name.get(name, ()):
-                body_start, body_end = function.body_span
-                for referenced in self._find_function_references(
-                    code[body_start:body_end],
-                    known_names,
-                ):
-                    if referenced not in reachable:
-                        reachable.add(referenced)
-                        pending.append(referenced)
+            function = pending.pop()
+            if function.span in reachable:
+                continue
+            reachable.add(function.span)
+            body_start, body_end = function.body_span
+            for referenced in self._find_function_references(
+                code[body_start:body_end],
+                known_names,
+            ):
+                pending.extend(by_name.get(referenced, ()))
+            function_source = code[function.span[0] : function.span[1]]
+            for owner in self._find_identifier_references(
+                function_source,
+                known_owners,
+            ):
+                pending.extend(by_owner.get(owner, ()))
 
-        return [function.span for function in functions if function.name in reachable]
+        return [function.span for function in functions if function.span in reachable]
+
+    def _qualified_function_owner(self, header: str) -> Optional[str]:
+        parameter_span = self._function_parameter_list_span(header)
+        if parameter_span is None:
+            return None
+        before_parameters = header[: parameter_span[0]].rstrip()
+        operator_call = re.search(
+            r"(?P<owner>[A-Za-z_][A-Za-z0-9_]*"
+            r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)"
+            r"\s*::\s*operator\s*\(\s*\)\s*$",
+            before_parameters,
+        )
+        if operator_call is not None:
+            return re.sub(r"\s+", "", operator_call.group("owner"))
+        method = re.search(
+            r"(?P<owner>[A-Za-z_][A-Za-z0-9_]*"
+            r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)"
+            r"\s*::\s*(?:~?[A-Za-z_][A-Za-z0-9_]*|operator\s*[^\s]+)\s*$",
+            before_parameters,
+        )
+        if method is None:
+            return None
+        return re.sub(r"\s+", "", method.group("owner"))
+
+    def _unreachable_function_spans(
+        self,
+        code: str,
+        excluded_spans: List[Tuple[int, int]],
+    ) -> List[Tuple[int, int]]:
+        functions = self._find_non_template_function_definitions(code, excluded_spans)
+        reachable = self._reachable_function_spans(code, excluded_spans)
+        if reachable is None:
+            return []
+        reachable_set = set(reachable)
+        return [
+            function.span
+            for function in functions
+            if function.span not in reachable_set
+        ]
 
     def _find_non_template_function_definitions(
         self,
@@ -19252,6 +19309,39 @@ class MetalPreprocessor(HLSLPreprocessor):
                 while j < len(code) and code[j].isspace():
                     j += 1
                 if ident in function_names and j < len(code) and code[j] == "(":
+                    references.add(ident)
+                i += consumed
+                continue
+            i += 1
+        return references
+
+    def _find_identifier_references(
+        self,
+        code: str,
+        identifiers: Set[str],
+    ) -> Set[str]:
+        references: Set[str] = set()
+        i = 0
+        while i < len(code):
+            if code[i] in "\"'":
+                _literal, consumed = self._read_string(code, i)
+                i += consumed
+                continue
+            if code.startswith("//", i):
+                end = code.find("\n", i)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if code.startswith("/*", i):
+                end = code.find("*/", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            if code[i].isalpha() or code[i] == "_":
+                ident, consumed = self._read_identifier(code, i)
+                if ident in identifiers:
                     references.add(ident)
                 i += consumed
                 continue

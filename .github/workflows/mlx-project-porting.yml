@@ -38,6 +38,7 @@ on:
       - "tests/test_translator/test_mlx_binary_native_loader.py"
       - "tests/test_translator/test_mlx_copy_native_loader.py"
       - "tests/test_translator/test_mlx_dot_native_loader.py"
+      - "tests/test_translator/test_mlx_unary_native_loader.py"
       - "tests/test_translator/test_mlx_fft_native_loader.py"
       - "tests/test_translator/test_mlx_logsumexp_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
@@ -75,6 +76,7 @@ on:
       - "tests/test_translator/test_mlx_binary_native_loader.py"
       - "tests/test_translator/test_mlx_copy_native_loader.py"
       - "tests/test_translator/test_mlx_dot_native_loader.py"
+      - "tests/test_translator/test_mlx_unary_native_loader.py"
       - "tests/test_translator/test_mlx_fft_native_loader.py"
       - "tests/test_translator/test_mlx_logsumexp_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
@@ -243,6 +245,13 @@ jobs:
           git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
           test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
 
+      - name: Translate pinned MLX unary Square entry
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_square_translates_to_selected_target
+
       - name: Prove pinned MLX LogSumExp Direct3D native-loader execution
         if: runner.os == 'Windows'
         env:
@@ -260,6 +269,15 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_executes_through_directx_native_loader
+
+      - name: Prove pinned MLX unary Square Direct3D native-loader execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+          CROSTL_REQUIRE_MLX_UNARY_DIRECTX_NATIVE_LOADER: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_square_executes_through_directx_native_loader
 
       - name: Record pinned MLX dot Metal round-trip boundary
         if: runner.os == 'macOS'
@@ -609,6 +627,18 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_copy_native_loader.py::test_pinned_mlx_copy_executes_through_opengl_native_loader
+
+      - name: Prove pinned MLX unary Square OpenGL native-loader execution
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+          CROSTL_REQUIRE_MLX_UNARY_OPENGL_NATIVE_LOADER: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_square_executes_through_opengl_native_loader
 
       - name: Validate pinned MLX LogSumExp OpenGL dispatch artifacts
         if: runner.os == 'Linux'

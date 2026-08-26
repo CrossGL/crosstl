@@ -10129,6 +10129,98 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     assert "or run the MLX test suite" in readme
 
 
+def test_unary_square_native_runtime_evidence_records_selected_entry_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["unary_square_native_runtime_status"]
+    assert status["status"] == "translated-packaged-and-executed"
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/unary.metal"
+    assert status["source_sha256"] == (
+        "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
+    )
+    assert status["selected_entry_point"] == "v_Squarefloat32float32"
+    assert status["specialization"] == {
+        "name": "unary_v",
+        "arguments": {
+            "T": "float",
+            "U": "float",
+            "Op": "Square",
+            "N": 1,
+        },
+        "specialization_count": 1,
+        "unsupported_specialization_count": 0,
+        "pruned_candidate_count": 39509,
+    }
+    assert status["entry_reachability"] == {
+        "unreachable_member_lowering_pruned": True,
+        "reachable_unresolved_calls_fail_closed": True,
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1922",
+    }
+    assert status["execution"] == {
+        "workgroup_size": [1, 1, 1],
+        "dispatch_workgroup_count": [5, 1, 1],
+    }
+    assert status["artifacts"]["directx"] == {
+        "target_entry_point": "CSMain",
+        "sha256": "64540a89c95e39914a4d616aff9bec98b939a5209fa4caef5cc1425511abb4e5",
+        "size_bytes": 2314,
+        "native_runtime": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "compiler": "dxc",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_square_executes_through_directx_native_loader"
+            ),
+        },
+    }
+    assert status["artifacts"]["opengl"] == {
+        "target_entry_point": "main",
+        "sha256": "2bb46a3bb0858eb849e533bfe46eff1d59b9192436e15b2639c7998698db6a48",
+        "size_bytes": 3613,
+        "native_runtime": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-opengl-4.3",
+            "compiler": "glslangValidator",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_square_executes_through_opengl_native_loader"
+            ),
+        },
+    }
+    assert status["workload"] == {
+        "dtype": "float32",
+        "input": [-3.0, -1.5, 0.0, 2.0, 4.25],
+        "expected_output": [9.0, 2.25, 0.0, 4.0, 18.0625],
+        "absolute_tolerance": 0.000001,
+        "relative_tolerance": 0.000001,
+    }
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["other_unary_specializations_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects `v_Squarefloat32float32`" in readme
+    assert "emits exactly one `unary_v<T=float, U=float, Op=Square, N=1>`" in readme
+    assert "Both generated artifacts retain the reachable `x * x` operation" in readme
+    assert "executes it through the native loader on Direct3D 12 WARP" in readme
+    assert "surfaceless Mesa OpenGL context" in readme
+    assert "numerical evidence for one selected unary specialization" in readme
+    assert "does not cover the other unary operations or dtypes" in readme
+    assert "run the MLX test suite" in readme
+
+
 def test_fft_directx_evidence_records_selected_native_runtime_proof():
     module = _load_harness()
     gaps = json.loads(
