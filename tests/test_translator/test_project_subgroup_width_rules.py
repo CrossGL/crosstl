@@ -146,6 +146,47 @@ def test_subgroup_width_rule_join_is_independent_of_record_order(tmp_path, monke
     )
 
 
+def test_subgroup_width_validation_isolated_from_entry_workgroup_rules(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_fixture(repo)
+    config = project_api.ProjectConfig(
+        root=repo,
+        targets=("directx",),
+        output_dir="out",
+        entry_workgroup_size_rules={
+            "shaders/wave.metal": {
+                "wave3*": ("WIDTH", "Y", "1"),
+                "wave64": ("WIDTH", "Y", "1"),
+            }
+        },
+        subgroup_width_rules={"shaders/wave.metal": "WIDTH"},
+    )
+
+    report = project_api.translate_project(
+        config,
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    entries = payload["artifacts"][0]["execution"]["entryPoints"]
+    assert {
+        entry["sourceEntryPoint"]: entry["rule"]["entryPattern"] for entry in entries
+    } == {"wave32": "wave3*", "wave64": "wave64"}
+    assert {entry["subgroupWidth"] for entry in entries} == {32, 64}
+
+    report_path = repo / "entry-and-subgroup-report.json"
+    report.write_json(report_path)
+    assert project_api.validate_project_report(report_path)["success"] is True
+    manifest = project_api.build_runtime_artifact_manifest(report_path)
+    assert manifest["success"] is True
+    assert manifest["summary"]["artifactCount"] == 1
+    assert manifest["summary"]["entryPointCount"] == 2
+
+
 @pytest.mark.parametrize("with_workgroup", (False, True))
 def test_subgroup_width_rules_emit_guarded_opengl_contracts(tmp_path, with_workgroup):
     repo = tmp_path / "repo"

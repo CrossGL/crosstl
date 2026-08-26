@@ -46497,6 +46497,8 @@ def _artifact_subgroup_rule_execution_contract_reasons(
                 provenance=shadow_provenance,
             )
         shadow_project = dict(project or {})
+        shadow_project.pop("entryWorkgroupSizeRules", None)
+        shadow_project.pop("entryWorkgroupSizeRuleCount", None)
         shadow_project["workgroupSizeRules"] = {
             pattern: [expression, "1", "1"]
             for pattern, expression in normalized_rules.items()
