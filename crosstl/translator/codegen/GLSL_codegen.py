@@ -15923,6 +15923,7 @@ class GLSLCodeGen:
         target_type_name = self.strip_metal_parameter_indirection(
             self.type_name_string(target_type)
         )
+        mapped_target_type = self.map_type(target_type_name)
         view_type_name = (
             binding.get("view_element_type")
             or binding.get("source_element_type")
@@ -15932,18 +15933,32 @@ class GLSLCodeGen:
         view_layout = scalar_storage_layout(view_type_name)
         source_layout = scalar_storage_layout(source_type_name)
         target_layout = scalar_storage_layout(target_type_name)
+        target_width = 1
+        if (
+            target_layout is None
+            and source_layout is not None
+            and source_layout.bit_width == 32
+            and self.is_vector_value_type(mapped_target_type)
+        ):
+            target_layout = scalar_storage_layout(
+                self.vector_component_type(mapped_target_type)
+            )
+            target_width = int(mapped_target_type[-1])
         if (
             view_layout is None
             or source_layout is None
             or target_layout is None
             or source_layout.bit_width != 32
             or target_layout.bit_width not in {8, 16, 32}
+            or target_width > 1
+            and target_layout.bit_width != 32
             or target_layout.kind == "floating"
             and target_layout.bit_width != 32
         ):
             raise PointerReinterpretationError(
                 "OpenGL storage pointer reinterpretation requires a 32-bit "
-                "scalar backing element and an 8-, 16-, or 32-bit scalar view",
+                "scalar backing element and either an 8-, 16-, or 32-bit scalar "
+                "view or a 2- to 4-lane 32-bit vector view",
                 source_type=source_type_name,
                 target_type=target_type_name,
                 address_space="storage",
@@ -15953,7 +15968,7 @@ class GLSLCodeGen:
                 source_location=getattr(expression, "source_location", None),
             )
 
-        if target_layout == view_layout:
+        if target_width == 1 and target_layout == view_layout:
             return {
                 **binding,
                 "element_type": self.map_type(target_type_name),
@@ -15982,6 +15997,7 @@ class GLSLCodeGen:
             "pointer_reinterpretation": {
                 "source_layout": source_layout,
                 "target_layout": target_layout,
+                "target_width": target_width,
             },
         }
 
@@ -16111,7 +16127,11 @@ class GLSLCodeGen:
         pointer_type = getattr(reinterpretation, "target_type", None)
         target_type_node = getattr(pointer_type, "pointee_type", None)
         target_type = self.glsl_normalized_source_type(target_type_node)
-        if not target_type or scalar_storage_layout(target_type) is not None:
+        if (
+            not target_type
+            or scalar_storage_layout(target_type) is not None
+            or self.is_vector_value_type(target_type)
+        ):
             return None
 
         aliases = self.glsl_storage_pointer_aliases()
@@ -16588,16 +16608,45 @@ class GLSLCodeGen:
 
         source_layout = reinterpretation["source_layout"]
         target_layout = reinterpretation["target_layout"]
+        target_width = reinterpretation.get("target_width", 1)
         byte_offset = str(binding.get("byte_offset", "0"))
         element_bytes = str(element_index)
-        if target_layout.byte_width != 1:
-            element_bytes = f"({element_bytes} * {target_layout.byte_width})"
+        target_byte_width = target_layout.byte_width * target_width
+        if target_byte_width != 1:
+            element_bytes = f"({element_bytes} * {target_byte_width})"
         if byte_offset in {"0", "0u"}:
             byte_index = element_bytes
         elif element_bytes in {"0", "0u"}:
             byte_index = byte_offset
         else:
             byte_index = f"({byte_offset} + {element_bytes})"
+
+        if target_width > 1:
+            components = []
+            for lane in range(target_width):
+                lane_byte_index = byte_index
+                if lane:
+                    lane_byte_index = (
+                        f"({byte_index} + {lane * target_layout.byte_width})"
+                    )
+                source_index = f"int(({lane_byte_index}) / {source_layout.byte_width})"
+                source_value = f"{binding['root']}[{source_index}]"
+                if source_layout.kind == "floating":
+                    source_bits = f"floatBitsToUint({source_value})"
+                elif source_layout.signed:
+                    source_bits = f"uint({source_value})"
+                else:
+                    source_bits = source_value
+                if target_layout.kind == "floating":
+                    components.append(f"uintBitsToFloat({source_bits})")
+                elif target_layout.signed:
+                    components.append(f"int({source_bits})")
+                else:
+                    components.append(source_bits)
+            constructor = self.map_type(
+                binding.get("view_element_type") or binding.get("element_type")
+            )
+            return f"{constructor}({', '.join(components)})"
 
         source_index = f"int(({byte_index}) / {source_layout.byte_width})"
         source_value = f"{binding['root']}[{source_index}]"

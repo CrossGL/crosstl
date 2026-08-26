@@ -51263,6 +51263,57 @@ def test_translate_project_lowers_read_only_local_struct_byte_view(
         assert_compute_glsl_validates_if_available(generated, tmp_path)
 
 
+def test_translate_project_lowers_read_only_metal_float_vector_view(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "float_vector_view.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[kernel]] void read_vector_float(
+                const device float* base [[buffer(0)]],
+                device float* output [[buffer(1)]],
+                constant uint& offset [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]) {
+                const device metal::vec<float, 4>* values =
+                    reinterpret_cast<const device metal::vec<float, 4>*>(
+                        base + offset);
+                metal::vec<float, 4> loaded = *values;
+                output[gid] = loaded[gid & 3u];
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+    assert set(outputs) == {"directx", "opengl"}
+    assert "float4 loaded = float4(" in outputs["directx"]
+    assert outputs["directx"].count("asfloat(asuint(base[uint(") == 4
+    assert "vec4 loaded = vec4(" in outputs["opengl"]
+    assert outputs["opengl"].count("uintBitsToFloat(floatBitsToUint(base[int(") == 4
+    for output in outputs.values():
+        assert "PointerReinterpretNode" not in output
+        assert "reinterpret_cast" not in output
+
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+
+
 def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_path):
     from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 
@@ -51319,11 +51370,13 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
     expected_errors = {
         "directx": (
             "DirectX storage pointer reinterpretation requires a 32-bit scalar "
-            "backing element and an 8-, 16-, or 32-bit scalar view"
+            "backing element and either an 8-, 16-, or 32-bit scalar view or a "
+            "2- to 4-lane 32-bit vector view"
         ),
         "opengl": (
             "OpenGL storage pointer reinterpretation requires a 32-bit scalar "
-            "backing element and an 8-, 16-, or 32-bit scalar view"
+            "backing element and either an 8-, 16-, or 32-bit scalar view or a "
+            "2- to 4-lane 32-bit vector view"
         ),
     }
     for target, artifact in artifacts.items():

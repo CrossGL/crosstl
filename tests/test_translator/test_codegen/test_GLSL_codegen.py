@@ -7589,6 +7589,40 @@ def test_glsl_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
     )
 
 
+def test_glsl_storage_pointer_reinterpret_reads_float_vectors(tmp_path):
+    code = """
+    shader StorageVectorPointerReinterpret {
+        compute {
+            @stage_entry
+            void loadVector(
+                StructuredBuffer<float> values @binding(0),
+                RWStructuredBuffer<float> output @binding(1),
+                uint base @binding(2)
+            ) {
+                float4 packed = *((float4*)(values + base));
+                buffer_store(
+                    output,
+                    0,
+                    packed.x + packed.y + packed.z + packed.w
+                );
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "vec4 packed = vec4(" in generated
+    assert generated.count("uintBitsToFloat(floatBitsToUint(values[int(") == 4
+    assert "_Args_base * 4" in generated
+    assert "* 16" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "float4*" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "storage_vector_pointer_reinterpret"
+    )
+
+
 def test_opengl_same_view_storage_pointer_cast_preserves_forwarded_offset(tmp_path):
     code = """
     shader ReinterpretedStoragePointerForwarding {

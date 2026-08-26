@@ -8936,6 +8936,37 @@ def test_hlsl_storage_pointer_reinterpret_reads_byte_lanes():
     assert "uint8*" not in generated
 
 
+def test_hlsl_storage_pointer_reinterpret_reads_float_vectors():
+    shader = """
+    shader StorageVectorPointerReinterpret {
+        compute {
+            @stage_entry
+            void loadVector(
+                StructuredBuffer<float> values @binding(0),
+                RWStructuredBuffer<float> output @binding(1),
+                uint base @binding(2)
+            ) {
+                float4 packed = *((float4*)(values + base));
+                buffer_store(
+                    output,
+                    0,
+                    packed.x + packed.y + packed.z + packed.w
+                );
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float4 packed = float4(" in generated
+    assert generated.count("asfloat(asuint(values[uint(") == 4
+    assert "(base * 4)" in generated
+    assert "* 16" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "float4*" not in generated
+
+
 def test_hlsl_constant_if_prunes_unsupported_pointer_reinterpretation():
     shader = """
     shader ConstantPointerBranch {

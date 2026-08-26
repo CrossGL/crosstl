@@ -12122,6 +12122,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_function_name, set()
         )
         if isinstance(expression, PointerReinterpretNode):
+            if self.hlsl_resource_pointer_binding(expression.expression) is not None:
+                return None
             layout = self.hlsl_private_pointer_reinterpret_word_views.get(
                 id(expression)
             )
@@ -13440,6 +13442,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_pointer_reinterpret_binding(self, expression, binding):
         target_type = getattr(expression.target_type, "pointee_type", None)
         target_type_name = self.type_name_string(target_type)
+        mapped_target_type = self.map_type(target_type_name)
         view_type_name = (
             binding.get("view_element_type")
             or binding.get("source_element_type")
@@ -13449,18 +13452,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         view_layout = scalar_storage_layout(view_type_name)
         source_layout = scalar_storage_layout(source_type_name)
         target_layout = scalar_storage_layout(target_type_name)
+        target_width = 1
+        if (
+            target_layout is None
+            and source_layout is not None
+            and source_layout.bit_width == 32
+            and self.is_vector_value_type(mapped_target_type)
+        ):
+            target_layout = scalar_storage_layout(
+                self.vector_component_type(mapped_target_type)
+            )
+            target_width = int(mapped_target_type[-1])
         if (
             view_layout is None
             or source_layout is None
             or target_layout is None
             or source_layout.bit_width != 32
             or target_layout.bit_width not in {8, 16, 32}
+            or target_width > 1
+            and target_layout.bit_width != 32
             or target_layout.kind == "floating"
             and target_layout.bit_width != 32
         ):
             raise PointerReinterpretationError(
                 "DirectX storage pointer reinterpretation requires a 32-bit "
-                "scalar backing element and an 8-, 16-, or 32-bit scalar view",
+                "scalar backing element and either an 8-, 16-, or 32-bit scalar "
+                "view or a 2- to 4-lane 32-bit vector view",
                 source_type=source_type_name,
                 target_type=target_type_name,
                 address_space="storage",
@@ -13492,6 +13509,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "pointer_reinterpretation": {
                 "source_layout": source_layout,
                 "target_layout": target_layout,
+                "target_width": target_width,
             },
         }
 
@@ -14228,16 +14246,44 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         source_layout = reinterpretation["source_layout"]
         target_layout = reinterpretation["target_layout"]
+        target_width = reinterpretation.get("target_width", 1)
         byte_offset = str(binding.get("byte_offset", "0"))
         element_bytes = str(element_index)
-        if target_layout.byte_width != 1:
-            element_bytes = f"({element_bytes} * {target_layout.byte_width})"
+        target_byte_width = target_layout.byte_width * target_width
+        if target_byte_width != 1:
+            element_bytes = f"({element_bytes} * {target_byte_width})"
         if byte_offset in {"0", "0u"}:
             byte_index = element_bytes
         elif element_bytes in {"0", "0u"}:
             byte_index = byte_offset
         else:
             byte_index = f"({byte_offset} + {element_bytes})"
+
+        if target_width > 1:
+            components = []
+            for lane in range(target_width):
+                lane_byte_index = byte_index
+                if lane:
+                    lane_byte_index = (
+                        f"({byte_index} + {lane * target_layout.byte_width})"
+                    )
+                source_index = f"uint(({lane_byte_index}) / {source_layout.byte_width})"
+                source_value = f"{binding['root']}[{source_index}]"
+                source_bits = (
+                    f"asuint({source_value})"
+                    if source_layout.kind == "floating" or source_layout.signed
+                    else source_value
+                )
+                if target_layout.kind == "floating":
+                    components.append(f"asfloat({source_bits})")
+                elif target_layout.signed:
+                    components.append(f"asint({source_bits})")
+                else:
+                    components.append(source_bits)
+            constructor = self.map_type(
+                binding.get("view_element_type") or binding.get("element_type")
+            )
+            return f"{constructor}({', '.join(components)})"
 
         source_index = f"uint(({byte_index}) / {source_layout.byte_width})"
         private_word_view = reinterpretation.get("private_word_view")
