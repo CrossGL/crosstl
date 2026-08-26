@@ -27,6 +27,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
 
 ROOT = Path(__file__).resolve().parents[2]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -128,10 +129,14 @@ def _assert_directx_runtime_requirements(source_path: Path, work_dir: Path) -> N
     if dxc is None:
         return
 
+    compiler_arguments = dxc_compiler_arguments_for_source(
+        source_path.read_text(encoding="utf-8")
+    )
     dxil_path = work_dir / "block-logsumexp-float32.dxil"
     compile_result = subprocess.run(
         [
             dxc,
+            *compiler_arguments,
             "-WX",
             "-T",
             "cs_6_6",
@@ -154,6 +159,37 @@ def _assert_directx_runtime_requirements(source_path: Path, work_dir: Path) -> N
     requirements = dump_result.stdout + dump_result.stderr
     assert "Wave level operations" in requirements
     assert "64-Bit integer" not in requirements
+
+
+def test_logsumexp_dxc_probe_applies_generated_source_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    source_path = tmp_path / "logsumexp.hlsl"
+    source_path.write_text("float16_t value;\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(arguments, *, capture_output, text):
+        calls.append(arguments)
+        stdout = "Wave level operations" if "-dumpbin" in arguments else ""
+        return subprocess.CompletedProcess(
+            arguments,
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+
+    monkeypatch.setattr(shutil, "which", lambda command: command)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    _assert_directx_runtime_requirements(source_path, tmp_path)
+
+    assert calls[0][0:3] == ["dxc", "-enable-16bit-types", "-WX"]
+    assert calls[1] == [
+        "dxc",
+        "-dumpbin",
+        str(tmp_path / "block-logsumexp-float32.dxil"),
+    ]
 
 
 def _pinned_mlx_root() -> Path:
