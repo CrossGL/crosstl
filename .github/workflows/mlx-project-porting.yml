@@ -37,6 +37,7 @@ on:
       - "tests/test_translator/test_mlx_arange_native_loader.py"
       - "tests/test_translator/test_mlx_binary_native_loader.py"
       - "tests/test_translator/test_mlx_copy_native_loader.py"
+      - "tests/test_translator/test_mlx_dot_native_loader.py"
       - "tests/test_translator/test_mlx_fft_native_loader.py"
       - "tests/test_translator/test_mlx_logsumexp_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
@@ -73,6 +74,7 @@ on:
       - "tests/test_translator/test_mlx_arange_native_loader.py"
       - "tests/test_translator/test_mlx_binary_native_loader.py"
       - "tests/test_translator/test_mlx_copy_native_loader.py"
+      - "tests/test_translator/test_mlx_dot_native_loader.py"
       - "tests/test_translator/test_mlx_fft_native_loader.py"
       - "tests/test_translator/test_mlx_logsumexp_native_loader.py"
       - "tests/test_translator/test_private_pointer_partition_runtime.py"
@@ -249,6 +251,23 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_logsumexp_native_loader.py::test_pinned_mlx_logsumexp_executes_through_directx_native_loader
+
+      - name: Prove pinned MLX dot Direct3D native-loader execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+          CROSTL_REQUIRE_MLX_DOT_DIRECTX_NATIVE_LOADER: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_executes_through_directx_native_loader
+
+      - name: Record pinned MLX dot Metal round-trip boundary
+        if: runner.os == 'macOS'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_records_metal_roundtrip_boundary
 
       - name: Prove pinned MLX FFT Direct3D native-loader execution
         if: runner.os == 'Windows'
@@ -599,6 +618,15 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_logsumexp_native_loader.py::test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts
+
+      - name: Validate pinned MLX dot OpenGL artifact
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+          CROSTL_REQUIRE_MLX_DOT_OPENGL_TOOLCHAIN: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_translates_to_guarded_opengl_artifact
 
       - name: Prove exact OpenGL subgroup-width execution
         if: runner.os == 'Linux'

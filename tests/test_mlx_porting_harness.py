@@ -10029,6 +10029,106 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     assert "does not cover the complex or bfloat16 entries" in readme
 
 
+def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["dot_native_runtime_status"]
+    assert status["status"] == (
+        "translated-packaged-directx-executed-and-opengl-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/dot.metal"
+    assert status["source_sha256"] == (
+        "97bcad13d09c3d5fed87482a0bb9719d6eeff9b21d364967cd6aec5b695b3462"
+    )
+    assert status["selected_entry_point"] == "dot_product_float32_it32_tg512_sg16"
+    assert status["template_arguments"] == {
+        "T": "float",
+        "ITEMS_PER_THREAD": 32,
+        "TG_SIZE": 512,
+        "SIMD_GROUPS": 16,
+    }
+    assert status["execution"] == {
+        "workgroup_size": [512, 1, 1],
+        "subgroup_width": 32,
+        "workgroup_reduction_element_count": 16,
+    }
+    assert status["artifacts"]["directx"] == {
+        "target_entry_point": "CSMain",
+        "sha256": "22101cf0c722264cb1cc2e12bff321eefc1629534c7363ea6a7a05565a2ba838",
+        "size_bytes": 4582,
+        "subgroup_enforcement": "hlsl-wave-size-attribute",
+        "native_runtime": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_dot_native_loader.py::"
+                "test_pinned_mlx_dot_executes_through_directx_native_loader"
+            ),
+        },
+    }
+    assert status["artifacts"]["opengl"] == {
+        "target_entry_point": "main",
+        "sha256": "ef69a757339fe09897a38804c27be279a19a7db146e2e02f85f0349c59f3168d",
+        "size_bytes": 5188,
+        "subgroup_enforcement": "glsl-subgroup-size-guard",
+        "toolchain_validation": {
+            "platform": "ubuntu-latest",
+            "compiler": "glslangValidator",
+            "validator": "spirv-val",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_dot_native_loader.py::"
+                "test_pinned_mlx_dot_translates_to_guarded_opengl_artifact"
+            ),
+        },
+        "native_runtime_executed": False,
+    }
+    assert status["artifacts"]["metal"] == {
+        "target_entry_point": "dot_product_float32_it32_tg512_sg16",
+        "status": "blocked-before-emission",
+        "diagnostic_code": "project.translate.pointer-reinterpret-unsupported",
+        "missing_capability": "pointer.reinterpretation",
+        "reason": "target-lowering-unavailable",
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1903",
+        "test": (
+            "tests/test_translator/test_mlx_dot_native_loader.py::"
+            "test_pinned_mlx_dot_records_metal_roundtrip_boundary"
+        ),
+    }
+    assert status["workload"] == {
+        "dtype": "float32",
+        "input_element_count": 1024,
+        "left_value": 1.0,
+        "right_value": 0.25,
+        "dispatch_workgroup_count": [1, 1, 1],
+        "expected_output": 256.0,
+        "absolute_tolerance": 0.00001,
+        "relative_tolerance": 0.00001,
+    }
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is True
+    assert status["metal_roundtrip_included"] is False
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects `dot_product_float32_it32_tg512_sg16`" in readme
+    assert "preserve the read-only `float4` storage views" in readme
+    assert "requires a readback of `256.0`" in readme
+    assert "used for compiler validation, not numerical execution" in readme
+    assert "still fails closed at storage-backed vector pointer lowering" in readme
+    assert "do not redirect MLX host dispatch" in readme
+    assert "or run the MLX test suite" in readme
+
+
 def test_fft_directx_evidence_records_selected_native_runtime_proof():
     module = _load_harness()
     gaps = json.loads(

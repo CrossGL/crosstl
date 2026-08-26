@@ -154,10 +154,10 @@ The current harness verifies:
   one real binary operator entry and does not claim coverage of the other
   materialized binary variants or the upstream MLX host runtime;
 - the `arangeuint32` and `ss_Addfloat32` native-loader checks above, together
-  with the scalar copy check described below, use the current corpus at commit
-  `846d176227a0ac13d266ce4644fd93d20223b6e`. The broader 40-unit frontier and
-  its remaining proofs retain their recorded historical revision until each
-  source contract is remeasured;
+  with the scalar copy and float32 dot-product checks described below, use the
+  current corpus at commit `846d176227a0ac13d266ce4644fd93d20223b6e`. The
+  broader 40-unit frontier and its remaining proofs retain their recorded
+  historical revision until each source contract is remeasured;
 - Vulkan assembly and validator checks for the existing non-fence regression
   frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
   deferred; the separate `fence.metal` contract check prevents generated
@@ -1018,6 +1018,30 @@ and bounded workload set with:
 .venv/bin/python -m pytest -q -n auto \
   tests/test_mlx_logsumexp_dispatch_contract_fixture.py
 ```
+
+The current-corpus dot-product proof selects
+`dot_product_float32_it32_tg512_sg16` directly from `dot.metal`. Translation
+materializes the concrete `dot_product<float, 32, 512, 16>` entry with a
+512-thread workgroup and an exact subgroup width of 32. The generated artifacts
+preserve the read-only `float4` storage views as four bit-preserving scalar
+loads, both subgroup reductions, the 16-element workgroup reduction buffer, and
+the final output store. Their portability report and runtime manifest retain
+the source entry, target entry, workgroup size, subgroup requirement, and all
+four reflected resource layouts.
+
+Windows CI compiles the HLSL artifact with DXC, packages its native-loader ABI,
+and dispatches one workgroup through Direct3D 12 WARP. The bounded workload
+computes the dot product of 1,024 float32 values containing `1.0` and `0.25` and
+requires a readback of `256.0`. Linux CI independently compiles the guarded GLSL
+artifact with `glslangValidator` and validates the resulting SPIR-V. The OpenGL
+artifact rejects a device subgroup width other than 32 before translated work;
+the software CI device is therefore used for compiler validation, not numerical
+execution of this entry. macOS CI records that the equivalent selected Metal
+round trip still fails closed at storage-backed vector pointer lowering under
+[#1903](https://github.com/CrossGL/crosstl/issues/1903); it does not claim native
+Metal compiler acceptance. These checks establish one selected kernel workload
+and do not redirect MLX host dispatch, cover the float16 or bfloat16 dot
+entries, or run the MLX test suite.
 
 The checked-in
 [`contracts/rms_norm.dispatch.json`](contracts/rms_norm.dispatch.json) fixture
