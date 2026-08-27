@@ -722,6 +722,94 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
+  "unary_arccos_native_runtime_status": {
+    "status": "translated-packaged-and-executed",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/unary.metal",
+    "source_sha256": "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b",
+    "selected_entry_point": "v_ArcCosfloat32float32",
+    "specialization": {
+      "name": "unary_v",
+      "arguments": {
+        "T": "float",
+        "U": "float",
+        "Op": "ArcCos",
+        "N": 1
+      },
+      "specialization_count": 1,
+      "unsupported_specialization_count": 0,
+      "pruned_candidate_count": 39509
+    },
+    "entry_reachability": {
+      "unselected_out_of_line_overloads_pruned": true,
+      "reachable_unresolved_calls_fail_closed": true,
+      "tracked_by": "https://github.com/CrossGL/crosstl/issues/1924"
+    },
+    "execution": {
+      "workgroup_size": [
+        1,
+        1,
+        1
+      ],
+      "dispatch_workgroup_count": [
+        5,
+        1,
+        1
+      ]
+    },
+    "artifacts": {
+      "directx": {
+        "target_entry_point": "CSMain",
+        "sha256": "720fe85c7458de6d058fc35f47679540f9c40e2ac2bca1e966f3cb897419f6cc",
+        "size_bytes": 2314,
+        "native_runtime": {
+          "platform": "windows-latest",
+          "runtime": "direct3d-12-warp",
+          "compiler": "dxc",
+          "status": "required-on-ci",
+          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_arccos_executes_through_directx_native_loader"
+        }
+      },
+      "opengl": {
+        "target_entry_point": "main",
+        "sha256": "dd6e4fbb35197a16dbc096e5a274fe94bba55ee236738c4dcada578b88ee7b18",
+        "size_bytes": 3613,
+        "native_runtime": {
+          "platform": "ubuntu-latest",
+          "runtime": "mesa-opengl-4.3",
+          "compiler": "glslangValidator",
+          "status": "required-on-ci",
+          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_arccos_executes_through_opengl_native_loader"
+        }
+      }
+    },
+    "workload": {
+      "dtype": "float32",
+      "input": [
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0
+      ],
+      "expected_output": [
+        3.141592653589793,
+        2.0943951023931957,
+        1.5707963267948966,
+        1.0471975511965979,
+        0.0
+      ],
+      "absolute_tolerance": 0.00001,
+      "relative_tolerance": 0.00001
+    },
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": true,
+    "selected_workload_numerical_parity_verified": true,
+    "other_unary_specializations_included": false,
+    "full_mlx_test_suite_included": false,
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "directx_fft_current_corpus_status": {
     "status": "blocked-at-reachable-workgroup-alias",
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",

@@ -3274,7 +3274,7 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     )
 
 
-def test_mlx_project_porting_workflow_runs_pinned_unary_square_proofs():
+def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()
     test_path = "tests/test_translator/test_mlx_unary_native_loader.py"
@@ -3337,6 +3337,63 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_square_proofs():
     )
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
+
+    arccos_translation_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Translate pinned MLX unary ArcCos entry",
+    )
+    assert "if: runner.os" not in arccos_translation_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
+        in arccos_translation_step
+    )
+    assert (
+        f"{test_path}::test_pinned_mlx_unary_arccos_translates_to_selected_target"
+        in arccos_translation_step
+    )
+    assert "-n auto" in arccos_translation_step
+    assert "-k" not in arccos_translation_step
+
+    arccos_directx_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX unary ArcCos Direct3D native-loader execution",
+    )
+    assert "if: runner.os == 'Windows'" in arccos_directx_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
+        in arccos_directx_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_UNARY_DIRECTX_NATIVE_LOADER: "1"' in (
+        arccos_directx_step
+    )
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_unary_arccos_executes_through_directx_native_loader"
+        in arccos_directx_step
+    )
+    assert "-n auto" in arccos_directx_step
+    assert "-k" not in arccos_directx_step
+
+    arccos_opengl_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX unary ArcCos OpenGL native-loader execution",
+    )
+    assert "if: runner.os == 'Linux'" in arccos_opengl_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
+        in arccos_opengl_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_UNARY_OPENGL_NATIVE_LOADER: "1"' in (arccos_opengl_step)
+    assert "EGL_PLATFORM: surfaceless" in arccos_opengl_step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in arccos_opengl_step
+    assert "PYOPENGL_PLATFORM: egl" in arccos_opengl_step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_unary_arccos_executes_through_opengl_native_loader"
+        in arccos_opengl_step
+    )
+    assert "-n auto" in arccos_opengl_step
+    assert "-k" not in arccos_opengl_step
 
 
 def test_mlx_project_porting_workflow_records_current_fft_directx_boundary():

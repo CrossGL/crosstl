@@ -323,6 +323,30 @@ class _MetalFunctionDefinition:
 
 
 @dataclass(frozen=True)
+class _MetalOutOfLineMemberDefinition:
+    function: _MetalFunctionDefinition
+    owner_name: str
+    method: "_MetalStructMethod"
+
+
+@dataclass(frozen=True)
+class _MetalOutOfLineMemberCallSite:
+    method_name: str
+    argument_open: int
+    receiver_contract: Optional["_MetalReceiverContract"]
+
+
+@dataclass
+class _MetalReachabilityTypeContext:
+    buffer_element_types: "_MetalPositionedBufferTypes"
+    local_variable_types: Dict[str, List[Tuple[int, str]]]
+    receiver_variable_types: Dict[str, List[Tuple[int, str]]]
+    structs_by_name: Dict[str, "_MetalStructDefinition"]
+    struct_type_aliases: Dict[str, List["_MetalTypeAliasBinding"]]
+    source_type_aliases: Dict[str, List["_MetalTypeAliasBinding"]]
+
+
+@dataclass(frozen=True)
 class _MetalTypeAliasBinding:
     declaration_position: int
     scope_start: int
@@ -19137,16 +19161,33 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
 
         by_name: Dict[str, List[_MetalFunctionDefinition]] = {}
-        by_owner: Dict[str, List[_MetalFunctionDefinition]] = {}
+        qualified_functions = [
+            function
+            for function in functions
+            if self._qualified_function_owner(
+                code[function.span[0] : function.body_span[0] - 1]
+            )
+            is not None
+        ]
+        structs = (
+            self._find_concrete_struct_definitions(code) if qualified_functions else []
+        )
+        struct_names = {struct.name for struct in structs}
+        by_owner: Dict[str, List[_MetalOutOfLineMemberDefinition]] = {}
         for function in functions:
             by_name.setdefault(function.name, []).append(function)
-            header = code[function.span[0] : function.body_span[0] - 1]
-            owner = self._qualified_function_owner(header)
-            if owner is not None:
-                by_owner.setdefault(owner.split("::")[-1], []).append(function)
+        for function in qualified_functions:
+            member = self._out_of_line_member_definition(
+                code,
+                function,
+                struct_names,
+            )
+            if member is not None:
+                by_owner.setdefault(member.owner_name, []).append(member)
 
         known_names = set(by_name)
         known_owners = set(by_owner)
+        member_type_context: Optional[_MetalReachabilityTypeContext] = None
         reachable: Set[Tuple[int, int]] = set()
         pending = list(roots)
         while pending:
@@ -19158,6 +19199,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             for referenced in self._find_function_references(
                 code[body_start:body_end],
                 known_names,
+                known_owners,
             ):
                 pending.extend(by_name.get(referenced, ()))
             function_source = code[function.span[0] : function.span[1]]
@@ -19165,9 +19207,504 @@ class MetalPreprocessor(HLSLPreprocessor):
                 function_source,
                 known_owners,
             ):
-                pending.extend(by_owner.get(owner, ()))
+                if member_type_context is None:
+                    member_type_context = self._reachability_type_context(
+                        code,
+                        excluded_spans,
+                        structs,
+                    )
+                candidates = by_owner.get(owner, ())
+                selected = self._reachable_out_of_line_member_functions(
+                    code,
+                    function,
+                    owner,
+                    candidates,
+                    member_type_context,
+                )
+                pending.extend(candidate.function for candidate in selected)
 
         return [function.span for function in functions if function.span in reachable]
+
+    def _out_of_line_member_definition(
+        self,
+        code: str,
+        function: _MetalFunctionDefinition,
+        struct_names: Set[str],
+    ) -> Optional[_MetalOutOfLineMemberDefinition]:
+        header = code[function.span[0] : function.body_span[0] - 1]
+        owner = self._qualified_function_owner(header)
+        if owner is None:
+            return None
+        owner_name = owner.rsplit("::", 1)[-1]
+        if owner_name not in struct_names:
+            return None
+
+        parameter_span = self._function_parameter_list_span(header)
+        if parameter_span is None:
+            return None
+        operator_call = re.search(r"\boperator\s*\(\s*\)", header)
+        if operator_call is not None:
+            method_start = operator_call.start()
+        else:
+            method_match = re.search(
+                r"[A-Za-z_][A-Za-z0-9_]*\s*$",
+                header[: parameter_span[0]],
+            )
+            if method_match is None:
+                return None
+            method_start = method_match.start()
+
+        scope_end = method_start
+        while scope_end > 0 and header[scope_end - 1].isspace():
+            scope_end -= 1
+        if scope_end < 2 or header[scope_end - 2 : scope_end] != "::":
+            return None
+        owner_end = scope_end - 2
+        owner_match = re.search(
+            r"(?P<owner>[A-Za-z_][A-Za-z0-9_]*"
+            r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*$",
+            header[:owner_end],
+        )
+        if owner_match is None:
+            return None
+        parsed_owner = re.sub(r"\s*::\s*", "::", owner_match.group("owner"))
+        if parsed_owner != owner:
+            return None
+
+        dequalified_header = header[: owner_match.start("owner")] + header[scope_end:]
+        body_start = function.body_span[0] - 1
+        method_source = dequalified_header + code[body_start : function.span[1]]
+        method = self._parse_struct_method(
+            owner_name,
+            method_source,
+            0,
+            len(dequalified_header),
+        )
+        if method is None:
+            return None
+        method.span = function.span
+        return _MetalOutOfLineMemberDefinition(
+            function=function,
+            owner_name=owner_name,
+            method=method,
+        )
+
+    def _reachability_type_context(
+        self,
+        code: str,
+        excluded_spans: List[Tuple[int, int]],
+        structs: Sequence[_MetalStructDefinition],
+    ) -> _MetalReachabilityTypeContext:
+        structs_by_name = {struct.name: struct for struct in structs}
+        struct_names = set(structs_by_name)
+        scan_skip_spans = sorted(
+            set(excluded_spans + [struct.span for struct in structs])
+        )
+        struct_type_aliases = self._collect_struct_type_aliases(
+            code,
+            struct_names,
+            scan_skip_spans,
+            structs_by_name,
+        )
+        source_type_aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+            skip_spans=excluded_spans,
+        )
+        receiver_variable_types = self._collect_struct_variable_types(
+            code,
+            struct_names,
+            scan_skip_spans,
+            include_indirect=True,
+        )
+        aliased_variable_types = self._collect_aliased_struct_variable_types(
+            code,
+            struct_type_aliases,
+            scan_skip_spans,
+        )
+        for name, entries in aliased_variable_types.items():
+            existing = receiver_variable_types.setdefault(name, [])
+            existing.extend(entry for entry in entries if entry not in existing)
+            existing.sort(key=lambda item: item[0])
+
+        buffer_element_types = self._collect_buffer_element_types(
+            code,
+            scan_skip_spans,
+        )
+        local_variable_types = self._collect_local_variable_types(
+            code,
+            scan_skip_spans,
+        )
+        for name, entries in receiver_variable_types.items():
+            existing = local_variable_types.setdefault(name, [])
+            existing.extend(entry for entry in entries if entry not in existing)
+            existing.sort(key=lambda item: item[0])
+        self._collect_function_parameter_types(
+            code,
+            scan_skip_spans,
+            buffer_element_types,
+            local_variable_types,
+        )
+        self._collect_auto_local_variable_types(
+            code,
+            scan_skip_spans,
+            buffer_element_types,
+            local_variable_types,
+            structs_by_name,
+        )
+        return _MetalReachabilityTypeContext(
+            buffer_element_types=buffer_element_types,
+            local_variable_types=local_variable_types,
+            receiver_variable_types=receiver_variable_types,
+            structs_by_name=structs_by_name,
+            struct_type_aliases=struct_type_aliases,
+            source_type_aliases=source_type_aliases,
+        )
+
+    def _reachable_out_of_line_member_functions(
+        self,
+        code: str,
+        function: _MetalFunctionDefinition,
+        owner_name: str,
+        candidates: Sequence[_MetalOutOfLineMemberDefinition],
+        context: _MetalReachabilityTypeContext,
+    ) -> List[_MetalOutOfLineMemberDefinition]:
+        call_sites = self._out_of_line_member_call_sites(
+            code,
+            function,
+            owner_name,
+            context,
+        )
+        if not call_sites:
+            return []
+
+        owner = context.structs_by_name.get(owner_name)
+        selected: Dict[Tuple[int, int], _MetalOutOfLineMemberDefinition] = {}
+        for call_site in call_sites:
+            method_candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.method.name == call_site.method_name
+            ]
+            if not method_candidates:
+                continue
+            receiver_candidates = [
+                candidate
+                for candidate in method_candidates
+                if call_site.receiver_contract is None
+                or not self._receiver_candidate_mismatches(
+                    candidate.method,
+                    call_site.receiver_contract,
+                )
+            ]
+            if not receiver_candidates:
+                continue
+            argument_types = self._reachable_member_call_argument_types(
+                code,
+                call_site.argument_open,
+                context,
+            )
+            if argument_types is None:
+                for candidate in receiver_candidates:
+                    selected[candidate.function.span] = candidate
+                continue
+
+            exact_matches = [
+                candidate
+                for candidate in receiver_candidates
+                if self._concrete_method_matches_call(
+                    candidate.method,
+                    code,
+                    call_site.argument_open,
+                    context.buffer_element_types,
+                    context.local_variable_types,
+                    context.receiver_variable_types,
+                    context.structs_by_name,
+                )
+            ]
+            if len(exact_matches) > 1 and call_site.receiver_contract is not None:
+                ranked = [
+                    (
+                        self._receiver_candidate_preference_rank(
+                            candidate.method,
+                            call_site.receiver_contract,
+                        ),
+                        candidate,
+                    )
+                    for candidate in exact_matches
+                ]
+                best_rank = min(rank for rank, _candidate in ranked)
+                exact_matches = [
+                    candidate for rank, candidate in ranked if rank == best_rank
+                ]
+            if exact_matches:
+                for candidate in exact_matches:
+                    selected[candidate.function.span] = candidate
+                continue
+
+            template_fallback = owner is not None and any(
+                method.name == call_site.method_name
+                and self._callable_accepts_argument_count(
+                    method.parameters,
+                    len(argument_types),
+                )
+                for method in owner.template_methods
+            )
+            for candidate in receiver_candidates:
+                if not self._callable_accepts_argument_count(
+                    candidate.method.parameters,
+                    len(argument_types),
+                ):
+                    continue
+                if template_fallback and self._out_of_line_member_mismatch_is_proven(
+                    candidate.method,
+                    argument_types,
+                    call_site.argument_open,
+                    context,
+                ):
+                    continue
+                selected[candidate.function.span] = candidate
+
+        return list(selected.values())
+
+    def _out_of_line_member_mismatch_is_proven(
+        self,
+        method: _MetalStructMethod,
+        argument_types: Sequence[str],
+        argument_position: int,
+        context: _MetalReachabilityTypeContext,
+    ) -> bool:
+        parameters = [
+            parameter
+            for parameter in self._split_top_level_commas(method.parameters)
+            if parameter.strip()
+            and parameter.strip() != "void"
+            and "..." not in parameter
+        ]
+        if len(argument_types) > len(parameters):
+            return True
+
+        declared_types = [
+            self._function_parameter_value_type(parameter)
+            for parameter in parameters[: len(argument_types)]
+        ]
+        canonical_declared = [
+            self._canonicalize_type_aliases_at(
+                declared_type,
+                context.source_type_aliases,
+                method.span[0],
+            )
+            or declared_type
+            for declared_type in declared_types
+        ]
+        canonical_arguments = [
+            self._canonicalize_type_aliases_at(
+                argument_type,
+                context.source_type_aliases,
+                argument_position,
+            )
+            or argument_type
+            for argument_type in argument_types
+        ]
+        known_struct_types = set(context.structs_by_name)
+        known_struct_types.update(
+            struct.qualified_name
+            for struct in context.structs_by_name.values()
+            if struct.qualified_name
+        )
+
+        def is_known_value_type(type_name: str) -> bool:
+            normalized = self._normalize_inferred_type(type_name)
+            return self._is_metal_scalar_or_vector_type(normalized) or (
+                normalized in known_struct_types
+            )
+
+        if not all(
+            is_known_value_type(type_name)
+            for type_name in (*canonical_declared, *canonical_arguments)
+        ):
+            return False
+        return [
+            self._normalize_inferred_type(type_name) for type_name in canonical_declared
+        ] != [
+            self._normalize_inferred_type(type_name)
+            for type_name in canonical_arguments
+        ]
+
+    def _out_of_line_member_call_sites(
+        self,
+        code: str,
+        function: _MetalFunctionDefinition,
+        owner_name: str,
+        context: _MetalReachabilityTypeContext,
+    ) -> List[_MetalOutOfLineMemberCallSite]:
+        call_sites: Dict[
+            Tuple[str, int],
+            _MetalOutOfLineMemberCallSite,
+        ] = {}
+        body_start, body_end = function.body_span
+        cursor = body_start
+        while cursor < body_end:
+            if code[cursor] in "\"'":
+                _literal, consumed = self._read_string(code, cursor)
+                cursor += consumed
+                continue
+            if code.startswith("//", cursor):
+                line_end = code.find("\n", cursor, body_end)
+                cursor = body_end if line_end == -1 else line_end + 1
+                continue
+            if code.startswith("/*", cursor):
+                comment_end = code.find("*/", cursor + 2, body_end)
+                cursor = body_end if comment_end == -1 else comment_end + 2
+                continue
+            if not (code[cursor].isalpha() or code[cursor] == "_"):
+                cursor += 1
+                continue
+
+            ident, consumed = self._read_identifier(code, cursor)
+            ident_end = cursor + consumed
+            after = ident_end
+            while after < body_end and code[after].isspace():
+                after += 1
+
+            if ident == owner_name:
+                temporary = self._temporary_functor_call(code, after)
+                if (
+                    temporary is not None
+                    and temporary.argument_close < body_end
+                    and self._temporary_functor_is_candidate(
+                        code,
+                        cursor,
+                        temporary,
+                    )
+                ):
+                    call_sites[("operator()", temporary.argument_open)] = (
+                        _MetalOutOfLineMemberCallSite(
+                            method_name="operator()",
+                            argument_open=temporary.argument_open,
+                            receiver_contract=_MetalReceiverContract(
+                                struct_name=owner_name,
+                                value_category="rvalue",
+                                source_type=f"thread {owner_name}",
+                            ),
+                        )
+                    )
+                elif code[after : after + 2] == "::":
+                    member_start = after + 2
+                    while member_start < body_end and code[member_start].isspace():
+                        member_start += 1
+                    member, member_length = self._read_identifier(code, member_start)
+                    if member:
+                        suffix = self._member_template_call_suffix(
+                            code,
+                            member_start + member_length,
+                        )
+                        if suffix is not None and suffix[0] < body_end:
+                            call_sites[(member, suffix[0])] = (
+                                _MetalOutOfLineMemberCallSite(
+                                    method_name=member,
+                                    argument_open=suffix[0],
+                                    receiver_contract=None,
+                                )
+                            )
+
+            declaration, receiver_type = self._receiver_struct_type_at(
+                code,
+                ident,
+                cursor,
+                set(context.structs_by_name),
+                context.struct_type_aliases,
+            )
+            if receiver_type is None:
+                inferred_receiver_type = self._resolve_declared_type_at(
+                    context.local_variable_types,
+                    ident,
+                    cursor,
+                )
+                if inferred_receiver_type in context.structs_by_name:
+                    receiver_type = inferred_receiver_type
+            if receiver_type == owner_name:
+                receiver_contract = (
+                    self._receiver_contract_from_type_text(
+                        declaration.raw_type_text,
+                        owner_name,
+                    )
+                    if declaration is not None
+                    else _MetalReceiverContract(
+                        struct_name=owner_name,
+                        source_type=f"thread {owner_name}",
+                    )
+                )
+                if after < body_end and code[after] == "(":
+                    call_sites[("operator()", after)] = _MetalOutOfLineMemberCallSite(
+                        method_name="operator()",
+                        argument_open=after,
+                        receiver_contract=receiver_contract,
+                    )
+                elif after < body_end and (
+                    code[after] == "." or code[after : after + 2] == "->"
+                ):
+                    member_start = after + (2 if code[after] == "-" else 1)
+                    while member_start < body_end and code[member_start].isspace():
+                        member_start += 1
+                    member, member_length = self._read_identifier(code, member_start)
+                    if member:
+                        suffix = self._member_template_call_suffix(
+                            code,
+                            member_start + member_length,
+                        )
+                        if suffix is not None and suffix[0] < body_end:
+                            call_sites[(member, suffix[0])] = (
+                                _MetalOutOfLineMemberCallSite(
+                                    method_name=member,
+                                    argument_open=suffix[0],
+                                    receiver_contract=receiver_contract,
+                                )
+                            )
+
+            cursor = ident_end
+        return list(call_sites.values())
+
+    def _reachable_member_call_argument_types(
+        self,
+        code: str,
+        arg_open: int,
+        context: _MetalReachabilityTypeContext,
+    ) -> Optional[List[str]]:
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        arguments = [
+            argument
+            for argument in self._split_top_level_commas(code[arg_open + 1 : arg_close])
+            if argument.strip()
+        ]
+        buffer_view = self._flatten_types_at(
+            context.buffer_element_types,
+            arg_open,
+        )
+        local_view = self._flatten_types_at(
+            context.local_variable_types,
+            arg_open,
+        )
+        field_types = self._struct_field_types_at(
+            context.receiver_variable_types,
+            context.structs_by_name,
+            arg_open,
+        )
+        inferred_types: List[str] = []
+        for argument in arguments:
+            inferred = self._infer_argument_type(
+                argument,
+                buffer_view,
+                local_view,
+                field_types,
+                context.structs_by_name,
+            )
+            if inferred is None:
+                return None
+            inferred_types.append(self._normalize_inferred_type(inferred))
+        return inferred_types
 
     def _qualified_function_owner(self, header: str) -> Optional[str]:
         parameter_span = self._function_parameter_list_span(header)
@@ -19282,7 +19819,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         return -1
 
     def _find_function_references(
-        self, code: str, function_names: Set[str]
+        self,
+        code: str,
+        function_names: Set[str],
+        member_owner_names: Optional[Set[str]] = None,
     ) -> Set[str]:
         references: Set[str] = set()
         i = 0
@@ -19308,12 +19848,47 @@ class MetalPreprocessor(HLSLPreprocessor):
                 j = i + consumed
                 while j < len(code) and code[j].isspace():
                     j += 1
-                if ident in function_names and j < len(code) and code[j] == "(":
+                if (
+                    ident in function_names
+                    and j < len(code)
+                    and code[j] == "("
+                    and not self._function_reference_is_member_call(
+                        code,
+                        i,
+                        member_owner_names or set(),
+                    )
+                ):
                     references.add(ident)
                 i += consumed
                 continue
             i += 1
         return references
+
+    def _function_reference_is_member_call(
+        self,
+        code: str,
+        identifier_start: int,
+        member_owner_names: Set[str],
+    ) -> bool:
+        previous = identifier_start - 1
+        while previous >= 0 and code[previous].isspace():
+            previous -= 1
+        if previous < 0:
+            return False
+        if code[previous] == ".":
+            return True
+        if previous >= 1 and code[previous - 1 : previous + 1] == "->":
+            return True
+        if previous < 1 or code[previous - 1 : previous + 1] != "::":
+            return False
+
+        owner_end = previous - 1
+        owner_start = owner_end
+        while owner_start > 0 and (
+            code[owner_start - 1].isalnum() or code[owner_start - 1] == "_"
+        ):
+            owner_start -= 1
+        return code[owner_start:owner_end] in member_owner_names
 
     def _find_identifier_references(
         self,

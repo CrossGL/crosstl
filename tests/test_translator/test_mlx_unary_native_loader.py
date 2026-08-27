@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -31,24 +32,80 @@ from crosstl.project import (
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_UNARY_SOURCE = "mlx/backend/metal/kernels/unary.metal"
 MLX_UNARY_SHA256 = "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
-MLX_UNARY_ENTRY = "v_Squarefloat32float32"
-MLX_UNARY_GENERATED_ARTIFACTS = {
-    "directx": {
-        "sha256": "64540a89c95e39914a4d616aff9bec98b939a5209fa4caef5cc1425511abb4e5",
-        "sizeBytes": 2314,
-    },
-    "opengl": {
-        "sha256": "2bb46a3bb0858eb849e533bfe46eff1d59b9192436e15b2639c7998698db6a48",
-        "sizeBytes": 3613,
-    },
-}
 REQUIRE_PROOF_ENVS = {
     "directx": "CROSTL_REQUIRE_MLX_UNARY_DIRECTX_NATIVE_LOADER",
     "opengl": "CROSTL_REQUIRE_MLX_UNARY_OPENGL_NATIVE_LOADER",
 }
 
 
-def _project_config(target: str) -> str:
+@dataclass(frozen=True)
+class UnaryWorkload:
+    name: str
+    entry_point: str
+    operator_type: str
+    operation: str
+    generated_artifacts: dict[str, dict[str, str | int]]
+    input_values: tuple[float, ...]
+    expected_values: tuple[float, ...]
+    tolerance: float
+
+
+SQUARE_WORKLOAD = UnaryWorkload(
+    name="square",
+    entry_point="v_Squarefloat32float32",
+    operator_type="Square",
+    operation="return (x * x);",
+    generated_artifacts={
+        "directx": {
+            "sha256": (
+                "64540a89c95e39914a4d616aff9bec98b939a5209fa4caef5cc1425511abb4e5"
+            ),
+            "sizeBytes": 2314,
+        },
+        "opengl": {
+            "sha256": (
+                "2bb46a3bb0858eb849e533bfe46eff1d59b9192436e15b2639c7998698db6a48"
+            ),
+            "sizeBytes": 3613,
+        },
+    },
+    input_values=(-3.0, -1.5, 0.0, 2.0, 4.25),
+    expected_values=(9.0, 2.25, 0.0, 4.0, 18.0625),
+    tolerance=1e-6,
+)
+
+ARCCOS_WORKLOAD = UnaryWorkload(
+    name="arccos",
+    entry_point="v_ArcCosfloat32float32",
+    operator_type="ArcCos",
+    operation="return acos(x);",
+    generated_artifacts={
+        "directx": {
+            "sha256": (
+                "720fe85c7458de6d058fc35f47679540f9c40e2ac2bca1e966f3cb897419f6cc"
+            ),
+            "sizeBytes": 2314,
+        },
+        "opengl": {
+            "sha256": (
+                "dd6e4fbb35197a16dbc096e5a274fe94bba55ee236738c4dcada578b88ee7b18"
+            ),
+            "sizeBytes": 3613,
+        },
+    },
+    input_values=(-1.0, -0.5, 0.0, 0.5, 1.0),
+    expected_values=(
+        3.141592653589793,
+        2.0943951023931957,
+        1.5707963267948966,
+        1.0471975511965979,
+        0.0,
+    ),
+    tolerance=1e-5,
+)
+
+
+def _project_config(target: str, workload: UnaryWorkload) -> str:
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
@@ -61,10 +118,10 @@ def _project_config(target: str) -> str:
         "**/*.metal" = "metal"
 
         [project.entry_points]
-        "{MLX_UNARY_SOURCE}" = "{MLX_UNARY_ENTRY}"
+        "{MLX_UNARY_SOURCE}" = "{workload.entry_point}"
 
         [project.entry_workgroup_size_rules."{MLX_UNARY_SOURCE}"]
-        "{MLX_UNARY_ENTRY}" = [1, 1, 1]
+        "{workload.entry_point}" = [1, 1, 1]
 
         [project.source_options.metal]
         max_template_specializations = 64
@@ -109,13 +166,17 @@ def _pinned_mlx_root() -> Path:
     return mlx_root
 
 
-def _translate_square_artifact(
+def _translate_unary_artifact(
     mlx_root: Path,
     work_dir: Path,
     target: str,
+    workload: UnaryWorkload,
 ):
     config_path = work_dir / "crosstl.toml"
-    config_path.write_text(_project_config(target) + "\n", encoding="utf-8")
+    config_path.write_text(
+        _project_config(target, workload) + "\n",
+        encoding="utf-8",
+    )
     output_dir = work_dir / "out"
     report = translate_project(
         load_project_config(mlx_root, config_path),
@@ -131,7 +192,7 @@ def _translate_square_artifact(
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     artifact = payload["artifacts"][0]
-    expected_identity = MLX_UNARY_GENERATED_ARTIFACTS[target]
+    expected_identity = workload.generated_artifacts[target]
     assert artifact["source"] == MLX_UNARY_SOURCE
     assert artifact["sourceHash"] == {
         "algorithm": "sha256",
@@ -143,7 +204,7 @@ def _translate_square_artifact(
     }
     assert artifact["generatedSizeBytes"] == expected_identity["sizeBytes"]
     assert artifact["entryPoint"] == {
-        "source": MLX_UNARY_ENTRY,
+        "source": workload.entry_point,
         "target": "CSMain" if target == "directx" else "main",
         "stage": "compute",
     }
@@ -155,10 +216,10 @@ def _translate_square_artifact(
     assert materialization["specializations"] == [
         {
             "name": "unary_v",
-            "materializedName": MLX_UNARY_ENTRY,
+            "materializedName": workload.entry_point,
             "parameters": {
                 "N": "1",
-                "Op": "Square",
+                "Op": workload.operator_type,
                 "T": "float",
                 "U": "float",
             },
@@ -169,20 +230,22 @@ def _translate_square_artifact(
                 "U": "source-instantiation",
             },
             "source": "source-instantiation",
-            "hostName": MLX_UNARY_ENTRY,
+            "hostName": workload.entry_point,
         }
     ]
     assert materialization["unsupported"] == []
 
     generated_path = mlx_root / artifact["path"]
     generated = generated_path.read_text(encoding="utf-8")
-    assert "return (x * x);" in generated
+    assert workload.operation in generated
     assert "Log{}(x + i * Sqrt{}(1.0 - x * x))" not in generated
     if target == "directx":
         assert "[numthreads(1, 1, 1)]" in generated
         validator = "dxc"
     else:
-        assert "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1)" in generated
+        assert (
+            "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1)" in generated
+        )
         validator = "glslangValidator"
     if shutil.which(validator) is not None:
         toolchain_runs = payload["validation"]["toolchainRuns"]
@@ -204,15 +267,41 @@ def test_pinned_mlx_unary_square_translates_to_selected_target(target):
         prefix=f".crosstl-unary-{target}-translation-",
         dir=mlx_root,
     ) as temporary_directory:
-        _translate_square_artifact(mlx_root, Path(temporary_directory), target)
+        _translate_unary_artifact(
+            mlx_root,
+            Path(temporary_directory),
+            target,
+            SQUARE_WORKLOAD,
+        )
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_pinned_mlx_unary_arccos_translates_to_selected_target(target):
+    mlx_root = _pinned_mlx_root()
+    with tempfile.TemporaryDirectory(
+        prefix=f".crosstl-unary-arccos-{target}-translation-",
+        dir=mlx_root,
+    ) as temporary_directory:
+        _translate_unary_artifact(
+            mlx_root,
+            Path(temporary_directory),
+            target,
+            ARCCOS_WORKLOAD,
+        )
 
 
 def _build_runtime_package(
     mlx_root: Path,
     work_dir: Path,
     target: str,
+    workload: UnaryWorkload,
 ) -> tuple[dict, Path]:
-    report_path = _translate_square_artifact(mlx_root, work_dir, target)
+    report_path = _translate_unary_artifact(
+        mlx_root,
+        work_dir,
+        target,
+        workload,
+    )
     runtime_artifacts = build_runtime_artifact_manifest(report_path)
     assert runtime_artifacts["success"] is True, json.dumps(
         runtime_artifacts,
@@ -226,12 +315,12 @@ def _build_runtime_package(
         "directx": {
             "in_": (0, "read"),
             "out_": (1, "read_write"),
-            f"{MLX_UNARY_ENTRY}_size_Constants": (2, "read"),
+            f"{workload.entry_point}_size_Constants": (2, "read"),
         },
         "opengl": {
             "in_Buffer": (0, "read"),
             "out_Buffer": (1, "read_write"),
-            f"{MLX_UNARY_ENTRY}_size_Args": (2, "read"),
+            f"{workload.entry_point}_size_Args": (2, "read"),
         },
     }[target]
     resources = reflected["hostInterface"]["resources"]
@@ -269,35 +358,36 @@ def _build_runtime_package(
             "local_size_z": 1,
         }
     assert {
-        binding["name"]: binding["access"]
-        for binding in descriptor["bindings"]
-    } == {
-        name: access for name, (_binding, access) in expected_resources.items()
-    }
+        binding["name"]: binding["access"] for binding in descriptor["bindings"]
+    } == {name: access for name, (_binding, access) in expected_resources.items()}
     return descriptor, package_dir
 
 
-def _execute_pinned_mlx_unary_square(target: str) -> None:
+def _execute_pinned_mlx_unary(
+    target: str,
+    workload: UnaryWorkload,
+) -> None:
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-unary-{target}-native-loader-",
+        prefix=f".crosstl-unary-{workload.name}-{target}-native-loader-",
         dir=mlx_root,
     ) as temporary_directory:
         descriptor, package_dir = _build_runtime_package(
             mlx_root,
             Path(temporary_directory),
             target,
+            workload,
         )
         if target == "directx":
             input_binding = "in_"
             output_binding = "out_"
-            size_binding = f"{MLX_UNARY_ENTRY}_size_Constants"
+            size_binding = f"{workload.entry_point}_size_Constants"
         else:
             input_binding = "in_Buffer"
             output_binding = "out_Buffer"
-            size_binding = f"{MLX_UNARY_ENTRY}_size_Args"
-        input_values = [-3.0, -1.5, 0.0, 2.0, 4.25]
-        expected_values = [9.0, 2.25, 0.0, 4.0, 18.0625]
+            size_binding = f"{workload.entry_point}_size_Args"
+        input_values = list(workload.input_values)
+        expected_values = list(workload.expected_values)
         request = build_native_loader_dispatch_request(
             descriptor,
             package_dir,
@@ -318,7 +408,10 @@ def _execute_pinned_mlx_unary_square(target: str) -> None:
                     "dtype": "float32",
                     "shape": [len(expected_values)],
                     "values": expected_values,
-                    "tolerance": {"absolute": 1e-6, "relative": 1e-6},
+                    "tolerance": {
+                        "absolute": workload.tolerance,
+                        "relative": workload.tolerance,
+                    },
                 }
             },
             (len(input_values), 1, 1),
@@ -342,7 +435,7 @@ def _execute_pinned_mlx_unary_square(target: str) -> None:
         )
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
-                adapter_id=f"mlx-unary-{target}-native-loader",
+                adapter_id=f"mlx-unary-{workload.name}-{target}-native-loader",
                 target=target,
                 executor=target,
                 adapter_kind=f"{target}-native-runtime",
@@ -363,14 +456,22 @@ def _execute_pinned_mlx_unary_square(target: str) -> None:
     assert result.outputs[output_binding]["shape"] == [len(expected_values)]
     assert result.outputs[output_binding]["values"] == pytest.approx(
         expected_values,
-        abs=1e-6,
-        rel=1e-6,
+        abs=workload.tolerance,
+        rel=workload.tolerance,
     )
 
 
 def test_pinned_mlx_unary_square_executes_through_directx_native_loader():
-    _execute_pinned_mlx_unary_square("directx")
+    _execute_pinned_mlx_unary("directx", SQUARE_WORKLOAD)
 
 
 def test_pinned_mlx_unary_square_executes_through_opengl_native_loader():
-    _execute_pinned_mlx_unary_square("opengl")
+    _execute_pinned_mlx_unary("opengl", SQUARE_WORKLOAD)
+
+
+def test_pinned_mlx_unary_arccos_executes_through_directx_native_loader():
+    _execute_pinned_mlx_unary("directx", ARCCOS_WORKLOAD)
+
+
+def test_pinned_mlx_unary_arccos_executes_through_opengl_native_loader():
+    _execute_pinned_mlx_unary("opengl", ARCCOS_WORKLOAD)

@@ -154,8 +154,8 @@ The current harness verifies:
   one real binary operator entry and does not claim coverage of the other
   materialized binary variants or the upstream MLX host runtime;
 - the `arangeuint32` and `ss_Addfloat32` native-loader checks above, together
-  with the scalar copy, float32 dot-product, and unary Square checks described
-  below, use the current corpus at commit
+  with the scalar copy, float32 dot-product, and unary Square and ArcCos checks
+  described below, use the current corpus at commit
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The broader 40-unit frontier and
   its remaining proofs retain their recorded historical revision until each
   source contract is remeasured;
@@ -1044,24 +1044,28 @@ Metal compiler acceptance. These checks establish one selected kernel workload
 and do not redirect MLX host dispatch, cover the float16 or bfloat16 dot
 entries, or run the MLX test suite.
 
-The current-corpus unary proof selects `v_Squarefloat32float32` from the full
-include-expanded `unary.metal` source. Entry-scoped materialization emits exactly
-one `unary_v<T=float, U=float, Op=Square, N=1>` specialization and does not
-require lowering unrelated complex unary function bodies. Both generated
-artifacts retain the reachable `x * x` operation, a one-thread workgroup, the
-source and output buffers, and the size constant in their reflected runtime
-interfaces. Deterministic artifact hashes and the pinned upstream source hash
-are checked before packaging.
+The current-corpus unary proofs select `v_Squarefloat32float32` and
+`v_ArcCosfloat32float32` from the full include-expanded `unary.metal` source.
+Each entry-scoped artifact emits exactly one
+`unary_v<T=float, U=float, Op=..., N=1>` specialization. Concrete call-argument
+typing keeps the out-of-line complex `ArcCos::operator()` body out of the float
+artifact while preserving fail-closed handling when that complex overload is
+reachable. The generated artifacts retain either `x * x` or `acos(x)`, a
+one-thread workgroup, the source and output buffers, and the size constant in
+their reflected runtime interfaces. Deterministic artifact hashes and the
+pinned upstream source hash are checked before packaging.
 
-Windows CI compiles the selected HLSL entry with DXC and executes it through the
-native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entry with
-`glslangValidator` and executes it through the same loader contract on a
-surfaceless Mesa OpenGL context. Five float32 inputs
-`[-3.0, -1.5, 0.0, 2.0, 4.25]` must produce
-`[9.0, 2.25, 0.0, 4.0, 18.0625]` under explicit tolerance on both platforms.
-This is numerical evidence for one selected unary specialization. It does not
-cover the other unary operations or dtypes, redirect the MLX host runtime, or
-run the MLX test suite.
+Windows CI compiles the selected HLSL entries with DXC and executes them through
+the native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entries with
+`glslangValidator` and executes them through the same loader contract on a
+surfaceless Mesa OpenGL context. The Square workload maps
+`[-3.0, -1.5, 0.0, 2.0, 4.25]` to
+`[9.0, 2.25, 0.0, 4.0, 18.0625]`. The ArcCos workload maps
+`[-1.0, -0.5, 0.0, 0.5, 1.0]` to the corresponding five float32 arccos values.
+Both platforms enforce explicit numerical tolerances. This is numerical
+evidence for two selected unary specializations. It does not cover the other
+unary operations or dtypes, redirect the MLX host runtime, or run the MLX test
+suite.
 
 The checked-in
 [`contracts/rms_norm.dispatch.json`](contracts/rms_norm.dispatch.json) fixture

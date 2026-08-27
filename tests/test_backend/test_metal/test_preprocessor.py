@@ -7338,6 +7338,143 @@ def test_preprocessor_lowers_temporary_functor_call_with_arithmetic_and_functor_
     assert "complex64_t Sqrt__operator_call(thread Sqrt& self, complex64_t x)" in output
 
 
+def test_preprocessor_prunes_unselected_out_of_line_member_overload():
+    code = """
+    struct complex64_t { float real; float imag; };
+
+    complex64_t opaque(complex64_t value) { return value; }
+
+    struct Log {
+      template <typename T>
+      T operator()(T value) thread { return value; }
+    };
+
+    struct ArcCos {
+      template <typename T>
+      T operator()(T value) thread { return value; }
+      complex64_t operator()(complex64_t value) thread;
+    };
+
+    complex64_t ArcCos::operator()(complex64_t value) thread {
+      return Log{}(opaque(value));
+    }
+
+    float apply_arccos(float value) {
+      return ArcCos{}(value);
+    }
+
+    [[kernel]] void selected(
+        device const float* in [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      out[0] = apply_arccos(in[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "ArcCos__operator_call__float__temporary(value)" in output
+    assert "out[0] = apply_arccos(in[0]);" in output
+    assert "return Log{}(opaque(value));" in output
+
+    repeated_output = MetalPreprocessor()._lower_struct_member_functions(output)
+    assert "ArcCos__operator_call__float__temporary(value)" in repeated_output
+    assert "return Log{}(opaque(value));" in repeated_output
+
+
+def test_preprocessor_reachable_out_of_line_member_overload_fails_closed():
+    code = """
+    struct complex64_t { float real; float imag; };
+
+    complex64_t opaque(complex64_t value) { return value; }
+
+    struct Log {
+      template <typename T>
+      T operator()(T value) thread { return value; }
+    };
+
+    struct ArcCos {
+      template <typename T>
+      T operator()(T value) thread { return value; }
+      complex64_t operator()(complex64_t value) thread;
+    };
+
+    complex64_t ArcCos::operator()(complex64_t value) thread {
+      return Log{}(opaque(value));
+    }
+
+    [[kernel]] void selected(
+        device const complex64_t* in [[buffer(0)]],
+        device complex64_t* out [[buffer(1)]]) {
+      out[0] = ArcCos{}(in[0]);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == "Log"
+    assert error.method_name == "operator()"
+    assert error.requested_signature == "Log(opaque(value))"
+
+
+def test_reachable_function_spans_select_receiver_qualified_member_overload():
+    code = """
+    struct Operation {
+      template <typename T>
+      T fallback(T value) thread { return value; }
+      float evaluate(float value) thread;
+      float evaluate(float value) const thread;
+    };
+
+    float Operation::evaluate(float value) thread {
+      return value + 1.0;
+    }
+
+    float Operation::evaluate(float value) const thread {
+      return value - 1.0;
+    }
+
+    [[kernel]] void selected(device float* out [[buffer(0)]]) {
+      const Operation operation;
+      out[0] = operation.evaluate(2.0);
+    }
+    """
+    preprocessor = MetalPreprocessor()
+
+    reachable = preprocessor._reachable_function_spans(
+        code,
+        preprocessor._find_template_declaration_spans(code),
+    )
+
+    assert reachable is not None
+    reachable_source = "\n".join(code[start:end] for start, end in reachable)
+    assert "return value - 1.0;" in reachable_source
+    assert "return value + 1.0;" not in reachable_source
+
+
+def test_reachable_function_spans_preserve_namespace_qualified_free_call():
+    code = """
+    namespace operations {
+    float evaluate(float value) {
+      return value + 1.0;
+    }
+    }
+
+    [[kernel]] void selected(device float* out [[buffer(0)]]) {
+      out[0] = operations::evaluate(2.0);
+    }
+    """
+    preprocessor = MetalPreprocessor()
+
+    reachable = preprocessor._reachable_function_spans(code, [])
+
+    assert reachable is not None
+    reachable_source = "\n".join(code[start:end] for start, end in reachable)
+    assert "return value + 1.0;" in reachable_source
+
+
 def test_preprocessor_defers_temporaries_for_declared_out_of_line_call_operators():
     code = """
     struct complex64_t { float real; float imag; };

@@ -10129,7 +10129,7 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     assert "or run the MLX test suite" in readme
 
 
-def test_unary_square_native_runtime_evidence_records_selected_entry_proof():
+def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
             encoding="utf-8"
@@ -10210,13 +10210,94 @@ def test_unary_square_native_runtime_evidence_records_selected_entry_proof():
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 
+    arccos = gaps["unary_arccos_native_runtime_status"]
+    assert arccos["status"] == "translated-packaged-and-executed"
+    assert arccos["commit"] == CURRENT_MLX_COMMIT
+    assert arccos["source"] == "mlx/backend/metal/kernels/unary.metal"
+    assert arccos["source_sha256"] == (
+        "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
+    )
+    assert arccos["selected_entry_point"] == "v_ArcCosfloat32float32"
+    assert arccos["specialization"] == {
+        "name": "unary_v",
+        "arguments": {
+            "T": "float",
+            "U": "float",
+            "Op": "ArcCos",
+            "N": 1,
+        },
+        "specialization_count": 1,
+        "unsupported_specialization_count": 0,
+        "pruned_candidate_count": 39509,
+    }
+    assert arccos["entry_reachability"] == {
+        "unselected_out_of_line_overloads_pruned": True,
+        "reachable_unresolved_calls_fail_closed": True,
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1924",
+    }
+    assert arccos["execution"] == {
+        "workgroup_size": [1, 1, 1],
+        "dispatch_workgroup_count": [5, 1, 1],
+    }
+    assert arccos["artifacts"]["directx"] == {
+        "target_entry_point": "CSMain",
+        "sha256": "720fe85c7458de6d058fc35f47679540f9c40e2ac2bca1e966f3cb897419f6cc",
+        "size_bytes": 2314,
+        "native_runtime": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "compiler": "dxc",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_arccos_executes_through_directx_native_loader"
+            ),
+        },
+    }
+    assert arccos["artifacts"]["opengl"] == {
+        "target_entry_point": "main",
+        "sha256": "dd6e4fbb35197a16dbc096e5a274fe94bba55ee236738c4dcada578b88ee7b18",
+        "size_bytes": 3613,
+        "native_runtime": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-opengl-4.3",
+            "compiler": "glslangValidator",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_arccos_executes_through_opengl_native_loader"
+            ),
+        },
+    }
+    assert arccos["workload"] == {
+        "dtype": "float32",
+        "input": [-1.0, -0.5, 0.0, 0.5, 1.0],
+        "expected_output": [
+            3.141592653589793,
+            2.0943951023931957,
+            1.5707963267948966,
+            1.0471975511965979,
+            0.0,
+        ],
+        "absolute_tolerance": 0.00001,
+        "relative_tolerance": 0.00001,
+    }
+    assert arccos["mlx_host_runtime_included"] is False
+    assert arccos["runtime_integration_included"] is True
+    assert arccos["selected_workload_numerical_parity_verified"] is True
+    assert arccos["other_unary_specializations_included"] is False
+    assert arccos["full_mlx_test_suite_included"] is False
+    assert arccos["numerical_parity_claimed"] is False
+    assert arccos["runtime_parity_claimed"] is False
+
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "selects `v_Squarefloat32float32`" in readme
-    assert "emits exactly one `unary_v<T=float, U=float, Op=Square, N=1>`" in readme
-    assert "Both generated artifacts retain the reachable `x * x` operation" in readme
-    assert "executes it through the native loader on Direct3D 12 WARP" in readme
+    assert "select `v_Squarefloat32float32` and `v_ArcCosfloat32float32`" in readme
+    assert "Each entry-scoped artifact emits exactly one" in readme
+    assert "keeps the out-of-line complex `ArcCos::operator()` body out" in readme
+    assert "retain either `x * x` or `acos(x)`" in readme
+    assert "executes them through the native loader on Direct3D 12 WARP" in readme
     assert "surfaceless Mesa OpenGL context" in readme
-    assert "numerical evidence for one selected unary specialization" in readme
+    assert "numerical evidence for two selected unary specializations" in readme
     assert "does not cover the other unary operations or dtypes" in readme
     assert "run the MLX test suite" in readme
 
