@@ -1163,9 +1163,10 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
     "numerical_parity_claimed": False,
 }
 MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
-    "status": "translated-glslang-spirv-val-validated",
-    "commit": MLX_COMMIT,
+    "status": "translated-toolchain-validated-native-loader-executed",
+    "commit": MLX_CORPUS_COMMIT,
     "source": MLX_QUANTIZED_SOURCE,
+    "source_sha256": "292aab5a98e3fc047b8ed91343fc10b66e5a92e12c258cde168929520ab2abfd",
     "target": "opengl",
     "selected_entry_point": MLX_QUANTIZED_SELECTED_ENTRY_POINT,
     "project_translation": {
@@ -1175,11 +1176,22 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
         "failed_count": 0,
         "emitted_target_file_count": 1,
         "project_diagnostic_count": 0,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width_rule_configured": False,
+        "max_template_specializations": 128,
+        "max_template_materialization_work": 4096,
     },
     "materialization": {
-        "reachable_specialization_count": 6,
+        "reachable_specialization_count": 9,
         "concrete_specialization_count": 3,
-        "pruned_candidate_count": 110861,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 104702,
+        "selected_parameters": {
+            "T": "float",
+            "bits": 2,
+            "group_size": 32,
+            "has_global_scale": False,
+        },
     },
     "index_range_assertion_evidence": {
         "assertion_count": len(MLX_OPENGL_QUANTIZED_INDEX_RANGE_ASSERTIONS),
@@ -1194,9 +1206,29 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
         "inferred": False,
         "runtime_enforced": False,
     },
+    "software_subgroup": {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "operations": [
+            "WaveActiveMin(float)",
+            "WaveActiveMax(float)",
+            "WaveShuffleDown(uint,int)",
+        ],
+        "artifact_marker": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+        "control_barrier_instruction_count": 8,
+        "group_non_uniform_instruction_count": 0,
+        "hardware_subgroup_extensions_emitted": False,
+        "hardware_subgroup_marker_emitted": False,
+        "hardware_subgroup_execution_metadata_emitted": False,
+        "unsupported_contract_behavior": "reject-before-artifact-emission",
+    },
     "generated_glsl": {
-        "sha256": "7808f9f35bab56c1f415dea1a669225c68447cb32f9147ab1c4b04b975543aa3",
-        "size_bytes": 5107,
+        "sha256": "e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb",
+        "size_bytes": 6642,
     },
     "required_capabilities": [],
     "artifact_emitted": True,
@@ -1210,9 +1242,56 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
         "status": "passed",
         "observed_failure_count": 0,
     },
+    "runtime_package": {
+        "artifact_count": 1,
+        "ready_load_unit_count": 1,
+        "blocked_load_unit_count": 0,
+        "resources": [
+            {"name": "wBuffer", "binding": 0, "access": "read"},
+            {"name": "out_Buffer", "binding": 1, "access": "read_write"},
+            {"name": "scalesBuffer", "binding": 2, "access": "read_write"},
+            {"name": "biasesBuffer", "binding": 3, "access": "read_write"},
+        ],
+    },
+    "runtime_execution": {
+        "platform": "Linux Mesa software OpenGL",
+        "context": "EGL surfaceless",
+        "adapter": "OpenGLRuntimeParityAdapter",
+        "runtime": "OpenGLComputeRuntime",
+        "workgroup_count": [1, 1, 1],
+        "global_size": [32, 1, 1],
+        "input": {
+            "dtype": "float32",
+            "shape": [32],
+            "values": "[0.0,1.0,2.0,3.0] repeated 8 times",
+        },
+        "outputs": {
+            "out_Buffer": {
+                "dtype": "uint32",
+                "shape": [8],
+                "values": [27, 27, 27, 27, 27, 27, 27, 27],
+            },
+            "scalesBuffer": {
+                "dtype": "float32",
+                "shape": [1],
+                "values": [-1.0],
+            },
+            "biasesBuffer": {
+                "dtype": "float32",
+                "shape": [1],
+                "values": [3.0],
+            },
+        },
+        "status": "passed",
+    },
     "resolved_by": [OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE],
-    "runtime_execution_attempted": False,
-    "numerical_parity_claimed": False,
+    "tracked_issues": ["https://github.com/CrossGL/crosstl/issues/1894"],
+    "runtime_execution_attempted": True,
+    "runtime_integration_included": True,
+    "mlx_host_runtime_integration_included": False,
+    "numerical_parity_claimed": True,
+    "runtime_parity_claimed": True,
+    "parity_scope": "one deterministic affine_quantize_float_gs_32_b_2 workload",
 }
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"

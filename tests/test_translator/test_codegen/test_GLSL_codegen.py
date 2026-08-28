@@ -57,6 +57,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLReferenceParameterError,
     OpenGLResourceMemoryQualifierError,
     OpenGLScalarConversionError,
+    OpenGLSoftwareSubgroupError,
     OpenGLSpecializationConstantError,
     OpenGLStoragePointerError,
     OpenGLStructConstructionError,
@@ -20135,6 +20136,426 @@ def test_glsl_exact_subgroup_width_rejects_invalid_contracts(stage, attribute, r
         generate_code(parse_code(tokenize_code(code)))
 
     assert raised.value.reason == reason
+
+
+def test_glsl_software_subgroup_constructor_rejects_invalid_widths():
+    for value, exception_type in (
+        (True, TypeError),
+        (32.0, TypeError),
+        ("32", TypeError),
+        (0, ValueError),
+        (16, ValueError),
+        (64, ValueError),
+    ):
+        with pytest.raises(exception_type):
+            GLSLCodeGen(software_subgroup_width=value)
+
+
+def test_glsl_software_subgroup_lowers_affine_operation_set_without_khr_subgroups(
+    tmp_path,
+):
+    code = """
+    shader GLSLSoftwareSubgroupAffineOps {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = float(gl_LocalInvocationID.x);
+                float minimum = WaveActiveMin(value);
+                float maximum = WaveActiveMax(value);
+                uint shuffled = WaveShuffleDown(uint(gl_LocalInvocationID.x), 1);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert generated.count("#define CROSSTL_SOFTWARE_SUBGROUP_WIDTH 32u") == 1
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert "CROSSTL_REQUIRED_SUBGROUP_WIDTH" not in generated
+    assert "gl_Subgroup" not in generated
+    assert "subgroupMin" not in generated
+    assert "subgroupMax" not in generated
+    assert "subgroupShuffleDown" not in generated
+    assert "shared float crossglSoftwareSubgroupScratchFloat[32];" in generated
+    assert "shared uint crossglSoftwareSubgroupScratchUint[32];" in generated
+    assert "float crossglSoftwareSubgroupMinFloat(float value)" in generated
+    assert "float crossglSoftwareSubgroupMaxFloat(float value)" in generated
+    assert (
+        "uint crossglSoftwareSubgroupShuffleDownUint(uint value, uint delta)"
+        in generated
+    )
+    assert "for (uint stride = 16u; stride > 0u; stride >>= 1u)" in generated
+    assert "barrier();" in generated
+    assert "float minimum = crossglSoftwareSubgroupMinFloat(value);" in generated
+    assert "float maximum = crossglSoftwareSubgroupMaxFloat(value);" in generated
+    assert (
+        "uint shuffled = crossglSoftwareSubgroupShuffleDownUint("
+        "uint(gl_LocalInvocationID.x), uint(1));"
+    ) in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_affine_ops",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
+    code = """
+    shader GLSLSoftwareSubgroupNameCollision {
+        const float crossglSoftwareSubgroupScratchFloat = 0.0;
+
+        float crossglSoftwareSubgroupMinFloat(float value) {
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = float(gl_LocalInvocationID.x);
+                float minimum = WaveActiveMin(value);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "shared float crossglSoftwareSubgroupScratchFloat_2[32];" in generated
+    assert "float crossglSoftwareSubgroupMinFloat_2(float value)" in generated
+    assert "float minimum = crossglSoftwareSubgroupMinFloat_2(value);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_name_collision",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "local_size", "attribute", "reason"),
+    [
+        (
+            "float value = WaveActiveMin(1.0);",
+            (16, 1, 1),
+            "",
+            "workgroup-size-mismatch",
+        ),
+        (
+            "float value = WaveActiveMin(1.0);",
+            (32, 2, 1),
+            "",
+            "workgroup-size-mismatch",
+        ),
+        (
+            "float value = WaveActiveMin(1.0);",
+            (32, 1, 1),
+            " @ WaveSize(32)",
+            "hardware-contract-conflict",
+        ),
+        (
+            "uint value = gl_LocalInvocationID.x;",
+            (32, 1, 1),
+            "",
+            "operation-set-empty",
+        ),
+        (
+            "uint value = WaveActiveSum(gl_LocalInvocationID.x);",
+            (32, 1, 1),
+            "",
+            "operation-unsupported",
+        ),
+    ],
+)
+def test_glsl_software_subgroup_rejects_invalid_execution_contracts(
+    body, local_size, attribute, reason
+):
+    x, y, z = local_size
+    code = f"""
+    shader GLSLInvalidSoftwareSubgroup {{
+        compute {{
+            layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;
+            void main(){attribute} {{
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == reason
+    assert raised.value.software_subgroup_width == 32
+
+
+def test_glsl_software_subgroup_rejects_multiple_or_non_compute_entries():
+    multiple_compute = """
+    shader GLSLMultipleSoftwareSubgroupEntries {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void first() { float value = WaveActiveMin(1.0); }
+        }
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void second() { float value = WaveActiveMax(1.0); }
+        }
+    }
+    """
+    mixed_stages = """
+    shader GLSLMixedSoftwareSubgroupEntries {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() { float value = WaveActiveMin(1.0); }
+        }
+        fragment {
+            vec4 main() @ SV_Target { return vec4(1.0); }
+        }
+    }
+    """
+
+    for code in (multiple_compute, mixed_stages):
+        with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+            GLSLCodeGen(software_subgroup_width=32).generate(
+                parse_code(tokenize_code(code))
+            )
+        assert raised.value.reason == "entry-point-contract-invalid"
+
+
+@pytest.mark.parametrize(
+    ("declaration", "operation", "reason"),
+    [
+        (
+            "vec2 result = WaveActiveMin(vec2(1.0));",
+            "WaveActiveMin",
+            "value-type-unsupported",
+        ),
+        (
+            "double source = double(1.0); double result = WaveActiveMax(source);",
+            "WaveActiveMax",
+            "value-type-unsupported",
+        ),
+        (
+            "bool result = WaveShuffleDown(true, 1);",
+            "WaveShuffleDown",
+            "value-type-unsupported",
+        ),
+    ],
+)
+def test_glsl_software_subgroup_rejects_unsupported_payload_types(
+    declaration, operation, reason
+):
+    code = f"""
+    shader GLSLSoftwareSubgroupInvalidType {{
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{ {declaration} }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == reason
+    assert raised.value.operation == operation
+
+
+def test_glsl_software_subgroup_rejects_wave_operations_in_helpers():
+    code = """
+    shader GLSLSoftwareSubgroupHelperCall {
+        float reduceValue(float value) {
+            return WaveActiveMin(value);
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = reduceValue(float(gl_LocalInvocationID.x));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "helper-operation-unsupported"
+    assert raised.value.operation == "WaveActiveMin"
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        """
+        if ((gl_LocalInvocationID.x & 1u) != 0u) {
+            float result = WaveActiveMin(1.0);
+        }
+        """,
+        """
+        while (gl_LocalInvocationID.x < 4u) {
+            uint result = WaveShuffleDown(gl_LocalInvocationID.x, 1);
+            break;
+        }
+        """,
+        """
+        float result = ((gl_LocalInvocationID.x & 1u) != 0u)
+            ? WaveActiveMin(1.0) : 0.0;
+        """,
+        """
+        for (uint i = 0u; i < gl_LocalInvocationID.x; i++) {
+            uint result = WaveShuffleDown(gl_LocalInvocationID.x, 1);
+        }
+        """,
+        """
+        do {
+            float result = WaveActiveMin(1.0);
+        } while (gl_LocalInvocationID.x != 0u);
+        """,
+        """
+        loop {
+            uint result = WaveShuffleDown(gl_LocalInvocationID.x, 1);
+        }
+        """,
+        """
+        for delta in 2 {
+            uint result = WaveShuffleDown(gl_LocalInvocationID.x, delta);
+        }
+        """,
+        """
+        switch (gl_LocalInvocationID.x) {
+            case 0:
+                float result = WaveActiveMin(1.0);
+                break;
+            default:
+                break;
+        }
+        """,
+        """
+        match gl_LocalInvocationID.x {
+            0 => { float result = WaveActiveMin(1.0); }
+            _ => {}
+        }
+        """,
+        """
+        bool result = ((gl_LocalInvocationID.x & 1u) != 0u)
+            && (WaveActiveMin(1.0) > 0.0);
+        """,
+    ],
+)
+def test_glsl_software_subgroup_rejects_potentially_divergent_calls(statement):
+    code = f"""
+    shader GLSLSoftwareSubgroupDivergence {{
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation in {
+        "WaveActiveMin",
+        "WaveShuffleDown",
+    }
+
+
+def test_glsl_software_subgroup_accepts_static_if_and_uniform_constant_loop(
+    tmp_path,
+):
+    code = """
+    shader GLSLSoftwareSubgroupUniformFlow {
+        const int ITERATIONS = 2;
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint value = gl_LocalInvocationID.x;
+                if (ITERATIONS > 1) {
+                    for (int delta = 1; delta <= ITERATIONS; delta++) {
+                        value = WaveShuffleDown(value, delta);
+                    }
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "if ((ITERATIONS > 1))" not in generated
+    assert "for (int delta = 1; (delta <= ITERATIONS); (delta++))" in generated
+    assert "crossglSoftwareSubgroupShuffleDownUint(value, uint(delta))" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_uniform_flow",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_rejects_raw_subgroup_builtins():
+    code = """
+    shader GLSLSoftwareSubgroupRawBuiltin {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main(uint lane @ gl_SubgroupInvocationID) {
+                float value = WaveActiveMin(float(lane));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "subgroup-builtin-unsupported"
+
+
+def test_glsl_default_hardware_subgroup_path_is_unchanged():
+    code = """
+    shader GLSLDefaultHardwareSubgroup {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() @ WaveSize(32) {
+                float minimum = WaveActiveMin(float(gl_LocalInvocationID.x));
+                uint shuffled = WaveShuffleDown(gl_LocalInvocationID.x, 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = GLSLCodeGen().generate(ast)
+
+    assert "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 32u" in generated
+    assert "#define CROSSTL_SOFTWARE_SUBGROUP_WIDTH" not in generated
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_shuffle_relative : require" in generated
+    assert "subgroupMin(float(gl_LocalInvocationID.x))" in generated
+    assert "subgroupShuffleDown(gl_LocalInvocationID.x, 1)" in generated
 
 
 def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():

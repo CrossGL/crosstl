@@ -78,6 +78,7 @@ from crosstl.translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from crosstl.translator.codegen.GLSL_codegen import OpenGLSoftwareSubgroupError
 from crosstl.translator.codegen.index_range_contracts import (
     IndexRangeAssertion,
     parse_index_range_assertions,
@@ -1525,6 +1526,7 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 )
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
+OPENGL_SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
 SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY = "source_specialization_constants"
@@ -6167,6 +6169,7 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
         not in {
             TEMPLATE_VARIANTS_SOURCE_OPTION,
             TARGET_SOURCE_OPTIONS_KEY,
+            OPENGL_SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
             METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
             METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
         }
@@ -23721,6 +23724,7 @@ def _workgroup_size_failure_details(
         "project.translate.subgroup-width-invalid",
         "project.translate.subgroup-width-rule-invalid",
         "project.translate.subgroup-width-materialization-invalid",
+        "project.translate.opengl-software-subgroup-invalid",
     }:
         return {}
     execution: dict[str, Any] = {
@@ -23731,6 +23735,8 @@ def _workgroup_size_failure_details(
             if getattr(exc, "workgroup_size", None) is not None
             else None
         ),
+        "softwareSubgroupWidth": getattr(exc, "software_subgroup_width", None),
+        "operation": getattr(exc, "operation", None),
         "sourceWorkgroupSize": (
             list(getattr(exc, "source_workgroup_size"))
             if getattr(exc, "source_workgroup_size", None) is not None
@@ -25789,7 +25795,7 @@ def _crossgl_ast_for_project_target(
     else:
         source = input_path.read_text(encoding="utf-8", errors="replace")
         parser_defines = defines
-        parser_options = source_options
+        parser_options = _frontend_source_options(source_options)
         if source_backend == "metal" and not source_is_materialized:
             materialized = materialize_metal_source_for_target(
                 source=source,
@@ -25802,7 +25808,7 @@ def _crossgl_ast_for_project_target(
             if materialized is not None:
                 source = materialized.text
                 parser_defines = materialized.defines
-                parser_options = materialized.source_options
+                parser_options = _frontend_source_options(materialized.source_options)
         source_ast = source_spec.parse(
             source,
             file_path=str(input_path),
@@ -26025,6 +26031,22 @@ def _project_workgroup_execution_metadata(
     }
 
 
+def _project_opengl_software_subgroup_width(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> Any | None:
+    if OPENGL_SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION not in source_options:
+        return None
+    width = source_options[OPENGL_SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION]
+    if target != "opengl":
+        raise OpenGLSoftwareSubgroupError(
+            "software_subgroup_width is supported only by the OpenGL target",
+            software_subgroup_width=width,
+            reason="target-not-supported",
+        )
+    return width
+
+
 def _generate_project_target_from_crossgl_ast(
     *,
     ast: Any,
@@ -26034,8 +26056,27 @@ def _generate_project_target_from_crossgl_ast(
     format_output: bool,
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
+    software_subgroup_width: Any | None = None,
 ) -> str:
     codegen = get_codegen(target)
+    if software_subgroup_width is not None:
+        configure_software_subgroup = getattr(
+            codegen, "set_software_subgroup_width", None
+        )
+        if not callable(configure_software_subgroup):
+            raise OpenGLSoftwareSubgroupError(
+                f"Target '{target}' does not consume software_subgroup_width",
+                software_subgroup_width=software_subgroup_width,
+                reason="target-not-supported",
+            )
+        try:
+            configure_software_subgroup(software_subgroup_width)
+        except (TypeError, ValueError) as exc:
+            raise OpenGLSoftwareSubgroupError(
+                "software_subgroup_width must be the integer 32",
+                software_subgroup_width=software_subgroup_width,
+                reason="configured-width-invalid",
+            ) from exc
     if index_range_assertions:
         configure_index_ranges = getattr(codegen, "set_index_range_assertions", None)
         if not callable(configure_index_ranges):
@@ -27004,7 +27045,12 @@ def _translate_project_impl(
                     if target == "opengl"
                     else ()
                 )
+                software_subgroup_width = None
                 try:
+                    software_subgroup_width = _project_opengl_software_subgroup_width(
+                        target,
+                        source_options,
+                    )
                     unsupported_rule_target = (
                         _unsupported_workgroup_size_rule_target_error(
                             config,
@@ -27279,6 +27325,7 @@ def _translate_project_impl(
                     if (
                         requires_workgroup_specialization
                         or requires_subgroup_specialization
+                        or software_subgroup_width is not None
                     ):
                         crossgl_ast = _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -27440,6 +27487,9 @@ def _translate_project_impl(
                                                 workgroup_access_assertions=(
                                                     workgroup_access_assertions
                                                 ),
+                                                software_subgroup_width=(
+                                                    software_subgroup_width
+                                                ),
                                             )
                                         )
                                     except Exception as exc:
@@ -27507,6 +27557,9 @@ def _translate_project_impl(
                                             workgroup_access_assertions=(
                                                 workgroup_access_assertions
                                             ),
+                                            software_subgroup_width=(
+                                                software_subgroup_width
+                                            ),
                                         )
                                     )
                                 except Exception as exc:
@@ -27530,7 +27583,9 @@ def _translate_project_impl(
                                     execution=execution,
                                 )
                     if generated_source is None and (
-                        index_range_assertions or workgroup_access_assertions
+                        index_range_assertions
+                        or workgroup_access_assertions
+                        or software_subgroup_width is not None
                     ):
                         crossgl_ast = crossgl_ast or _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -27552,6 +27607,7 @@ def _translate_project_impl(
                             format_output=format_output,
                             index_range_assertions=index_range_assertions,
                             workgroup_access_assertions=(workgroup_access_assertions),
+                            software_subgroup_width=software_subgroup_width,
                         )
                     if generated_source is None:
                         generated_source = translate(

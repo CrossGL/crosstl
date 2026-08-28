@@ -2351,13 +2351,57 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
 
     opengl_quantized = expected_gaps["opengl_quantized_frontier_status"]
     assert opengl_quantized == module.MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE
+    assert opengl_quantized["commit"] == module.MLX_CORPUS_COMMIT
     assert opengl_quantized["artifact_emitted"] is True
     assert opengl_quantized["native_validation_attempted"] is True
     assert opengl_quantized["native_validation_status"] == "passed"
     assert opengl_quantized["generated_glsl"] == {
-        "sha256": "7808f9f35bab56c1f415dea1a669225c68447cb32f9147ab1c4b04b975543aa3",
-        "size_bytes": 5107,
+        "sha256": "e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb",
+        "size_bytes": 6642,
     }
+    assert opengl_quantized["software_subgroup"] == {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "operations": [
+            "WaveActiveMin(float)",
+            "WaveActiveMax(float)",
+            "WaveShuffleDown(uint,int)",
+        ],
+        "artifact_marker": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+        "control_barrier_instruction_count": 8,
+        "group_non_uniform_instruction_count": 0,
+        "hardware_subgroup_extensions_emitted": False,
+        "hardware_subgroup_marker_emitted": False,
+        "hardware_subgroup_execution_metadata_emitted": False,
+        "unsupported_contract_behavior": "reject-before-artifact-emission",
+    }
+    assert opengl_quantized["runtime_execution"]["status"] == "passed"
+    assert opengl_quantized["runtime_execution"]["outputs"] == {
+        "out_Buffer": {
+            "dtype": "uint32",
+            "shape": [8],
+            "values": [27, 27, 27, 27, 27, 27, 27, 27],
+        },
+        "scalesBuffer": {
+            "dtype": "float32",
+            "shape": [1],
+            "values": [-1.0],
+        },
+        "biasesBuffer": {
+            "dtype": "float32",
+            "shape": [1],
+            "values": [3.0],
+        },
+    }
+    assert opengl_quantized["runtime_execution_attempted"] is True
+    assert opengl_quantized["runtime_integration_included"] is True
+    assert opengl_quantized["mlx_host_runtime_integration_included"] is False
+    assert opengl_quantized["numerical_parity_claimed"] is True
+    assert opengl_quantized["runtime_parity_claimed"] is True
 
     directx = expected_gaps["directx_toolchain_status"]
     assert directx["compiler"] == {"name": "dxc", "version": "v1.9.2602.24"}
@@ -9505,11 +9549,17 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`gindex`" in readme
     assert "`out_index / writes_per_reduce`" in readme
     assert "inclusive bounds `[0, 2147483647]`" in normalized_readme
-    assert "5,107-byte GLSL artifact" in normalized_readme
+    assert "6,642 bytes" in normalized_readme
+    assert "`CROSSTL_SOFTWARE_SUBGROUP_WIDTH`" in readme
+    assert "eight control barriers" in normalized_readme
+    assert "no group-nonuniform instruction" in normalized_readme
     assert "OpenGL/SPIR-V 1.3" in normalized_readme
     assert "`spirv-val`" in readme
     assert "not inferred or enforced at runtime" in normalized_readme
-    for issue in (1497, 1515, 1799, 1800, 1801, 1802):
+    assert "eight packed `uint32` values of `27`" in normalized_readme
+    assert "scale `-1`, and bias `3`" in normalized_readme
+    assert "one deterministic affine-quantize workload" in normalized_readme
+    for issue in (1497, 1515, 1799, 1800, 1801, 1802, 1894):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
 
     directx = module.MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE
@@ -9561,7 +9611,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["numerical_parity_claimed"] is False
 
     opengl = module.MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE
-    assert opengl["status"] == "translated-glslang-spirv-val-validated"
+    assert opengl["status"] == "translated-toolchain-validated-native-loader-executed"
+    assert opengl["commit"] == module.MLX_CORPUS_COMMIT
     assert opengl["project_translation"] == {
         "unit_count": 1,
         "artifact_record_count": 1,
@@ -9569,6 +9620,22 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "failed_count": 0,
         "emitted_target_file_count": 1,
         "project_diagnostic_count": 0,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width_rule_configured": False,
+        "max_template_specializations": 128,
+        "max_template_materialization_work": 4096,
+    }
+    assert opengl["materialization"] == {
+        "reachable_specialization_count": 9,
+        "concrete_specialization_count": 3,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 104702,
+        "selected_parameters": {
+            "T": "float",
+            "bits": 2,
+            "group_size": 32,
+            "has_global_scale": False,
+        },
     }
     assert opengl["index_range_assertion_evidence"] == {
         "assertion_count": 3,
@@ -9589,9 +9656,20 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "status": "passed",
         "observed_failure_count": 0,
     }
+    assert opengl["generated_glsl"] == {
+        "sha256": "e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb",
+        "size_bytes": 6642,
+    }
+    assert opengl["software_subgroup"]["width"] == 32
+    assert opengl["software_subgroup"]["control_barrier_instruction_count"] == 8
+    assert opengl["software_subgroup"]["group_non_uniform_instruction_count"] == 0
     assert opengl["resolved_by"] == [module.OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE]
-    assert opengl["runtime_execution_attempted"] is False
-    assert opengl["numerical_parity_claimed"] is False
+    assert opengl["runtime_execution"]["status"] == "passed"
+    assert opengl["runtime_execution_attempted"] is True
+    assert opengl["runtime_integration_included"] is True
+    assert opengl["mlx_host_runtime_integration_included"] is False
+    assert opengl["numerical_parity_claimed"] is True
+    assert opengl["runtime_parity_claimed"] is True
 
     adjacent = module.MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE
     assert adjacent["status"] == "translated-dxc-validated"

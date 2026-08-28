@@ -487,6 +487,48 @@ Entry selection scopes shader or kernel translation; it does not infer host
 dispatch dimensions, runtime bindings, or backend integration. Record those
 requirements through the corresponding dispatch and runtime contracts.
 
+OpenGL Software Subgroup Specialization
+----------------------------------------
+
+Metal compute sources that require exactly one 32-lane SIMD group can opt into
+a narrow OpenGL shared-memory lowering when the deployment device does not
+provide the KHR subgroup extensions:
+
+.. code-block:: toml
+
+   [project.entry_points]
+   "kernels/quantized.metal" = "affine_quantize_float_gs_32_b_2"
+
+   [project.entry_workgroup_size_rules."kernels/quantized.metal"]
+   affine_quantize_float_gs_32_b_2 = [32, 1, 1]
+
+   [project.source_options.metal.target_options.opengl]
+   software_subgroup_width = 32
+
+This option is target-scoped and explicit; it does not change Metal parsing or
+other target artifacts. The only accepted width is ``32``. The selected output
+must contain exactly one compute entry with local size ``[32, 1, 1]`` and may
+use only the supported scalar ``float``, ``int``, or ``uint`` minimum, maximum,
+and shuffle-down operations. CrossTL rejects empty operation sets, raw subgroup
+builtins, calls from helper functions, unsupported payloads or operations, and
+calls beneath lane-dependent or otherwise unproven control flow. Constant-
+bound uniform loops and compile-time-selected branches remain valid.
+
+Successful lowering emits barriered ``shared``-memory helpers and the marker
+``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``. It deliberately emits no
+``GL_KHR_shader_subgroup*`` extension, ``gl_Subgroup*`` use,
+``CROSSTL_REQUIRED_SUBGROUP_WIDTH`` marker, or hardware ``subgroupWidth``
+execution metadata. This keeps the software execution contract distinct from
+the default hardware-subgroup path and its host preflight. When the option is
+absent, KHR subgroup generation and exact-width enforcement are unchanged.
+
+The lowering establishes shader semantics only for this constrained contract.
+It does not infer dispatch counts, prove arbitrary divergent control flow,
+rewrite an application's loader, or claim parity for other entries. Invalid
+requests fail with
+``project.translate.opengl-software-subgroup-invalid`` and include the width,
+workgroup size, operation, and reason available at the rejection site.
+
 Project Index-Range Assertions
 ------------------------------
 

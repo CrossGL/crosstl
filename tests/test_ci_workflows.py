@@ -3274,6 +3274,33 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     )
 
 
+def test_mlx_project_porting_workflow_runs_affine_quantize_opengl_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_quantized_native_loader.py"
+    step_name = "Prove pinned MLX affine quantize OpenGL native-loader execution"
+
+    assert mlx_porting.count(f'"{test_path}"') == 2
+    step = ci_coverage.workflow_step_section(mlx_porting, step_name)
+    assert "if: runner.os == 'Linux'" in step
+    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in step
+    assert 'CROSTL_REQUIRE_MLX_QUANTIZED_OPENGL_NATIVE_LOADER: "1"' in step
+    assert "EGL_PLATFORM: surfaceless" in step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in step
+    assert "PYOPENGL_PLATFORM: egl" in step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_quantized_affine_executes_through_opengl_native_loader" in step
+    )
+    assert "-n auto" in step
+    assert "-k" not in step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        step_name,
+        "Checkout current MLX runtime proof corpus",
+    )
+
+
 def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()

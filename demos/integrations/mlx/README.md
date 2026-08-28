@@ -597,20 +597,48 @@ cover broader cross-target, writable-view, alignment, subgroup fallback, and
 runtime acceptance criteria. This proof does not dispatch the kernel through
 Direct3D, run MLX tests, or claim numerical parity.
 
-The selected `affine_quantize_float_gs_32_b_2` entry also translates to a
-5,107-byte GLSL artifact with no project diagnostics. The project configuration
-supplies three source-qualified index-range assertions for `in_index + i`,
-`gindex`, and `out_index / writes_per_reduce`, each with inclusive bounds
-`[0, 2147483647]`.
-These are explicit host/runtime portability preconditions used to justify legal
-GLSL `uint` subscripts; they are not inferred or enforced at runtime. The
-generated artifact preserves the subgroup minimum, maximum, shuffle-down, and
-quantization operations. Linux CI compiles it for OpenGL/SPIR-V 1.3 with
-`glslangValidator` and validates the resulting module with `spirv-val`.
-[#1515](https://github.com/CrossGL/crosstl/issues/1515) records the completed
-general index-width normalization contract. This evidence establishes selected
-entry translation and native toolchain acceptance only. It does not establish
-OpenGL runtime integration, MLX test execution, or numerical parity.
+The current-corpus `affine_quantize_float_gs_32_b_2` entry now has a
+selected OpenGL native-loader proof at commit
+`846d176227a0ac13d2667e58d2bb68b322109ab0`. The project configuration supplies
+three source-qualified index-range assertions for `in_index + i`, `gindex`, and
+`out_index / writes_per_reduce`, each with inclusive bounds
+`[0, 2147483647]`. These are explicit host/runtime portability preconditions
+used to justify legal GLSL `uint` subscripts; they are not inferred or enforced
+at runtime.
+
+The target-scoped Metal option
+`project.source_options.metal.target_options.opengl.software_subgroup_width = 32`
+selects a fail-closed software implementation of this entry's scalar
+`WaveActiveMin(float)`, `WaveActiveMax(float)`, and
+`WaveShuffleDown(uint, int)` operations. It is accepted only for one compute
+entry with local size `[32, 1, 1]`; unsupported operations, payload types,
+helper placement, raw subgroup builtins, or unproven lane-dependent control
+flow reject translation. The default hardware KHR subgroup path is unchanged.
+The software artifact uses collision-safe shared scratch storage and eight
+barriers, emits `CROSSTL_SOFTWARE_SUBGROUP_WIDTH`, and emits no KHR subgroup
+extension, `gl_Subgroup*` use, `CROSSTL_REQUIRED_SUBGROUP_WIDTH`, or hardware
+subgroup-width runtime metadata.
+
+The exact generated GLSL is 6,642 bytes with SHA-256
+`e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb`.
+Materialization records three concrete and nine reachable specializations, zero
+dependency-discovery work, and 104,702 pruned candidates. Linux CI compiles it
+for OpenGL/SPIR-V 1.3 with `glslangValidator`; `spirv-val` accepts the module,
+whose disassembly contains eight control barriers and no group-nonuniform
+instruction. The runtime package reflects `wBuffer` at binding 0 and the
+`out_Buffer`, `scalesBuffer`, and `biasesBuffer` read-write resources at
+bindings 1 through 3. Through surfaceless EGL and Mesa software OpenGL, one
+32-thread dispatch transforms `[0, 1, 2, 3]` repeated eight times into eight
+packed `uint32` values of `27`, scale `-1`, and bias `3`.
+
+This is exact translation, packaging, native execution, and numerical parity
+for that one deterministic affine-quantize workload. It does not redirect the
+MLX host runtime, run MLX's test suite, cover other quantized entries, or turn
+the constrained software subgroup mode into a general divergent-subgroup
+implementation. [#1515](https://github.com/CrossGL/crosstl/issues/1515) records
+the completed index-width normalization contract, while
+[#1894](https://github.com/CrossGL/crosstl/issues/1894) continues to track
+broader subgroup fallback coverage.
 
 The adjacent `affine_gather_qmv_fast_float_gs_32_b_2` entry now has the same
 selected-entry OpenGL gate. It emits a 16,132-byte GLSL artifact with SHA-256
