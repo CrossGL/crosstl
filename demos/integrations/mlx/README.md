@@ -1071,10 +1071,12 @@ artifact while preserving fail-closed handling when that complex overload is
 reachable. Square retains `x * x`. ArcCos retains the source
 `metal::precise::acos` contract through a portable float32 range-reduction
 implementation with no-contraction qualifiers instead of relying on the target
-intrinsic's unspecified accuracy. The generated artifacts also retain a
-one-thread workgroup, the source and output buffers, and the size constant in
-their reflected runtime interfaces. Deterministic artifact hashes and the
-pinned upstream source hash are checked before packaging.
+intrinsic's unspecified accuracy. OpenGL materializes each precise helper result
+through a collision-safe `precise` local, avoiding non-portable qualified
+function return types while preserving SPIR-V `NoContraction`. The generated
+artifacts also retain a one-thread workgroup, the source and output buffers, and
+the size constant in their reflected runtime interfaces. Deterministic artifact
+hashes and the pinned upstream source hash are checked before packaging.
 
 Windows CI compiles the selected HLSL entries with DXC and executes them through
 the native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entries with

@@ -96,9 +96,9 @@ ARCCOS_WORKLOAD = UnaryWorkload(
         },
         "opengl": {
             "sha256": (
-                "34a6df68b3eebc2bc1726d740cb40f6e6688d9763f2c0695f0368f3927becc3d"
+                "280864c39e88198cd5e660127db453877349fadb090cb37f022bcc46300660b3"
             ),
-            "sizeBytes": 5508,
+            "sizeBytes": 5965,
         },
     },
     input_values=(-1.0, -0.5, 0.0, 0.5, 1.0),
@@ -249,7 +249,11 @@ def _translate_unary_artifact(
     assert workload.generated_operation[target] in generated
     if workload is ARCCOS_WORKLOAD:
         assert "return acos(x);" not in generated
-        assert "precise float" in generated
+        if target == "opengl":
+            assert "precise float crossgl_metal_precise_acos" not in generated
+            assert "precise float crossglPreciseReturn" in generated
+        else:
+            assert "precise float __crossgl_metal_precise_acos" in generated
     assert "Log{}(x + i * Sqrt{}(1.0 - x * x))" not in generated
     if target == "directx":
         assert "[numthreads(1, 1, 1)]" in generated

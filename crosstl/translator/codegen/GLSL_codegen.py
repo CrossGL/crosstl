@@ -2256,6 +2256,7 @@ class GLSLCodeGen:
         self.fragment_direct_output_name_maps = {}
         self.vertex_input_member_names = set()
         self.current_function_return_type = None
+        self.current_glsl_precise_return_type = None
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
         self.function_fragment_only_requirements = {}
@@ -4475,6 +4476,7 @@ class GLSLCodeGen:
         self.fragment_direct_output_name_maps = {}
         self.fragment_blend_support_layout_parts = []
         self.current_function_return_type = None
+        self.current_glsl_precise_return_type = None
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
         self.function_fragment_only_requirements = {}
@@ -11402,6 +11404,7 @@ class GLSLCodeGen:
             "indices", set()
         )
         previous_function_return_type = self.current_function_return_type
+        previous_precise_return_type = self.current_glsl_precise_return_type
         previous_local_variable_types = self.local_variable_types
         previous_local_variable_source_types = self.local_variable_source_types
         previous_identifier_aliases = self.current_identifier_aliases
@@ -11422,6 +11425,7 @@ class GLSLCodeGen:
         )
         self.local_variable_types = {}
         self.local_variable_source_types = {}
+        self.current_glsl_precise_return_type = None
         self.current_identifier_aliases = dict(self.current_identifier_aliases)
         self.prepare_glsl_local_identifier_names(func)
         self.current_glsl_synthetic_local_names = set(
@@ -11619,8 +11623,8 @@ class GLSLCodeGen:
             return_type = self.map_type(
                 self.type_name_string(getattr(func, "return_type", None)) or "void"
             )
-            precise_prefix = self.glsl_precise_qualifier_prefix(func, return_type)
             self.current_function_return_type = previous_function_return_type
+            self.current_glsl_precise_return_type = previous_precise_return_type
             self.local_variable_types = previous_local_variable_types
             self.local_variable_source_types = previous_local_variable_source_types
             self.current_identifier_aliases = previous_identifier_aliases
@@ -11642,10 +11646,7 @@ class GLSLCodeGen:
             self.current_glsl_private_pointer_function_name = (
                 previous_private_pointer_function_name
             )
-            return (
-                f"{code}{precise_prefix}{return_type} "
-                f"{declaration_name}({params_str});\n\n"
-            )
+            return f"{code}{return_type} {declaration_name}({params_str});\n\n"
 
         stage_entry_types = {
             "vertex",
@@ -11731,17 +11732,17 @@ class GLSLCodeGen:
         if shader_type in stage_entry_types:
             code += f"void {entry_name or 'main'}() {{\n"
             self.current_function_return_type = "void"
+            self.current_glsl_precise_return_type = None
             if shader_type == "compute" and is_native_stage_entry:
                 code += self.generate_glsl_exact_subgroup_width_guard(func, shader_type)
         else:
             raw_return_type = self.type_name_string(getattr(func, "return_type", None))
             self.current_function_return_type = raw_return_type or "void"
             return_type = self.map_type(self.current_function_return_type)
-            precise_prefix = self.glsl_precise_qualifier_prefix(func, return_type)
-            code += (
-                f"{precise_prefix}{return_type} "
-                f"{declaration_name}({params_str}) {{\n"
+            self.current_glsl_precise_return_type = self.glsl_precise_return_local_type(
+                func, return_type
             )
+            code += f"{return_type} {declaration_name}({params_str}) {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -11907,6 +11908,7 @@ class GLSLCodeGen:
             previous_compile_time_int_vector_array_constants
         )
         self.current_function_return_type = previous_function_return_type
+        self.current_glsl_precise_return_type = previous_precise_return_type
         self.local_variable_types = previous_local_variable_types
         self.local_variable_source_types = previous_local_variable_source_types
         self.current_generic_function_substitutions = (
@@ -14401,6 +14403,23 @@ class GLSLCodeGen:
             result += f"{indent_str}{line}{terminator}\n"
         return result
 
+    def generate_glsl_return_value_statement(self, value, indent):
+        """Render a return while preserving ``@precise`` without a return qualifier."""
+        indent_str = "    " * indent
+        return_type = self.current_glsl_precise_return_type
+        if return_type is None:
+            return f"{indent_str}return {value};\n"
+
+        return_name = self.glsl_synthetic_local_identifier("crossglPreciseReturn")
+        source_return_type = self.type_name_string(self.current_function_return_type)
+        self.local_variable_types[return_name] = source_return_type
+        self.local_variable_source_types[return_name] = source_return_type
+        declaration = format_c_style_array_declaration(return_type, return_name)
+        return (
+            f"{indent_str}precise {declaration} = {value};\n"
+            f"{indent_str}return {return_name};\n"
+        )
+
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as GLSL source."""
         indent_str = "    " * indent
@@ -14626,13 +14645,12 @@ class GLSLCodeGen:
             if self.is_void_stage_entry_return_value():
                 return f"{indent_str}return;\n"
             if isinstance(stmt.value, list):
-                values = ", ".join(self.generate_expression(val) for val in stmt.value)
-                return f"{indent_str}return {values};\n"
+                value = ", ".join(self.generate_expression(val) for val in stmt.value)
             else:
-                return (
-                    f"{indent_str}return "
-                    f"{self.generate_expression_with_expected(stmt.value, self.current_function_return_type)};\n"
+                value = self.generate_expression_with_expected(
+                    stmt.value, self.current_function_return_type
                 )
+            return self.generate_glsl_return_value_statement(value, indent)
         elif hasattr(stmt, "__class__") and "ExpressionStatementNode" in str(
             type(stmt)
         ):
@@ -14857,14 +14875,16 @@ class GLSLCodeGen:
         code = f"{indent_str}switch ({selector}) {{\n"
         for index, call in dispatch["cases"]:
             code += f"{indent_str}case {index}:\n"
-            code += f"{case_indent}return {call};\n"
+            code += self.generate_glsl_return_value_statement(call, indent + 1)
         return_type = dispatch.get("return_type") or self.current_function_return_type
         mapped_return_type = self.map_type(return_type)
         code += f"{indent_str}default:\n"
         if mapped_return_type == "void":
             code += f"{case_indent}return;\n"
         else:
-            code += f"{case_indent}return {self.zero_value_expression(return_type)};\n"
+            code += self.generate_glsl_return_value_statement(
+                self.zero_value_expression(return_type), indent + 1
+            )
         code += f"{indent_str}}}\n"
         return code
 
@@ -14896,7 +14916,7 @@ class GLSLCodeGen:
             return None
 
         value = self.generate_expression_with_expected(value_expr, return_type)
-        return f"{indent_str}return {value};\n"
+        return self.generate_glsl_return_value_statement(value, indent)
 
     def local_variable_declared_type(self, stmt):
         var_type = getattr(stmt, "var_type", None)
@@ -17309,10 +17329,11 @@ class GLSLCodeGen:
             for attribute in getattr(node, "attributes", []) or []
         )
 
-    def glsl_precise_qualifier_prefix(self, node, declaration_type):
+    def glsl_precise_return_local_type(self, node, declaration_type):
+        """Return the type materialized for a portable precise function result."""
         if declaration_type == "void" or not self.glsl_has_precise_qualifier(node):
-            return ""
-        return "precise "
+            return None
+        return declaration_type
 
     def global_variable_qualifier(self, node):
         qualifier_prefix = self.glsl_variable_qualifier_prefix(node)

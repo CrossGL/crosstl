@@ -10032,7 +10032,7 @@ def test_glsl_stage_interface_interpolation_precision_qualifiers():
     )
 
 
-def test_glsl_precise_function_returns_and_local_variables(tmp_path):
+def test_glsl_precise_function_returns_lower_through_precise_locals(tmp_path):
     code = """
     shader PreciseArithmetic {
         @precise
@@ -10057,15 +10057,77 @@ def test_glsl_precise_function_returns_and_local_variables(tmp_path):
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
 
-    assert "precise float stableProduct(float left, float right);" in generated_code
-    assert "precise float stableProduct(float left, float right) {" in generated_code
+    assert "float stableProduct(float left, float right);" in generated_code
+    assert "float stableProduct(float left, float right) {" in generated_code
+    assert "precise float stableProduct" not in generated_code
     assert "precise float product = (left * right);" in generated_code
+    assert (
+        "precise float crossglPreciseReturn = (product + left);\n"
+        "    return crossglPreciseReturn;"
+    ) in generated_code
     assert "float relaxedProduct(float left, float right) {" in generated_code
     assert "precise float relaxedProduct" not in generated_code
+    assert "return (product + left);" in generated_code
     assert_glsl_compute_validates_if_available(
         generated_code,
         tmp_path,
         "precise-arithmetic",
+        validate_spirv=True,
+    )
+    spirv_dis = shutil.which("spirv-dis")
+    spirv_path = tmp_path / "precise-arithmetic.spv"
+    if spirv_dis is not None and spirv_path.is_file():
+        disassembly = subprocess.run(
+            [spirv_dis, str(spirv_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert disassembly.returncode == 0, disassembly.stderr
+        assert "NoContraction" in disassembly.stdout
+
+
+def test_glsl_precise_function_multiple_returns_use_collision_safe_locals(tmp_path):
+    code = """
+    shader PreciseReturnNames {
+        @precise
+        float selectProduct(float left, float right) {
+            float crossglPreciseReturn = left;
+            if (left < 0.0) {
+                return left * right;
+            }
+            if (right < 0.0) {
+                return left + right;
+            }
+            return crossglPreciseReturn;
+        }
+
+        compute {
+            void main() {
+                float selected = selectProduct(2.0, 3.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "precise float selectProduct" not in generated_code
+    assert "float crossglPreciseReturn = left;" in generated_code
+    assert generated_code.count("precise float crossglPreciseReturn_") == 3
+    assert "precise float crossglPreciseReturn_2 = (left * right);" in generated_code
+    assert "precise float crossglPreciseReturn_3 = (left + right);" in generated_code
+    assert (
+        "precise float crossglPreciseReturn_4 = crossglPreciseReturn;" in generated_code
+    )
+    assert "return crossglPreciseReturn_2;" in generated_code
+    assert "return crossglPreciseReturn_3;" in generated_code
+    assert "return crossglPreciseReturn_4;" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "precise-return-names",
         validate_spirv=True,
     )
 

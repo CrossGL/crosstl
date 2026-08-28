@@ -9592,7 +9592,13 @@ def test_codegen_lowers_precise_acos_without_changing_other_math_modes(tmp_path)
 
     HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
     assert "precise float __crossgl_metal_precise_acos_float" in hlsl
-    assert "precise float crossgl_metal_precise_acos_float" in glsl
+    assert "float crossgl_metal_precise_acos_float(float value)" in glsl
+    assert not re.search(
+        r"\bprecise\s+(?:float|vec[234])\s+crossgl_metal_precise_acos_",
+        glsl,
+    )
+    assert "precise float crossglPreciseReturn" in glsl
+    assert "precise vec4 crossglPreciseReturn" in glsl
     assert hlsl.count("acos(value)") == 2
     assert glsl.count("acos(value)") == 2
     assert "[[precise]]" not in metal

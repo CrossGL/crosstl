@@ -10262,8 +10262,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert arccos["artifacts"]["opengl"] == {
         "target_entry_point": "main",
-        "sha256": "34a6df68b3eebc2bc1726d740cb40f6e6688d9763f2c0695f0368f3927becc3d",
-        "size_bytes": 5508,
+        "sha256": "280864c39e88198cd5e660127db453877349fadb090cb37f022bcc46300660b3",
+        "size_bytes": 5965,
         "native_runtime": {
             "platform": "ubuntu-latest",
             "runtime": "mesa-opengl-4.3",
@@ -10302,6 +10302,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     assert "keeps the out-of-line complex `ArcCos::operator()` body out" in readme
     assert "Square retains `x * x`" in readme
     assert "portable float32 range-reduction implementation" in readme
+    assert "collision-safe `precise` local" in readme
+    assert "preserving SPIR-V `NoContraction`" in readme
     assert "target intrinsic's unspecified accuracy" in readme
     assert "executes them through the native loader on Direct3D 12 WARP" in readme
     assert "surfaceless Mesa OpenGL context" in readme
