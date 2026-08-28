@@ -44955,3 +44955,148 @@ def test_hlsl_boolean_min_max_reports_unrepresentable_operand_shapes():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_hlsl_decodes_encoded_materialized_generic_vector_constructor():
+    ast = ShaderNode(
+        "EncodedGenericVectorConstructor",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "make_pair",
+                VectorType(PrimitiveType("float"), 2),
+                [
+                    ParameterNode("x", PrimitiveType("float")),
+                    ParameterNode("y", PrimitiveType("float")),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("vec_u3cfloat_u2c2_u3e"),
+                                [IdentifierNode("x"), IdentifierNode("y")],
+                            )
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "return float2(x, y);" in generated
+    assert "vec_u3cfloat_u2c2_u3e" not in generated
+
+
+def test_hlsl_vector_fallthrough_default_initializes_every_lane():
+    ast = ShaderNode(
+        "VectorFallthroughDefault",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "missing_return",
+                VectorType(PrimitiveType("float"), 2),
+                [],
+                BlockNode([]),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "return float2(0.0, 0.0);" in generated
+    assert "return float2(0);" not in generated
+
+
+def test_hlsl_nested_scoped_return_terminates_function_without_fallback():
+    shader = """
+    shader NestedScopedReturn {
+        vec2 choose(bool first) {
+            if (first) {
+                return vec2(1.0, 2.0);
+            }
+            {
+                return vec2(3.0, 4.0);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return float2(3.0, 4.0);" in generated
+    assert "return float2(0.0, 0.0);" not in generated
+    assert "return float2(0);" not in generated
+
+
+def test_hlsl_metal_unobserved_default_null_resource_pointer_is_pruned(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    float hidden_value(const device float* values) {
+      if (false) {
+        return values[0];
+      }
+      return 7.0f;
+    }
+
+    float forwarded_default(const device float* values = nullptr) {
+      return hidden_value(values);
+    }
+
+    kernel void unobserved_default(
+        device float* output [[buffer(0)]]) {
+      output[0] = forwarded_default();
+    }
+    """
+    shader_path = tmp_path / "unobserved_default_pointer.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "float hidden_value()" in generated
+    assert "float forwarded_default()" in generated
+    assert "return hidden_value();" in generated
+    assert "forwarded_default();" in generated
+    assert "StructuredBuffer<float> values" not in generated
+    assert "nullptr" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_observed_default_null_resource_pointer_still_fails_closed(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    float read_default(const device float* values = nullptr) {
+      return values[0];
+    }
+
+    kernel void observed_default(device float* output [[buffer(0)]]) {
+      output[0] = read_default();
+    }
+    """
+    shader_path = tmp_path / "observed_default_pointer.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerParameterError) as exc_info:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert exc_info.value.reason == "call-backing-unresolved"
+    assert exc_info.value.address_space == "device"
+    assert exc_info.value.parameter_name == "values"

@@ -7,6 +7,7 @@ from ...translator.cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
 )
+from ...translator.standard_constants import standard_math_constant
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -1418,6 +1419,7 @@ class MetalToCrossGLConverter:
         self.struct_static_constexpr_member_keys = set()
         self.current_struct_static_constant_owner = None
         self.struct_template_parameters = {}
+        self.local_type_alias_names = set()
         self.local_struct_type_aliases = {}
         self.local_integral_constant_bindings = {}
         self.local_aggregate_declarations = []
@@ -7450,6 +7452,7 @@ class MetalToCrossGLConverter:
         self.struct_static_constexpr_member_keys = set()
         self.current_struct_static_constant_owner = None
         self.struct_template_parameters = {}
+        self.local_type_alias_names = set()
         self.local_struct_type_aliases = {}
         self.local_integral_constant_bindings = {}
         self.local_aggregate_declarations = []
@@ -10035,6 +10038,18 @@ class MetalToCrossGLConverter:
         elif isinstance(expr, LambdaNode):
             return self.generate_lambda_expression(expr, is_main)
         elif isinstance(expr, CallNode):
+            if (
+                isinstance(expr.callee, FunctionCallNode)
+                and str(expr.callee.name) in {"decltype", "metal::decltype"}
+                and len(expr.callee.args) == 1
+            ):
+                inferred_type = self.expression_metal_type(expr.callee)
+                if inferred_type is not None:
+                    constructor = self.map_type(inferred_type)
+                    arguments = ", ".join(
+                        self.generate_expression(arg, is_main) for arg in expr.args
+                    )
+                    return f"{constructor}({arguments})"
             callee = self.generate_postfix_operand(expr.callee, is_main)
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
@@ -11804,23 +11819,27 @@ class MetalToCrossGLConverter:
 
     def map_metal_type_constructor_name(self, name):
         text = str(name)
+        decltype_type = self.resolve_metal_decltype_type(text)
         is_local_alias = text in self.local_type_alias_names
         is_materialized_type = any(
             text in bindings for bindings in self.template_type_bindings
         )
         if (
-            "::" not in text
+            decltype_type is None
+            and "::" not in text
             and text not in self.unscoped_metal_type_constructors
             and not is_local_alias
             and not is_materialized_type
         ):
             return None
         normalized = self.normalized_metal_type(
-            self.substitute_template_type_text(self.resolve_local_type_aliases(text))
+            decltype_type
+            or self.substitute_template_type_text(self.resolve_local_type_aliases(text))
         )
         mapped = self.map_type(normalized)
         if (
-            normalized in self.type_map
+            decltype_type is not None
+            or normalized in self.type_map
             or normalized in self.struct_name_map
             or mapped != normalized
         ):
@@ -12621,6 +12640,55 @@ class MetalToCrossGLConverter:
             )
         )
 
+    def resolve_metal_decltype_type(self, metal_type):
+        text = str(metal_type or "").strip()
+        prefix = next(
+            (
+                candidate
+                for candidate in ("decltype(", "metal::decltype(")
+                if text.startswith(candidate)
+            ),
+            None,
+        )
+        if prefix is None:
+            return None
+
+        open_index = text.find("(")
+        depth = 0
+        close_index = None
+        for index in range(open_index, len(text)):
+            character = text[index]
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0:
+                    close_index = index
+                    break
+        if close_index is None:
+            return None
+
+        suffix = text[close_index + 1 :].strip()
+        if suffix and re.fullmatch(r"[*&]+", suffix) is None:
+            return None
+        expression_text = text[open_index + 1 : close_index].strip()
+        if not expression_text or expression_text == "auto":
+            return None
+
+        try:
+            lexer = MetalLexer(expression_text, preprocess=False)
+            parser = MetalParser(lexer.tokenize())
+            expression = parser.parse_expression()
+            if parser.current_token[0] != "EOF":
+                return None
+        except (SyntaxError, ValueError, TypeError):
+            return None
+
+        inferred_type = self.expression_metal_type(expression)
+        if inferred_type is None:
+            return None
+        return f"{self.resolve_type_alias(inferred_type)}{suffix}"
+
     def map_type(self, metal_type):
         """Map a Metal type name to the closest CrossGL type name."""
         if not metal_type:
@@ -12628,6 +12696,10 @@ class MetalToCrossGLConverter:
 
         metal_type = self.substitute_template_type_text(metal_type)
         metal_type = self.substitute_template_value_text(metal_type)
+
+        decltype_type = self.resolve_metal_decltype_type(metal_type)
+        if decltype_type is not None and decltype_type != str(metal_type).strip():
+            return self.map_type(decltype_type)
 
         materialized_alias = self.materialize_alias_template_type(metal_type)
         if materialized_alias != str(metal_type).strip():
@@ -15297,6 +15369,12 @@ class MetalToCrossGLConverter:
             return self.metal_scalar_arithmetic_type_info(enum_type)
         return self.metal_scalar_arithmetic_types.get(type_name)
 
+    def metal_standard_math_constant_type(self, name):
+        constant = standard_math_constant(name)
+        if constant is None or "metal" not in constant.source_environments:
+            return None
+        return constant.scalar_type
+
     def metal_literal_string_type(self, value):
         text = str(value).replace("'", "")
         if text in {"true", "false"}:
@@ -15733,12 +15811,13 @@ class MetalToCrossGLConverter:
             constructor_member_type = self.current_constructor_member_type(expr)
             if constructor_member_type is not None:
                 return constructor_member_type
-            return self.current_variable_types.get(
+            tracked_type = self.current_variable_types.get(
                 expr,
                 self.global_variable_types.get(
                     expr, self.metal_enum_member_types.get(expr)
                 ),
             )
+            return tracked_type or self.metal_standard_math_constant_type(expr)
         if isinstance(expr, VariableNode):
             name = getattr(expr, "name", None)
             if not name:
@@ -15754,12 +15833,13 @@ class MetalToCrossGLConverter:
             constructor_member_type = self.current_constructor_member_type(name)
             if constructor_member_type is not None:
                 return constructor_member_type
-            return self.current_variable_types.get(
+            tracked_type = self.current_variable_types.get(
                 name,
                 self.global_variable_types.get(
                     name, self.metal_enum_member_types.get(name)
                 ),
             )
+            return tracked_type or self.metal_standard_math_constant_type(name)
         if isinstance(expr, ArrayAccessNode):
             selection = self.metal_indexed_type_selection(expr)
             if selection["kind"] == "aggregate":

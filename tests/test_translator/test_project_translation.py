@@ -22310,7 +22310,8 @@ def test_translate_project_runs_pinned_slang_external_corpus_fixture(tmp_path):
     assert artifact["status"] == "translated"
     assert artifact["path"] == "out/cgl/tests/compute/default-parameter.cgl"
     assert "int helper(int val, int a)" in translated
-    assert "return helper(val) + helper(val, 256);" in translated
+    assert "return helper(val, 16) + helper(val, 256);" in translated
+    assert "helper(val)" not in translated
     external_corpus = payload["externalCorpus"]
     assert external_corpus["status"] == "ok"
     assert external_corpus["summary"] == {

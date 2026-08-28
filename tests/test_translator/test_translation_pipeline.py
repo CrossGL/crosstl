@@ -2355,3 +2355,33 @@ def test_metal_function_header_masks_comments_spanning_the_header_start():
     assert "OR" not in header
     assert "BUSINESS" not in header
     assert "float foo(int x)" in header
+
+
+def test_metal_default_pointer_call_lowers_for_crossgl_intermediate(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "default-pointer.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        float ignored_default(const device float* values = nullptr) {
+            return 7.0f;
+        }
+
+        kernel void computeMain(device float* output [[buffer(0)]]) {
+            output[0] = ignored_default();
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="cgl",
+        source_backend="metal",
+        format_output=False,
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "ignored_default(nullptr)" in generated
+    assert "ignored_default()" not in generated

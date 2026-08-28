@@ -41,9 +41,9 @@ MLX_FFT_GENERATED_SHA256 = (
 )
 MLX_FFT_GENERATED_SIZE_BYTES = 116160
 CURRENT_MLX_FFT_GENERATED_SHA256 = (
-    "948b214c9286f8dc77317531330e603bcf46d5094fa08d23445b278dcdda7ea3"
+    "d93972d83156853af519886a669111a061ad311ebfee85615fd797f4e22b3041"
 )
-CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 152613
+CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 146663
 MLX_FFT_SIZE = 256
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER"
 CURRENT_MLX_ROOT_ENV = "CROSTL_MLX_CURRENT_ROOT"
@@ -370,6 +370,12 @@ def _build_runtime_package(
     assert "groupshared float2 fft_mem_256_float2_float2_shared_in[256];" in generated
     assert re.search(r"\bcrosstl_ptr_buf\s*[,)]", generated) is None
     assert "float2*" not in generated
+    assert "decltype(" not in generated
+    assert "vec_u3cfloat_u2c2_u3e" not in generated
+    assert "return float2(0);" not in generated
+    assert (
+        re.search(r"\b(?:RW)?StructuredBuffer<float2>\s+twiddles\b", generated) is None
+    )
 
     report_path = work_dir / "portability-report.json"
     report.write_json(report_path)

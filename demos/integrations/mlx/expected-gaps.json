@@ -864,11 +864,13 @@
       "pruned_candidate_count": 2120
     },
     "artifact": {
-      "sha256": "948b214c9286f8dc77317531330e603bcf46d5094fa08d23445b278dcdda7ea3",
-      "size_bytes": 152613,
+      "sha256": "d93972d83156853af519886a669111a061ad311ebfee85615fd797f4e22b3041",
+      "size_bytes": 146663,
       "first_class_workgroup_pointer_residue": false,
       "workgroup_pointer_transport": "concrete-groupshared-root-plus-integer-offset",
-      "overload_body_reachability": "all-compatible-source-overloads"
+      "overload_body_reachability": "all-compatible-source-overloads",
+      "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
+      "observable_null_resource_pointer_policy": "fail-closed"
     },
     "native_validation": {
       "compiler": "dxc",

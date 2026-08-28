@@ -699,10 +699,15 @@ overload bodies. DirectX workgroup-pointer reachability now analyzes both
 bodies, merges their forwarded calls and access ranges, and retains the
 concrete `fft_mem_256_float2_float2_shared_in[256]` backing identity. Generated
 helpers transport `crosstl_ptr_buf` as an integer offset instead of a bare
-first-class workgroup pointer expression.
+first-class workgroup pointer expression. The omitted default `twiddles =
+nullptr` argument is carried into the CrossGL intermediate before target
+lowering. Because the materialized `use_twiddle_table = false` call chain makes
+every twiddle dereference unreachable, DirectX removes that unobserved resource
+parameter through the forwarding chain rather than inventing a backing buffer.
+A null pointer that can be observed or dereferenced still fails closed.
 
-The current source emits a 152,613-byte HLSL artifact with SHA-256
-`948b214c9286f8dc77317531330e603bcf46d5094fa08d23445b278dcdda7ea3`
+The current source emits a 146,663-byte HLSL artifact with SHA-256
+`d93972d83156853af519886a669111a061ad311ebfee85615fd797f4e22b3041`
 and zero project diagnostics. Windows CI compiles it with DXC using `cs_6_2`,
 `-enable-16bit-types`, and warnings as errors, then packages and dispatches it
 through Direct3D 12 WARP. The same index-1 complex impulse workload, reflected

@@ -10473,11 +10473,13 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "948b214c9286f8dc77317531330e603bcf46d5094fa08d23445b278dcdda7ea3",
-        "size_bytes": 152613,
+        "sha256": "d93972d83156853af519886a669111a061ad311ebfee85615fd797f4e22b3041",
+        "size_bytes": 146663,
         "first_class_workgroup_pointer_residue": False,
         "workgroup_pointer_transport": "concrete-groupshared-root-plus-integer-offset",
         "overload_body_reachability": "all-compatible-source-overloads",
+        "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
+        "observable_null_resource_pointer_policy": "fail-closed",
     }
     assert status["native_validation"] == {
         "compiler": "dxc",
@@ -10544,7 +10546,12 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
     assert "records 42 reachable specializations before pruning" in readme
     assert "two compatible `ReadWriter_float2_float2__load` overload bodies" in readme
     assert "transport `crosstl_ptr_buf` as an integer offset" in readme
-    assert "152,613-byte HLSL artifact" in readme
+    assert "carried into the CrossGL intermediate before target lowering" in readme
+    assert "removes that unobserved resource parameter" in readme
+    assert (
+        "null pointer that can be observed or dereferenced still fails closed" in readme
+    )
+    assert "146,663-byte HLSL artifact" in readme
     assert "zero project diagnostics" in readme
     assert "packages and dispatches it through Direct3D 12 WARP" in readme
     assert (

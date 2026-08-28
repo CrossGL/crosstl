@@ -1963,6 +1963,7 @@ class HLSLCodeGen:
         self.function_hlsl_workgroup_pointer_base_names = {}
         self.function_hlsl_resource_pointer_parameters = {}
         self.function_hlsl_resource_pointer_parameter_indices = {}
+        self.hlsl_omitted_resource_pointer_parameter_keys = set()
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
         self.current_hlsl_workgroup_pointer_base_names = {}
@@ -2854,6 +2855,7 @@ class HLSLCodeGen:
         self.function_hlsl_workgroup_pointer_base_names = {}
         self.function_hlsl_resource_pointer_parameters = {}
         self.function_hlsl_resource_pointer_parameter_indices = {}
+        self.hlsl_omitted_resource_pointer_parameter_keys = set()
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
         self.current_hlsl_workgroup_pointer_base_names = {}
@@ -8003,6 +8005,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for p in param_list:
             if id(p) in promoted_entry_resource_parameter_ids:
                 continue
+            if self.hlsl_resource_pointer_parameter_is_omitted(func, p):
+                continue
             self.current_hlsl_resource_pointer_aliases.pop(p.name, None)
             if hasattr(p, "param_type"):
                 raw_param_type = (
@@ -12553,6 +12557,298 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 indices_by_function[function_name] = pointer_indices
         self.function_hlsl_resource_pointer_parameters = parameters_by_function
         self.function_hlsl_resource_pointer_parameter_indices = indices_by_function
+        self.collect_hlsl_unobserved_null_resource_pointer_parameters(functions)
+
+    def hlsl_resource_pointer_analysis_call_name(self, call):
+        function_name = self.function_call_name(call)
+        if not function_name:
+            return None
+        arguments = list(getattr(call, "arguments", getattr(call, "args", [])) or [])
+        if function_name in self.hlsl_mapped_overload_names:
+            resolved = self.resolve_hlsl_function_overload(
+                function_name, arguments, call_node=call
+            )
+            if resolved is not None:
+                return self.hlsl_function_declaration_name(resolved)
+        return self.hlsl_function_call_name(function_name)
+
+    def hlsl_resource_pointer_analysis_call_parameter(self, call, argument_index):
+        function_name = self.hlsl_resource_pointer_analysis_call_name(call)
+        if not function_name:
+            return None, None
+        return self.hlsl_resource_pointer_parameter_for_call(
+            function_name, argument_index
+        )
+
+    def hlsl_static_condition_value(self, expression, bool_constants=None):
+        value = self.hlsl_bool_constant_value(expression, bool_constants or {})
+        if value is not None:
+            return bool(value)
+        value = self.literal_int_value(expression, self.literal_int_constants)
+        return None if value is None else value != 0
+
+    def collect_hlsl_unobserved_null_resource_pointer_parameters(self, functions):
+        """Find null-rooted pointer chains that have no reachable observation.
+
+        HLSL resource objects cannot represent ``nullptr``. A parameter is omitted
+        only when an explicit null call roots the chain and branch-aware dataflow
+        proves that every forwarded parameter is neither dereferenced nor otherwise
+        observed. Any unresolved or reachable use remains on the normal fail-closed
+        resource-binding path.
+        """
+        self.hlsl_omitted_resource_pointer_parameter_keys = set()
+        functions = list(functions or [])
+        all_keys = set()
+        function_pointer_keys = {}
+        function_has_body = {}
+
+        for function in functions:
+            function_name = self.hlsl_function_declaration_name(function)
+            if not function_name:
+                continue
+            keys_by_name = {}
+            for parameter in (
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            ):
+                if not self.hlsl_resource_pointer_parameter(parameter):
+                    continue
+                key = (function_name, parameter.name)
+                keys_by_name[parameter.name] = key
+                all_keys.add(key)
+            if keys_by_name:
+                function_pointer_keys[id(function)] = keys_by_name
+                function_has_body[function_name] = (
+                    function_has_body.get(function_name, False)
+                    or getattr(function, "body", None) is not None
+                )
+
+        if not all_keys:
+            return
+
+        directly_observed = set()
+        forwarded = {key: set() for key in all_keys}
+        null_call_targets = set()
+
+        def reference_name(value, pointer_names):
+            if isinstance(value, str):
+                name = value
+            elif isinstance(value, (IdentifierNode, VariableNode)):
+                name = getattr(value, "name", None)
+            else:
+                return None
+            return name if name in pointer_names else None
+
+        def analyze_value(value, caller_keys, bool_constants, seen=None):
+            if value is None or isinstance(value, (bool, int, float)):
+                return
+            if seen is None:
+                seen = set()
+            value_id = id(value)
+            if value_id in seen:
+                return
+            seen.add(value_id)
+
+            pointer_names = set(caller_keys)
+            direct_name = reference_name(value, pointer_names)
+            if direct_name is not None:
+                directly_observed.add(caller_keys[direct_name])
+                return
+            if isinstance(value, str):
+                return
+            if isinstance(value, dict):
+                for child in value.values():
+                    analyze_value(child, caller_keys, bool_constants, seen)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for child in value:
+                    analyze_value(child, caller_keys, bool_constants, seen)
+                return
+
+            if isinstance(value, FunctionCallNode):
+                arguments = list(
+                    getattr(value, "arguments", getattr(value, "args", [])) or []
+                )
+                for index, argument in enumerate(arguments):
+                    parameter, target_name = (
+                        self.hlsl_resource_pointer_analysis_call_parameter(value, index)
+                    )
+                    target_key = (
+                        (target_name, parameter.name)
+                        if parameter is not None and target_name is not None
+                        else None
+                    )
+                    if self.hlsl_null_pointer_expression(argument):
+                        if target_key in all_keys:
+                            null_call_targets.add(target_key)
+                        continue
+                    source_name = reference_name(argument, pointer_names)
+                    if source_name is not None and target_key in all_keys:
+                        forwarded[caller_keys[source_name]].add(target_key)
+                        continue
+                    analyze_value(argument, caller_keys, bool_constants, seen)
+                return
+
+            if isinstance(value, TernaryOpNode):
+                condition = getattr(value, "condition", None)
+                analyze_value(condition, caller_keys, bool_constants, seen)
+                selected = self.hlsl_static_condition_value(condition, bool_constants)
+                if selected is None:
+                    analyze_value(
+                        getattr(value, "true_expr", None),
+                        caller_keys,
+                        bool_constants,
+                        seen,
+                    )
+                    analyze_value(
+                        getattr(value, "false_expr", None),
+                        caller_keys,
+                        bool_constants,
+                        seen,
+                    )
+                else:
+                    analyze_value(
+                        (
+                            getattr(value, "true_expr", None)
+                            if selected
+                            else getattr(value, "false_expr", None)
+                        ),
+                        caller_keys,
+                        bool_constants,
+                        seen,
+                    )
+                return
+
+            for field_name, child in vars(value).items():
+                if field_name in {
+                    "annotations",
+                    "parent",
+                    "source_location",
+                    "function",
+                }:
+                    continue
+                analyze_value(child, caller_keys, bool_constants, seen)
+
+        def analyze_if(statement, caller_keys, bool_constants):
+            conditions = [
+                getattr(
+                    statement,
+                    "condition",
+                    getattr(statement, "if_condition", None),
+                ),
+                *(getattr(statement, "else_if_conditions", []) or []),
+            ]
+            bodies = [
+                getattr(
+                    statement,
+                    "then_branch",
+                    getattr(statement, "if_body", None),
+                ),
+                *(getattr(statement, "else_if_bodies", []) or []),
+            ]
+            else_body = getattr(
+                statement,
+                "else_branch",
+                getattr(statement, "else_body", None),
+            )
+
+            for index, condition in enumerate(conditions):
+                analyze_value(condition, caller_keys, bool_constants)
+                selected = self.hlsl_static_condition_value(condition, bool_constants)
+                if selected is False:
+                    continue
+                if selected is True:
+                    analyze_body(bodies[index], caller_keys, dict(bool_constants))
+                    return
+
+                analyze_body(bodies[index], caller_keys, dict(bool_constants))
+                for later_condition, later_body in zip(
+                    conditions[index + 1 :], bodies[index + 1 :]
+                ):
+                    analyze_value(later_condition, caller_keys, bool_constants)
+                    analyze_body(later_body, caller_keys, dict(bool_constants))
+                analyze_body(else_body, caller_keys, dict(bool_constants))
+                return
+
+            analyze_body(else_body, caller_keys, dict(bool_constants))
+
+        def analyze_body(body, caller_keys, bool_constants):
+            for statement in self.hlsl_statement_body_items(body):
+                if isinstance(statement, BlockNode):
+                    analyze_body(statement, caller_keys, dict(bool_constants))
+                    continue
+                if isinstance(statement, IfNode):
+                    analyze_if(statement, caller_keys, bool_constants)
+                    continue
+                analyze_value(statement, caller_keys, bool_constants)
+                self.hlsl_update_visible_bool_constants(statement, bool_constants)
+
+        for function in functions:
+            caller_keys = function_pointer_keys.get(id(function), {})
+            if getattr(function, "body", None) is None:
+                continue
+            analyze_body(
+                function.body,
+                caller_keys,
+                self.hlsl_initial_bool_constants(function),
+            )
+
+        for key in all_keys:
+            if not function_has_body.get(key[0], False):
+                directly_observed.add(key)
+
+        observed = set(directly_observed)
+        changed = True
+        while changed:
+            changed = False
+            for source, targets in forwarded.items():
+                if source in observed:
+                    continue
+                if any(
+                    target in observed or target not in all_keys for target in targets
+                ):
+                    observed.add(source)
+                    changed = True
+
+        omitted = set()
+        pending = [key for key in null_call_targets if key not in observed]
+        while pending:
+            key = pending.pop()
+            if key in omitted or key in observed:
+                continue
+            omitted.add(key)
+            pending.extend(
+                target
+                for target in forwarded.get(key, ())
+                if target in all_keys and target not in observed
+            )
+        self.hlsl_omitted_resource_pointer_parameter_keys = omitted
+
+    def hlsl_resource_pointer_parameter_is_omitted(self, function, parameter):
+        function_names = {
+            getattr(function, "name", None),
+            self.hlsl_function_declaration_name(function),
+        }
+        return any(
+            (name, getattr(parameter, "name", None))
+            in self.hlsl_omitted_resource_pointer_parameter_keys
+            for name in function_names
+            if name
+        )
+
+    def hlsl_resource_pointer_call_parameter_is_omitted(
+        self, function_name, argument_index
+    ):
+        parameter, target_name = self.hlsl_resource_pointer_parameter_for_call(
+            function_name, argument_index
+        )
+        return bool(
+            parameter is not None
+            and (
+                target_name,
+                getattr(parameter, "name", None),
+            )
+            in self.hlsl_omitted_resource_pointer_parameter_keys
+        )
 
     def hlsl_mutable_resource_pointer_argument_names(self, function):
         names = set()
@@ -15269,6 +15565,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return generate_switch_match(self, node, indent)
         return generate_ordered_conditional_match(self, node, indent, "HLSL")
 
+    def hlsl_statement_terminates(self, statement):
+        if isinstance(statement, (BreakNode, ContinueNode, ReturnNode)):
+            return True
+        if isinstance(statement, BlockNode):
+            return self.statement_body_terminates(statement)
+        if not isinstance(statement, IfNode):
+            return False
+
+        condition = getattr(
+            statement, "condition", getattr(statement, "if_condition", None)
+        )
+        then_body = getattr(
+            statement, "then_branch", getattr(statement, "if_body", None)
+        )
+        else_body = getattr(
+            statement, "else_branch", getattr(statement, "else_body", None)
+        )
+        literal_condition = self.literal_int_value(condition, {})
+        if literal_condition is not None:
+            selected_body = then_body if literal_condition != 0 else else_body
+            return self.statement_body_terminates(selected_body)
+
+        if not self.statement_body_terminates(then_body):
+            return False
+        if any(
+            not self.statement_body_terminates(branch)
+            for branch in getattr(statement, "else_if_bodies", []) or []
+        ):
+            return False
+        return else_body is not None and self.statement_body_terminates(else_body)
+
     def statement_body_terminates(self, body):
         if hasattr(body, "statements"):
             statements = body.statements
@@ -15279,9 +15606,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             statements = [body]
 
-        return bool(statements) and isinstance(
-            statements[-1], (BreakNode, ContinueNode, ReturnNode)
-        )
+        return bool(statements) and self.hlsl_statement_terminates(statements[-1])
 
     def statement_body_has_statements(self, body):
         if hasattr(body, "statements"):
@@ -17171,6 +17496,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         generic_vector = self.hlsl_generic_vector_type_name(name)
         if generic_vector is not None:
             return generic_vector
+        decoded = self.hlsl_decoded_materialized_name(name)
+        if decoded != name:
+            return self.hlsl_generic_vector_type_name(decoded)
         return None
 
     def hlsl_generic_vector_type_name(self, type_name):
@@ -27624,7 +27952,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return target_name
         return self.hlsl_function_name_aliases.get(name, name)
 
-    def hlsl_materialized_function_name(self, name):
+    def hlsl_decoded_materialized_name(self, name):
         if not isinstance(name, str) or "_u" not in name:
             return name
         decoded = name
@@ -27635,6 +27963,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ("_u20", " "),
         ):
             decoded = decoded.replace(encoded, character)
+        return decoded
+
+    def hlsl_materialized_function_name(self, name):
+        decoded = self.hlsl_decoded_materialized_name(name)
+        if decoded == name:
+            return name
         candidate = sanitize_type_name(decoded)
         available_names = set(self.function_parameter_names)
         available_names.update(self.function_private_pointer_parameters)
@@ -32810,6 +33144,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         workgroup_pointer_func_name = workgroup_pointer_func_name or func_name
 
         for index, arg in enumerate(args):
+            if self.hlsl_resource_pointer_call_parameter_is_omitted(
+                workgroup_pointer_func_name, index
+            ):
+                continue
             workgroup_binding = self.hlsl_workgroup_pointer_call_argument_binding(
                 workgroup_pointer_func_name, index, arg
             )
@@ -39504,6 +39842,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ]
             return f"{mapped_type}({', '.join(member_values)})"
 
+        component_count = self.value_component_count(mapped_type)
+        if component_count and component_count > 1:
+            return self.diagnostic_zero_value_for_type(mapped_type)
         return default_value_expression(self, base_type)
 
     def is_input_attachment_type_name(self, vtype):

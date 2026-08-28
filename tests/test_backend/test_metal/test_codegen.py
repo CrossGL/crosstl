@@ -13936,3 +13936,23 @@ def test_stateful_compile_time_global_reaches_existing_directx_lowering(tmp_path
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_codegen_resolves_decltype_arithmetic_type_and_constructors():
+    crossgl = convert_without_preprocessing("""
+        float phase(int k, int p) {
+            decltype(M_PI_F * float(0)) theta =
+                -decltype(M_PI_F * float(0))(2) *
+                decltype(M_PI_F * float(0))(k) *
+                decltype(M_PI_F * float(0))(M_PI_F) /
+                decltype(M_PI_F * float(0))(p);
+            return theta;
+        }
+        """)
+
+    assert "float theta" in crossgl
+    assert "float(2)" in crossgl
+    assert "float(k)" in crossgl
+    assert "float(M_PI_F)" in crossgl
+    assert "float(p)" in crossgl
+    assert "decltype" not in crossgl
