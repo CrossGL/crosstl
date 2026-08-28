@@ -234,14 +234,14 @@
     "runtime_parity_claimed": false
   },
   "opengl_logsumexp_dispatch_status": {
-    "status": "translated-glslang-spirv-val-validated-with-runtime-width-preflight",
-    "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+    "status": "translated-toolchain-validated-with-axis32-software-runtime",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
     "source": "mlx/backend/metal/kernels/logsumexp.metal",
     "source_sha256": "f9bec5e1e5a23d20bedf9ff8d29a8c03bbb5144bc5d751bbfe906d32ee894817",
     "target": "opengl",
     "dispatch_contract": {
-      "path": "demos/integrations/mlx/contracts/logsumexp.dispatch.json",
-      "content_identity": "sha256:db762a188e05786e206d9aa5a340b6f9095a8a3e938b85a7c04836f300e97c95",
+      "path": "demos/integrations/mlx/contracts/logsumexp.native-loader.dispatch.json",
+      "content_identity": "sha256:3cfc400f25cf49cb16d028fdba59ebe8b56b729ade919f711de4b8b67bfa5ab4",
       "workload_count": 2,
       "workgroup_sizes": [
         [
@@ -256,6 +256,11 @@
         ]
       ],
       "subgroup_width": 32
+    },
+    "historical_dispatch_contract": {
+      "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+      "path": "demos/integrations/mlx/contracts/logsumexp.dispatch.json",
+      "content_identity": "sha256:db762a188e05786e206d9aa5a340b6f9095a8a3e938b85a7c04836f300e97c95"
     },
     "project_translation": {
       "unit_count": 1,
@@ -289,11 +294,169 @@
         "artifact_specialized_to_reported_width": true,
         "width_source": "GL_SUBGROUP_SIZE_KHR"
       },
-      "logsumexp_required_width": 32,
-      "logsumexp_runtime_execution_attempted": false,
+      "hardware_logsumexp_required_width": 32,
+      "hardware_runtime_execution_attempted": false,
+      "software_runtime_execution_attempted": true,
+      "software_executed_workloads": [
+        "block-float32-axis-32"
+      ],
+      "remaining_hardware_only_workloads": [
+        "block-float32-axis-1025"
+      ],
       "blocked_by": "https://github.com/CrossGL/crosstl/issues/1894"
     },
-    "runtime_integration_included": false,
+    "current_corpus_software_runtime": {
+      "status": "translated-toolchain-validated-native-loader-required",
+      "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+      "source": "mlx/backend/metal/kernels/logsumexp.metal",
+      "source_sha256": "f9bec5e1e5a23d20bedf9ff8d29a8c03bbb5144bc5d751bbfe906d32ee894817",
+      "selected_entry_point": "block_logsumexp_float32",
+      "selected_workload": "block-float32-axis-32",
+      "dispatch_contract": {
+        "path": "demos/integrations/mlx/contracts/logsumexp.native-loader.dispatch.json",
+        "content_identity": "sha256:3cfc400f25cf49cb16d028fdba59ebe8b56b729ade919f711de4b8b67bfa5ab4",
+        "artifact_id": "sha256:f51ab67b8a9ad3240e3fbb52f6de00cdf4a8532e58790758e59aa50fb95e2c52",
+        "workgroup_size": [
+          32,
+          1,
+          1
+        ],
+        "subgroup_width": 32,
+        "dispatch_workgroup_count": [
+          1,
+          1,
+          1
+        ]
+      },
+      "project_translation": {
+        "unit_count": 1,
+        "artifact_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "subgroup_width_rule_configured": false
+      },
+      "materialization": {
+        "concrete_specialization_count": 1,
+        "reachable_specialization_count": 4,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 76,
+        "selected_parameters": {
+          "AccT": "float",
+          "N_READS": "4",
+          "T": "float"
+        }
+      },
+      "software_subgroup": {
+        "configuration": "project.source_options.metal.target_options.opengl.software_subgroup_width",
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "operations": [
+          "WaveActiveMax(float)",
+          "WaveActiveSum(float)"
+        ],
+        "builtin_substitutions": {
+          "gl_NumSubgroups": "1u",
+          "gl_SubgroupID": "0u",
+          "gl_SubgroupSize": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+          "gl_SubgroupInvocationID": "gl_LocalInvocationIndex"
+        },
+        "artifact_marker": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+        "control_barrier_instruction_count": 10,
+        "group_non_uniform_instruction_count": 0,
+        "hardware_subgroup_extensions_emitted": false,
+        "hardware_subgroup_marker_emitted": false,
+        "hardware_subgroup_execution_metadata_emitted": false,
+        "unsupported_contract_behavior": "reject-before-artifact-emission"
+      },
+      "generated_glsl": {
+        "sha256": "813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5",
+        "size_bytes": 4676
+      },
+      "toolchain_validation": {
+        "compiler": "glslangValidator",
+        "compiler_target": "OpenGL/SPIR-V 1.3",
+        "validator": "spirv-val",
+        "validator_target": "SPIR-V 1.3",
+        "status": "passed",
+        "observed_failure_count": 0
+      },
+      "runtime_package": {
+        "artifact_count": 1,
+        "ready_load_unit_count": 1,
+        "blocked_load_unit_count": 0,
+        "resources": [
+          {
+            "name": "in_Buffer",
+            "binding": 0,
+            "access": "read",
+            "layout": "std430-float32"
+          },
+          {
+            "name": "out_Buffer",
+            "binding": 1,
+            "access": "read_write",
+            "layout": "std430-float32"
+          },
+          {
+            "name": "block_logsumexp_float32_axis_size_Args",
+            "binding": 2,
+            "access": "read",
+            "layout": "std140-int32-16-byte-block"
+          }
+        ]
+      },
+      "workload": {
+        "axis_size": 32,
+        "input_dtype": "float32",
+        "input_shape": [
+          32
+        ],
+        "input_values": "[(index - 16) / 8.0 for index in range(32)]",
+        "expected_output": 3.9978051379373145,
+        "absolute_tolerance": 5e-05,
+        "relative_tolerance": 5e-05
+      },
+      "runtime_execution": {
+        "platform": "ubuntu-latest",
+        "runtime": "Mesa headless EGL software OpenGL",
+        "adapter": "OpenGLRuntimeParityAdapter",
+        "workgroup_count": [
+          1,
+          1,
+          1
+        ],
+        "global_size": [
+          32,
+          1,
+          1
+        ],
+        "status": "required-on-ci",
+        "test": "tests/test_translator/test_mlx_logsumexp_native_loader.py::test_pinned_mlx_logsumexp_executes_through_opengl_native_loader"
+      },
+      "remaining_scope": {
+        "workload": "block-float32-axis-1025",
+        "axis_size": 1025,
+        "workgroup_size": [
+          288,
+          1,
+          1
+        ],
+        "status": "hardware-subgroup-only",
+        "reason": "software-mode-requires-exactly-one-32-thread-subgroup",
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1894"
+      },
+      "runtime_execution_attempted": true,
+      "runtime_integration_included": true,
+      "mlx_host_runtime_integration_included": false,
+      "selected_workload_numerical_parity_verified": true,
+      "full_mlx_test_suite_included": false,
+      "numerical_parity_claimed": false,
+      "runtime_parity_claimed": false
+    },
+    "runtime_integration_included": true,
+    "selected_workload_numerical_parity_verified": true,
+    "full_mlx_test_suite_included": false,
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },

@@ -17,8 +17,7 @@ def _write_fixture(repo):
     source_path = repo / SOURCE
     source_path.parent.mkdir(parents=True)
     source_path.write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             #include <metal_stdlib>
             using namespace metal;
 
@@ -26,14 +25,13 @@ def _write_fixture(repo):
                 device float* output [[buffer(0)]],
                 uint lane [[thread_index_in_threadgroup]]) {
                 float value = float(lane);
+                float sum = simd_sum(value);
                 float minimum = simd_min(value);
                 float maximum = simd_max(value);
                 uint shuffled = simd_shuffle_down(lane, 1u);
-                output[lane] = minimum + maximum + float(shuffled);
+                output[lane] = sum + minimum + maximum + float(shuffled);
             }
-            """
-        ).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -59,8 +57,7 @@ def _diagnostic(payload):
     return next(
         item
         for item in payload["diagnostics"]
-        if item["code"]
-        == "project.translate.opengl-software-subgroup-invalid"
+        if item["code"] == "project.translate.opengl-software-subgroup-invalid"
     )
 
 
@@ -102,6 +99,7 @@ def test_project_target_option_emits_software_subgroup_without_hardware_metadata
     assert "CROSSTL_REQUIRED_SUBGROUP_WIDTH" not in generated
     assert "GL_KHR_shader_subgroup" not in generated
     assert "gl_Subgroup" not in generated
+    assert "crossglSoftwareSubgroupSumFloat" in generated
     assert "crossglSoftwareSubgroupMinFloat" in generated
     assert "crossglSoftwareSubgroupMaxFloat" in generated
     assert "crossglSoftwareSubgroupShuffleDownUint" in generated
@@ -111,9 +109,9 @@ def test_project_target_option_emits_software_subgroup_without_hardware_metadata
     assert validate_project_report(report_path)["success"] is True
     runtime_manifest = build_runtime_artifact_manifest(report_path)
     assert runtime_manifest["success"] is True
-    execution_config = runtime_manifest["artifacts"][0]["hostInterface"][
-        "entryPoints"
-    ][0]["executionConfig"]
+    execution_config = runtime_manifest["artifacts"][0]["hostInterface"]["entryPoints"][
+        0
+    ]["executionConfig"]
     assert execution_config == {
         "local_size_x": 32,
         "local_size_y": 1,

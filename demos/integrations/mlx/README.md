@@ -1015,9 +1015,9 @@ pins the same bounded workloads to current corpus commit
 `846d176227a0ac13d2667e58d2bb68b322109ab0`. The upstream kernel, host dispatch
 formula, and referenced workload coverage are unchanged between the two
 revisions, so the two evaluated variant sets are identical; only revision
-provenance differs. Current-corpus Direct3D execution and OpenGL toolchain tests
-use this companion contract. The historical contract remains attached to the
-recorded 40-unit frontier.
+provenance differs. Current-corpus Direct3D execution, OpenGL toolchain, and
+bounded OpenGL software-runtime tests use this companion contract. The
+historical contract remains attached to the recorded 40-unit frontier.
 
 The repository harness evaluates both records against the unchanged pinned
 `logsumexp.metal` source and emits one standalone DirectX artifact per workload.
@@ -1040,23 +1040,45 @@ artifacts. The built-in Python runtime and generated C++ adapter reject a
 reported width other than 32 before compiling the shader or allocating its
 resources.
 
-The Linux software-device proof separately queries the device subgroup width,
-specializes a reduced exact-width compute artifact to that reported value, and
-verifies dispatch and readback. This validates the query and compatibility path
-without assuming a fixed Mesa subgroup width, but it cannot execute the
-width-32 LogSumExp artifacts unless the device reports 32. OpenGL LogSumExp
-numerical parity therefore remains dependent on compatible hardware or a
-semantics-preserving subgroup emulation strategy tracked by
-[#1894](https://github.com/CrossGL/crosstl/issues/1894).
+The default OpenGL path remains the guarded hardware-subgroup path described
+above. A separately selected current-corpus axis-size-32 artifact opts into
+``project.source_options.metal.target_options.opengl.software_subgroup_width =
+32``. Because its complete workgroup is one 32-lane subgroup, CrossTL can prove
+that ``simdgroup_index_in_threadgroup`` is zero and that
+``thread_index_in_simdgroup`` is ``gl_LocalInvocationIndex``. It lowers the two
+scalar ``WaveActiveMax(float)`` and ``WaveActiveSum(float)`` reductions through
+shared-memory trees while continuing to reject direct raw subgroup builtins,
+helper-contained operations, unsupported payloads, and unproven divergent
+control flow. The default hardware artifacts and host width preflight are
+unchanged.
 
-A separate Windows native-loader test uses the current-corpus contract to
-package the axis-size-32 artifact, builds its reflected DirectX ABI, binds 32
-nonuniform float32 inputs and the axis-size constant, dispatches one 32-thread
-workgroup, and compares the readback with a stable CPU LogSumExp reference
-under explicit float tolerance. That is numerical runtime evidence for one
-finite workload. It does not redirect the MLX runtime, cover the axis-size-1025
-artifact or looped reduction path, or establish parity for other dtypes,
-shapes, devices, or the full MLX test suite.
+The software artifact is 4,676 bytes with SHA-256
+``813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5``.
+It contains ``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``, no KHR subgroup extension or
+``gl_Subgroup*`` use, and no hardware subgroup execution metadata.
+``glslangValidator`` and ``spirv-val`` accept its OpenGL/SPIR-V 1.3 module; the
+SPIR-V contains ten control-barrier instructions and no group-nonuniform
+instruction. Runtime reflection packages ``in_Buffer`` and ``out_Buffer`` as
+std430 float32 resources at bindings 0 and 1, plus the 16-byte std140
+axis-size block at binding 2, with one ready native load unit.
+
+Linux CI requires a surfaceless Mesa EGL dispatch of that software artifact.
+The workload binds the 32 values ``(index - 16) / 8``, sets axis size 32,
+dispatches one 32-thread workgroup, and compares the single readback with the
+stable CPU LogSumExp reference ``3.9978051379373145`` at ``5e-5`` absolute and
+relative tolerance. The Windows native-loader test exercises the same bounded
+workload through the guarded HLSL artifact and Direct3D 12 WARP. This is exact
+translation, packaging, and numerical execution coverage for one finite
+current-corpus workload; it does not redirect the MLX runtime or run the MLX
+test suite.
+
+The axis-size-1025 record still produces a ``[288, 1, 1]`` artifact containing
+nine logical 32-lane subgroups. The explicit software mode rejects that
+workgroup mismatch rather than pretending one shared reduction is nine
+independent subgroups, so this second artifact remains dependent on compatible
+width-32 hardware. Multi-subgroup fallback, looped reductions, other dtypes and
+shapes, and full-runtime parity remain tracked by
+[#1894](https://github.com/CrossGL/crosstl/issues/1894).
 
 Validate the LogSumExp contract schema, provenance, deterministic identities,
 and bounded workload set with:

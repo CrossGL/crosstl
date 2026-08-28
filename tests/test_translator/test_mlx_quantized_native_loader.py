@@ -41,24 +41,20 @@ REQUIRE_ENV = "CROSTL_REQUIRE_MLX_QUANTIZED_OPENGL_NATIVE_LOADER"
 
 def _project_config() -> str:
     assertions = "\n\n".join(
-        textwrap.dedent(
-            f"""
+        textwrap.dedent(f"""
             [[project.index_range_assertions]]
             source = "{MLX_QUANTIZED_SOURCE}"
             expression = "{expression}"
             minimum = 0
             maximum = 2147483647
-            """
-        ).strip()
+            """).strip()
         for expression in (
             "in_index + i",
             "gindex",
             "out_index / writes_per_reduce",
         )
     )
-    return (
-        textwrap.dedent(
-            f"""
+    return textwrap.dedent(f"""
             [project]
             source_roots = ["mlx/backend/metal/kernels"]
             include = ["{MLX_QUANTIZED_SOURCE}"]
@@ -81,11 +77,7 @@ def _project_config() -> str:
 
             [project.source_options.metal.target_options.opengl]
             software_subgroup_width = 32
-            """
-        ).strip()
-        + "\n\n"
-        + assertions
-    )
+            """).strip() + "\n\n" + assertions
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -211,13 +203,11 @@ def _translate_affine_artifact(mlx_root: Path, work_dir: Path) -> Path:
     assert "w_min = crossglSoftwareSubgroupMinFloat(w_min);" in generated
     assert "w_max = crossglSoftwareSubgroupMaxFloat(w_max);" in generated
     assert (
-        "uint sval = crossglSoftwareSubgroupShuffleDownUint(val, uint(j));"
-        in generated
+        "uint sval = crossglSoftwareSubgroupShuffleDownUint(val, uint(j));" in generated
     )
     assert generated.count("barrier();") == 8
     assert (
-        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;"
-        in generated
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;" in generated
     )
 
     glslang = shutil.which("glslangValidator")

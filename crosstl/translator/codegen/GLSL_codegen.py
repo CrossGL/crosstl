@@ -1674,9 +1674,17 @@ class GLSLCodeGen:
     GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO = "CROSSTL_SOFTWARE_SUBGROUP_WIDTH"
     GLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH = 32
     GLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
-        {"WaveActiveMin", "WaveActiveMax", "WaveShuffleDown"}
+        {"WaveActiveSum", "WaveActiveMin", "WaveActiveMax", "WaveShuffleDown"}
     )
     GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
+    GLSL_SOFTWARE_SUBGROUP_BUILTIN_ALIASES = frozenset(
+        {
+            "gl_NumSubgroups",
+            "gl_SubgroupID",
+            "gl_SubgroupSize",
+            "gl_SubgroupInvocationID",
+        }
+    )
     GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES = {
         "float": "Float",
         "int": "Int",
@@ -3709,10 +3717,14 @@ class GLSLCodeGen:
                 name = self.function_call_name(node)
             semantic = self.semantic_from_node(node)
             mapped_semantic = self.map_semantic(semantic) if semantic else None
-            if (
-                isinstance(name, str)
-                and (name.startswith("gl_Subgroup") or name.startswith("subgroup"))
-            ) or mapped_semantic in self.GLSL_SUBGROUP_BASIC_BUILTINS:
+            raw_hardware_name = isinstance(name, str) and (
+                name.startswith("gl_Subgroup") or name.startswith("subgroup")
+            )
+            unsupported_mapped_semantic = (
+                mapped_semantic in self.GLSL_SUBGROUP_BASIC_BUILTINS
+                and mapped_semantic not in self.GLSL_SOFTWARE_SUBGROUP_BUILTIN_ALIASES
+            )
+            if raw_hardware_name or unsupported_mapped_semantic:
                 raise self.glsl_software_subgroup_error(
                     "OpenGL software subgroup lowering cannot preserve raw "
                     "hardware subgroup builtins",
@@ -16781,6 +16793,11 @@ class GLSLCodeGen:
         )
         for name in getattr(self, "glsl_specialization_constant_names", set()):
             constants.pop(name, None)
+        if self.software_subgroup_width is not None:
+            for name, alias in self.current_stage_parameter_aliases.items():
+                match = re.fullmatch(r"([0-9]+)u?", str(alias).strip())
+                if match is not None:
+                    constants[name] = int(match.group(1))
         return constants
 
     def glsl_compile_time_constant_scope_state(self):
@@ -25379,6 +25396,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def glsl_software_subgroup_helper_name(self, operation, value_type):
         operation_suffix = {
+            "WaveActiveSum": "Sum",
             "WaveActiveMin": "Min",
             "WaveActiveMax": "Max",
             "WaveShuffleDown": "ShuffleDown",
@@ -25411,9 +25429,10 @@ complex64_t crossgl_complex64_mod_assign(
         code += "\n"
 
         operation_order = {
-            "WaveActiveMin": 0,
-            "WaveActiveMax": 1,
-            "WaveShuffleDown": 2,
+            "WaveActiveSum": 0,
+            "WaveActiveMin": 1,
+            "WaveActiveMax": 2,
+            "WaveShuffleDown": 3,
         }
         for operation, value_type in sorted(
             self.required_glsl_software_subgroup_helpers,
@@ -25424,8 +25443,18 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             helper = self.glsl_software_subgroup_helper_name(operation, value_type)
             scratch = self.glsl_software_subgroup_scratch_name(value_type)
-            if operation in {"WaveActiveMin", "WaveActiveMax"}:
-                reduction = "min" if operation == "WaveActiveMin" else "max"
+            if operation in {
+                "WaveActiveSum",
+                "WaveActiveMin",
+                "WaveActiveMax",
+            }:
+                reduction = {
+                    "WaveActiveSum": lambda left, right: f"({left} + {right})",
+                    "WaveActiveMin": lambda left, right: f"min({left}, {right})",
+                    "WaveActiveMax": lambda left, right: f"max({left}, {right})",
+                }[operation]
+                left = f"{scratch}[lane]"
+                right = f"{scratch}[lane + stride]"
                 code += (
                     f"{value_type} {helper}({value_type} value) {{\n"
                     "    uint lane = gl_LocalInvocationIndex;\n"
@@ -25433,8 +25462,7 @@ complex64_t crossgl_complex64_mod_assign(
                     "    barrier();\n"
                     "    for (uint stride = 16u; stride > 0u; stride >>= 1u) {\n"
                     "        if (lane < stride) {\n"
-                    f"            {scratch}[lane] = {reduction}("
-                    f"{scratch}[lane], {scratch}[lane + stride]);\n"
+                    f"            {left} = {reduction(left, right)};\n"
                     "        }\n"
                     "        barrier();\n"
                     "    }\n"
@@ -37701,6 +37729,15 @@ complex64_t crossgl_complex64_mod_assign(
 
     def stage_input_builtin_alias(self, semantic, stage_name=None):
         mapped = self.map_stage_input_semantic(semantic, stage_name)
+        if self.software_subgroup_width is not None:
+            software_alias = {
+                "gl_NumSubgroups": "1u",
+                "gl_SubgroupID": "0u",
+                "gl_SubgroupSize": self.GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO,
+                "gl_SubgroupInvocationID": "gl_LocalInvocationIndex",
+            }.get(mapped)
+            if software_alias is not None:
+                return software_alias
         if (
             normalize_stage_name(stage_name) == "fragment"
             and mapped == "gl_SampleMaskIn"

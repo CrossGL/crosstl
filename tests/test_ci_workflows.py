@@ -3184,6 +3184,36 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
         "- name: Prove pinned MLX LogSumExp Direct3D native-loader execution"
     ) < mlx_porting.index("- name: Run MLX project-porting checks")
 
+    runtime_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX LogSumExp OpenGL native-loader execution",
+    )
+    assert "if: runner.os == 'Linux'" in runtime_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in runtime_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_LOGSUMEXP_OPENGL_NATIVE_LOADER: "1"' in runtime_step
+    assert "EGL_PLATFORM: surfaceless" in runtime_step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in runtime_step
+    assert "PYOPENGL_PLATFORM: egl" in runtime_step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_logsumexp_executes_through_opengl_native_loader"
+        in runtime_step
+    )
+    assert "-n auto" in runtime_step
+    assert "-k" not in runtime_step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove pinned MLX LogSumExp OpenGL native-loader execution",
+        "Install Linux runtime dependencies",
+    )
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove pinned MLX LogSumExp OpenGL native-loader execution",
+        "Checkout current MLX runtime proof corpus",
+    )
+
     opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Validate pinned MLX LogSumExp OpenGL dispatch artifacts",

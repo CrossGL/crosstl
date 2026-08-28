@@ -20160,6 +20160,7 @@ def test_glsl_software_subgroup_lowers_affine_operation_set_without_khr_subgroup
             layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
             void main() {
                 float value = float(gl_LocalInvocationID.x);
+                float sum = WaveActiveSum(value);
                 float minimum = WaveActiveMin(value);
                 float maximum = WaveActiveMax(value);
                 uint shuffled = WaveShuffleDown(uint(gl_LocalInvocationID.x), 1);
@@ -20176,11 +20177,13 @@ def test_glsl_software_subgroup_lowers_affine_operation_set_without_khr_subgroup
     assert "GL_KHR_shader_subgroup" not in generated
     assert "CROSSTL_REQUIRED_SUBGROUP_WIDTH" not in generated
     assert "gl_Subgroup" not in generated
+    assert "subgroupAdd" not in generated
     assert "subgroupMin" not in generated
     assert "subgroupMax" not in generated
     assert "subgroupShuffleDown" not in generated
     assert "shared float crossglSoftwareSubgroupScratchFloat[32];" in generated
     assert "shared uint crossglSoftwareSubgroupScratchUint[32];" in generated
+    assert "float crossglSoftwareSubgroupSumFloat(float value)" in generated
     assert "float crossglSoftwareSubgroupMinFloat(float value)" in generated
     assert "float crossglSoftwareSubgroupMaxFloat(float value)" in generated
     assert (
@@ -20189,6 +20192,7 @@ def test_glsl_software_subgroup_lowers_affine_operation_set_without_khr_subgroup
     )
     assert "for (uint stride = 16u; stride > 0u; stride >>= 1u)" in generated
     assert "barrier();" in generated
+    assert "float sum = crossglSoftwareSubgroupSumFloat(value);" in generated
     assert "float minimum = crossglSoftwareSubgroupMinFloat(value);" in generated
     assert "float maximum = crossglSoftwareSubgroupMaxFloat(value);" in generated
     assert (
@@ -20265,7 +20269,7 @@ def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
             "operation-set-empty",
         ),
         (
-            "uint value = WaveActiveSum(gl_LocalInvocationID.x);",
+            "uint value = WaveActiveProduct(gl_LocalInvocationID.x);",
             (32, 1, 1),
             "",
             "operation-unsupported",
@@ -20514,12 +20518,49 @@ def test_glsl_software_subgroup_accepts_static_if_and_uniform_constant_loop(
     )
 
 
+def test_glsl_software_subgroup_lowers_one_subgroup_builtin_semantics(tmp_path):
+    code = """
+    shader GLSLSoftwareSubgroupBuiltinSemantics {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main(
+                uint lane @ gl_SubgroupInvocationID,
+                uint group @ gl_SubgroupID,
+                uint width @ gl_SubgroupSize,
+                uint groupCount @ gl_NumSubgroups) {
+                if (group == 0) {
+                    float value = WaveActiveSum(float(lane));
+                    uint contract = width + groupCount;
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "if ((group == 0))" not in generated
+    assert "float value = crossglSoftwareSubgroupSumFloat(" in generated
+    assert "float(gl_LocalInvocationIndex)" in generated
+    assert "uint contract = (CROSSTL_SOFTWARE_SUBGROUP_WIDTH + 1u);" in generated
+    assert "gl_Subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_builtin_semantics",
+        validate_spirv=True,
+    )
+
+
 def test_glsl_software_subgroup_rejects_raw_subgroup_builtins():
     code = """
     shader GLSLSoftwareSubgroupRawBuiltin {
         compute {
             layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
-            void main(uint lane @ gl_SubgroupInvocationID) {
+            void main() {
+                uint lane = gl_SubgroupInvocationID;
                 float value = WaveActiveMin(float(lane));
             }
         }

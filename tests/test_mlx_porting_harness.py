@@ -2309,19 +2309,31 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_frontier["runtime_parity_claimed"] is False
 
     opengl_logsumexp = expected_gaps["opengl_logsumexp_dispatch_status"]
-    assert opengl_logsumexp["commit"] == module.MLX_COMMIT
+    assert opengl_logsumexp["status"] == (
+        "translated-toolchain-validated-with-axis32-software-runtime"
+    )
+    assert opengl_logsumexp["commit"] == module.MLX_CORPUS_COMMIT
     assert opengl_logsumexp["source"] == module.MLX_LOGSUMEXP_SOURCE
     assert opengl_logsumexp["source_sha256"] == module.MLX_LOGSUMEXP_SHA256
     assert opengl_logsumexp["target"] == "opengl"
     assert opengl_logsumexp["dispatch_contract"] == {
-        "path": "demos/integrations/mlx/contracts/logsumexp.dispatch.json",
-        "content_identity": module.MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY,
+        "path": (
+            "demos/integrations/mlx/contracts/" "logsumexp.native-loader.dispatch.json"
+        ),
+        "content_identity": (
+            module.MLX_LOGSUMEXP_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY
+        ),
         "workload_count": len(module.MLX_LOGSUMEXP_DISPATCH_VARIANTS),
         "workgroup_sizes": [
             variant["workgroupSize"]
             for variant in module.MLX_LOGSUMEXP_DISPATCH_VARIANTS.values()
         ],
         "subgroup_width": 32,
+    }
+    assert opengl_logsumexp["historical_dispatch_contract"] == {
+        "commit": module.MLX_COMMIT,
+        "path": "demos/integrations/mlx/contracts/logsumexp.dispatch.json",
+        "content_identity": module.MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY,
     }
     assert opengl_logsumexp["project_translation"] == {
         "unit_count": 1,
@@ -2341,11 +2353,40 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
             "artifact_specialized_to_reported_width": True,
             "width_source": "GL_SUBGROUP_SIZE_KHR",
         },
-        "logsumexp_required_width": 32,
-        "logsumexp_runtime_execution_attempted": False,
+        "hardware_logsumexp_required_width": 32,
+        "hardware_runtime_execution_attempted": False,
+        "software_runtime_execution_attempted": True,
+        "software_executed_workloads": ["block-float32-axis-32"],
+        "remaining_hardware_only_workloads": ["block-float32-axis-1025"],
         "blocked_by": "https://github.com/CrossGL/crosstl/issues/1894",
     }
-    assert opengl_logsumexp["runtime_integration_included"] is False
+    software_logsumexp = opengl_logsumexp["current_corpus_software_runtime"]
+    assert software_logsumexp == (module.MLX_OPENGL_LOGSUMEXP_SOFTWARE_RUNTIME_EVIDENCE)
+    assert software_logsumexp["generated_glsl"] == {
+        "sha256": "813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5",
+        "size_bytes": 4676,
+    }
+    assert software_logsumexp["software_subgroup"]["operations"] == [
+        "WaveActiveMax(float)",
+        "WaveActiveSum(float)",
+    ]
+    assert (
+        software_logsumexp["software_subgroup"]["control_barrier_instruction_count"]
+        == 10
+    )
+    assert software_logsumexp["runtime_package"]["ready_load_unit_count"] == 1
+    assert software_logsumexp["runtime_execution"]["status"] == "required-on-ci"
+    assert software_logsumexp["remaining_scope"] == {
+        "workload": "block-float32-axis-1025",
+        "axis_size": 1025,
+        "workgroup_size": [288, 1, 1],
+        "status": "hardware-subgroup-only",
+        "reason": "software-mode-requires-exactly-one-32-thread-subgroup",
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1894",
+    }
+    assert opengl_logsumexp["runtime_integration_included"] is True
+    assert opengl_logsumexp["selected_workload_numerical_parity_verified"] is True
+    assert opengl_logsumexp["full_mlx_test_suite_included"] is False
     assert opengl_logsumexp["numerical_parity_claimed"] is False
     assert opengl_logsumexp["runtime_parity_claimed"] is False
 
@@ -9481,7 +9522,20 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "zero warnings across all 484 entry-point runs" in normalized_readme
     assert "two float32 block-reduction workloads" in normalized_readme
     assert "axis sizes 32 and 1025" in normalized_readme
-    assert "numerical runtime evidence for one finite workload" in normalized_readme
+    assert "current-corpus axis-size-32 artifact opts into" in normalized_readme
+    assert "``WaveActiveMax(float)`` and ``WaveActiveSum(float)``" in (
+        normalized_readme
+    )
+    assert "4,676 bytes" in normalized_readme
+    assert (
+        "`813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5`" in readme
+    )
+    assert "ten control-barrier instructions" in normalized_readme
+    assert "`3.9978051379373145`" in readme
+    assert "axis-size-1025 record still produces a ``[288, 1, 1]`` artifact" in (
+        normalized_readme
+    )
+    assert "nine logical 32-lane subgroups" in normalized_readme
     assert "does not redirect the MLX runtime" in normalized_readme
     assert "records this as a warning-clean contract" in normalized_readme
     assert "rejects any newly observed warning" in normalized_readme

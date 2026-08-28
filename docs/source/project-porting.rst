@@ -508,11 +508,16 @@ provide the KHR subgroup extensions:
 This option is target-scoped and explicit; it does not change Metal parsing or
 other target artifacts. The only accepted width is ``32``. The selected output
 must contain exactly one compute entry with local size ``[32, 1, 1]`` and may
-use only the supported scalar ``float``, ``int``, or ``uint`` minimum, maximum,
-and shuffle-down operations. CrossTL rejects empty operation sets, raw subgroup
-builtins, calls from helper functions, unsupported payloads or operations, and
-calls beneath lane-dependent or otherwise unproven control flow. Constant-
-bound uniform loops and compile-time-selected branches remain valid.
+use only the supported scalar ``float``, ``int``, or ``uint`` sum, minimum,
+maximum, and shuffle-down operations. Under that exact one-subgroup contract,
+Metal entry semantics for subgroup count, subgroup index, subgroup width, and
+lane index lower respectively to ``1u``, ``0u``,
+``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``, and ``gl_LocalInvocationIndex``. Direct
+source references to raw ``gl_Subgroup*`` or ``subgroup*`` builtins still fail
+closed. CrossTL also rejects empty operation sets, calls from helper functions,
+unsupported payloads or operations, and calls beneath lane-dependent or
+otherwise unproven control flow. Constant-bound uniform loops and
+compile-time-selected branches remain valid.
 
 Successful lowering emits barriered ``shared``-memory helpers and the marker
 ``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``. It deliberately emits no
