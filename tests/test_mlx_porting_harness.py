@@ -10423,7 +10423,7 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     assert "does not redirect the MLX host runtime" in readme
 
 
-def test_fft_current_corpus_evidence_records_workgroup_alias_blocker():
+def test_fft_current_corpus_evidence_records_native_runtime_proof():
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
             encoding="utf-8"
@@ -10431,75 +10431,127 @@ def test_fft_current_corpus_evidence_records_workgroup_alias_blocker():
     )
 
     status = gaps["directx_fft_current_corpus_status"]
-    assert status == {
-        "status": "blocked-at-reachable-workgroup-alias",
-        "commit": CURRENT_MLX_COMMIT,
-        "source": "mlx/backend/metal/kernels/fft.metal",
-        "source_sha256": (
-            "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e"
-        ),
-        "source_size_bytes": 3436,
-        "target": "directx",
-        "selected_entry_point": "fft_mem_256_float2_float2",
-        "workgroup_size": [1, 1, 64],
-        "project_translation": {
-            "unit_count": 1,
-            "artifact_count": 1,
-            "translated_count": 0,
-            "failed_count": 1,
-            "project_diagnostic_count": 1,
-            "artifact_emitted": False,
-        },
-        "specialization": {
-            "configured_function_constant_count": 23,
-            "reachable_function_constant_count": 21,
-            "pruned_function_constant_ids": [3, 22],
-            "new_function_constant": {
-                "id": 22,
-                "name": "use_bluestein_twiddle_table_",
-                "value": False,
-            },
-        },
-        "materialization": {
-            "status": "materialized",
-            "specialization_count": 37,
-            "unsupported_specialization_count": 0,
-            "reachable_specialization_count": 42,
-            "dependency_discovery_work_count": 0,
-            "pruned_candidate_count": 2120,
-        },
-        "diagnostic": {
-            "code": "project.translate.directx-workgroup-pointer-unsupported",
-            "missing_capability": "directx.workgroup-pointer-lowering",
-            "message": (
-                "DirectX cannot emit a workgroup pointer as a first-class value: "
-                "crosstl_ptr_buf"
-            ),
-            "workgroup_pointer": {
-                "function": "ReadWriter_float2_float2__load",
-                "parameter": "crosstl_ptr_buf",
-                "reason": "bare-pointer-expression",
-            },
-            "tracked_by": "https://github.com/CrossGL/crosstl/issues/1518",
-        },
-        "previous_verified_proof": {
-            "commit": PINNED_MLX_COMMIT,
-            "status_key": "directx_fft_translation_status",
-        },
-        "mlx_host_runtime_included": False,
-        "runtime_integration_included": False,
-        "numerical_parity_claimed": False,
-        "runtime_parity_claimed": False,
+    assert status["status"] == "translated-dxc-validated-direct3d-executed"
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/fft.metal"
+    assert status["source_sha256"] == (
+        "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e"
+    )
+    assert status["source_size_bytes"] == 3436
+    assert status["target"] == "directx"
+    assert status["selected_entry_point"] == "fft_mem_256_float2_float2"
+    assert status["target_entry_point"] == "CSMain"
+    assert status["workgroup_size"] == [1, 1, 64]
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "artifact_emitted": True,
+        "index_range_assertion_count": 4,
+        "workgroup_access_assertion_count": 1,
+        "max_template_specializations": 4096,
+        "max_template_materialization_work": 2097152,
     }
+    assert status["specialization"] == {
+        "configured_function_constant_count": 23,
+        "reachable_function_constant_count": 21,
+        "pruned_function_constant_ids": [3, 22],
+        "new_function_constant": {
+            "id": 22,
+            "name": "use_bluestein_twiddle_table_",
+            "value": False,
+        },
+    }
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 37,
+        "unsupported_specialization_count": 0,
+        "reachable_specialization_count": 42,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 2120,
+    }
+    assert status["artifact"] == {
+        "sha256": "948b214c9286f8dc77317531330e603bcf46d5094fa08d23445b278dcdda7ea3",
+        "size_bytes": 152613,
+        "first_class_workgroup_pointer_residue": False,
+        "workgroup_pointer_transport": "concrete-groupshared-root-plus-integer-offset",
+        "overload_body_reachability": "all-compatible-source-overloads",
+    }
+    assert status["native_validation"] == {
+        "compiler": "dxc",
+        "profile": "cs_6_2",
+        "arguments": ["-enable-16bit-types"],
+        "warnings_as_errors": True,
+        "status": "required-on-ci",
+    }
+    assert status["native_runtime"] == {
+        "runtime": "direct3d-12-warp",
+        "status": "required-on-ci",
+        "test": (
+            "tests/test_translator/test_mlx_fft_native_loader.py::"
+            "test_current_mlx_fft_executes_through_directx_native_loader"
+        ),
+        "workgroup_count": [1, 1, 1],
+        "global_size": [1, 1, 64],
+        "input": {
+            "kind": "complex-unit-impulse",
+            "index": 1,
+            "shape": [256, 2],
+        },
+        "expected_output": {
+            "kind": "forward-dft-unit-circle",
+            "shape": [256, 2],
+            "absolute_tolerance": 0.0002,
+            "relative_tolerance": 0.0002,
+        },
+        "resource_layouts": {
+            "input_element": "float2",
+            "input_stride_bytes": 8,
+            "output_element": "float2",
+            "output_stride_bytes": 8,
+            "dispatch_element": "uint3",
+            "dispatch_block_size_bytes": 16,
+        },
+        "dispatch_binding_source": "dispatch.workgroupCount",
+    }
+    assert status["resolved_blocker"] == {
+        "former_diagnostic_code": (
+            "project.translate.directx-workgroup-pointer-unsupported"
+        ),
+        "function": "ReadWriter_float2_float2__load",
+        "parameter": "crosstl_ptr_buf",
+        "cause": "same-name-overload-body-was-not-analyzed",
+        "resolution": "merge-compatible-overload-pointer-analysis",
+        "diagnostic_emitted": False,
+        "broader_contract_tracked_by": "https://github.com/CrossGL/crosstl/issues/1518",
+    }
+    assert status["previous_verified_proof"] == {
+        "commit": PINNED_MLX_COMMIT,
+        "status_key": "directx_fft_translation_status",
+    }
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "successful runtime proof remains revision-specific" in readme
+    assert "bounded runtime proof now also covers current corpus commit" in readme
     assert "adds function constant 22" in readme
     assert "materializes 37 specializations" in readme
-    assert "`ReadWriter_float2_float2__load`" in readme
-    assert "`crosstl_ptr_buf` remains a first-class workgroup pointer" in readme
-    assert "current-corpus CI check requires this exact diagnostic" in readme
-    assert "historical FFT execution result is not evidence" in readme
+    assert "records 42 reachable specializations before pruning" in readme
+    assert "two compatible `ReadWriter_float2_float2__load` overload bodies" in readme
+    assert "transport `crosstl_ptr_buf` as an integer offset" in readme
+    assert "152,613-byte HLSL artifact" in readme
+    assert "zero project diagnostics" in readme
+    assert "packages and dispatches it through Direct3D 12 WARP" in readme
+    assert (
+        "roots without a concrete shared-array identity or extent still fail closed"
+        in readme
+    )
+    assert "no longer being used as a substitute for current-corpus evidence" in readme
 
 
 def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():

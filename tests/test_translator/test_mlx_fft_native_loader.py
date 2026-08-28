@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -29,14 +30,20 @@ MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 CURRENT_MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_FFT_SOURCE = "mlx/backend/metal/kernels/fft.metal"
 MLX_FFT_SHA256 = "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825"
+MLX_FFT_SOURCE_SIZE_BYTES = 3278
 CURRENT_MLX_FFT_SHA256 = (
     "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e"
 )
+CURRENT_MLX_FFT_SOURCE_SIZE_BYTES = 3436
 MLX_FFT_ENTRY = "fft_mem_256_float2_float2"
 MLX_FFT_GENERATED_SHA256 = (
     "07f9300c2e4860077b344610fbfaa2eadb330e1f9723cb519794f91272bd2289"
 )
 MLX_FFT_GENERATED_SIZE_BYTES = 116160
+CURRENT_MLX_FFT_GENERATED_SHA256 = (
+    "948b214c9286f8dc77317531330e603bcf46d5094fa08d23445b278dcdda7ea3"
+)
+CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 152613
 MLX_FFT_SIZE = 256
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER"
 CURRENT_MLX_ROOT_ENV = "CROSTL_MLX_CURRENT_ROOT"
@@ -199,111 +206,22 @@ def _current_mlx_root() -> Path:
     return mlx_root
 
 
-def test_current_mlx_fft_reports_directx_workgroup_alias_blocker():
-    mlx_root = _current_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=".crosstl-fft-current-frontier-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        work_dir = Path(temporary_directory)
-        output_dir = work_dir / "out"
-        config_path = work_dir / "crosstl.toml"
-        config_path.write_text(
-            _project_config(
-                output_dir.relative_to(mlx_root).as_posix(),
-                specialization_constants=CURRENT_FFT_SPECIALIZATION_CONSTANTS,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        report = translate_project(
-            load_project_config(mlx_root, config_path),
-            targets=("directx",),
-            output_dir=output_dir.relative_to(mlx_root).as_posix(),
-            format_output=False,
-            validate=False,
-        )
-        payload = report.to_json()
-
-        assert payload["summary"]["unitCount"] == 1
-        assert payload["summary"]["artifactCount"] == 1
-        assert payload["summary"]["translatedCount"] == 0
-        assert payload["summary"]["failedCount"] == 1
-        assert payload["summary"]["diagnosticCounts"] == {
-            "error": 1,
-            "note": 0,
-            "warning": 0,
-        }
-        artifact = payload["artifacts"][0]
-        assert artifact["sourceHash"] == {
-            "algorithm": "sha256",
-            "value": CURRENT_MLX_FFT_SHA256,
-        }
-        assert artifact["sourceSizeBytes"] == 3436
-        assert artifact["status"] == "failed"
-        assert artifact["entryPoint"] == {
-            "source": MLX_FFT_ENTRY,
-            "target": MLX_FFT_ENTRY,
-        }
-        assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [
-            1,
-            1,
-            64,
-        ]
-        assert artifact["specializationMaterialization"] == {
-            "status": "concrete",
-            "mode": "concrete-crossgl-variant",
-            "source": "shared-crossgl-specialization",
-            "constantCount": 21,
-            "requiredCount": 21,
-            "concreteCount": 21,
-            "overriddenCount": 21,
-            "targetSupportsDeferredSpecialization": False,
-        }
-        materialization = artifact["templateMaterialization"]
-        assert materialization["status"] == "materialized"
-        assert materialization["specializationCount"] == 37
-        assert materialization["unsupported"] == []
-        assert materialization["accounting"] == {
+def test_current_mlx_fft_executes_through_directx_native_loader():
+    _execute_mlx_fft_through_directx_native_loader(
+        _current_mlx_root(),
+        temporary_prefix=".crosstl-fft-current-directx-native-loader-",
+        source_sha256=CURRENT_MLX_FFT_SHA256,
+        source_size_bytes=CURRENT_MLX_FFT_SOURCE_SIZE_BYTES,
+        generated_sha256=CURRENT_MLX_FFT_GENERATED_SHA256,
+        generated_size_bytes=CURRENT_MLX_FFT_GENERATED_SIZE_BYTES,
+        specialization_constants=CURRENT_FFT_SPECIALIZATION_CONSTANTS,
+        template_specialization_count=37,
+        template_accounting={
             "reachableSpecializationCount": 42,
             "dependencyDiscoveryWorkCount": 0,
             "prunedCandidateCount": 2120,
-        }
-        assert artifact["error"] == (
-            "DirectX cannot emit a workgroup pointer as a first-class value: "
-            "crosstl_ptr_buf"
-        )
-        assert not (mlx_root / artifact["path"]).exists()
-
-        assert payload["diagnostics"] == [
-            {
-                "code": "project.translate.directx-workgroup-pointer-unsupported",
-                "message": artifact["error"],
-                "severity": "error",
-                "sourceBackend": "metal",
-                "target": "directx",
-                "location": {
-                    "file": MLX_FFT_SOURCE,
-                    "line": 1,
-                    "column": 1,
-                    "endLine": 1,
-                    "endColumn": 1,
-                    "offset": 0,
-                    "endOffset": 0,
-                    "length": 0,
-                },
-                "missingCapabilities": ["directx.workgroup-pointer-lowering"],
-                "details": {
-                    "sourcePath": MLX_FFT_SOURCE,
-                    "targetArtifact": artifact["path"],
-                    "workgroupPointer": {
-                        "function": "ReadWriter_float2_float2__load",
-                        "parameter": "crosstl_ptr_buf",
-                        "reason": "bare-pointer-expression",
-                    },
-                },
-            }
-        ]
+        },
+    )
 
 
 def _expected_layouts() -> dict[str, dict]:
@@ -370,11 +288,26 @@ def _expected_layouts() -> dict[str, dict]:
     }
 
 
-def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
+def _build_runtime_package(
+    mlx_root: Path,
+    work_dir: Path,
+    *,
+    source_sha256: str,
+    source_size_bytes: int,
+    generated_sha256: str,
+    generated_size_bytes: int,
+    specialization_constants: dict[int, object],
+    template_specialization_count: int,
+    template_accounting: dict[str, int] | None = None,
+) -> tuple[dict, Path]:
     output_dir = work_dir / "out"
     config_path = work_dir / "crosstl.toml"
     config_path.write_text(
-        _project_config(output_dir.relative_to(mlx_root).as_posix()) + "\n",
+        _project_config(
+            output_dir.relative_to(mlx_root).as_posix(),
+            specialization_constants=specialization_constants,
+        )
+        + "\n",
         encoding="utf-8",
     )
     report = translate_project(
@@ -387,6 +320,7 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     report_payload = report.to_json()
 
     assert report_payload["summary"]["unitCount"] == 1
+    assert report_payload["summary"]["artifactCount"] == 1
     assert report_payload["summary"]["translatedCount"] == 1
     assert report_payload["summary"]["failedCount"] == 0
     assert report_payload["summary"]["diagnosticCounts"] == {
@@ -398,8 +332,10 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     assert artifact["source"] == MLX_FFT_SOURCE
     assert artifact["sourceHash"] == {
         "algorithm": "sha256",
-        "value": MLX_FFT_SHA256,
+        "value": source_sha256,
     }
+    assert artifact["sourceSizeBytes"] == source_size_bytes
+    assert artifact["status"] == "translated"
     assert artifact["entryPoint"] == {
         "source": MLX_FFT_ENTRY,
         "target": "CSMain",
@@ -408,11 +344,32 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 64]
     assert artifact["generatedHash"] == {
         "algorithm": "sha256",
-        "value": MLX_FFT_GENERATED_SHA256,
+        "value": generated_sha256,
     }
-    assert artifact["generatedSizeBytes"] == MLX_FFT_GENERATED_SIZE_BYTES
-    assert len(artifact["templateMaterialization"]["specializations"]) == 24
-    assert artifact["templateMaterialization"]["unsupported"] == []
+    assert artifact["generatedSizeBytes"] == generated_size_bytes
+    assert artifact["specializationMaterialization"] == {
+        "status": "concrete",
+        "mode": "concrete-crossgl-variant",
+        "source": "shared-crossgl-specialization",
+        "constantCount": 21,
+        "requiredCount": 21,
+        "concreteCount": 21,
+        "overriddenCount": 21,
+        "targetSupportsDeferredSpecialization": False,
+    }
+    materialization = artifact["templateMaterialization"]
+    assert materialization["status"] == "materialized"
+    assert len(materialization["specializations"]) == template_specialization_count
+    assert materialization["specializationCount"] == template_specialization_count
+    assert materialization["unsupported"] == []
+    if template_accounting is not None:
+        assert materialization["accounting"] == template_accounting
+
+    generated_path = mlx_root / artifact["path"]
+    generated = generated_path.read_text(encoding="utf-8")
+    assert "groupshared float2 fft_mem_256_float2_float2_shared_in[256];" in generated
+    assert re.search(r"\bcrosstl_ptr_buf\s*[,)]", generated) is None
+    assert "float2*" not in generated
 
     report_path = work_dir / "portability-report.json"
     report.write_json(report_path)
@@ -475,15 +432,32 @@ def _complex_impulse() -> tuple[list[float], list[float]]:
     return input_values, expected_values
 
 
-def test_pinned_mlx_fft_executes_through_directx_native_loader():
-    mlx_root = _pinned_mlx_root()
+def _execute_mlx_fft_through_directx_native_loader(
+    mlx_root: Path,
+    *,
+    temporary_prefix: str,
+    source_sha256: str,
+    source_size_bytes: int,
+    generated_sha256: str,
+    generated_size_bytes: int,
+    specialization_constants: dict[int, object],
+    template_specialization_count: int,
+    template_accounting: dict[str, int] | None = None,
+) -> None:
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-fft-directx-native-loader-",
+        prefix=temporary_prefix,
         dir=mlx_root,
     ) as temporary_directory:
         descriptor, package_dir = _build_runtime_package(
             mlx_root,
             Path(temporary_directory),
+            source_sha256=source_sha256,
+            source_size_bytes=source_size_bytes,
+            generated_sha256=generated_sha256,
+            generated_size_bytes=generated_size_bytes,
+            specialization_constants=specialization_constants,
+            template_specialization_count=template_specialization_count,
+            template_accounting=template_accounting,
         )
         input_values, expected_values = _complex_impulse()
         request = build_native_loader_dispatch_request(
@@ -565,4 +539,17 @@ def test_pinned_mlx_fft_executes_through_directx_native_loader():
         expected_values,
         abs=2e-4,
         rel=2e-4,
+    )
+
+
+def test_pinned_mlx_fft_executes_through_directx_native_loader():
+    _execute_mlx_fft_through_directx_native_loader(
+        _pinned_mlx_root(),
+        temporary_prefix=".crosstl-fft-directx-native-loader-",
+        source_sha256=MLX_FFT_SHA256,
+        source_size_bytes=MLX_FFT_SOURCE_SIZE_BYTES,
+        generated_sha256=MLX_FFT_GENERATED_SHA256,
+        generated_size_bytes=MLX_FFT_GENERATED_SIZE_BYTES,
+        specialization_constants=FFT_SPECIALIZATION_CONSTANTS,
+        template_specialization_count=24,
     )

@@ -688,19 +688,32 @@ resource-layout contracts remain tracked by
 [#1542](https://github.com/CrossGL/crosstl/issues/1542) and
 [#1543](https://github.com/CrossGL/crosstl/issues/1543).
 
-That successful runtime proof remains revision-specific. At current corpus
-commit `846d176227a0ac13d266ce4644fd93d20223b6e`, MLX generalizes FFT workgroup
-storage through `FFTIOTypeTraits` and adds function constant 22 for the
-Bluestein twiddle-table path. Replaying the same 256-point entry with that new
-constant set to `false` materializes 37 specializations and reaches the
-concrete `ReadWriter_float2_float2__load` helper, then fails closed with
-`project.translate.directx-workgroup-pointer-unsupported` because parameter
-`crosstl_ptr_buf` remains a first-class workgroup pointer expression. The
-current-corpus CI check requires this exact diagnostic and emits no HLSL
-artifact. [#1518](https://github.com/CrossGL/crosstl/issues/1518) tracks the
-required groupshared-root-plus-offset lowering. Until that boundary is fixed
-and the native workload passes again, the historical FFT execution result is
-not evidence for the current source revision.
+That bounded runtime proof now also covers current corpus commit
+`846d176227a0ac13d266ce4644fd93d20223b6e`, where MLX generalizes FFT
+workgroup storage through `FFTIOTypeTraits` and adds function constant 22 for
+the Bluestein twiddle-table path. Replaying the same 256-point entry with that
+constant set to `false` materializes 37 specializations, records 42 reachable
+specializations before pruning, and concretizes 21 of 23 configured function
+constants. The source reaches two compatible `ReadWriter_float2_float2__load`
+overload bodies. DirectX workgroup-pointer reachability now analyzes both
+bodies, merges their forwarded calls and access ranges, and retains the
+concrete `fft_mem_256_float2_float2_shared_in[256]` backing identity. Generated
+helpers transport `crosstl_ptr_buf` as an integer offset instead of a bare
+first-class workgroup pointer expression.
+
+The current source emits a 152,613-byte HLSL artifact with SHA-256
+`948b214c9286f8dc77317531330e603bcf46d5094fa08d23445b278dcdda7ea3`
+and zero project diagnostics. Windows CI compiles it with DXC using `cs_6_2`,
+`-enable-16bit-types`, and warnings as errors, then packages and dispatches it
+through Direct3D 12 WARP. The same index-1 complex impulse workload, reflected
+resource layouts, physical workgroup count, and `2e-4` output tolerances are
+required for this exact current checkout. This lowering does not permit
+arbitrary first-class workgroup pointers: roots without a concrete shared-array
+identity or extent still fail closed, and
+[#1518](https://github.com/CrossGL/crosstl/issues/1518) continues to track the
+broader pointer-offset contract. The historical proof remains separately
+recorded under its own commit provenance; it is no longer being used as a
+substitute for current-corpus evidence.
 
 A dedicated project replay now translates the complete pinned `fft.metal`
 source to one standalone OpenGL compute shader with a 4,096-specialization

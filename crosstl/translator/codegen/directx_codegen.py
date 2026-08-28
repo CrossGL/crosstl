@@ -28970,6 +28970,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 function, available_names
             ):
                 reachable_names.add(called_name)
+                overloads = self.hlsl_function_overloads_by_name.get(called_name)
+                if overloads:
+                    pending.extend(overloads)
+                    continue
                 callee = functions_by_name.get(called_name)
                 if callee is not None:
                     pending.append(callee)
@@ -29040,11 +29044,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         functions = list(self.collect_functions(ast))
         functions.extend(getattr(self, "generic_function_specializations", {}).values())
         all_functions_by_name = {}
+        all_function_overloads_by_name = {}
         for function in functions:
             function_name = getattr(function, "name", None)
             if not function_name or generic_function_parameters(function):
                 continue
             all_functions_by_name[function_name] = function
+            all_function_overloads_by_name.setdefault(function_name, []).append(
+                function
+            )
 
         reachable_names = self.hlsl_reachable_function_names(
             ast, all_functions_by_name, target_stage
@@ -29060,10 +29068,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if function_name in reachable_names
         }
 
+        def workgroup_pointer_signature(function):
+            parameters = list(
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            return tuple(
+                (
+                    index,
+                    parameter.name,
+                    self.hlsl_workgroup_pointer_element_type(parameter),
+                )
+                for index, parameter in enumerate(parameters)
+                if self.hlsl_workgroup_pointer_declaration(parameter)
+            )
+
+        compatible_overloads_by_name = {}
         pointer_parameters = {}
         pointer_parameter_indices = {}
         pointer_base_names = {}
         for function_name, function in functions_by_name.items():
+            signature = workgroup_pointer_signature(function)
+            compatible_overloads = [
+                overload
+                for overload in all_function_overloads_by_name[function_name]
+                if workgroup_pointer_signature(overload) == signature
+            ]
+            compatible_overloads_by_name[function_name] = compatible_overloads
             parameters = list(
                 getattr(function, "parameters", getattr(function, "params", [])) or []
             )
@@ -29081,7 +29111,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if self.hlsl_workgroup_pointer_declaration(parameter)
             }
             used_names = {getattr(parameter, "name", None) for parameter in parameters}
-            used_names.update(self.collect_hlsl_function_identifier_names(function))
+            for overload in compatible_overloads:
+                used_names.update(self.collect_hlsl_function_identifier_names(overload))
             base_names = {}
             for parameter in workgroup_parameters:
                 base_name = self.hlsl_unique_local_identifier(
@@ -29103,16 +29134,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         entry_intervals = self.hlsl_workgroup_pointer_entry_intervals(ast)
         direct_ranges = {}
         direct_observations = {}
-        for function_name, function in functions_by_name.items():
-            direct_ranges[function_name], direct_observations[function_name] = (
-                self.hlsl_analyze_workgroup_pointer_function(
-                    function,
-                    pointer_parameters,
-                    pointer_parameter_indices,
-                    calls_by_caller[function_name],
-                    entry_intervals.get(function_name, {}),
+        for function_name, overloads in compatible_overloads_by_name.items():
+            merged_ranges = {}
+            merged_observations = set()
+            for function in overloads:
+                overload_ranges, overload_observations = (
+                    self.hlsl_analyze_workgroup_pointer_function(
+                        function,
+                        pointer_parameters,
+                        pointer_parameter_indices,
+                        calls_by_caller[function_name],
+                        entry_intervals.get(function_name, {}),
+                    )
                 )
-            )
+                for parameter_name, access_range in overload_ranges.items():
+                    current = merged_ranges.get(parameter_name)
+                    merged_ranges[parameter_name] = (
+                        access_range
+                        if current is None
+                        else (
+                            min(current[0], access_range[0]),
+                            max(current[1], access_range[1]),
+                        )
+                    )
+                merged_observations.update(overload_observations)
+            direct_ranges[function_name] = merged_ranges
+            direct_observations[function_name] = merged_observations
 
         self.hlsl_validate_workgroup_pointer_access_ranges(
             calls_by_caller, direct_ranges, direct_observations

@@ -44090,6 +44090,48 @@ def test_hlsl_workgroup_pointer_mapped_overloads_retain_pointer_contracts(tmp_pa
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_workgroup_pointer_overload_reachability_analyzes_all_bodies(tmp_path):
+    shader = """
+    shader WorkgroupPointerOverloadReachability {
+        float read(threadgroup float* values, uint index) {
+            return values[index];
+        }
+
+        float load(threadgroup float* values, float scale) {
+            return read(values, 1u) * scale;
+        }
+
+        float load(threadgroup float* values) {
+            return load(values, 2.0);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(device float* output) {
+                threadgroup float values[4];
+                values[1] = 3.0;
+                output[0] = load(values);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    read = "read__crosstl_workgroup_values_main_values_4"
+    load = "load__crosstl_workgroup_values_main_values_4"
+    assert f"float {read}(int values_offset, uint index)" in generated
+    assert f"float {load}(int values_offset, float scale)" in generated
+    assert f"float {load}(int values_offset)" in generated
+    assert "return main_values[uint((values_offset + index))];" in generated
+    assert f"return ({read}(int(values_offset), 1u) * scale);" in generated
+    assert f"return {load}(int(values_offset), 2.0);" in generated
+    assert f"output[0] = {load}(int(0));" in generated
+    assert "float*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_workgroup_pointer_static_nullable_calls_preserve_specialization(
     tmp_path,
 ):

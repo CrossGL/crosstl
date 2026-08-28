@@ -3396,20 +3396,21 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     assert "-k" not in arccos_opengl_step
 
 
-def test_mlx_project_porting_workflow_records_current_fft_directx_boundary():
+def test_mlx_project_porting_workflow_runs_current_fft_directx_runtime_proof():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()
-    step_name = "Record current MLX FFT DirectX boundary"
+    step_name = "Prove current MLX FFT Direct3D native-loader execution"
     step = ci_coverage.workflow_step_section(mlx_porting, step_name)
 
     assert "if: runner.os == 'Windows'" in step
     assert (
         "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-upstream" in step
     )
+    assert 'CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER: "1"' in step
     assert "python -m pytest -q -n auto" in step
     assert (
         "tests/test_translator/test_mlx_fft_native_loader.py::"
-        "test_current_mlx_fft_reports_directx_workgroup_alias_blocker" in step
+        "test_current_mlx_fft_executes_through_directx_native_loader" in step
     )
     assert "-k" not in step
     assert ci_coverage.workflow_step_after(

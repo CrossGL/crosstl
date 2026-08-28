@@ -312,13 +312,14 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_fft_native_loader.py::test_pinned_mlx_fft_executes_through_directx_native_loader
 
-      - name: Record current MLX FFT DirectX boundary
+      - name: Prove current MLX FFT Direct3D native-loader execution
         if: runner.os == 'Windows'
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-upstream
+          CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER: "1"
         run: >-
           python -m pytest -q -n auto
-          tests/test_translator/test_mlx_fft_native_loader.py::test_current_mlx_fft_reports_directx_workgroup_alias_blocker
+          tests/test_translator/test_mlx_fft_native_loader.py::test_current_mlx_fft_executes_through_directx_native_loader
 
       - name: Enumerate pinned MLX Metal entry points
         shell: bash
