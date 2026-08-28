@@ -10059,8 +10059,8 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     }
     assert status["artifacts"]["directx"] == {
         "target_entry_point": "CSMain",
-        "sha256": "22101cf0c722264cb1cc2e12bff321eefc1629534c7363ea6a7a05565a2ba838",
-        "size_bytes": 4582,
+        "sha256": "81dd21ff3219ea9333fffff7f00b494117b96bcbec9e30018aa88d458951ca60",
+        "size_bytes": 4540,
         "subgroup_enforcement": "hlsl-wave-size-attribute",
         "native_runtime": {
             "platform": "windows-latest",
