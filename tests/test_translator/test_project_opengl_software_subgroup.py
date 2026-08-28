@@ -9,7 +9,6 @@ from crosstl.project import (
     validate_project_report,
 )
 
-
 SOURCE = "shaders/software_wave.metal"
 ENTRY = "software_wave"
 
