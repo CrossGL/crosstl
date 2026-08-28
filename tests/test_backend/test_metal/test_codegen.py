@@ -24,6 +24,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalFunctionLocalTypeResolutionError,
     MetalIndexedComponentTypeResolutionError,
     MetalOutOfLineCallOperatorLoweringError,
+    MetalPreciseMathLoweringError,
     MetalSizeofResolutionError,
     MetalSourceOverloadResolutionError,
     MetalStageEntryArrayResourceError,
@@ -126,6 +127,32 @@ def parse_crossgl(code: str):
     tokens = CrossGLLexer(code).get_tokens()
     parser = CrossGLParser(tokens)
     return parser.parse()
+
+
+def assert_metal_compute_validates_if_available(metal, tmp_path, stem):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        return
+    source_path = tmp_path / f"{stem}.metal"
+    binary_path = tmp_path / f"{stem}.air"
+    source_path.write_text(metal, encoding="utf-8")
+    result = subprocess.run(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-Werror",
+            "-c",
+            str(source_path),
+            "-o",
+            str(binary_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def assert_opengl_compute_validates_if_available(glsl, tmp_path, stem):
@@ -9510,6 +9537,112 @@ def test_codegen_composes_precise_bfloat_extension_with_standard_float_builtin()
     assert "complex64_t crosstl_ctor_complex64_t_1_float(float value)" in normalized
     assert "return crosstl_ctor_complex64_t_1_float(sqrt(value));" in normalized
     assert "<unknown>" not in normalized
+
+
+def test_codegen_lowers_precise_acos_without_changing_other_math_modes(tmp_path):
+    source = """
+    float relaxed_acos(float value) {
+      return metal::acos(value) + metal::fast::acos(value);
+    }
+
+    float precise_scalar(float value) {
+      return metal::precise::acos(value);
+    }
+
+    float2 precise_pair(float2 value) {
+      return metal::precise::acos(value);
+    }
+
+    float3 precise_triple(float3 value) {
+      return metal::precise::acos(value);
+    }
+
+    float4 precise_quad(float4 value) {
+      return metal::precise::acos(value);
+    }
+
+    kernel void precise_acos_kernel(
+        device float4* output [[buffer(0)]],
+        device const float4* input [[buffer(1)]],
+        uint tid [[thread_position_in_grid]]) {
+      output[tid] = precise_quad(input[tid])
+          + float4(precise_scalar(input[tid].x));
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "return acos(value) + acos(value);" in normalized
+    assert "return __crossgl_metal_precise_acos_float(value);" in normalized
+    for width in (2, 3, 4):
+        assert f"return __crossgl_metal_precise_acos_float{width}(value);" in normalized
+        assert (
+            crossgl.count(f"vec{width} __crossgl_metal_precise_acos_float{width}(") == 1
+        )
+    assert crossgl.count("float __crossgl_metal_precise_acos_ratio(") == 1
+    assert crossgl.count("float __crossgl_metal_precise_acos_float(") == 1
+    assert "Copyright (C) 1993 by Sun" in crossgl
+    assert "provided this notice" in crossgl
+
+    shader = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(shader)
+    glsl = GLSLCodeGen().generate(shader)
+    metal = MetalCodeGen().generate(shader)
+
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+    assert "precise float __crossgl_metal_precise_acos_float" in hlsl
+    assert "precise float crossgl_metal_precise_acos_float" in glsl
+    assert hlsl.count("acos(value)") == 2
+    assert glsl.count("acos(value)") == 2
+    assert "[[precise]]" not in metal
+    assert metal.count("#pragma clang fp contract(off)") == 5
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-precise-acos-roundtrip"
+    )
+    assert_opengl_compute_validates_if_available(glsl, tmp_path, "metal-precise-acos")
+
+
+def test_codegen_avoids_precise_acos_helper_name_collisions():
+    source = """
+    float __crossgl_metal_precise_acos_ratio(float value) { return value; }
+    float __crossgl_metal_precise_acos_float(float value) { return value; }
+
+    float evaluate(float value) {
+      return metal::precise::acos(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+
+    assert "float __crossgl_metal_precise_acos_ratio_(float value)" in crossgl
+    assert "float __crossgl_metal_precise_acos_float_(float value)" in crossgl
+    assert "return __crossgl_metal_precise_acos_float_(value);" in crossgl
+    assert crossgl.count("float __crossgl_metal_precise_acos_ratio(float value)") == 1
+    assert crossgl.count("float __crossgl_metal_precise_acos_float(float value)") == 1
+    parse_crossgl(crossgl)
+
+
+def test_codegen_rejects_unrepresentable_precise_acos_operand():
+    source = """
+    struct Payload { float value; };
+
+    Payload evaluate(Payload value) {
+      return metal::precise::acos(value);
+    }
+    """
+
+    with pytest.raises(MetalPreciseMathLoweringError) as exc_info:
+        convert_without_preprocessing(source, "precise-acos-object.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-precise-math-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("metal.precise-math-lowering",)
+    assert diagnostic.operation == "acos"
+    assert diagnostic.operand_type == "Payload"
+    assert "only floating-point operands" in diagnostic.reason
 
 
 def test_codegen_keeps_metal_stdlib_wrappers_as_non_emitted_builtin_metadata():

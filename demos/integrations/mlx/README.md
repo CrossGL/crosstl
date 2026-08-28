@@ -1050,7 +1050,10 @@ Each entry-scoped artifact emits exactly one
 `unary_v<T=float, U=float, Op=..., N=1>` specialization. Concrete call-argument
 typing keeps the out-of-line complex `ArcCos::operator()` body out of the float
 artifact while preserving fail-closed handling when that complex overload is
-reachable. The generated artifacts retain either `x * x` or `acos(x)`, a
+reachable. Square retains `x * x`. ArcCos retains the source
+`metal::precise::acos` contract through a portable float32 range-reduction
+implementation with no-contraction qualifiers instead of relying on the target
+intrinsic's unspecified accuracy. The generated artifacts also retain a
 one-thread workgroup, the source and output buffers, and the size constant in
 their reflected runtime interfaces. Deterministic artifact hashes and the
 pinned upstream source hash are checked before packaging.

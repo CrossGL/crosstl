@@ -10235,14 +10235,20 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
         "reachable_unresolved_calls_fail_closed": True,
         "tracked_by": "https://github.com/CrossGL/crosstl/issues/1924",
     }
+    assert arccos["precise_math_lowering"] == {
+        "source_operation": "metal::precise::acos",
+        "strategy": "portable-float32-range-reduction",
+        "no_contraction": True,
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1925",
+    }
     assert arccos["execution"] == {
         "workgroup_size": [1, 1, 1],
         "dispatch_workgroup_count": [5, 1, 1],
     }
     assert arccos["artifacts"]["directx"] == {
         "target_entry_point": "CSMain",
-        "sha256": "720fe85c7458de6d058fc35f47679540f9c40e2ac2bca1e966f3cb897419f6cc",
-        "size_bytes": 2314,
+        "sha256": "4562332ad4fb951478ca419180ccdf3589f74b9e0956226badc6de877d343239",
+        "size_bytes": 4175,
         "native_runtime": {
             "platform": "windows-latest",
             "runtime": "direct3d-12-warp",
@@ -10256,8 +10262,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert arccos["artifacts"]["opengl"] == {
         "target_entry_point": "main",
-        "sha256": "dd6e4fbb35197a16dbc096e5a274fe94bba55ee236738c4dcada578b88ee7b18",
-        "size_bytes": 3613,
+        "sha256": "34a6df68b3eebc2bc1726d740cb40f6e6688d9763f2c0695f0368f3927becc3d",
+        "size_bytes": 5508,
         "native_runtime": {
             "platform": "ubuntu-latest",
             "runtime": "mesa-opengl-4.3",
@@ -10279,7 +10285,7 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
             1.0471975511965979,
             0.0,
         ],
-        "absolute_tolerance": 0.00001,
+        "absolute_tolerance": 0.000001,
         "relative_tolerance": 0.00001,
     }
     assert arccos["mlx_host_runtime_included"] is False
@@ -10294,7 +10300,9 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     assert "select `v_Squarefloat32float32` and `v_ArcCosfloat32float32`" in readme
     assert "Each entry-scoped artifact emits exactly one" in readme
     assert "keeps the out-of-line complex `ArcCos::operator()` body out" in readme
-    assert "retain either `x * x` or `acos(x)`" in readme
+    assert "Square retains `x * x`" in readme
+    assert "portable float32 range-reduction implementation" in readme
+    assert "target intrinsic's unspecified accuracy" in readme
     assert "executes them through the native loader on Direct3D 12 WARP" in readme
     assert "surfaceless Mesa OpenGL context" in readme
     assert "numerical evidence for two selected unary specializations" in readme

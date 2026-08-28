@@ -43,18 +43,22 @@ class UnaryWorkload:
     name: str
     entry_point: str
     operator_type: str
-    operation: str
+    generated_operation: dict[str, str]
     generated_artifacts: dict[str, dict[str, str | int]]
     input_values: tuple[float, ...]
     expected_values: tuple[float, ...]
-    tolerance: float
+    absolute_tolerance: float
+    relative_tolerance: float
 
 
 SQUARE_WORKLOAD = UnaryWorkload(
     name="square",
     entry_point="v_Squarefloat32float32",
     operator_type="Square",
-    operation="return (x * x);",
+    generated_operation={
+        "directx": "return (x * x);",
+        "opengl": "return (x * x);",
+    },
     generated_artifacts={
         "directx": {
             "sha256": (
@@ -71,26 +75,30 @@ SQUARE_WORKLOAD = UnaryWorkload(
     },
     input_values=(-3.0, -1.5, 0.0, 2.0, 4.25),
     expected_values=(9.0, 2.25, 0.0, 4.0, 18.0625),
-    tolerance=1e-6,
+    absolute_tolerance=1e-6,
+    relative_tolerance=1e-6,
 )
 
 ARCCOS_WORKLOAD = UnaryWorkload(
     name="arccos",
     entry_point="v_ArcCosfloat32float32",
     operator_type="ArcCos",
-    operation="return acos(x);",
+    generated_operation={
+        "directx": "return __crossgl_metal_precise_acos_float(x);",
+        "opengl": "return crossgl_metal_precise_acos_float(x);",
+    },
     generated_artifacts={
         "directx": {
             "sha256": (
-                "720fe85c7458de6d058fc35f47679540f9c40e2ac2bca1e966f3cb897419f6cc"
+                "4562332ad4fb951478ca419180ccdf3589f74b9e0956226badc6de877d343239"
             ),
-            "sizeBytes": 2314,
+            "sizeBytes": 4175,
         },
         "opengl": {
             "sha256": (
-                "dd6e4fbb35197a16dbc096e5a274fe94bba55ee236738c4dcada578b88ee7b18"
+                "34a6df68b3eebc2bc1726d740cb40f6e6688d9763f2c0695f0368f3927becc3d"
             ),
-            "sizeBytes": 3613,
+            "sizeBytes": 5508,
         },
     },
     input_values=(-1.0, -0.5, 0.0, 0.5, 1.0),
@@ -101,7 +109,8 @@ ARCCOS_WORKLOAD = UnaryWorkload(
         1.0471975511965979,
         0.0,
     ),
-    tolerance=1e-5,
+    absolute_tolerance=1e-6,
+    relative_tolerance=1e-5,
 )
 
 
@@ -237,7 +246,10 @@ def _translate_unary_artifact(
 
     generated_path = mlx_root / artifact["path"]
     generated = generated_path.read_text(encoding="utf-8")
-    assert workload.operation in generated
+    assert workload.generated_operation[target] in generated
+    if workload is ARCCOS_WORKLOAD:
+        assert "return acos(x);" not in generated
+        assert "precise float" in generated
     assert "Log{}(x + i * Sqrt{}(1.0 - x * x))" not in generated
     if target == "directx":
         assert "[numthreads(1, 1, 1)]" in generated
@@ -409,8 +421,8 @@ def _execute_pinned_mlx_unary(
                     "shape": [len(expected_values)],
                     "values": expected_values,
                     "tolerance": {
-                        "absolute": workload.tolerance,
-                        "relative": workload.tolerance,
+                        "absolute": workload.absolute_tolerance,
+                        "relative": workload.relative_tolerance,
                     },
                 }
             },
@@ -456,8 +468,8 @@ def _execute_pinned_mlx_unary(
     assert result.outputs[output_binding]["shape"] == [len(expected_values)]
     assert result.outputs[output_binding]["values"] == pytest.approx(
         expected_values,
-        abs=workload.tolerance,
-        rel=workload.tolerance,
+        abs=workload.absolute_tolerance,
+        rel=workload.relative_tolerance,
     )
 
 

@@ -110,6 +110,29 @@ class MetalBuiltinResultTypeResolutionError(ValueError):
         )
 
 
+class MetalPreciseMathLoweringError(ValueError):
+    """Raised when a precise Metal math call has no portable implementation."""
+
+    project_diagnostic_code = "project.translate.metal-precise-math-unsupported"
+    missing_capabilities = ("metal.precise-math-lowering",)
+
+    def __init__(
+        self,
+        operation,
+        operand_type,
+        reason,
+        source_location=None,
+    ):
+        self.operation = operation
+        self.operand_type = operand_type
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot preserve Metal precise::{operation} for "
+            f"'{operand_type or '<unknown>'}': {reason}"
+        )
+
+
 class MetalStandardLibraryWrapperLoweringError(ValueError):
     """Raised when a materialized Metal standard-library wrapper has no target op."""
 
@@ -1440,6 +1463,8 @@ class MetalToCrossGLConverter:
         self.wide_vector_binary_helpers = set()
         self.wide_vector_compound_helpers = set()
         self.wide_vector_reserved_names = set()
+        self.metal_precise_math_helper_names = {}
+        self.required_metal_precise_acos_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
@@ -2525,6 +2550,7 @@ class MetalToCrossGLConverter:
 
     def generate(self, ast):
         wide_vector_support_marker = "    // __crossgl_metal_wide_vector_support__\n"
+        precise_math_support_marker = "    // __crossgl_metal_precise_math_support__\n"
         small_vector_index_support_marker = (
             "    // __crossgl_metal_small_vector_index_support__\n"
         )
@@ -2543,6 +2569,8 @@ class MetalToCrossGLConverter:
         self.wide_vector_binary_helpers = set()
         self.wide_vector_compound_helpers = set()
         self.wide_vector_reserved_names = set()
+        self.metal_precise_math_helper_names = {}
+        self.required_metal_precise_acos_widths = set()
         self.cooperative_matrix_fragment_helpers = {}
         self.cooperative_matrix_fragment_helper_names = set()
         self.cooperative_matrix_fragment_type_contracts = {}
@@ -2777,6 +2805,7 @@ class MetalToCrossGLConverter:
         code += local_aggregate_support_marker
         code += small_vector_index_support_marker
         code += cooperative_matrix_fragment_support_marker
+        code += precise_math_support_marker
 
         globals_list = [
             glob
@@ -2956,6 +2985,11 @@ class MetalToCrossGLConverter:
         code = code.replace(
             cooperative_matrix_fragment_support_marker,
             self.generate_cooperative_matrix_fragment_support_code(indent=1),
+            1,
+        )
+        code = code.replace(
+            precise_math_support_marker,
+            self.generate_metal_precise_math_support_code(indent=1),
             1,
         )
         code = code.replace(
@@ -10997,6 +11031,9 @@ class MetalToCrossGLConverter:
                 if metal_math_name is not None:
                     return metal_math_name
                 return self.sanitize_identifier(name)
+            precise_math_name = self.map_metal_precise_math_function_name(name, args)
+            if precise_math_name is not None:
+                return precise_math_name
             metal_type_constructor = self.map_metal_type_constructor_name(name)
             if metal_type_constructor is not None:
                 return metal_type_constructor
@@ -11810,6 +11847,192 @@ class MetalToCrossGLConverter:
                 return None
             return unscoped
         return None
+
+    def map_metal_precise_math_function_name(self, name, args=None):
+        text = str(name)
+        if self.metal_math_builtin_namespace_mode(text) != "precise":
+            return None
+        operation = text.rsplit("::", 1)[-1]
+        if operation != "acos":
+            return None
+        arguments = list(args or [])
+        source_location = (
+            getattr(arguments[0], "source_location", None) if arguments else None
+        )
+        if len(arguments) != 1:
+            raise MetalPreciseMathLoweringError(
+                operation,
+                None,
+                "the operation requires exactly one operand",
+                source_location,
+            )
+
+        operand_type = self.expression_metal_type(arguments[0])
+        type_info = self.metal_math_builtin_type_info(operand_type)
+        if type_info is None:
+            raise MetalPreciseMathLoweringError(
+                operation,
+                operand_type,
+                "the operand type could not be inferred",
+                source_location,
+            )
+        if type_info["category"] not in {"floating", "bfloat"}:
+            raise MetalPreciseMathLoweringError(
+                operation,
+                operand_type,
+                "only floating-point operands have a precise acos contract",
+                source_location,
+            )
+        width = type_info["width"]
+        if not isinstance(width, int) or width not in {1, 2, 3, 4}:
+            raise MetalPreciseMathLoweringError(
+                operation,
+                operand_type,
+                "only scalar and two- to four-lane vectors are representable",
+                source_location,
+            )
+
+        self.required_metal_precise_acos_widths.add(width)
+        return self.metal_precise_acos_helper_name(width)
+
+    def metal_precise_math_unique_helper_name(self, key, base_name):
+        existing = self.metal_precise_math_helper_names.get(key)
+        if existing is not None:
+            return existing
+        used_names = set(self.wide_vector_reserved_names)
+        used_names.update(self.metal_precise_math_helper_names.values())
+        used_names.update(
+            self.sanitize_identifier(name) for name in self.user_function_names
+        )
+        helper_name = base_name
+        while helper_name in used_names:
+            helper_name += "_"
+        self.metal_precise_math_helper_names[key] = helper_name
+        self.wide_vector_reserved_names.add(helper_name)
+        return helper_name
+
+    def metal_precise_acos_ratio_helper_name(self):
+        return self.metal_precise_math_unique_helper_name(
+            "acos-ratio",
+            "__crossgl_metal_precise_acos_ratio",
+        )
+
+    def metal_precise_acos_helper_name(self, width):
+        self.metal_precise_acos_ratio_helper_name()
+        scalar_name = self.metal_precise_math_unique_helper_name(
+            "acos-float",
+            "__crossgl_metal_precise_acos_float",
+        )
+        if width == 1:
+            return scalar_name
+        return self.metal_precise_math_unique_helper_name(
+            f"acos-float{width}",
+            f"__crossgl_metal_precise_acos_float{width}",
+        )
+
+    def generate_metal_precise_math_support_code(self, indent=0):
+        widths = sorted(self.required_metal_precise_acos_widths)
+        if not widths:
+            return ""
+
+        ratio_name = self.metal_precise_acos_ratio_helper_name()
+        scalar_name = self.metal_precise_acos_helper_name(1)
+        pad = "    " * indent
+        body_pad = "    " * (indent + 1)
+        nested_pad = "    " * (indent + 2)
+
+        # The float32 acos range reduction and coefficients are derived from
+        # fdlibm. Copyright (C) 1993 by Sun Microsystems, Inc. All rights
+        # reserved. Developed at SunPro. Permission to use, copy, modify, and
+        # distribute this software is freely granted, provided this notice is
+        # preserved.
+        code = f"{pad}// Portable float32 lowering for Metal precise::acos.\n"
+        code += f"{pad}// Derived from fdlibm. Copyright (C) 1993 by Sun\n"
+        code += f"{pad}// Microsystems, Inc. All rights reserved. Developed at\n"
+        code += f"{pad}// SunPro. Permission to use, copy, modify, and distribute\n"
+        code += f"{pad}// this software is freely granted, provided this notice\n"
+        code += f"{pad}// is preserved.\n"
+        code += f"{pad}@precise\n"
+        code += f"{pad}float {ratio_name}(float value) {{\n"
+        code += (
+            f"{body_pad}float numerator @precise = value * (\n"
+            f"{nested_pad}0.16666586697 + value * (\n"
+            f"{nested_pad}    -0.042743422091 + value * -0.008656363003\n"
+            f"{nested_pad})\n"
+            f"{body_pad});\n"
+        )
+        code += (
+            f"{body_pad}float denominator @precise = " "1.0 + value * -0.70662963390;\n"
+        )
+        code += f"{body_pad}return numerator / denominator;\n"
+        code += f"{pad}}}\n\n"
+
+        code += f"{pad}@precise\n"
+        code += f"{pad}float {scalar_name}(float value) {{\n"
+        code += f"{body_pad}uint bits = asuint(value);\n"
+        code += f"{body_pad}uint magnitude_bits = bits & 0x7fffffffu;\n"
+        code += f"{body_pad}if (magnitude_bits >= 0x3f800000u) {{\n"
+        code += f"{nested_pad}if (magnitude_bits == 0x3f800000u) {{\n"
+        code += (
+            f"{nested_pad}    return (bits >> 31u) != 0u\n"
+            f"{nested_pad}        ? 3.14159265358979323846\n"
+            f"{nested_pad}        : 0.0;\n"
+        )
+        code += f"{nested_pad}}}\n"
+        code += f"{nested_pad}return asfloat(0x7fc00000u);\n"
+        code += f"{body_pad}}}\n"
+        code += f"{body_pad}if (magnitude_bits < 0x3f000000u) {{\n"
+        code += f"{nested_pad}if (magnitude_bits <= 0x32800000u) {{\n"
+        code += f"{nested_pad}    return 1.5707962513;\n"
+        code += f"{nested_pad}}}\n"
+        code += f"{nested_pad}float squared @precise = value * value;\n"
+        code += f"{nested_pad}float correction @precise = {ratio_name}(squared);\n"
+        code += (
+            f"{nested_pad}return 1.5707962513 - (\n"
+            f"{nested_pad}    value - (\n"
+            f"{nested_pad}        0.000000075497894159 - value * correction\n"
+            f"{nested_pad}    )\n"
+            f"{nested_pad});\n"
+        )
+        code += f"{body_pad}}}\n"
+        code += f"{body_pad}if ((bits >> 31u) != 0u) {{\n"
+        code += (
+            f"{nested_pad}float reduced @precise = (1.0 + value) * 0.5;\n"
+            f"{nested_pad}float root @precise = sqrt(reduced);\n"
+            f"{nested_pad}float correction @precise =\n"
+            f"{nested_pad}    {ratio_name}(reduced) * root\n"
+            f"{nested_pad}    - 0.000000075497894159;\n"
+            f"{nested_pad}return 2.0 * (1.5707962513 - (root + correction));\n"
+        )
+        code += f"{body_pad}}}\n"
+        code += (
+            f"{body_pad}float reduced @precise = (1.0 - value) * 0.5;\n"
+            f"{body_pad}float root @precise = sqrt(reduced);\n"
+            f"{body_pad}float truncated_root @precise =\n"
+            f"{body_pad}    asfloat(asuint(root) & 0xfffff000u);\n"
+            f"{body_pad}float tail @precise =\n"
+            f"{body_pad}    (reduced - truncated_root * truncated_root)\n"
+            f"{body_pad}    / (root + truncated_root);\n"
+            f"{body_pad}float correction @precise =\n"
+            f"{body_pad}    {ratio_name}(reduced) * root + tail;\n"
+            f"{body_pad}return 2.0 * (truncated_root + correction);\n"
+        )
+        code += f"{pad}}}\n\n"
+
+        for width in widths:
+            if width == 1:
+                continue
+            vector_name = self.metal_precise_acos_helper_name(width)
+            components = "xyzw"[:width]
+            arguments = ",\n".join(
+                f"{nested_pad}{scalar_name}(value.{component})"
+                for component in components
+            )
+            code += f"{pad}@precise\n"
+            code += f"{pad}vec{width} {vector_name}(vec{width} value) {{\n"
+            code += f"{body_pad}return vec{width}(\n{arguments}\n{body_pad});\n"
+            code += f"{pad}}}\n\n"
+        return code
 
     @staticmethod
     def metal_math_source_overload_is_stdlib_extension(function):

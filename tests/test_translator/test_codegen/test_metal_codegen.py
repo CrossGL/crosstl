@@ -4003,6 +4003,45 @@ def test_metal_precision_aliases_map_to_native_metal_types():
         assert invalid_token not in generated_code
 
 
+def test_metal_precise_functions_and_locals_disable_contraction():
+    shader = """
+    shader PreciseArithmetic {
+        @precise
+        float stableProduct(float left, float right) {
+            return left * right + left;
+        }
+
+        float scopedProduct(float left, float right) {
+            float product @precise = left * right;
+            return product + left;
+        }
+
+        float relaxedProduct(float left, float right) {
+            return left * right + left;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("#pragma clang fp contract(off)") == 2
+    assert generated_code.count("#pragma clang fp contract(fast)") == 2
+    assert (
+        "#pragma clang fp contract(off)\n"
+        "float stableProduct(float left, float right)"
+    ) in generated_code
+    assert (
+        "#pragma clang fp contract(off)\n"
+        "float scopedProduct(float left, float right)"
+    ) in generated_code
+    assert (
+        "#pragma clang fp contract(off)\n"
+        "float relaxedProduct(float left, float right)"
+    ) not in generated_code
+    assert "[[precise]]" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_float16_matrix_ir_aliases_map_to_half_matrices():
     shader = """
     shader Float16MatrixIRSmoke {

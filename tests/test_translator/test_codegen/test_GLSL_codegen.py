@@ -10032,6 +10032,44 @@ def test_glsl_stage_interface_interpolation_precision_qualifiers():
     )
 
 
+def test_glsl_precise_function_returns_and_local_variables(tmp_path):
+    code = """
+    shader PreciseArithmetic {
+        @precise
+        float stableProduct(float left, float right) {
+            float product @precise = left * right;
+            return product + left;
+        }
+
+        float relaxedProduct(float left, float right) {
+            float product = left * right;
+            return product + left;
+        }
+
+        compute {
+            void main() {
+                float stable = stableProduct(2.0, 3.0);
+                float relaxed = relaxedProduct(2.0, 3.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "precise float stableProduct(float left, float right);" in generated_code
+    assert "precise float stableProduct(float left, float right) {" in generated_code
+    assert "precise float product = (left * right);" in generated_code
+    assert "float relaxedProduct(float left, float right) {" in generated_code
+    assert "precise float relaxedProduct" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "precise-arithmetic",
+        validate_spirv=True,
+    )
+
+
 def test_glsl_global_fragment_integer_input_adds_required_flat_qualifier():
     # Reduced from KhronosGroup/glslang Test/spv.nonuniform.frag, where
     # fragment-stage integer varyings are declared with flat interpolation.

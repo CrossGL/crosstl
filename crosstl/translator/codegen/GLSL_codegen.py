@@ -11619,6 +11619,7 @@ class GLSLCodeGen:
             return_type = self.map_type(
                 self.type_name_string(getattr(func, "return_type", None)) or "void"
             )
+            precise_prefix = self.glsl_precise_qualifier_prefix(func, return_type)
             self.current_function_return_type = previous_function_return_type
             self.local_variable_types = previous_local_variable_types
             self.local_variable_source_types = previous_local_variable_source_types
@@ -11641,7 +11642,10 @@ class GLSLCodeGen:
             self.current_glsl_private_pointer_function_name = (
                 previous_private_pointer_function_name
             )
-            return f"{code}{return_type} {declaration_name}({params_str});\n\n"
+            return (
+                f"{code}{precise_prefix}{return_type} "
+                f"{declaration_name}({params_str});\n\n"
+            )
 
         stage_entry_types = {
             "vertex",
@@ -11733,7 +11737,11 @@ class GLSLCodeGen:
             raw_return_type = self.type_name_string(getattr(func, "return_type", None))
             self.current_function_return_type = raw_return_type or "void"
             return_type = self.map_type(self.current_function_return_type)
-            code += f"{return_type} {declaration_name}({params_str}) {{\n"
+            precise_prefix = self.glsl_precise_qualifier_prefix(func, return_type)
+            code += (
+                f"{precise_prefix}{return_type} "
+                f"{declaration_name}({params_str}) {{\n"
+            )
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -17279,12 +17287,32 @@ class GLSLCodeGen:
         parts = []
         if "const" in qualifiers:
             parts.append("const")
+        if "precise" in qualifiers:
+            parts.append("precise")
         parts.extend(
             qualifier
             for qualifier in ("lowp", "mediump", "highp")
             if qualifier in qualifiers
         )
         return f"{' '.join(parts)} " if parts else ""
+
+    @staticmethod
+    def glsl_has_precise_qualifier(node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "precise" in qualifiers:
+            return True
+        return any(
+            str(getattr(attribute, "name", "")).lower() == "precise"
+            for attribute in getattr(node, "attributes", []) or []
+        )
+
+    def glsl_precise_qualifier_prefix(self, node, declaration_type):
+        if declaration_type == "void" or not self.glsl_has_precise_qualifier(node):
+            return ""
+        return "precise "
 
     def global_variable_qualifier(self, node):
         qualifier_prefix = self.glsl_variable_qualifier_prefix(node)

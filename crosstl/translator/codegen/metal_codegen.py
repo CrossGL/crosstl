@@ -4379,6 +4379,11 @@ class MetalCodeGen:
             return code
 
         body = getattr(func, "body", None)
+        precise_arithmetic = (
+            body is not None and self.metal_function_requires_no_contraction(func)
+        )
+        if precise_arithmetic:
+            code += "#pragma clang fp contract(off)\n"
         if shader_type is None and body is None:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
@@ -4850,7 +4855,10 @@ class MetalCodeGen:
             previous_metal_compute_builtin_parameter_names
         )
 
-        code += "}\n\n"
+        code += "}\n"
+        if precise_arithmetic:
+            code += "#pragma clang fp contract(fast)\n"
+        code += "\n"
         return code
 
     def metal_needs_fallback_return(self, body, return_type):
@@ -18621,7 +18629,33 @@ class MetalCodeGen:
         return None
 
     def is_precision_qualifier_attribute(self, attr):
-        return str(getattr(attr, "name", attr)).lower() in {"lowp", "mediump", "highp"}
+        return str(getattr(attr, "name", attr)).lower() in {
+            "lowp",
+            "mediump",
+            "highp",
+            "precise",
+        }
+
+    @staticmethod
+    def metal_has_precise_qualifier(node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "precise" in qualifiers:
+            return True
+        return any(
+            str(getattr(attribute, "name", "")).lower() == "precise"
+            for attribute in getattr(node, "attributes", []) or []
+        )
+
+    def metal_function_requires_no_contraction(self, func):
+        if self.metal_has_precise_qualifier(func):
+            return True
+        return any(
+            self.metal_has_precise_qualifier(node)
+            for node in self.iter_ast_nodes(getattr(func, "body", None))
+        )
 
     def is_metal_address_space_attribute(self, attr):
         name = str(getattr(attr, "name", "")).lower()
