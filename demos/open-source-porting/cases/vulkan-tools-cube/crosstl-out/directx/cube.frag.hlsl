@@ -19,7 +19,6 @@ float linearToSrgb(float linear_) {
     } else {
         return ((1.055 * pow(linear_, (1.0 / 2.4))) - 0.055);
     }
-    return float(0);
 }
 
 float4 linearToSrgb(float4 linear_) {
