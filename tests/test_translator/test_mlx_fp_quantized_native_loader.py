@@ -55,8 +55,8 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627",
-        "sizeBytes": 7909,
+        "sha256": "936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625",
+        "sizeBytes": 9240,
     },
     "opengl": {
         "sha256": "cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da",
@@ -253,7 +253,8 @@ def _assert_directx_compiles(generated_path: Path) -> None:
         assert result.returncode == 0, result.stderr
         assert dxil_path.stat().st_size > 0
         assembly = assembly_path.read_text(encoding="utf-8")
-        assert "call float @dx.op.legacyF16ToF32" in assembly
+        assert "uitofp i32" in assembly
+        assert "legacyF16ToF32" not in assembly
         assert "fmul fast half" not in assembly
         assert "fmul half" not in assembly
         assert "uitofp i16" not in assembly
@@ -431,8 +432,12 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "scale_dec_b = WaveActiveMax(abs(w_thread));" in generated
         assert "float scale = fp8_e8m0__operator_float(" in generated
         assert generated.count("asfloat16(") == 2
-        assert generated.count("f16tof32(uint(asuint16(converted)))") == 2
+        assert (
+            generated.count("__crossgl_binary16_to_float(uint(asuint16(converted)))")
+            == 2
+        )
         assert "float16_t(uint16_t(" not in generated
+        assert "f16tof32(" not in generated
         assert "converted *= 16384.0;" not in generated
         assert "converted *= 256.0;" not in generated
         assert "int n = int(round(le));" in generated

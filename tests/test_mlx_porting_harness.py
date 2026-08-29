@@ -12511,9 +12511,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627"
+                "936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625"
             ),
-            "size_bytes": 7909,
+            "size_bytes": 9240,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
@@ -12549,7 +12549,7 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
             "native-asfloat16-asint16-asuint16-reinterpretation"
         ),
         "directx_binary16_mixed_arithmetic": (
-            "exact-f16tof32-promotion-before-float32-operation-and-float16-rounding"
+            "integer-ieee754-binary16-decode-before-float32-operation-and-float16-rounding"
         ),
         "opengl_binary16_bitcast": "exact-low-16-bit-payload-via-pack-unpack-half",
         "global_scale_read": "statically-eliminated-for-has_global_scale-false",
@@ -12580,13 +12580,25 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
             "dxil_bitcast": "bitcast-i16-to-half",
             "rejected_dxil_arithmetic": "fmul-half-on-binary16-subnormal",
         },
-        "corrected_dxil_contract": {
+        "legacy_half_decode_rejection": {
             "artifact_sha256": (
                 "938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627"
             ),
             "artifact_size_bytes": 7909,
+            "workflow_run": 33274360343,
+            "job": 99158370210,
+            "output_element_count": 32,
+            "mismatched_nonzero_output_count": 28,
+            "observed_nonzero_outputs": "signed-zero-only",
+            "rejected_dxil_decode": "legacy-f16-to-f32",
+        },
+        "corrected_dxil_contract": {
+            "artifact_sha256": (
+                "936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625"
+            ),
+            "artifact_size_bytes": 9240,
             "source_bitcast": "native-asfloat16",
-            "subnormal_decode": "legacy-f16-to-f32",
+            "subnormal_decode": "integer-ieee754-binary16-to-float32",
             "arithmetic": "fmul-float",
             "rounding": "fptrunc-float-to-half",
         },

@@ -5539,6 +5539,52 @@ uint __crossgl_bfloat16_from_uint16({uint16_type} value) {{
 
     def generate_hlsl_explicit_bitcast_helpers(self):
         helper_sources = {
+            "binary16_to_float": (
+                """
+float __crossgl_binary16_to_float(uint value) {
+    uint bits = value & 0xffffu;
+    uint sign = (bits & 0x8000u) << 16u;
+    uint exponent = bits & 0x7c00u;
+    uint mantissa = bits & 0x03ffu;
+    if (exponent == 0u) {
+        if (mantissa == 0u) {
+            return asfloat(sign);
+        }
+        float magnitude = float(mantissa) * 5.9604644775390625e-8f;
+        return asfloat(asuint(magnitude) | sign);
+    }
+    if (exponent == 0x7c00u) {
+        return asfloat(sign | 0x7f800000u | (mantissa << 13u));
+    }
+    uint floatExponent = ((exponent >> 10u) + 112u) << 23u;
+    return asfloat(sign | floatExponent | (mantissa << 13u));
+}
+
+float2 __crossgl_binary16_to_float(uint2 value) {
+    return float2(
+        __crossgl_binary16_to_float(value.x),
+        __crossgl_binary16_to_float(value.y)
+    );
+}
+
+float3 __crossgl_binary16_to_float(uint3 value) {
+    return float3(
+        __crossgl_binary16_to_float(value.x),
+        __crossgl_binary16_to_float(value.y),
+        __crossgl_binary16_to_float(value.z)
+    );
+}
+
+float4 __crossgl_binary16_to_float(uint4 value) {
+    return float4(
+        __crossgl_binary16_to_float(value.x),
+        __crossgl_binary16_to_float(value.y),
+        __crossgl_binary16_to_float(value.z),
+        __crossgl_binary16_to_float(value.w)
+    );
+}
+"""
+            ),
             "double_to_uint2": (
                 """
 uint2 __crossgl_bitcast_double_to_uint2(double value) {
@@ -10935,7 +10981,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "double",
         }:
             uint_type = "uint" if width == 1 else f"uint{width}"
-            decoded = f"f16tof32({uint_type}(asuint16({rendered})))"
+            self.require_hlsl_explicit_bitcast_helper("binary16_to_float")
+            decoded = (
+                "__crossgl_binary16_to_float(" f"{uint_type}(asuint16({rendered})))"
+            )
             return (
                 decoded
                 if operation_base == "float"

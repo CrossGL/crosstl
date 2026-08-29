@@ -15799,9 +15799,15 @@ def test_hlsl_native_binary16_compound_assignment_promotes_exact_payload(tmp_pat
 
     assert "float16_t value = asfloat16(bits);" in generated
     assert (
-        "value = float16_t((f16tof32(uint(asuint16(value))) * 16384.0));" in generated
+        "value = float16_t((__crossgl_binary16_to_float("
+        "uint(asuint16(value))) * 16384.0));" in generated
     )
-    assert "return (f16tof32(uint(asuint16(value))) * 2.0);" in generated
+    assert (
+        "return (__crossgl_binary16_to_float(uint(asuint16(value))) * 2.0);"
+        in generated
+    )
+    assert "float magnitude = float(mantissa) * 5.9604644775390625e-8f;" in generated
+    assert "f16tof32(" not in generated
     assert "value *= 16384.0;" not in generated
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 

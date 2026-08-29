@@ -1530,26 +1530,30 @@ The same current pin has a bounded MXFP4 quantize/dequantize contract for
 ``quantized.cpp`` and ``fp_quantized.h`` fixes float32 input, group size 32,
 four payload bits, no global scale, workgroup ``[32, 1, 1]``, and one dispatched
 workgroup. Entry-scoped translation materializes only that specialization. The
-7,909-byte HLSL has SHA-256
-``938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627`` and
+9,240-byte HLSL has SHA-256
+``936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625`` and
 passes DXC under ``cs_6_6``, ``-enable-16bit-types``, and warnings as errors.
 DirectX lowers source ``as_type<float16_t>(uint16_t)`` to native
 ``asfloat16`` reinterpretation (and matching signed/inverse forms to
-``asint16``/``asuint16``). Mixed ``float16_t *= float`` then decodes the exact
-payload through ``f16tof32(uint(asuint16(value)))``, performs ``fmul float``,
-and rounds the result once through ``fptrunc float ... to half``. The optimized
-DXIL is 4,732 bytes and uses ``dx.op.legacyF16ToF32``.
+``asint16``/``asuint16``). Mixed ``float16_t *= float`` then reconstructs the
+exact float32 value with integer IEEE-754 masks for zeros, subnormals, normals,
+infinities, and NaNs before float32 arithmetic and one final binary16 rounding.
+The optimized 4,724-byte DXIL uses integer masks, ``uitofp i32``, and
+``fmul float`` with no ``LegacyF16ToF32`` or half multiply.
 
-Two Windows failures bound this contract. The 7,809-byte HLSL under SHA-256
+Three Windows failures bound this contract. The 7,809-byte HLSL under SHA-256
 ``3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361``
 produced numeric ``uitofp i16 ... to half``; workflow run 33271117475, job
 99149649480 collapsed all 28 nonzero values to signed zero on WARP. Exact
 ``bitcast i16 ... to half`` produced same-size HLSL under SHA-256
 ``4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352``,
-but workflow run 33272842347, job 99154326814 showed that consuming its
-intentionally constructed binary16 subnormal in ``fmul half`` still collapsed
-all 28 nonzero values to signed zero. Promoting the payload before arithmetic
-removes that target-specific flush boundary.
+but run 33272842347, job 99154326814 still consumed the constructed subnormal
+in ``fmul half`` and produced the same 28 signed zeros. Moving arithmetic to
+float32 produced 7,909-byte HLSL under SHA-256
+``938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627``;
+``dx.op.legacyF16ToF32`` nevertheless yielded the identical signed-zero result
+in run 33274360343, job 99158370210. Integer reconstruction removes WARP half
+conversion from the payload path entirely.
 
 The 9,571-byte explicit-software-subgroup GLSL has SHA-256
 ``cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da``;
