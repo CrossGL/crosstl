@@ -154,8 +154,8 @@ The current harness verifies:
   one real binary operator entry and does not claim coverage of the other
   materialized binary variants or the upstream MLX host runtime;
 - the `arangeuint32` and `ss_Addfloat32` native-loader checks above, together
-  with the scalar copy, float32 dot-product, and unary Square and ArcCos checks
-  described below, use the current corpus at commit
+  with the scalar copy, float32 dot-product, bounded Softmax, and unary Square
+  and ArcCos checks described below, use the current corpus at commit
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The broader 40-unit frontier and
   its remaining proofs retain their recorded historical revision until each
   source contract is remeasured;
@@ -1171,12 +1171,12 @@ current-corpus workload; it does not redirect the MLX runtime or run the MLX
 test suite.
 
 The axis-size-1025 record still produces a ``[288, 1, 1]`` artifact containing
-nine logical 32-lane subgroups. That layout is now within the bounded software
-workgroup contract, but the entry's lane-dependent ``WaveActiveMax`` path is
-not the narrow additive-identity-masked sum shape. Translation therefore still
-fails closed with ``potentially-divergent-control-flow``, and this artifact
-remains dependent on compatible width-32 hardware until its complete control
-flow and numerical semantics are proved separately. Looped reductions, other
+nine logical 32-lane subgroups, but it remains outside this LogSumExp software
+runtime package. The compiler now admits structurally constrained typed masked
+sum, minimum, and maximum reductions, as exercised by the current-corpus
+Softmax proof below; this LogSumExp workload has not been packaged or
+numerically dispatched under that mode here. Its checked artifact therefore
+retains the compatible width-32 hardware contract. Looped reductions, other
 dtypes and shapes, and full-runtime parity remain tracked by
 [#1894](https://github.com/CrossGL/crosstl/issues/1894).
 
@@ -1187,6 +1187,57 @@ and bounded workload set with:
 .venv/bin/python -m pytest -q -n auto \
   tests/test_mlx_logsumexp_dispatch_contract_fixture.py
 ```
+
+The checked-in
+[`contracts/softmax.native-loader.dispatch.json`](contracts/softmax.native-loader.dispatch.json)
+fixture selects current-pinned `block_softmax_float32` and records two
+host-derived block workloads. Axis size 32 with two rows uses `[32, 1, 1]` and
+dispatches two workgroups. Axis size 2049 with one row uses `[544, 1, 1]` and
+dispatches one workgroup; 2049 is directly represented in the pinned upstream
+`python/tests/test_ops.py::test_softmax` coverage. Both follow
+`32 * ceilDiv(ceilDiv(axisSize, 4), 32)`, stay within the host's block-path
+limit of 4096, require logical subgroup width 32, and package three scalar
+resources: float32 input and output buffers plus the int32 axis-size block.
+
+DirectX emits one guarded `CSMain` artifact for each workgroup size, retaining
+`[WaveSize(32)]`. Official DXC 1.9.2602.24 accepts both under `cs_6_6` with
+`-enable-16bit-types` and warnings as errors. Their SHA-256 values are
+`de5ae241c037cf9a0b37f456d777d51c544c8f725cf2efe8a51c45ae968a0fc2`
+and `2849c2143f4d7e5195aa69f4b0f26c0b5adac34e533bfd72ed99413ca711c807`.
+The default OpenGL path remains a separate guarded hardware-subgroup artifact.
+The runtime proof opts into explicit software subgroups instead, producing a
+5,585-byte axis-32 artifact with SHA-256
+`f69dad597cefc34f7908799aaf0ba2eac47a0dcdd91e5f2bf3d7247172fa84b9`
+and a 7,204-byte axis-2049 artifact with SHA-256
+`eb195e15089f4e7bade380af55e8b7e167c4b89f80b2f25675eb71196a5468ce`.
+Both pass `glslangValidator` and `spirv-val`, contain exactly 11
+`OpControlBarrier` instructions, and contain no `OpGroupNonUniform` operation.
+
+The 544-thread artifact partitions the workgroup into 17 independent logical
+subgroups. Its subgroup-zero final reductions execute under a lane-dependent
+condition, so CrossTL evaluates the branch prefix only for active lanes and
+contributes typed identities from inactive lanes before calling the uniform
+barriered helper: negative infinity for float maximum and zero for float sum.
+The same fail-closed lifting supports 32-bit float, int, and uint sum, minimum,
+and maximum identities. Conditional shuffle and structurally ambiguous masked
+collectives remain rejected.
+
+Windows CI requires both parameterized workloads to execute through the
+Direct3D 12 WARP native loader. Linux CI requires both software artifacts to
+execute through surfaceless Mesa EGL; a local Linux arm64 llvmpipe run passed
+both workloads. Every output is compared with a stable float32 CPU Softmax
+reference at `5e-5` absolute and relative tolerance. This is bounded evidence
+for two block float32 workloads only: the looped path above axis 4096, float16
+and bfloat16 variants, MLX host redirection, and the full MLX test suite remain
+outside the claim. Selected entry-scoped Metal generation currently fails
+explicitly with `project.translate.entry-point-target-unsupported`, so this
+proof does not claim the Metal round trip.
+
+The historical reduced-frontier aggregate can still list `softmax.metal` under
+workgroup-size dispatch blockers because that aggregate run does not consume
+this later current-corpus entry-scoped contract. That result describes the
+aggregate pipeline coordinate; it does not mean that no bounded Softmax
+translation, package, or native runtime integration exists.
 
 The current-corpus dot-product proof selects
 `dot_product_float32_it32_tg512_sg16` directly from `dot.metal`. Translation

@@ -20260,15 +20260,103 @@ def test_glsl_software_subgroup_lowers_multiple_subgroups_and_masked_sum(
     )
 
 
-def test_glsl_software_subgroup_rejects_masked_non_sum_collective():
+@pytest.mark.parametrize(
+    ("operation", "value_type", "value_expression", "identity", "helper"),
+    [
+        (
+            "WaveActiveMin",
+            "float",
+            "float(gl_LocalInvocationID.x)",
+            "uintBitsToFloat(0x7f800000u)",
+            "crossglSoftwareSubgroupMinFloat",
+        ),
+        (
+            "WaveActiveMax",
+            "float",
+            "float(gl_LocalInvocationID.x)",
+            "uintBitsToFloat(0xff800000u)",
+            "crossglSoftwareSubgroupMaxFloat",
+        ),
+        (
+            "WaveActiveMin",
+            "int",
+            "int(gl_LocalInvocationID.x) - 7",
+            "2147483647",
+            "crossglSoftwareSubgroupMinInt",
+        ),
+        (
+            "WaveActiveMax",
+            "int",
+            "int(gl_LocalInvocationID.x) - 7",
+            "(-2147483647 - 1)",
+            "crossglSoftwareSubgroupMaxInt",
+        ),
+        (
+            "WaveActiveMin",
+            "uint",
+            "gl_LocalInvocationID.x",
+            "0xffffffffu",
+            "crossglSoftwareSubgroupMinUint",
+        ),
+        (
+            "WaveActiveMax",
+            "uint",
+            "gl_LocalInvocationID.x",
+            "0u",
+            "crossglSoftwareSubgroupMaxUint",
+        ),
+    ],
+)
+def test_glsl_software_subgroup_lowers_masked_min_max_collectives(
+    operation,
+    value_type,
+    value_expression,
+    identity,
+    helper,
+    tmp_path,
+):
+    code = f"""
+    shader GLSLSoftwareMaskedReduction {{
+        compute {{
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {value_type} value = {value_expression};
+                if (gl_LocalInvocationID.x < 16u) {{
+                    value = {operation}(value);
+                }}
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert (
+        "bool crossglSoftwareSubgroupActive = " "(gl_LocalInvocationID.x < 16u);"
+    ) in generated
+    assert f"{value_type} crossglSoftwareSubgroupInput = {identity};" in generated
+    assert f"{helper}(crossglSoftwareSubgroupInput)" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert "gl_Subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"software_masked_{operation}_{value_type}",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_rejects_masked_shuffle():
     code = """
-    shader GLSLSoftwareMaskedMin {
+    shader GLSLSoftwareMaskedShuffle {
         compute {
             layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
             void main() {
-                float value = float(gl_LocalInvocationID.x);
+                uint value = gl_LocalInvocationID.x;
                 if (gl_LocalInvocationID.x < 16u) {
-                    value = WaveActiveMin(value);
+                    value = WaveShuffleDown(value, 1u);
                 }
             }
         }
@@ -20281,7 +20369,7 @@ def test_glsl_software_subgroup_rejects_masked_non_sum_collective():
         )
 
     assert raised.value.reason == "potentially-divergent-control-flow"
-    assert raised.value.operation == "WaveActiveMin"
+    assert raised.value.operation == "WaveShuffleDown"
 
 
 @pytest.mark.parametrize(

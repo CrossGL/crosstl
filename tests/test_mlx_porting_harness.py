@@ -10050,6 +10050,146 @@ def test_full_corpus_checkpoint_probe_records_verified_resume_coordinate():
     }
 
 
+def test_softmax_native_runtime_evidence_records_bounded_cross_target_proof():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["softmax_native_runtime_status"]
+    assert status == module.MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE
+    assert status["status"] == (
+        "translated-packaged-and-cross-target-native-runtime-required"
+    )
+    assert status["commit"] == module.MLX_CORPUS_COMMIT
+    assert status["source"] == module.MLX_SOFTMAX_SOURCE
+    assert status["source_sha256"] == module.MLX_CURRENT_SOFTMAX_SHA256
+    assert status["selected_entry_point"] == "block_softmax_float32"
+
+    contract = status["dispatch_contract"]
+    assert contract["path"] == (
+        "demos/integrations/mlx/contracts/softmax.native-loader.dispatch.json"
+    )
+    assert contract["content_identity"] == (
+        module.MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY
+    )
+    assert contract["workload_count"] == 2
+    assert contract["host_formula"] == "32 * ceilDiv(ceilDiv(axisSize, 4), 32)"
+    assert contract["block_limit"] == 4096
+    assert contract["subgroup_width"] == 32
+    assert contract["variants"] == module.MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_VARIANTS
+    assert set(contract["variants"]) == {
+        "block-float32-axis-32-two-rows",
+        "block-float32-axis-2049",
+    }
+    assert contract["variants"]["block-float32-axis-32-two-rows"]["workgroup_size"] == [
+        32,
+        1,
+        1,
+    ]
+    assert contract["variants"]["block-float32-axis-2049"]["workgroup_size"] == [
+        544,
+        1,
+        1,
+    ]
+
+    assert status["materialization"] == {
+        "concrete_specialization_count": 2,
+        "reachable_specialization_count": 5,
+        "dependency_discovery_work_count": 11,
+        "pruned_candidate_count": 131,
+        "selected_parameters": {
+            "AccT": "float",
+            "N_READS": "SOFTMAX_N_READS",
+            "T": "float",
+        },
+    }
+    assert status["guarded_artifacts"]["directx"]["block-float32-axis-32-two-rows"] == {
+        "sha256": "de5ae241c037cf9a0b37f456d777d51c544c8f725cf2efe8a51c45ae968a0fc2",
+        "size_bytes": 4213,
+    }
+    assert status["guarded_artifacts"]["directx"]["block-float32-axis-2049"] == {
+        "sha256": "2849c2143f4d7e5195aa69f4b0f26c0b5adac34e533bfd72ed99413ca711c807",
+        "size_bytes": 4214,
+    }
+    directx_artifacts = status["guarded_artifacts"]["directx"]
+    assert directx_artifacts["compiler_profile"] == "cs_6_6"
+    assert directx_artifacts["compiler_arguments"] == ["-enable-16bit-types"]
+    assert directx_artifacts["warnings_as_errors"] is True
+    assert directx_artifacts["compiler_validation_status"] == "passed"
+    software = status["software_opengl_artifacts"]
+    assert software["block-float32-axis-32-two-rows"]["sha256"] == (
+        "f69dad597cefc34f7908799aaf0ba2eac47a0dcdd91e5f2bf3d7247172fa84b9"
+    )
+    assert software["block-float32-axis-32-two-rows"]["size_bytes"] == 5585
+    assert software["block-float32-axis-2049"]["sha256"] == (
+        "eb195e15089f4e7bade380af55e8b7e167c4b89f80b2f25675eb71196a5468ce"
+    )
+    assert software["block-float32-axis-2049"]["size_bytes"] == 7204
+    assert software["block-float32-axis-2049"]["logical_subgroup_count"] == 17
+    assert software["block-float32-axis-2049"]["masked_collective_count"] == 2
+    for workload_id in (
+        "block-float32-axis-32-two-rows",
+        "block-float32-axis-2049",
+    ):
+        assert software[workload_id]["control_barrier_instruction_count"] == 11
+        assert software[workload_id]["group_non_uniform_instruction_count"] == 0
+
+    subgroup = status["software_subgroup"]
+    assert subgroup["selected_kernel_operations"] == [
+        "WaveActiveMax(float)",
+        "WaveActiveSum(float)",
+    ]
+    assert subgroup["masked_reduction_operations"] == [
+        "WaveActiveSum",
+        "WaveActiveMin",
+        "WaveActiveMax",
+    ]
+    assert subgroup["typed_mask_identities"]["WaveActiveMax"] == {
+        "float": "-infinity",
+        "int": "INT_MIN",
+        "uint": "0u",
+    }
+    assert subgroup["masked_shuffle_supported"] is False
+    assert status["runtime_package"]["resource_count"] == 3
+    assert status["runtime_package"]["blocked_load_unit_count"] == 0
+    assert status["native_runtime"]["directx"]["status"] == "required-on-ci"
+    assert status["native_runtime"]["opengl"]["status"] == "required-on-ci"
+    assert (
+        status["native_runtime"]["opengl"]["local_linux_arm64_validation"] == "passed"
+    )
+    assert status["metal_roundtrip_boundary"] == {
+        "status": "entry-scoped-target-unsupported",
+        "diagnostic": "project.translate.entry-point-target-unsupported",
+        "missing_capability": "artifact.entry-point-selection",
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects current-pinned `block_softmax_float32`" in readme
+    assert "Axis size 2049 with one row uses `[544, 1, 1]`" in readme
+    assert "17 independent logical subgroups" in readme
+    assert "negative infinity for float maximum and zero for float sum" in readme
+    assert "does not mean that no bounded Softmax translation" in readme
+
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "a bounded Softmax proof for ``block_softmax_float32``" in guide
+    assert "typed inactive-lane identities" in guide
+    assert "does not claim a Metal round trip" in guide
+
+
 def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
     module = _load_harness()
     gaps = json.loads(

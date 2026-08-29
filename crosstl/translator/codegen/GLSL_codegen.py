@@ -3786,7 +3786,11 @@ class GLSLCodeGen:
         if not self.glsl_side_effect_free_expression(condition):
             return None
         records = self.glsl_software_subgroup_operation_records(node)
-        if len(records) != 1 or records[0][0] != "WaveActiveSum":
+        if len(records) != 1 or records[0][0] not in {
+            "WaveActiveSum",
+            "WaveActiveMin",
+            "WaveActiveMax",
+        }:
             return None
         statements = self.glsl_software_subgroup_statement_list(node.if_body)
         operation_node = records[0][1]
@@ -26148,8 +26152,8 @@ complex64_t crossgl_complex64_mod_assign(
             or mapped_target_type != mapped_value_type
         ):
             raise self.glsl_software_subgroup_error(
-                "OpenGL masked software subgroup sum requires a matching 32-bit "
-                "numeric scalar payload and assignment target",
+                "OpenGL masked software subgroup reduction requires a matching "
+                "32-bit numeric scalar payload and assignment target",
                 operation=operation,
                 reason="value-type-unsupported",
                 source_location=getattr(operation_node, "source_location", None),
@@ -26167,7 +26171,19 @@ complex64_t crossgl_complex64_mod_assign(
         condition = self.generate_glsl_boolean_context(
             getattr(node, "condition", getattr(node, "if_condition", None))
         )
-        identity = {"float": "0.0", "int": "0", "uint": "0u"}[mapped_value_type]
+        identity = {
+            "WaveActiveSum": {"float": "0.0", "int": "0", "uint": "0u"},
+            "WaveActiveMin": {
+                "float": "uintBitsToFloat(0x7f800000u)",
+                "int": "2147483647",
+                "uint": "0xffffffffu",
+            },
+            "WaveActiveMax": {
+                "float": "uintBitsToFloat(0xff800000u)",
+                "int": "(-2147483647 - 1)",
+                "uint": "0u",
+            },
+        }[operation][mapped_value_type]
         indent_str = "    " * indent
         inner_indent = "    " * (indent + 1)
         code = f"{indent_str}bool {active_name} = {condition};\n"

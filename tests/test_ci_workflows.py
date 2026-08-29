@@ -2454,6 +2454,18 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert '"tests/test_mlx_porting_harness.py"' in mlx_porting
     assert '"tests/test_mlx_logsumexp_dispatch_contract_fixture.py"' in mlx_porting
     assert '"tests/test_mlx_rms_norm_dispatch_contract_fixture.py"' in mlx_porting
+    assert '"tests/test_translator/test_mlx_softmax_native_loader.py"' in mlx_porting
+    assert "Prove pinned MLX Softmax Direct3D native-loader execution" in mlx_porting
+    assert "CROSTL_REQUIRE_MLX_SOFTMAX_DIRECTX_NATIVE_LOADER" in mlx_porting
+    assert (
+        "test_pinned_mlx_softmax_executes_through_directx_native_loader" in mlx_porting
+    )
+    assert "Prove pinned MLX Softmax OpenGL native-loader execution" in mlx_porting
+    assert "CROSTL_REQUIRE_MLX_SOFTMAX_OPENGL_TOOLCHAIN" in mlx_porting
+    assert "CROSTL_REQUIRE_MLX_SOFTMAX_OPENGL_NATIVE_LOADER" in mlx_porting
+    assert (
+        "test_pinned_mlx_softmax_executes_through_opengl_native_loader" in mlx_porting
+    )
     assert '"tests/test_translator/test_mlx_rms_norm_native_loader.py"' in mlx_porting
     assert "Prove pinned MLX RMSNorm Direct3D native-loader execution" in mlx_porting
     assert "CROSTL_REQUIRE_MLX_RMS_NORM_DIRECTX_NATIVE_LOADER" in mlx_porting

@@ -1,0 +1,208 @@
+{
+  "kind": "crosstl-host-dispatch-contract",
+  "schemaVersion": 1,
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "sourceReferences": {
+      "hostDispatch": "mlx/backend/metal/softmax.cpp",
+      "kernel": "mlx/backend/metal/kernels/softmax.metal"
+    },
+    "scope": {
+      "description": "Pinned float32 Softmax block-entry dispatch records.",
+      "blockEntriesIncluded": true,
+      "loopedEntriesIncluded": false,
+      "runtimeExecutionVerified": false,
+      "numericalParityVerified": false
+    }
+  },
+  "inputs": [
+    {
+      "name": "axisSize",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "axis_size"
+      }
+    },
+    {
+      "name": "nRows",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "n_rows"
+      }
+    },
+    {
+      "name": "dtype",
+      "role": "dtype",
+      "type": "string"
+    }
+  ],
+  "workloads": [
+    {
+      "id": "block-float32-axis-32-two-rows",
+      "values": {
+        "axisSize": 32,
+        "nRows": 2,
+        "dtype": "float32"
+      },
+      "provenance": {
+        "hostFunction": "Softmax::eval_gpu",
+        "branch": "block",
+        "testSource": "python/tests/test_ops.py::test_softmax",
+        "shape": [
+          16,
+          8,
+          32
+        ]
+      }
+    },
+    {
+      "id": "block-float32-axis-2049",
+      "values": {
+        "axisSize": 2049,
+        "nRows": 1,
+        "dtype": "float32"
+      },
+      "provenance": {
+        "hostFunction": "Softmax::eval_gpu",
+        "branch": "block",
+        "testSource": "python/tests/test_ops.py::test_softmax",
+        "shape": [
+          2049
+        ]
+      }
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "simdWidth",
+      "type": "integer",
+      "provenance": {
+        "kernelSymbol": "SIMD_SIZE"
+      }
+    },
+    {
+      "name": "maxThreadsPerWorkgroup",
+      "type": "integer",
+      "provenance": {
+        "requirement": "bounded device record"
+      }
+    }
+  ],
+  "devices": [
+    {
+      "id": "wave32-max1024",
+      "values": {
+        "simdWidth": 32,
+        "maxThreadsPerWorkgroup": 1024
+      },
+      "provenance": {
+        "scope": "bounded wave32 device record"
+      }
+    }
+  ],
+  "contracts": [
+    {
+      "id": "mlx-softmax-unit-tests",
+      "source": "mlx/backend/metal/kernels/softmax.metal",
+      "provenance": {
+        "hostSource": "mlx/backend/metal/softmax.cpp",
+        "kernelSource": "mlx/backend/metal/kernels/softmax.metal",
+        "hostFormula": "32 * ceilDiv(ceilDiv(axisSize, 4), 32)",
+        "dispatchNormalization": "block workgroup count derived from dispatch_threads"
+      },
+      "branches": [
+        {
+          "id": "block-float32",
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "dtype"
+                  },
+                  "float32"
+                ]
+              },
+              {
+                "op": "le",
+                "args": [
+                  {
+                    "input": "axisSize"
+                  },
+                  4096
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "capability": "simdWidth"
+                  },
+                  32
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "capability": "maxThreadsPerWorkgroup"
+                  },
+                  1024
+                ]
+              }
+            ]
+          },
+          "entryPoint": "block_softmax_float32",
+          "workgroupSize": [
+            {
+              "op": "multiply",
+              "args": [
+                32,
+                {
+                  "op": "ceilDiv",
+                  "args": [
+                    {
+                      "op": "ceilDiv",
+                      "args": [
+                        {
+                          "input": "axisSize"
+                        },
+                        4
+                      ]
+                    },
+                    32
+                  ]
+                }
+              ]
+            },
+            1,
+            1
+          ],
+          "subgroupWidth": {
+            "capability": "simdWidth"
+          },
+          "dispatch": {
+            "workgroupCount": [
+              {
+                "input": "nRows"
+              },
+              1,
+              1
+            ]
+          },
+          "provenance": {
+            "hostFunction": "Softmax::eval_gpu",
+            "branch": "block",
+            "loopedLimit": 4096,
+            "readsPerThread": 4
+          }
+        }
+      ]
+    }
+  ]
+}

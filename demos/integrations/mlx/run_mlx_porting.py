@@ -1432,6 +1432,245 @@ MLX_OPENGL_LOGSUMEXP_SOFTWARE_RUNTIME_EVIDENCE = {
     "numerical_parity_claimed": False,
     "runtime_parity_claimed": False,
 }
+MLX_CURRENT_SOFTMAX_SHA256 = (
+    "d19231c66973edc3944f12529d1cc393029e7f7262b914907c710ef9dbcb39e2"
+)
+MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:1ef1b663b0ff87dbd193bf73dded4dd1c8008e03dcd9c7e8d9ff8aaad832b006"
+)
+MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_VARIANTS = {
+    "block-float32-axis-32-two-rows": {
+        "artifact_id": (
+            "sha256:fa3eb57ad31078c7300855a29c8d67d5f6ac9595e33b651085a9e5fcf3883ea2"
+        ),
+        "dispatch_variant_id": (
+            "sha256:59a3029f50afad7ed80bd0533849cf33f1cdd8d2e5586b6b17b82d0e979119e8"
+        ),
+        "inputs": {"axisSize": 32, "dtype": "float32", "nRows": 2},
+        "workgroup_size": [32, 1, 1],
+        "dispatch_workgroup_count": [2, 1, 1],
+    },
+    "block-float32-axis-2049": {
+        "artifact_id": (
+            "sha256:956659b706f518421d9f99b08d028ec0a9ceeb359a556a7777c565dfb8e5df37"
+        ),
+        "dispatch_variant_id": (
+            "sha256:fa751ebed377b5371cb0a4f91c38eaf8ac95e6430f03ac4a21ef4bddcda91a0d"
+        ),
+        "inputs": {"axisSize": 2049, "dtype": "float32", "nRows": 1},
+        "workgroup_size": [544, 1, 1],
+        "dispatch_workgroup_count": [1, 1, 1],
+    },
+}
+MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
+    "status": "translated-packaged-and-cross-target-native-runtime-required",
+    "commit": MLX_CORPUS_COMMIT,
+    "source": MLX_SOFTMAX_SOURCE,
+    "source_sha256": MLX_CURRENT_SOFTMAX_SHA256,
+    "selected_entry_point": "block_softmax_float32",
+    "dispatch_contract": {
+        "path": (
+            "demos/integrations/mlx/contracts/" "softmax.native-loader.dispatch.json"
+        ),
+        "content_identity": MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY,
+        "workload_count": len(MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_VARIANTS),
+        "host_formula": "32 * ceilDiv(ceilDiv(axisSize, 4), 32)",
+        "block_limit": 4096,
+        "subgroup_width": 32,
+        "variants": MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_VARIANTS,
+    },
+    "project_translation": {
+        "unit_count": 1,
+        "guarded_artifact_count_by_target": {"directx": 2, "opengl": 2},
+        "software_opengl_artifact_count": 2,
+        "translated_count_by_target": {"directx": 2, "opengl": 2},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+    },
+    "materialization": {
+        "concrete_specialization_count": 2,
+        "reachable_specialization_count": 5,
+        "dependency_discovery_work_count": 11,
+        "pruned_candidate_count": 131,
+        "selected_parameters": {
+            "AccT": "float",
+            "N_READS": "SOFTMAX_N_READS",
+            "T": "float",
+        },
+    },
+    "guarded_artifacts": {
+        "directx": {
+            "block-float32-axis-32-two-rows": {
+                "sha256": (
+                    "de5ae241c037cf9a0b37f456d777d51c544c8f725cf2efe8a51c45ae968a0fc2"
+                ),
+                "size_bytes": 4213,
+            },
+            "block-float32-axis-2049": {
+                "sha256": (
+                    "2849c2143f4d7e5195aa69f4b0f26c0b5adac34e533bfd72ed99413ca711c807"
+                ),
+                "size_bytes": 4214,
+            },
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "compiler": "dxc",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types"],
+            "warnings_as_errors": True,
+            "compiler_validation_status": "passed",
+        },
+        "opengl": {
+            "block-float32-axis-32-two-rows": {
+                "sha256": (
+                    "5a1da27d4acc858937ddbfc73aed27b2270c9b17e02d6cf9ebb920980dbc5a51"
+                ),
+                "size_bytes": 4663,
+            },
+            "block-float32-axis-2049": {
+                "sha256": (
+                    "9d185604faa31f5dd013b2e009683658c063f0105f516fb02891ea3ab2b5485f"
+                ),
+                "size_bytes": 4664,
+            },
+            "subgroup_enforcement": "glsl-subgroup-size-guard",
+            "compiler": "glslangValidator",
+            "validator": "spirv-val",
+        },
+    },
+    "software_opengl_artifacts": {
+        "block-float32-axis-32-two-rows": {
+            "sha256": (
+                "f69dad597cefc34f7908799aaf0ba2eac47a0dcdd91e5f2bf3d7247172fa84b9"
+            ),
+            "size_bytes": 5585,
+            "workgroup_size": [32, 1, 1],
+            "logical_subgroup_count": 1,
+            "masked_collective_count": 0,
+            "control_barrier_instruction_count": 11,
+            "group_non_uniform_instruction_count": 0,
+        },
+        "block-float32-axis-2049": {
+            "sha256": (
+                "eb195e15089f4e7bade380af55e8b7e167c4b89f80b2f25675eb71196a5468ce"
+            ),
+            "size_bytes": 7204,
+            "workgroup_size": [544, 1, 1],
+            "logical_subgroup_count": 17,
+            "masked_collective_count": 2,
+            "control_barrier_instruction_count": 11,
+            "group_non_uniform_instruction_count": 0,
+        },
+        "compiler": "glslangValidator",
+        "compiler_target": "OpenGL/SPIR-V 1.3",
+        "validator": "spirv-val",
+        "validator_target": "SPIR-V 1.3",
+        "status": "passed",
+    },
+    "software_subgroup": {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "selected_kernel_operations": [
+            "WaveActiveMax(float)",
+            "WaveActiveSum(float)",
+        ],
+        "masked_reduction_operations": [
+            "WaveActiveSum",
+            "WaveActiveMin",
+            "WaveActiveMax",
+        ],
+        "typed_mask_identities": {
+            "WaveActiveSum": {"float": "0.0", "int": "0", "uint": "0u"},
+            "WaveActiveMin": {
+                "float": "+infinity",
+                "int": "INT_MAX",
+                "uint": "UINT_MAX",
+            },
+            "WaveActiveMax": {
+                "float": "-infinity",
+                "int": "INT_MIN",
+                "uint": "0u",
+            },
+        },
+        "masked_shuffle_supported": False,
+        "artifact_marker": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+        "hardware_subgroup_extensions_emitted": False,
+        "hardware_subgroup_marker_emitted": False,
+        "hardware_subgroup_execution_metadata_emitted": False,
+        "unsupported_contract_behavior": "reject-before-artifact-emission",
+    },
+    "runtime_package": {
+        "artifact_count_per_variant_and_target": 1,
+        "ready_load_unit_count_per_variant_and_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count": 3,
+        "resources": [
+            {"binding": 0, "role": "input", "dtype": "float32"},
+            {"binding": 1, "role": "output", "dtype": "float32"},
+            {"binding": 2, "role": "axis_size", "dtype": "int32"},
+        ],
+    },
+    "workloads": {
+        "block-float32-axis-32-two-rows": {
+            "input_shape": [2, 32],
+            "input_values": "row0=(index-16)/8; row1=(((index*7)%19)-9)/5",
+            "reference": "row-wise stable exp(x-max)/sum(exp(x-max))",
+            "output_element_count": 64,
+        },
+        "block-float32-axis-2049": {
+            "input_shape": [2049],
+            "input_values": "(((index*13)%37)-18)/7",
+            "reference": "stable exp(x-max)/sum(exp(x-max))",
+            "output_element_count": 2049,
+        },
+        "absolute_tolerance": 0.00005,
+        "relative_tolerance": 0.00005,
+    },
+    "native_runtime": {
+        "directx": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_softmax_native_loader.py::"
+                "test_pinned_mlx_softmax_executes_through_directx_native_loader"
+            ),
+        },
+        "opengl": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-headless-egl-software-opengl",
+            "status": "required-on-ci",
+            "local_linux_arm64_validation": "passed",
+            "test": (
+                "tests/test_translator/test_mlx_softmax_native_loader.py::"
+                "test_pinned_mlx_softmax_executes_through_opengl_native_loader"
+            ),
+        },
+    },
+    "metal_roundtrip_boundary": {
+        "status": "entry-scoped-target-unsupported",
+        "diagnostic": "project.translate.entry-point-target-unsupported",
+        "missing_capability": "artifact.entry-point-selection",
+    },
+    "remaining_scope": {
+        "looped_axis_sizes_above_4096_included": False,
+        "float16_and_bfloat16_included": False,
+        "precise_half_and_bfloat16_entries_included": False,
+        "other_axis_sizes_included": False,
+        "mlx_host_runtime_integration_included": False,
+        "full_mlx_test_suite_included": False,
+    },
+    "runtime_execution_attempted": True,
+    "runtime_integration_included": True,
+    "selected_workload_numerical_parity_verified": True,
+    "complete_runtime_coverage_claimed": False,
+    "full_mlx_test_suite_included": False,
+    "numerical_parity_claimed": False,
+    "runtime_parity_claimed": False,
+}
 MLX_CURRENT_RMS_NORM_SHA256 = (
     "b2e04e377fdad1d645581f9beeaf9cbb06d1ad32926161e06cbc15240caf12bf"
 )

@@ -527,16 +527,18 @@ unconditional, top-level, and owned by that sole entry. Compile-time branches,
 canonical constant loops, and canonical runtime loops whose integer bounds are
 proven workgroup-uniform remain valid.
 
-One narrow lane-dependent form is also supported: a direct
-``WaveActiveSum`` assignment in a top-level entry-owned ``if`` with no
-``else``. The condition must be side-effect-free, the branch must contain
-exactly that one subgroup operation, declarations and escaping control flow
-cannot precede it, and the payload and target must be matching 32-bit numeric
-scalars. CrossTL evaluates the branch prefix only for active lanes, contributes
-the additive identity from inactive lanes, invokes the barriered subgroup
-helper uniformly across the workgroup, and exposes the result only to active
-lanes. Divergent minimum, maximum, shuffle, nested, multi-operation, and other
-unproven shapes continue to fail closed.
+One narrow lane-dependent reduction form is also supported: a direct
+``WaveActiveSum``, ``WaveActiveMin``, or ``WaveActiveMax`` assignment in a
+top-level entry-owned ``if`` with no ``else``. The condition must be
+side-effect-free, the branch must contain exactly that one subgroup operation,
+declarations and escaping control flow cannot precede it, and the payload and
+target must be matching 32-bit numeric scalars. CrossTL evaluates the branch
+prefix only for active lanes, contributes a typed identity from inactive lanes,
+invokes the barriered subgroup helper uniformly across the workgroup, and
+exposes the result only to active lanes. Sum uses zero. Minimum uses positive
+infinity, ``INT_MAX``, or ``UINT_MAX``; maximum uses negative infinity,
+``INT_MIN``, or unsigned zero. Conditional shuffle, nested or multi-operation
+branches, and other unproven shapes continue to fail closed.
 
 Direct source references to raw ``gl_Subgroup*`` or ``subgroup*`` builtins,
 empty operation sets, unsupported payloads or operations, and unresolved helper
@@ -1463,6 +1465,30 @@ compare all 32 input-gradient and 32 one-group weight-gradient values. The
 one-row/one-group boundary makes the group-local weight gradient equal to the
 final host reduction; multi-row reduction, other dtypes and axes, MLX host
 redirection, and the full MLX test suite remain outside this proof.
+
+The current pin additionally has a bounded Softmax proof for
+``block_softmax_float32``. Its checked dispatch contract applies the pinned
+host formula ``32 * ceilDiv(ceilDiv(axisSize, 4), 32)`` to two rows of axis 32
+and one row of axis 2049, producing workgroups ``[32, 1, 1]`` and
+``[544, 1, 1]``. Both DirectX artifacts retain ``WaveSize(32)``. OpenGL keeps
+the default guarded hardware-subgroup artifacts and separately packages
+explicit 32-lane software-subgroup artifacts; the wide artifact partitions 544
+invocations into 17 logical subgroups and uses typed inactive-lane identities
+for masked maximum and sum reductions. Official DXC accepts both HLSL artifacts
+under ``cs_6_6`` with ``-enable-16bit-types`` and warnings as errors. Both
+software modules pass
+``glslangValidator`` and ``spirv-val``, contain 11 control barriers, and contain
+no group-nonuniform SPIR-V instruction.
+
+Windows CI requires both workloads to execute through Direct3D 12 WARP, and
+Linux CI requires both to execute through surfaceless Mesa EGL. Every output is
+compared with a stable float32 CPU Softmax reference at ``5e-5`` absolute and
+relative tolerance. This evidence covers only the two finite float32 block
+workloads: axis sizes above 4096, half and bfloat16 entries, MLX host
+redirection, and the full MLX test suite remain outside the claim. Selected
+entry-scoped Metal generation also remains unavailable and fails explicitly
+with ``project.translate.entry-point-target-unsupported``; this bounded proof
+does not claim a Metal round trip.
 
 Build a versioned native loader ABI descriptor and optional C declarations for
 one ready load unit:
