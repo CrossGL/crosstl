@@ -15773,6 +15773,39 @@ def test_hlsl_metal_as_type_native_binary16_uses_exact_intrinsics(tmp_path):
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_native_binary16_compound_assignment_promotes_exact_payload(tmp_path):
+    shader = """
+    shader HlslNativeBinary16SubnormalArithmetic {
+        float16_t scalePayload(uint16_t bits) {
+            float16_t value = as_type<float16_t>(bits);
+            value *= 16384.0;
+            return value;
+        }
+
+        float promotePayload(uint16_t bits) {
+            float16_t value = as_type<float16_t>(bits);
+            return value * 2.0;
+        }
+
+        compute {
+            @ stage_entry
+            @ numthreads(1, 1, 1)
+            void main() {}
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float16_t value = asfloat16(bits);" in generated
+    assert (
+        "value = float16_t((f16tof32(uint(asuint16(value))) * 16384.0));" in generated
+    )
+    assert "return (f16tof32(uint(asuint16(value))) * 2.0);" in generated
+    assert "value *= 16384.0;" not in generated
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
 @pytest.mark.parametrize(
     ("source_type", "target_type", "message"),
     [

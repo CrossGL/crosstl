@@ -10930,7 +10930,96 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         target_type = operation_base if width == 1 else f"{operation_base}{width}"
         if type_info["mapped_type"] == target_type:
             return rendered
+        if type_info["base_type"] == "float16_t" and operation_base in {
+            "float",
+            "double",
+        }:
+            uint_type = "uint" if width == 1 else f"uint{width}"
+            decoded = f"f16tof32({uint_type}(asuint16({rendered})))"
+            return (
+                decoded
+                if operation_base == "float"
+                else f"double{width if width > 1 else ''}({decoded})"
+            )
         return f"{target_type}({rendered})"
+
+    def generate_hlsl_native_16_bit_compound_assignment(
+        self,
+        node,
+        target,
+        value,
+        operator,
+        *,
+        target_type=None,
+        lhs=None,
+    ):
+        mapped_operator = self.map_operator(operator)
+        binary_operator = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+        }.get(mapped_operator)
+        if binary_operator is None:
+            return None
+
+        target_type = target_type or self.expression_result_type(target)
+        target_info = self.hlsl_floating_arithmetic_type_info(target_type)
+        if target_info is None or target_info["base_type"] != "float16_t":
+            return None
+        value_type = self.expression_result_type(value)
+        contract = self.hlsl_native_16_bit_arithmetic_contract(
+            node,
+            binary_operator,
+            target_type,
+            value_type,
+        )
+        if contract is None:
+            return None
+        if self.hlsl_expression_has_observable_side_effects(target):
+            self.hlsl_native_16_bit_arithmetic_error(
+                node,
+                binary_operator,
+                target_type,
+                value_type,
+                operation_type=contract["operation_type"],
+                reason="side-effecting-assignment-target",
+                detail=(
+                    "the assignment target would need to be evaluated more than "
+                    "once; materialize its index or pointer before the assignment"
+                ),
+            )
+        if self.hlsl_expression_has_observable_side_effects(
+            value
+        ) and not self.hlsl_minimum_precision_compound_target_is_stable(target):
+            self.hlsl_native_16_bit_arithmetic_error(
+                node,
+                binary_operator,
+                target_type,
+                value_type,
+                operation_type=contract["operation_type"],
+                reason="rhs-may-change-assignment-target",
+                detail=(
+                    "the side-effecting right operand may change the storage "
+                    "selected by the repeated assignment target; materialize its "
+                    "index or pointer before the assignment"
+                ),
+            )
+
+        lhs = lhs or self.generate_expression(target)
+        rhs = self.generate_expression_with_expected(value, None)
+        left = self.hlsl_native_16_bit_arithmetic_operand(
+            lhs,
+            contract["left"],
+            contract["operation_base"],
+        )
+        right = self.hlsl_native_16_bit_arithmetic_operand(
+            rhs,
+            contract["right"],
+            contract["operation_base"],
+        )
+        operation = f"({left} {binary_operator} {right})"
+        return f"{lhs} = {target_info['mapped_type']}({operation})"
 
     def hlsl_native_16_bit_binary_expression(
         self,
@@ -15849,6 +15938,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if compound_assignment is not None:
             return compound_assignment
+        compound_assignment = self.generate_hlsl_native_16_bit_compound_assignment(
+            target,
+            target,
+            value,
+            op,
+            lhs=lhs,
+            target_type=binding.get("element_type") if binding else None,
+        )
+        if compound_assignment is not None:
+            return compound_assignment
         compound_assignment = (
             self.generate_hlsl_minimum_precision_integer_compound_assignment(
                 target,
@@ -16055,6 +16154,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if compound_assignment is not None:
                 return compound_assignment
+            compound_assignment = self.generate_hlsl_native_16_bit_compound_assignment(
+                node,
+                target,
+                value,
+                op,
+                lhs=lhs,
+                target_type=binding.get("element_type") if binding else None,
+            )
+            if compound_assignment is not None:
+                return compound_assignment
             compound_assignment = (
                 self.generate_hlsl_minimum_precision_integer_compound_assignment(
                     node,
@@ -16115,6 +16224,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return compound_assignment
 
         compound_assignment = self.generate_hlsl_bfloat16_compound_assignment(
+            node,
+            target,
+            value,
+            op,
+            target_type=target_type,
+        )
+        if compound_assignment is not None:
+            return compound_assignment
+
+        compound_assignment = self.generate_hlsl_native_16_bit_compound_assignment(
             node,
             target,
             value,

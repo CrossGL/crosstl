@@ -960,17 +960,29 @@ and
 
 Entry-scoped translation materializes only the selected specialization with
 `T=float`, `group_size=32`, `bits=4`, and `has_global_scale=false`. The
-7,809-byte HLSL has SHA-256
-`4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352`,
+7,909-byte HLSL has SHA-256
+`938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627`,
 retains `[numthreads(32, 1, 1)]` and `[WaveSize(32)]`, and passes DXC under
 `cs_6_6`, `-enable-16bit-types`, and warnings as errors. Its compiled DXIL is
-4,644 bytes. Source `as_type<float16_t>(uint16_t)` now emits DXC's native
+4,732 bytes. Source `as_type<float16_t>(uint16_t)` emits DXC's native
 `asfloat16` reinterpretation (with `asint16`/`asuint16` for matching signed and
-inverse contracts), so DXIL uses `bitcast i16 ... to half` rather than numeric
-conversion. The rejected same-size HLSL under SHA-256
+inverse contracts). Mixed `float16_t *= float` then expands the exact payload
+through `f16tof32(uint(asuint16(value)))`, performs `fmul float`, and rounds once
+back through `fptrunc float ... to half`.
+
+Two rejected Windows artifacts establish both requirements. The 7,809-byte
+HLSL under SHA-256
 `3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361`
-produced `uitofp i16 ... to half`; workflow run 33271117475, job 99149649480
-therefore collapsed all 28 nonzero values to signed zero on WARP.
+produced numeric `uitofp i16 ... to half`; workflow run 33271117475, job
+99149649480 collapsed all 28 nonzero values to signed zero on WARP. Replacing
+that conversion with exact `bitcast i16 ... to half` produced same-size HLSL
+under SHA-256
+`4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352`,
+but run 33272842347, job 99154326814 exposed the next target boundary: DXIL
+consumed the intentionally constructed binary16 subnormal in `fmul half`, and
+all 28 nonzero values again became signed zero. The final
+`dx.op.legacyF16ToF32` decode moves that operation to float32 before rounding
+the normal result back to binary16.
 
 The 9,571-byte GLSL has SHA-256
 `cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da`,

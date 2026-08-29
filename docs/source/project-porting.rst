@@ -1530,17 +1530,26 @@ The same current pin has a bounded MXFP4 quantize/dequantize contract for
 ``quantized.cpp`` and ``fp_quantized.h`` fixes float32 input, group size 32,
 four payload bits, no global scale, workgroup ``[32, 1, 1]``, and one dispatched
 workgroup. Entry-scoped translation materializes only that specialization. The
-7,809-byte HLSL has SHA-256
-``4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352`` and
+7,909-byte HLSL has SHA-256
+``938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627`` and
 passes DXC under ``cs_6_6``, ``-enable-16bit-types``, and warnings as errors.
 DirectX lowers source ``as_type<float16_t>(uint16_t)`` to native
 ``asfloat16`` reinterpretation (and matching signed/inverse forms to
-``asint16``/``asuint16``), producing ``bitcast i16 ... to half`` in DXIL. The
-rejected same-size HLSL under SHA-256
+``asint16``/``asuint16``). Mixed ``float16_t *= float`` then decodes the exact
+payload through ``f16tof32(uint(asuint16(value)))``, performs ``fmul float``,
+and rounds the result once through ``fptrunc float ... to half``. The optimized
+DXIL is 4,732 bytes and uses ``dx.op.legacyF16ToF32``.
+
+Two Windows failures bound this contract. The 7,809-byte HLSL under SHA-256
 ``3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361``
-instead produced numeric ``uitofp i16 ... to half``. Workflow run 33271117475,
-job 99149649480 consequently collapsed all 28 nonzero values to signed zero on
-WARP.
+produced numeric ``uitofp i16 ... to half``; workflow run 33271117475, job
+99149649480 collapsed all 28 nonzero values to signed zero on WARP. Exact
+``bitcast i16 ... to half`` produced same-size HLSL under SHA-256
+``4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352``,
+but workflow run 33272842347, job 99154326814 showed that consuming its
+intentionally constructed binary16 subnormal in ``fmul half`` still collapsed
+all 28 nonzero values to signed zero. Promoting the payload before arithmetic
+removes that target-specific flush boundary.
 
 The 9,571-byte explicit-software-subgroup GLSL has SHA-256
 ``cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da``;

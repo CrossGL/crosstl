@@ -2280,8 +2280,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352",
-        "size_bytes": 7809,
+        "sha256": "938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627",
+        "size_bytes": 7909,
         "workgroup_size": [
           32,
           1,
@@ -2323,19 +2323,40 @@
       "sign_test": "exact IEEE-754 float32 sign bit",
       "private_scalar_struct_view": "read-only exact one-member layout",
       "directx_binary16_bitcast": "native-asfloat16-asint16-asuint16-reinterpretation",
+      "directx_binary16_mixed_arithmetic": "exact-f16tof32-promotion-before-float32-operation-and-float16-rounding",
       "opengl_binary16_bitcast": "exact-low-16-bit-payload-via-pack-unpack-half",
       "global_scale_read": "statically-eliminated-for-has_global_scale-false"
     },
-    "directx_binary16_diagnostic": {
-      "rejected_artifact_sha256": "3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361",
-      "rejected_artifact_size_bytes": 7809,
-      "workflow_run": 33271117475,
-      "job": 99149649480,
-      "output_element_count": 32,
-      "mismatched_nonzero_output_count": 28,
-      "observed_nonzero_outputs": "signed-zero-only",
-      "rejected_dxil_conversion": "uitofp-i16-to-half",
-      "corrected_dxil_conversion": "bitcast-i16-to-half"
+    "directx_binary16_diagnostics": {
+      "numeric_cast_rejection": {
+        "artifact_sha256": "3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361",
+        "artifact_size_bytes": 7809,
+        "workflow_run": 33271117475,
+        "job": 99149649480,
+        "output_element_count": 32,
+        "mismatched_nonzero_output_count": 28,
+        "observed_nonzero_outputs": "signed-zero-only",
+        "rejected_dxil_conversion": "uitofp-i16-to-half"
+      },
+      "native_half_subnormal_rejection": {
+        "artifact_sha256": "4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352",
+        "artifact_size_bytes": 7809,
+        "workflow_run": 33272842347,
+        "job": 99154326814,
+        "output_element_count": 32,
+        "mismatched_nonzero_output_count": 28,
+        "observed_nonzero_outputs": "signed-zero-only",
+        "dxil_bitcast": "bitcast-i16-to-half",
+        "rejected_dxil_arithmetic": "fmul-half-on-binary16-subnormal"
+      },
+      "corrected_dxil_contract": {
+        "artifact_sha256": "938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627",
+        "artifact_size_bytes": 7909,
+        "source_bitcast": "native-asfloat16",
+        "subnormal_decode": "legacy-f16-to-f32",
+        "arithmetic": "fmul-float",
+        "rounding": "fptrunc-float-to-half"
+      }
     },
     "software_subgroup": {
       "configuration": "project.source_options.metal.target_options.opengl.software_subgroup_width",
