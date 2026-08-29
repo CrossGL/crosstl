@@ -45,6 +45,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- DirectX relative wave-shuffle lowering now offers an explicit target-scoped `self` policy that selects only valid source lanes and returns the calling lane for out-of-range down/up/xor reads; the default undefined policy and unrelated artifact identities remain unchanged.
 - OpenGL bounded index narrowing now tracks scalar and vector-component ranges across declarations, branches, loops, casts, and mutation boundaries, normalizes supported 64-bit indices once, and fails closed when no narrowing proof exists.
 - OpenGL scalar conversion contexts, explicit source truthiness lowering, narrow integer initializer contracts, and `isnan`/`isinf` result-type inference.
 - OpenGL boolean arithmetic compound assignments and trailing-zero builtin lowering, with structured diagnostics for unsupported operand contracts and target profiles.

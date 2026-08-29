@@ -1527,6 +1527,9 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 OPENGL_SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
+DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION = (
+    "relative_wave_shuffle_out_of_range"
+)
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
 SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY = "source_specialization_constants"
@@ -6170,6 +6173,7 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
             TEMPLATE_VARIANTS_SOURCE_OPTION,
             TARGET_SOURCE_OPTIONS_KEY,
             OPENGL_SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
+            DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
             METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
             METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
         }
@@ -26059,6 +26063,22 @@ def _project_opengl_software_subgroup_width(
     return width
 
 
+def _project_directx_relative_wave_shuffle_out_of_range(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> Any | None:
+    option = DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    policy = source_options[option]
+    if target != "directx":
+        raise ValueError(
+            "relative_wave_shuffle_out_of_range is supported only by the "
+            "DirectX target"
+        )
+    return policy
+
+
 def _generate_project_target_from_crossgl_ast(
     *,
     ast: Any,
@@ -26069,8 +26089,19 @@ def _generate_project_target_from_crossgl_ast(
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
+    directx_relative_wave_shuffle_out_of_range: Any | None = None,
 ) -> str:
     codegen = get_codegen(target)
+    if directx_relative_wave_shuffle_out_of_range is not None:
+        configure_relative_shuffle = getattr(
+            codegen, "set_relative_wave_shuffle_out_of_range", None
+        )
+        if not callable(configure_relative_shuffle):
+            raise ValueError(
+                f"Target '{target}' does not consume "
+                "relative_wave_shuffle_out_of_range"
+            )
+        configure_relative_shuffle(directx_relative_wave_shuffle_out_of_range)
     if software_subgroup_width is not None:
         configure_software_subgroup = getattr(
             codegen, "set_software_subgroup_width", None
@@ -27058,10 +27089,17 @@ def _translate_project_impl(
                     else ()
                 )
                 software_subgroup_width = None
+                directx_relative_wave_shuffle_out_of_range = None
                 try:
                     software_subgroup_width = _project_opengl_software_subgroup_width(
                         target,
                         source_options,
+                    )
+                    directx_relative_wave_shuffle_out_of_range = (
+                        _project_directx_relative_wave_shuffle_out_of_range(
+                            target,
+                            source_options,
+                        )
                     )
                     unsupported_rule_target = (
                         _unsupported_workgroup_size_rule_target_error(
@@ -27338,6 +27376,7 @@ def _translate_project_impl(
                         requires_workgroup_specialization
                         or requires_subgroup_specialization
                         or software_subgroup_width is not None
+                        or directx_relative_wave_shuffle_out_of_range is not None
                     ):
                         crossgl_ast = _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -27486,23 +27525,24 @@ def _translate_project_impl(
                                     )
                                     split_artifact["execution"] = split_execution
                                     try:
-                                        split_source = (
-                                            _generate_project_target_from_crossgl_ast(
-                                                ast=crossgl_ast,
-                                                target=target,
-                                                output_path=split_output_path,
-                                                entry_point=materialized_entry,
-                                                format_output=format_output,
-                                                index_range_assertions=(
-                                                    index_range_assertions
-                                                ),
-                                                workgroup_access_assertions=(
-                                                    workgroup_access_assertions
-                                                ),
-                                                software_subgroup_width=(
-                                                    software_subgroup_width
-                                                ),
-                                            )
+                                        split_source = _generate_project_target_from_crossgl_ast(
+                                            ast=crossgl_ast,
+                                            target=target,
+                                            output_path=split_output_path,
+                                            entry_point=materialized_entry,
+                                            format_output=format_output,
+                                            index_range_assertions=(
+                                                index_range_assertions
+                                            ),
+                                            workgroup_access_assertions=(
+                                                workgroup_access_assertions
+                                            ),
+                                            software_subgroup_width=(
+                                                software_subgroup_width
+                                            ),
+                                            directx_relative_wave_shuffle_out_of_range=(
+                                                directx_relative_wave_shuffle_out_of_range
+                                            ),
                                         )
                                     except Exception as exc:
                                         if getattr(
@@ -27556,23 +27596,22 @@ def _translate_project_impl(
                             else:
                                 artifact["execution"] = execution
                                 try:
-                                    generated_source = (
-                                        _generate_project_target_from_crossgl_ast(
-                                            ast=crossgl_ast,
-                                            target=target,
-                                            output_path=output_path,
-                                            entry_point=selected_entry_point,
-                                            format_output=format_output,
-                                            index_range_assertions=(
-                                                index_range_assertions
-                                            ),
-                                            workgroup_access_assertions=(
-                                                workgroup_access_assertions
-                                            ),
-                                            software_subgroup_width=(
-                                                software_subgroup_width
-                                            ),
-                                        )
+                                    generated_source = _generate_project_target_from_crossgl_ast(
+                                        ast=crossgl_ast,
+                                        target=target,
+                                        output_path=output_path,
+                                        entry_point=selected_entry_point,
+                                        format_output=format_output,
+                                        index_range_assertions=(index_range_assertions),
+                                        workgroup_access_assertions=(
+                                            workgroup_access_assertions
+                                        ),
+                                        software_subgroup_width=(
+                                            software_subgroup_width
+                                        ),
+                                        directx_relative_wave_shuffle_out_of_range=(
+                                            directx_relative_wave_shuffle_out_of_range
+                                        ),
                                     )
                                 except Exception as exc:
                                     if getattr(
@@ -27598,6 +27637,7 @@ def _translate_project_impl(
                         index_range_assertions
                         or workgroup_access_assertions
                         or software_subgroup_width is not None
+                        or directx_relative_wave_shuffle_out_of_range is not None
                     ):
                         crossgl_ast = crossgl_ast or _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -27620,6 +27660,9 @@ def _translate_project_impl(
                             index_range_assertions=index_range_assertions,
                             workgroup_access_assertions=(workgroup_access_assertions),
                             software_subgroup_width=software_subgroup_width,
+                            directx_relative_wave_shuffle_out_of_range=(
+                                directx_relative_wave_shuffle_out_of_range
+                            ),
                         )
                     if generated_source is None:
                         generated_source = translate(

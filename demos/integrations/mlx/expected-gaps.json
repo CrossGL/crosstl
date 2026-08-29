@@ -828,8 +828,8 @@
         1
       ],
       "expected_output": 256.0,
-      "absolute_tolerance": 0.00001,
-      "relative_tolerance": 0.00001
+      "absolute_tolerance": 1e-05,
+      "relative_tolerance": 1e-05
     },
     "mlx_host_runtime_included": false,
     "runtime_integration_included": true,
@@ -917,8 +917,8 @@
         4.0,
         18.0625
       ],
-      "absolute_tolerance": 0.000001,
-      "relative_tolerance": 0.000001
+      "absolute_tolerance": 1e-06,
+      "relative_tolerance": 1e-06
     },
     "mlx_host_runtime_included": false,
     "runtime_integration_included": true,
@@ -1011,8 +1011,8 @@
         1.0471975511965979,
         0.0
       ],
-      "absolute_tolerance": 0.000001,
-      "relative_tolerance": 0.00001
+      "absolute_tolerance": 1e-06,
+      "relative_tolerance": 1e-05
     },
     "mlx_host_runtime_included": false,
     "runtime_integration_included": true,
@@ -1267,7 +1267,11 @@
       "failed_count": 0,
       "emitted_target_file_count": 1,
       "project_diagnostic_count": 0,
-      "workgroup_size": [32, 1, 1],
+      "workgroup_size": [
+        32,
+        1,
+        1
+      ],
       "subgroup_width_rule_configured": false,
       "max_template_specializations": 128,
       "max_template_materialization_work": 4096
@@ -1352,10 +1356,26 @@
       "ready_load_unit_count": 1,
       "blocked_load_unit_count": 0,
       "resources": [
-        {"name": "wBuffer", "binding": 0, "access": "read"},
-        {"name": "out_Buffer", "binding": 1, "access": "read_write"},
-        {"name": "scalesBuffer", "binding": 2, "access": "read_write"},
-        {"name": "biasesBuffer", "binding": 3, "access": "read_write"}
+        {
+          "name": "wBuffer",
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "name": "out_Buffer",
+          "binding": 1,
+          "access": "read_write"
+        },
+        {
+          "name": "scalesBuffer",
+          "binding": 2,
+          "access": "read_write"
+        },
+        {
+          "name": "biasesBuffer",
+          "binding": 3,
+          "access": "read_write"
+        }
       ]
     },
     "runtime_execution": {
@@ -1363,17 +1383,58 @@
       "context": "EGL surfaceless",
       "adapter": "OpenGLRuntimeParityAdapter",
       "runtime": "OpenGLComputeRuntime",
-      "workgroup_count": [1, 1, 1],
-      "global_size": [32, 1, 1],
+      "workgroup_count": [
+        1,
+        1,
+        1
+      ],
+      "global_size": [
+        32,
+        1,
+        1
+      ],
       "input": {
         "dtype": "float32",
-        "shape": [32],
+        "shape": [
+          32
+        ],
         "values": "[0.0,1.0,2.0,3.0] repeated 8 times"
       },
       "outputs": {
-        "out_Buffer": {"dtype": "uint32", "shape": [8], "values": [27, 27, 27, 27, 27, 27, 27, 27]},
-        "scalesBuffer": {"dtype": "float32", "shape": [1], "values": [-1.0]},
-        "biasesBuffer": {"dtype": "float32", "shape": [1], "values": [3.0]}
+        "out_Buffer": {
+          "dtype": "uint32",
+          "shape": [
+            8
+          ],
+          "values": [
+            27,
+            27,
+            27,
+            27,
+            27,
+            27,
+            27,
+            27
+          ]
+        },
+        "scalesBuffer": {
+          "dtype": "float32",
+          "shape": [
+            1
+          ],
+          "values": [
+            -1.0
+          ]
+        },
+        "biasesBuffer": {
+          "dtype": "float32",
+          "shape": [
+            1
+          ],
+          "values": [
+            3.0
+          ]
+        }
       },
       "status": "passed"
     },
@@ -1438,13 +1499,41 @@
       "generated_target_entry_identity_count": 224,
       "generated_numthreads_contract_count": 224,
       "resolved_workgroup_sizes": [
-        [32, 1, 1],
-        [32, 1, 4],
-        [32, 1, 8],
-        [32, 2, 1],
-        [32, 4, 1],
-        [32, 8, 1],
-        [32, 16, 1]
+        [
+          32,
+          1,
+          1
+        ],
+        [
+          32,
+          1,
+          4
+        ],
+        [
+          32,
+          1,
+          8
+        ],
+        [
+          32,
+          2,
+          1
+        ],
+        [
+          32,
+          4,
+          1
+        ],
+        [
+          32,
+          8,
+          1
+        ],
+        [
+          32,
+          16,
+          1
+        ]
       ]
     },
     "compiler": {
@@ -1500,13 +1589,41 @@
         "BM"
       ],
       "resolved_workgroup_sizes": [
-        [32, 1, 1],
-        [32, 1, 4],
-        [32, 1, 8],
-        [32, 2, 1],
-        [32, 4, 1],
-        [32, 8, 1],
-        [32, 16, 1]
+        [
+          32,
+          1,
+          1
+        ],
+        [
+          32,
+          1,
+          4
+        ],
+        [
+          32,
+          1,
+          8
+        ],
+        [
+          32,
+          2,
+          1
+        ],
+        [
+          32,
+          4,
+          1
+        ],
+        [
+          32,
+          8,
+          1
+        ],
+        [
+          32,
+          16,
+          1
+        ]
       ],
       "generated_entry_contract_count": 224,
       "numthreads_contract_established": true,
@@ -1581,13 +1698,41 @@
           "BM"
         ],
         "resolved_sizes": [
-          [32, 1, 1],
-          [32, 1, 4],
-          [32, 1, 8],
-          [32, 2, 1],
-          [32, 4, 1],
-          [32, 8, 1],
-          [32, 16, 1]
+          [
+            32,
+            1,
+            1
+          ],
+          [
+            32,
+            1,
+            4
+          ],
+          [
+            32,
+            1,
+            8
+          ],
+          [
+            32,
+            2,
+            1
+          ],
+          [
+            32,
+            4,
+            1
+          ],
+          [
+            32,
+            8,
+            1
+          ],
+          [
+            32,
+            16,
+            1
+          ]
         ]
       },
       "subgroup_width_specialization": {
@@ -1730,12 +1875,12 @@
     "artifacts": {
       "directx": {
         "argmin_float32": {
-          "sha256": "78d14c461e28b3d054d96bbb427ad02c525aa23313197fe981d7b446a80a03fd",
-          "size_bytes": 5972
+          "sha256": "b63a160f4ca102cc6407d88b84f5c3e6f849840f73e57d372722f9828569a34d",
+          "size_bytes": 6655
         },
         "argmax_float32": {
-          "sha256": "958abb3811d89124a74d6632ae2167df40fff2f690df0fd0ff4c699681de2333",
-          "size_bytes": 5974
+          "sha256": "99359b364f701a420f1ee918f481eaabac7d5ea9b02c5872c915c7672c60b398",
+          "size_bytes": 6657
         },
         "subgroup_enforcement": "hlsl-wave-size-attribute",
         "compiler": "dxc",
@@ -1764,6 +1909,23 @@
         "group_non_uniform_instruction_count": 0,
         "compiler_validation_status": "passed"
       }
+    },
+    "directx_relative_shuffle": {
+      "configuration": "project.source_options.metal.target_options.directx.relative_wave_shuffle_out_of_range",
+      "policy": "self",
+      "default_policy": "undefined",
+      "activation": "explicit-target-scoped",
+      "selected_value_types": [
+        "float",
+        "uint"
+      ],
+      "invalid_source_lane_result": "calling-lane-value",
+      "invalid_source_lane_reads_emitted": false,
+      "source_lane_bounds": {
+        "down_valid_when": "delta < laneCount - lane",
+        "read_lane": "valid ? lane + delta : lane"
+      },
+      "wave_read_control_flow": "single-unconditional-selected-lane-read"
     },
     "software_subgroup": {
       "configuration": "project.source_options.metal.target_options.opengl.software_subgroup_width",
@@ -4694,8 +4856,8 @@
             "20": false
           },
           "generated_hlsl": {
-          "normalized_sha256": "316c6393196ff1ef60ac143cfbb7946635648f296a4cf36df215255cbeadf408",
-          "size_bytes": 5440
+            "normalized_sha256": "316c6393196ff1ef60ac143cfbb7946635648f296a4cf36df215255cbeadf408",
+            "size_bytes": 5440
           }
         },
         "vjp-float32-axis-32-has-w-true": {
@@ -4724,8 +4886,8 @@
             "20": true
           },
           "generated_hlsl": {
-          "normalized_sha256": "258a16ae4d2132e8500e2b08180b87322d4f8a223a974fa18b47ab77fa160908",
-          "size_bytes": 5439
+            "normalized_sha256": "258a16ae4d2132e8500e2b08180b87322d4f8a223a974fa18b47ab77fa160908",
+            "size_bytes": 5439
           }
         },
         "forward-float32-axis-512": {
@@ -4752,8 +4914,8 @@
           "subgroup_width_enforcement": "WaveSize(32)",
           "specialization_constants": {},
           "generated_hlsl": {
-          "normalized_sha256": "3790adf689bd3460602073ce19312dcc2fc631247c5e75859179e063ae1e38f5",
-          "size_bytes": 3646
+            "normalized_sha256": "3790adf689bd3460602073ce19312dcc2fc631247c5e75859179e063ae1e38f5",
+            "size_bytes": 3646
           }
         },
         "forward-float32-axis-4099": {
@@ -4780,8 +4942,8 @@
           "subgroup_width_enforcement": "WaveSize(32)",
           "specialization_constants": {},
           "generated_hlsl": {
-          "normalized_sha256": "0c05c3e676b55f567e18dd9a1d4ede3c84876945a33c22405e442174ac53cc85",
-          "size_bytes": 4262
+            "normalized_sha256": "0c05c3e676b55f567e18dd9a1d4ede3c84876945a33c22405e442174ac53cc85",
+            "size_bytes": 4262
           }
         },
         "forward-float32-axis-32": {
@@ -4808,8 +4970,8 @@
           "subgroup_width_enforcement": "WaveSize(32)",
           "specialization_constants": {},
           "generated_hlsl": {
-          "normalized_sha256": "bbb3dbbeee01c267ba2b96aa048fe96af45740ad7f88bce5d0f584904b5a9d04",
-          "size_bytes": 3644
+            "normalized_sha256": "bbb3dbbeee01c267ba2b96aa048fe96af45740ad7f88bce5d0f584904b5a9d04",
+            "size_bytes": 3644
           }
         },
         "forward-float16-axis-32": {
@@ -4836,8 +4998,8 @@
           "subgroup_width_enforcement": "WaveSize(32)",
           "specialization_constants": {},
           "generated_hlsl": {
-          "normalized_sha256": "09f5cb40981ae6a29c09a6e69f394657c0668a05721f3af91c30385fa0e083e5",
-          "size_bytes": 3664
+            "normalized_sha256": "09f5cb40981ae6a29c09a6e69f394657c0668a05721f3af91c30385fa0e083e5",
+            "size_bytes": 3664
           }
         },
         "forward-bfloat16-axis-32": {
@@ -4864,8 +5026,8 @@
           "subgroup_width_enforcement": "WaveSize(32)",
           "specialization_constants": {},
           "generated_hlsl": {
-          "normalized_sha256": "4280418858612f83d234445dfb1aa336ba66e215c5a416f134debdb50f8e92ac",
-          "size_bytes": 4736
+            "normalized_sha256": "4280418858612f83d234445dfb1aa336ba66e215c5a416f134debdb50f8e92ac",
+            "size_bytes": 4736
           }
         },
         "vjp-float32-axis-8192-has-w-true": {
@@ -4894,8 +5056,8 @@
             "20": true
           },
           "generated_hlsl": {
-          "normalized_sha256": "7f1712feeb2b01c6e3dfa2ad3384aa675af0e1c39bb883ac24c93eabe6ebb172",
-          "size_bytes": 6408
+            "normalized_sha256": "7f1712feeb2b01c6e3dfa2ad3384aa675af0e1c39bb883ac24c93eabe6ebb172",
+            "size_bytes": 6408
           }
         },
         "vjp-float32-axis-256-has-w-true": {
@@ -4924,8 +5086,8 @@
             "20": true
           },
           "generated_hlsl": {
-          "normalized_sha256": "cd74fa1af043a346a605922ff79cd97b6d51e9b444ffd8db635c4efc01f87ea4",
-          "size_bytes": 5439
+            "normalized_sha256": "cd74fa1af043a346a605922ff79cd97b6d51e9b444ffd8db635c4efc01f87ea4",
+            "size_bytes": 5439
           }
         },
         "vjp-float32-axis-256-has-w-false": {
@@ -4954,8 +5116,8 @@
             "20": false
           },
           "generated_hlsl": {
-          "normalized_sha256": "5d43f9c94cf98ef57ecf61339e989cdead9d91d6b25d337042e6b03e03de405b",
-          "size_bytes": 5440
+            "normalized_sha256": "5d43f9c94cf98ef57ecf61339e989cdead9d91d6b25d337042e6b03e03de405b",
+            "size_bytes": 5440
           }
         },
         "forward-float32-axis-256": {
@@ -4982,8 +5144,8 @@
           "subgroup_width_enforcement": "WaveSize(32)",
           "specialization_constants": {},
           "generated_hlsl": {
-          "normalized_sha256": "5ff7dcbf0f7236769184654424172b3edc34539547fa33b793745667083ca03e",
-          "size_bytes": 3644
+            "normalized_sha256": "5ff7dcbf0f7236769184654424172b3edc34539547fa33b793745667083ca03e",
+            "size_bytes": 3644
           }
         },
         "vjp-float32-axis-8192-has-w-false": {
@@ -5012,8 +5174,8 @@
             "20": false
           },
           "generated_hlsl": {
-          "normalized_sha256": "30d1fb23fc6f6587235a51f8b28d4d1bd520d41051eea0a98cf28a1b62c646b6",
-          "size_bytes": 6409
+            "normalized_sha256": "30d1fb23fc6f6587235a51f8b28d4d1bd520d41051eea0a98cf28a1b62c646b6",
+            "size_bytes": 6409
           }
         }
       },
@@ -5285,7 +5447,12 @@
       "required_on_linux_ci": true,
       "source_entry_point": "arangeuint32",
       "target_entry_point": "main",
-      "expected_output": [300, 317, 334, 351]
+      "expected_output": [
+        300,
+        317,
+        334,
+        351
+      ]
     },
     "target_specializations": {
       "directx": "uint8 via CSMain",

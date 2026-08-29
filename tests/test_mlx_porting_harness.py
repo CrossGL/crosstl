@@ -10139,11 +10139,36 @@ def test_arg_reduce_native_runtime_evidence_records_bounded_cross_target_proof()
     }
 
     directx = status["artifacts"]["directx"]
+    assert directx["argmin_float32"] == {
+        "sha256": "b63a160f4ca102cc6407d88b84f5c3e6f849840f73e57d372722f9828569a34d",
+        "size_bytes": 6655,
+    }
+    assert directx["argmax_float32"] == {
+        "sha256": "99359b364f701a420f1ee918f481eaabac7d5ea9b02c5872c915c7672c60b398",
+        "size_bytes": 6657,
+    }
     assert directx["compiler"] == "dxc"
     assert directx["compiler_version"] == "1.9.2602.24"
     assert directx["compiler_profile"] == "cs_6_6"
     assert directx["compiler_arguments"] == ["-enable-16bit-types", "-WX"]
     assert directx["compiler_validation_status"] == "passed"
+    assert status["directx_relative_shuffle"] == {
+        "configuration": (
+            "project.source_options.metal.target_options.directx."
+            "relative_wave_shuffle_out_of_range"
+        ),
+        "policy": "self",
+        "default_policy": "undefined",
+        "activation": "explicit-target-scoped",
+        "selected_value_types": ["float", "uint"],
+        "invalid_source_lane_result": "calling-lane-value",
+        "invalid_source_lane_reads_emitted": False,
+        "source_lane_bounds": {
+            "down_valid_when": "delta < laneCount - lane",
+            "read_lane": "valid ? lane + delta : lane",
+        },
+        "wave_read_control_flow": "single-unconditional-selected-lane-read",
+    }
     opengl = status["artifacts"]["opengl"]
     assert opengl["compiler"] == "glslangValidator"
     assert opengl["validator"] == "spirv-val"

@@ -3927,6 +3927,107 @@ def test_hlsl_codegen_lowers_canonical_relative_shuffle_wave_ops():
     assert "WaveShuffle" not in generated
 
 
+def test_hlsl_codegen_bounds_relative_shuffle_source_lanes_when_opted_in(tmp_path):
+    code = """
+    shader HLSLDefinedRelativeShuffle {
+        uint nextValue() {
+            return 7u;
+        }
+
+        uint nextDelta() {
+            return 1u;
+        }
+
+        compute {
+            void main() {
+                uint down = WaveShuffleDown(nextValue(), nextDelta());
+                uint up = WaveShuffleUp(down, 1u);
+                uint xored = WaveShuffleXor(up, 2u);
+                bool boolDown = WaveShuffleDown(true, 1u);
+            }
+        }
+    }
+    """
+    codegen = HLSLCodeGen(relative_wave_shuffle_out_of_range="self")
+    generated = codegen.generate(parse_code(tokenize_code(code)))
+
+    assert (
+        "uint __crossgl_wave_shuffle_down_self_uint(uint value, uint delta)"
+        in generated
+    )
+    assert (
+        "uint __crossgl_wave_shuffle_up_self_uint(uint value, uint delta)" in generated
+    )
+    assert (
+        "uint __crossgl_wave_shuffle_xor_self_uint(uint value, uint delta)" in generated
+    )
+    assert (
+        "bool __crossgl_wave_shuffle_down_self_bool(bool value, uint delta)"
+        in generated
+    )
+    assert "bool valid = delta < (laneCount - lane);" in generated
+    assert "bool valid = delta <= lane;" in generated
+    assert "bool valid = (lane ^ delta) < laneCount;" in generated
+    assert "? (lane + delta)\n        : lane;" in generated
+    assert "? (lane - delta)\n        : lane;" in generated
+    assert "? (lane ^ delta)\n        : lane;" in generated
+    assert "WaveReadLaneAt(value, sourceLane);" in generated
+    assert "WaveReadLaneAt(payload, sourceLane);" in generated
+    assert "WaveReadLaneAt(value, WaveGetLaneIndex()" not in generated
+    assert (
+        "__crossgl_wave_shuffle_down_self_uint("
+        "nextValue(), uint(nextDelta()))" in generated
+    )
+    assert generated.count("nextValue()") == 3
+    assert generated.count("nextDelta()") == 3
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_defined_relative_shuffle_helper_name_avoids_user_collision():
+    code = """
+    shader HLSLDefinedRelativeShuffleCollision {
+        uint __crossgl_wave_shuffle_down_self_uint(uint value, uint delta) {
+            return value + delta;
+        }
+
+        compute {
+            void main() {
+                uint value = WaveShuffleDown(7u, 1u);
+            }
+        }
+    }
+    """
+    codegen = HLSLCodeGen(relative_wave_shuffle_out_of_range="self")
+    generated = codegen.generate(parse_code(tokenize_code(code)))
+
+    assert (
+        "uint __crossgl_wave_shuffle_down_self_uint(uint value, uint delta)"
+        in generated
+    )
+    assert (
+        "uint __crossgl_wave_shuffle_down_self_uint_1("
+        "uint value, uint delta)" in generated
+    )
+    assert "__crossgl_wave_shuffle_down_self_uint_1(7u, uint(1u))" in generated
+
+
+@pytest.mark.parametrize("policy", ["zero", "clamp", "", "SELFISH"])
+def test_hlsl_defined_relative_shuffle_rejects_unknown_policy(policy):
+    with pytest.raises(
+        ValueError,
+        match="relative_wave_shuffle_out_of_range must be one of: self, undefined",
+    ):
+        HLSLCodeGen(relative_wave_shuffle_out_of_range=policy)
+
+
+def test_hlsl_defined_relative_shuffle_rejects_non_string_policy():
+    with pytest.raises(
+        TypeError,
+        match="relative_wave_shuffle_out_of_range must be a string",
+    ):
+        HLSLCodeGen(relative_wave_shuffle_out_of_range=True)
+
+
 def test_hlsl_user_call_wave_arguments_are_not_probed_as_texture_calls(monkeypatch):
     code = """
     shader HLSLUserCallWaveArguments {

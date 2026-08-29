@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -84,15 +85,15 @@ MLX_ARG_REDUCE_ARTIFACTS = {
     "directx": {
         "argmin_float32": {
             "sha256": (
-                "78d14c461e28b3d054d96bbb427ad02c525aa23313197fe981d7b446a80a03fd"
+                "b63a160f4ca102cc6407d88b84f5c3e6f849840f73e57d372722f9828569a34d"
             ),
-            "sizeBytes": 5972,
+            "sizeBytes": 6655,
         },
         "argmax_float32": {
             "sha256": (
-                "958abb3811d89124a74d6632ae2167df40fff2f690df0fd0ff4c699681de2333"
+                "99359b364f701a420f1ee918f481eaabac7d5ea9b02c5872c915c7672c60b398"
             ),
-            "sizeBytes": 5974,
+            "sizeBytes": 6657,
         },
     },
     "opengl": {
@@ -230,7 +231,12 @@ def _project_config(*, output_dir: str, target: str, entry: str) -> str:
             max_template_specializations = 128
             max_template_materialization_work = 8192
             """).strip())
-    if target == "opengl":
+    if target == "directx":
+        sections.append(textwrap.dedent("""
+                [project.source_options.metal.target_options.directx]
+                relative_wave_shuffle_out_of_range = "self"
+                """).strip())
+    elif target == "opengl":
         sections.append(textwrap.dedent("""
                 [project.source_options.metal.target_options.opengl]
                 software_subgroup_width = 32
@@ -377,6 +383,27 @@ def _translate_artifact(
         assert (
             "uint3 elem"
             not in generated.split("int64_t elem_to_loc_int64_t(int64_t elem,", 1)[1]
+        )
+        assert (
+            "float __crossgl_wave_shuffle_down_self_float("
+            "float value, uint delta)" in generated
+        )
+        assert (
+            "uint __crossgl_wave_shuffle_down_self_uint("
+            "uint value, uint delta)" in generated
+        )
+        assert "bool valid = delta < (laneCount - lane);" in generated
+        assert "uint sourceLane = valid" in generated
+        assert "? (lane + delta)\n        : lane;" in generated
+        wave_reads = re.findall(r"WaveReadLaneAt\(([^)]*)\)", generated)
+        assert wave_reads
+        assert all(read.endswith(", sourceLane") for read in wave_reads)
+        assert (
+            "__crossgl_wave_shuffle_down_self_uint(data.index, uint(delta))"
+            in generated
+        )
+        assert (
+            "__crossgl_wave_shuffle_down_self_float(data.val, uint(delta))" in generated
         )
     else:
         assert "subgroupWidth" not in entry_record

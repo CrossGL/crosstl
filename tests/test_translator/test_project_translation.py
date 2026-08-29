@@ -55376,6 +55376,40 @@ def test_metal_simd_shuffle_down_to_directx_lowers_to_wave_read(tmp_path):
     assert (repo / artifact["path"]).exists()
 
 
+def test_metal_relative_shuffle_self_policy_propagates_to_directx(tmp_path):
+    repo = _write_metal_directx_project(
+        tmp_path / "repo", "reduce_kernel", METAL_SIMD_SHUFFLE_DOWN_KERNEL
+    )
+    config_path = repo / "crosstl.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + textwrap.dedent("""
+
+            [project.source_options.metal.target_options.directx]
+            relative_wave_shuffle_out_of_range = "self"
+            """),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert (
+        "float __crossgl_wave_shuffle_down_self_float("
+        "float value, uint delta)" in generated
+    )
+    assert "bool valid = delta < (laneCount - lane);" in generated
+    assert "uint laneCount = WaveGetLaneCount();" in generated
+    assert "WaveReadLaneAt(value, sourceLane);" in generated
+    assert "__crossgl_wave_shuffle_down_self_float(v, uint(1))" in generated
+    assert "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint(1)))" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_metal_elementwise_copy_to_directx_is_not_flagged(tmp_path):
     # The clean copy kernel lowers cleanly; the conservative guardrail must not
     # flag valid HLSL output.

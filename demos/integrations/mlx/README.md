@@ -876,11 +876,18 @@ two axis-32 rows. It applies the host formula
 wave width of 32, emits `[32, 1, 1]`, and dispatches `[1, 2, 1]` workgroups.
 Signature-aware helper materialization selects the scalar
 `elem_to_loc<int64_t>` overload rather than the `uint3` overload. The HLSL
-artifacts are 5,972 and 5,974 bytes with SHA-256
-`78d14c461e28b3d054d96bbb427ad02c525aa23313197fe981d7b446a80a03fd`
-and `958abb3811d89124a74d6632ae2167df40fff2f690df0fd0ff4c699681de2333`;
+artifacts are 6,655 and 6,657 bytes with SHA-256
+`b63a160f4ca102cc6407d88b84f5c3e6f849840f73e57d372722f9828569a34d`
+and `99359b364f701a420f1ee918f481eaabac7d5ea9b02c5872c915c7672c60b398`;
 official DXC 1.9.2602.24 accepts both under `cs_6_6`,
-`-enable-16bit-types`, and warnings as errors.
+`-enable-16bit-types`, and warnings as errors. This proof explicitly sets
+`project.source_options.metal.target_options.directx.relative_wave_shuffle_out_of_range`
+to `"self"`: a relative shuffle whose source lane is outside the wave retains
+the calling lane's value. Generated helpers select either the valid relative
+lane or the calling lane before every unconditional `WaveReadLaneAt`, so the
+second reduction cannot consume undefined high-lane state. The default DirectX
+policy remains `"undefined"`, preserving existing artifacts unless a project
+opts in.
 
 The explicit OpenGL software-subgroup artifacts are 7,581 and 7,587 bytes with
 SHA-256

@@ -1529,15 +1529,15 @@ MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "argmin_float32": {
                 "sha256": (
-                    "78d14c461e28b3d054d96bbb427ad02c525aa23313197fe981d7b446a80a03fd"
+                    "b63a160f4ca102cc6407d88b84f5c3e6f849840f73e57d372722f9828569a34d"
                 ),
-                "size_bytes": 5972,
+                "size_bytes": 6655,
             },
             "argmax_float32": {
                 "sha256": (
-                    "958abb3811d89124a74d6632ae2167df40fff2f690df0fd0ff4c699681de2333"
+                    "99359b364f701a420f1ee918f481eaabac7d5ea9b02c5872c915c7672c60b398"
                 ),
-                "size_bytes": 5974,
+                "size_bytes": 6657,
             },
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
@@ -1567,6 +1567,23 @@ MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE = {
             "group_non_uniform_instruction_count": 0,
             "compiler_validation_status": "passed",
         },
+    },
+    "directx_relative_shuffle": {
+        "configuration": (
+            "project.source_options.metal.target_options.directx."
+            "relative_wave_shuffle_out_of_range"
+        ),
+        "policy": "self",
+        "default_policy": "undefined",
+        "activation": "explicit-target-scoped",
+        "selected_value_types": ["float", "uint"],
+        "invalid_source_lane_result": "calling-lane-value",
+        "invalid_source_lane_reads_emitted": False,
+        "source_lane_bounds": {
+            "down_valid_when": "delta < laneCount - lane",
+            "read_lane": "valid ? lane + delta : lane",
+        },
+        "wave_read_control_flow": "single-unconditional-selected-lane-read",
     },
     "software_subgroup": {
         "configuration": (

@@ -1450,11 +1450,18 @@ selects ``argmin_float32`` and ``argmax_float32`` for two axis-32 rows. The
 checked host dispatch formula produces workgroups ``[32, 1, 1]`` and dispatch
 ``[1, 2, 1]`` with subgroup width 32. Signature-aware source instantiation
 materializes the scalar ``elem_to_loc<int64_t>`` helper rather than its
-``uint3`` overload. The generated HLSL artifacts pass official DXC 1.9.2602.24
-under ``cs_6_6`` with ``-enable-16bit-types`` and warnings as errors. OpenGL
-uses the explicit software subgroup and admits direct shuffle-helper calls only
-inside a proven canonical workgroup-uniform halving loop. Both GLSL modules
-pass ``glslangValidator`` and ``spirv-val``, contain five control barriers, and
+``uint3`` overload. DirectX generation explicitly sets
+``project.source_options.metal.target_options.directx.relative_wave_shuffle_out_of_range``
+to ``"self"`` for these artifacts. Relative source lanes outside the wave then
+retain the calling lane's value; generated helpers select a proven in-range
+source before an unconditional ``WaveReadLaneAt``. This deterministically
+refines source undefined behavior without changing in-range shuffle semantics.
+The default policy remains ``"undefined"`` so unrelated project artifacts are
+unchanged. The generated HLSL artifacts pass official DXC 1.9.2602.24 under
+``cs_6_6`` with ``-enable-16bit-types`` and warnings as errors. OpenGL uses the
+explicit software subgroup and admits direct shuffle-helper calls only inside
+a proven canonical workgroup-uniform halving loop. Both GLSL modules pass
+``glslangValidator`` and ``spirv-val``, contain five control barriers, and
 contain no group-nonuniform SPIR-V instruction.
 
 The reflected runtime contract includes exact signed and unsigned 64-bit

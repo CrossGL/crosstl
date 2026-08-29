@@ -1882,18 +1882,21 @@ class HLSLCodeGen:
     }
     HLSL_GLSL_BUILTIN_INT_CONSTANTS = GLSL_BUILTIN_INT_LIMITS
     HLSL_SPECIALIZATION_CONSTANT_TYPES = frozenset({"bool", "int", "uint", "float"})
+    HLSL_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_POLICIES = frozenset({"undefined", "self"})
 
     def __init__(
         self,
         target_profile=None,
         *,
         cooperative_matrix_software_lowering=False,
+        relative_wave_shuffle_out_of_range="undefined",
     ):
         """Initialize DirectX type maps and per-generation resource state."""
         if not isinstance(cooperative_matrix_software_lowering, bool):
             raise TypeError("cooperative_matrix_software_lowering must be a boolean")
         self.target_profile = self.normalize_directx_target_profile(target_profile)
         self.cooperative_matrix_software_lowering = cooperative_matrix_software_lowering
+        self.set_relative_wave_shuffle_out_of_range(relative_wave_shuffle_out_of_range)
         self.directx_cooperative_matrix_lowerings = {}
         self.texture_variables = set()
         self.sampler_variables = set()
@@ -2018,6 +2021,8 @@ class HLSLCodeGen:
         self.required_hlsl_inverse_hyperbolic_helpers = set()
         self.hlsl_inverse_hyperbolic_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
+        self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
+        self.hlsl_defined_relative_wave_shuffle_helper_names = {}
         self.hlsl_lowered_struct_resource_members = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
@@ -2408,6 +2413,20 @@ class HLSLCodeGen:
                 "directx-10, directx-11, directx-12"
             )
         return normalized
+
+    def set_relative_wave_shuffle_out_of_range(self, policy):
+        """Configure relative wave-shuffle behavior for invalid source lanes."""
+        if not isinstance(policy, str):
+            raise TypeError("relative_wave_shuffle_out_of_range must be a string")
+        normalized = policy.strip().lower()
+        if normalized not in self.HLSL_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_POLICIES:
+            choices = ", ".join(
+                sorted(self.HLSL_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_POLICIES)
+            )
+            raise ValueError(
+                "relative_wave_shuffle_out_of_range must be one of: " f"{choices}"
+            )
+        self.relative_wave_shuffle_out_of_range = normalized
 
     def generate(self, ast):
         """Generate complete HLSL source for a CrossGL AST."""
@@ -2915,6 +2934,8 @@ class HLSLCodeGen:
         self.required_hlsl_inverse_hyperbolic_helpers = set()
         self.hlsl_inverse_hyperbolic_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
+        self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
+        self.hlsl_defined_relative_wave_shuffle_helper_names = {}
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
         self.current_hlsl_hull_output_element_type = None
@@ -4173,6 +4194,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_inverse_hyperbolic_helpers()
         code += self.generate_hlsl_complex64_helpers()
+        code += self.generate_hlsl_defined_relative_wave_shuffle_helpers()
         code += self.generate_hlsl_bfloat16_helpers()
         code += self.generate_hlsl_explicit_bitcast_helpers()
         code += self.generate_hlsl_union_storage_helpers()
@@ -4456,6 +4478,126 @@ class HLSLCodeGen:
             if value_type != "float"
         )
         return "".join(helpers) + "\n"
+
+    def hlsl_defined_relative_wave_shuffle_helper_name(self, operation, value_type):
+        mapped_value_type = self.map_type(value_type)
+        key = (operation, mapped_value_type)
+        existing = self.hlsl_defined_relative_wave_shuffle_helper_names.get(key)
+        if existing is not None:
+            return existing
+
+        operation_suffix = {
+            "WaveShuffleDown": "down",
+            "WaveShuffleUp": "up",
+            "WaveShuffleXor": "xor",
+        }[operation]
+        type_suffix = re.sub(r"[^A-Za-z0-9_]", "_", mapped_value_type)
+        base_name = "__crossgl_wave_shuffle_" f"{operation_suffix}_self_{type_suffix}"
+        reserved_names = set(self.function_return_types)
+        reserved_names.update(self.global_variable_types)
+        reserved_names.update(self.structs_by_name)
+        reserved_names.update(
+            self.hlsl_defined_relative_wave_shuffle_helper_names.values()
+        )
+        helper_name = base_name
+        suffix = 1
+        while helper_name in reserved_names:
+            helper_name = f"{base_name}_{suffix}"
+            suffix += 1
+        self.hlsl_defined_relative_wave_shuffle_helper_names[key] = helper_name
+        return helper_name
+
+    def hlsl_defined_relative_wave_shuffle_call(
+        self, operation, value_type, value_expression, delta_expression
+    ):
+        mapped_value_type = self.map_type(value_type)
+        key = (operation, mapped_value_type)
+        self.required_hlsl_defined_relative_wave_shuffle_helpers.add(key)
+        if self.is_hlsl_complex64_type(mapped_value_type):
+            self.required_hlsl_complex64_helpers.add(
+                "__crossgl_complex64_wave_read_lane_at"
+            )
+        helper_name = self.hlsl_defined_relative_wave_shuffle_helper_name(
+            operation, mapped_value_type
+        )
+        return f"{helper_name}({value_expression}, " f"uint({delta_expression}))"
+
+    def generate_hlsl_defined_relative_wave_shuffle_helpers(self):
+        code = ""
+        for operation, value_type in sorted(
+            getattr(
+                self,
+                "required_hlsl_defined_relative_wave_shuffle_helpers",
+                set(),
+            )
+        ):
+            helper_name = self.hlsl_defined_relative_wave_shuffle_helper_name(
+                operation, value_type
+            )
+            if operation == "WaveShuffleDown":
+                valid_expression = "delta < (laneCount - lane)"
+                source_expression = "lane + delta"
+            elif operation == "WaveShuffleUp":
+                valid_expression = "delta <= lane"
+                source_expression = "lane - delta"
+            elif operation == "WaveShuffleXor":
+                valid_expression = "(lane ^ delta) < laneCount"
+                source_expression = "lane ^ delta"
+            else:  # pragma: no cover - registration is closed over known operators.
+                raise ValueError(
+                    f"Unsupported relative wave shuffle operation: {operation}"
+                )
+
+            code += (
+                f"{value_type} {helper_name}({value_type} value, uint delta) {{\n"
+                "    uint lane = WaveGetLaneIndex();\n"
+                "    uint laneCount = WaveGetLaneCount();\n"
+                f"    bool valid = {valid_expression};\n"
+                "    uint sourceLane = valid\n"
+                f"        ? ({source_expression})\n"
+                "        : lane;\n"
+            )
+
+            if self.hlsl_result_component_type(value_type) == "bool":
+                component_count = self.value_component_count(value_type) or 1
+                payload_type = (
+                    "uint" if component_count == 1 else f"uint{component_count}"
+                )
+                if component_count == 1:
+                    payload = "value ? 1u : 0u"
+                    zero = "0u"
+                else:
+                    fields = "xyzw"[:component_count]
+                    payload = (
+                        f"{payload_type}("
+                        + ", ".join(f"value.{field} ? 1u : 0u" for field in fields)
+                        + ")"
+                    )
+                    zero = f"{payload_type}({', '.join(['0u'] * component_count)})"
+                code += (
+                    f"    {payload_type} payload = {payload};\n"
+                    f"    {payload_type} shuffledBits = "
+                    "WaveReadLaneAt(payload, sourceLane);\n"
+                    f"    {value_type} shuffled = (shuffledBits != {zero});\n"
+                )
+            elif self.is_hlsl_complex64_type(value_type):
+                code += (
+                    f"    {value_type} shuffled = "
+                    "__crossgl_complex64_wave_read_lane_at(value, sourceLane);\n"
+                )
+            else:
+                code += (
+                    f"    {value_type} shuffled = "
+                    "WaveReadLaneAt(value, sourceLane);\n"
+                )
+
+            # The selected source is always in range, and selecting the calling
+            # lane makes the wave read itself produce the requested fallback.
+            # Return it directly so DXC keeps one wave operation with every lane
+            # active instead of splitting the intrinsic across divergent branches.
+            code += "    return shuffled;\n}\n\n"
+
+        return code
 
     def hlsl_wave_shuffle_and_fill_up_helper_name(self, value_type):
         type_suffix = re.sub(r"[^A-Za-z0-9_]", "_", self.map_type(value_type))
@@ -17864,6 +18006,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if simd_name == "simd_shuffle_down" and len(args) == 2:
             data = self.generate_expression_with_expected(args[0], None)
             delta = self.generate_expression_with_expected(args[1], "uint")
+            if self.relative_wave_shuffle_out_of_range == "self":
+                return self.hlsl_cast_metal_simd_shuffle_result(
+                    self.hlsl_defined_relative_wave_shuffle_call(
+                        "WaveShuffleDown", value_type, data, delta
+                    )
+                )
             if complex_value:
                 return complex_wave_read(data, f"(WaveGetLaneIndex() + uint({delta}))")
             return self.hlsl_cast_metal_simd_shuffle_result(
@@ -17873,6 +18021,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if simd_name == "simd_shuffle_up" and len(args) == 2:
             data = self.generate_expression_with_expected(args[0], None)
             delta = self.generate_expression_with_expected(args[1], "uint")
+            if self.relative_wave_shuffle_out_of_range == "self":
+                return self.hlsl_cast_metal_simd_shuffle_result(
+                    self.hlsl_defined_relative_wave_shuffle_call(
+                        "WaveShuffleUp", value_type, data, delta
+                    )
+                )
             if complex_value:
                 return complex_wave_read(data, f"(WaveGetLaneIndex() - uint({delta}))")
             return self.hlsl_cast_metal_simd_shuffle_result(
@@ -18598,8 +18752,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     # HLSL has no native relative-shuffle wave ops, so shuffle-down/up/xor are
     # emulated by reading the lane relative to the current one via
-    # `WaveReadLaneAt`. Out-of-range lanes are undefined (matching Metal's
-    # relaxed semantics for the surrounding reduction/scan use).
+    # `WaveReadLaneAt`. Out-of-range lanes remain undefined by default; projects
+    # may explicitly select a typed calling-lane fallback for deterministic
+    # reduction artifacts without changing in-range reads.
     HLSL_WAVE_RELATIVE_SHUFFLE_OPERATORS = {
         "WaveShuffleDown": "+",
         "WaveShuffleUp": "-",
@@ -18669,16 +18824,27 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.generate_hlsl_wave_shuffle_and_fill_up_call(operation, args)
         relative_operator = self.HLSL_WAVE_RELATIVE_SHUFFLE_OPERATORS.get(operation)
         if relative_operator is not None:
-            # Match the format emitted by generate_hlsl_metal_simd_shuffle_call so
-            # that shuffle-relative ops lower identically whether they arrive as a
-            # canonical wave op (non-shadowed Metal simd_shuffle_down) or as a
-            # function call (shadowed by a user overload).
-            value = self.generate_expression_with_expected(args[0], None)
-            delta = self.generate_expression_with_expected(args[1], "uint")
-            result = (
-                f"WaveReadLaneAt({value}, "
-                f"(WaveGetLaneIndex() {relative_operator} uint({delta})))"
+            # Match the Metal builtin path whether this arrived as a canonical wave
+            # operation or as a function call shadowed by a user overload.
+            value_type = (
+                self.expression_result_type(args[0])
+                or self.current_expression_expected_type
             )
+            mapped_value_type = self.map_type(value_type)
+            value = self.generate_expression_with_expected(args[0], mapped_value_type)
+            delta = self.generate_expression_with_expected(args[1], "uint")
+            if self.relative_wave_shuffle_out_of_range == "self":
+                result = self.hlsl_defined_relative_wave_shuffle_call(
+                    operation,
+                    mapped_value_type,
+                    value,
+                    delta,
+                )
+            else:
+                result = (
+                    f"WaveReadLaneAt({value}, "
+                    f"(WaveGetLaneIndex() {relative_operator} uint({delta})))"
+                )
             return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
         inclusive = self.HLSL_WAVE_INCLUSIVE_PREFIX_OPERATORS.get(operation)
         if inclusive is not None:
@@ -18971,12 +19137,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         elif operation in self.HLSL_WAVE_SHUFFLE_AND_FILL_INTRINSICS:
             self.validate_hlsl_wave_shuffle_and_fill_arguments(operation, args)
         elif operation in self.HLSL_WAVE_LANE_READ_VALUE_INTRINSICS:
+            relative_shuffle_with_defined_fallback = (
+                operation in self.HLSL_WAVE_RELATIVE_SHUFFLE_OPERATORS
+                and self.relative_wave_shuffle_out_of_range == "self"
+            )
+            allowed_components = (
+                self.HLSL_WAVE_BASIC_COMPONENT_TYPES
+                if relative_shuffle_with_defined_fallback
+                else self.HLSL_WAVE_NUMERIC_COMPONENT_TYPES
+            )
+            description = (
+                "basic scalar or vector"
+                if relative_shuffle_with_defined_fallback
+                else "numeric scalar or vector"
+            )
             self.validate_hlsl_wave_value_argument(
                 operation,
                 args[0],
                 "value",
-                self.HLSL_WAVE_NUMERIC_COMPONENT_TYPES,
-                "numeric scalar or vector",
+                allowed_components,
+                description,
             )
 
         if operation == "WaveReadLaneAt":
