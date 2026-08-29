@@ -3472,6 +3472,93 @@ def test_prepare_opengl_buffers_packs_storage_and_uniform_buffers():
     assert buffers[2].allocation_size == 16
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_prepare_native_buffers_packs_64_bit_integer_values(target):
+    from crosstl.project.native_runtime_drivers import _unpack_values
+
+    storage_layout = {
+        "physicalType": "int64_t",
+        "elementType": "int64",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 8,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer" if target == "directx" else "std430",
+        "runtimeSized": True,
+    }
+    constant_layout = {
+        "physicalType": "uint64_t",
+        "elementType": "uint64",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-constant-buffer" if target == "directx" else "std140",
+        "runtimeSized": False,
+        "memberName": "axisSize",
+        "blockSizeBytes": 16,
+    }
+    bindings = {
+        "strides": NativeRuntimeBufferBinding(
+            name="strides",
+            binding=RuntimeResourceBinding(
+                name="strides",
+                kind="buffer" if target == "directx" else "storage-buffer",
+                type_name=(
+                    "StructuredBuffer<int64_t>" if target == "directx" else None
+                ),
+                set=0,
+                binding=3,
+                access="read",
+                metadata={"scalarLayout": storage_layout, "byteStride": 8},
+            ),
+            value=[-(1 << 63), (1 << 63) - 1],
+            source="input",
+            dtype="int64",
+            shape=(2,),
+        ),
+        "axis_size": NativeRuntimeBufferBinding(
+            name="axis_size",
+            binding=RuntimeResourceBinding(
+                name="axis_size",
+                kind="constant-buffer",
+                type_name="AxisSize" if target == "directx" else None,
+                set=0,
+                binding=7,
+                access="read",
+                metadata={"scalarLayout": constant_layout},
+            ),
+            value=[(1 << 64) - 1],
+            source="input",
+            dtype="uint64",
+            shape=(1,),
+        ),
+    }
+
+    prepared = (
+        _prepare_directx_buffers(bindings)
+        if target == "directx"
+        else _prepare_opengl_buffers(bindings)
+    )
+    by_name = {item.name: item for item in prepared}
+
+    assert by_name["strides"].payload == struct.pack("<2q", -(1 << 63), (1 << 63) - 1)
+    if target == "directx":
+        assert by_name["strides"].stride == 8
+    assert _unpack_values(
+        by_name["strides"].payload,
+        "int64",
+        target=target.title(),
+    ) == [-(1 << 63), (1 << 63) - 1]
+    assert by_name["axis_size"].payload == struct.pack("<Q", (1 << 64) - 1)
+    assert by_name["axis_size"].allocation_size == (256 if target == "directx" else 16)
+    assert _unpack_values(
+        by_name["axis_size"].payload,
+        "uint64",
+        target=target.title(),
+    ) == [(1 << 64) - 1]
+
+
 def test_prepare_opengl_buffers_rejects_missing_scalar_block_layout():
     with pytest.raises(RuntimeAdapterSetupError) as excinfo:
         _prepare_opengl_buffers({"params": _scalar_constant_buffer_binding("opengl")})

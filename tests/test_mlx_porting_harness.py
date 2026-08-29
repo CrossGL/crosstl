@@ -2253,6 +2253,19 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert arg_reduce["host_dispatch_import_resolved_by"] == (
         module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
     )
+    assert arg_reduce["bounded_native_runtime_status"] == (
+        module.MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE["status"]
+    )
+    assert arg_reduce["bounded_entry_points"] == [
+        "argmin_float32",
+        "argmax_float32",
+    ]
+    assert arg_reduce["bounded_workgroup_size"] == [32, 1, 1]
+    assert arg_reduce["bounded_dispatch_workgroup_count"] == [1, 2, 1]
+    assert (
+        arg_reduce["bounded_native_runtime_evidence"]
+        == "arg_reduce_native_runtime_status"
+    )
 
     opengl_frontier = expected_gaps["opengl_frontier_status"]
     assert opengl_frontier["status"] == (
@@ -10048,6 +10061,108 @@ def test_full_corpus_checkpoint_probe_records_verified_resume_coordinate():
         "canonical_report_produced": False,
         "runtime_parity_claimed": False,
     }
+
+
+def test_arg_reduce_native_runtime_evidence_records_bounded_cross_target_proof():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["arg_reduce_native_runtime_status"]
+    assert status == module.MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE
+    assert status["status"] == (
+        "translated-packaged-and-cross-target-native-runtime-required"
+    )
+    assert status["commit"] == module.MLX_CORPUS_COMMIT
+    assert status["source"] == module.MLX_ARG_REDUCE_SOURCE
+    assert status["source_sha256"] == module.MLX_CURRENT_ARG_REDUCE_SHA256
+    assert status["selected_entry_points"] == ["argmin_float32", "argmax_float32"]
+
+    contract = status["dispatch_contract"]
+    assert contract["path"] == (
+        "demos/integrations/mlx/contracts/" "arg_reduce.native-loader.dispatch.json"
+    )
+    assert contract["content_identity"] == (
+        module.MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY
+    )
+    assert contract["workload_count"] == 2
+    assert contract["bounded_axis_size"] == 32
+    assert contract["subgroup_width"] == 32
+    assert contract["variants"] == module.MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_VARIANTS
+    assert set(contract["variants"]) == {
+        "argmin-float32-axis-32-two-rows",
+        "argmax-float32-axis-32-two-rows",
+    }
+    for variant in contract["variants"].values():
+        assert variant["workgroup_size"] == [32, 1, 1]
+        assert variant["dispatch_workgroup_count"] == [1, 2, 1]
+
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 2, "opengl": 2},
+        "translated_count_by_target": {"directx": 2, "opengl": 2},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+    }
+    overload = status["materialization"]["overloaded_helper_selection"]
+    assert overload == {
+        "source_name": "elem_to_loc",
+        "materialized_name": "elem_to_loc_int64_t",
+        "selected_first_parameter": "int64_t",
+        "rejected_first_parameter": "uint3",
+        "resolution": "signature-aware-call-site-materialization",
+    }
+
+    directx = status["artifacts"]["directx"]
+    assert directx["compiler"] == "dxc"
+    assert directx["compiler_version"] == "1.9.2602.24"
+    assert directx["compiler_profile"] == "cs_6_6"
+    assert directx["compiler_arguments"] == ["-enable-16bit-types", "-WX"]
+    assert directx["compiler_validation_status"] == "passed"
+    opengl = status["artifacts"]["opengl"]
+    assert opengl["compiler"] == "glslangValidator"
+    assert opengl["validator"] == "spirv-val"
+    assert opengl["control_barrier_instruction_count"] == 5
+    assert opengl["group_non_uniform_instruction_count"] == 0
+    assert opengl["compiler_validation_status"] == "passed"
+
+    assert status["runtime_package"] == {
+        "artifact_count_per_variant_and_target": 1,
+        "ready_load_unit_count_per_variant_and_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count_by_target": {"directx": 9, "opengl": 8},
+        "resource_element_types": [
+            "float32",
+            "uint32",
+            "int32",
+            "int64",
+            "uint64",
+        ],
+        "directx_generated_dispatch_binding": "CrossGLDispatchInfo",
+        "scalar_64_bit_layout_reflected": True,
+    }
+    assert status["workloads"]["argmin_expected_indices"] == [5, 7]
+    assert status["workloads"]["argmax_expected_indices"] == [3, 2]
+    assert status["workloads"]["tie_behavior"] == "lowest index"
+    assert status["native_runtime"]["directx"]["status"] == "required-on-ci"
+    assert status["native_runtime"]["opengl"]["status"] == "required-on-ci"
+    assert status["native_runtime"]["opengl"]["local_linux_arm64_validation"] == (
+        "passed"
+    )
+    assert status["metal_roundtrip_boundary"] == {
+        "status": "entry-workgroup-specialization-target-unsupported",
+        "diagnostic": "project.translate.workgroup-size-rule-unsupported-target",
+        "missing_capability": "execution.workgroup-size-specialization",
+    }
+    assert all(value is False for value in status["remaining_scope"].values())
+    assert status["selected_workloads_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
 
 
 def test_softmax_native_runtime_evidence_records_bounded_cross_target_proof():

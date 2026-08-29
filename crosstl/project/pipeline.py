@@ -14394,6 +14394,10 @@ def _materialize_inherited_source_template_helpers(
     existing_materialized_names: Mapping[tuple[str, tuple[str, ...]], str],
 ) -> _InheritedTemplateMaterialization:
     template_names = set(templates_by_name)
+    template_name_counts = Counter(
+        template.name
+        for template in preprocessor._find_template_functions(materialized)
+    )
     generated: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
     generated_order: list[tuple[str, tuple[str, ...]]] = []
     specialization_records: list[dict[str, Any]] = []
@@ -14409,7 +14413,15 @@ def _materialize_inherited_source_template_helpers(
         inherited_parameter_sources: Mapping[str, str],
     ) -> str | None:
         template = templates_by_name.get(name)
-        if template is None or _is_metal_entry_template(template):
+        if (
+            template is None
+            or template_name_counts.get(name, 0) != 1
+            or _is_metal_entry_template(template)
+        ):
+            # Name-only inherited bindings cannot identify one declaration from
+            # an overload set. Leave that call untouched for the later
+            # signature-aware plain-helper pass rather than materializing an
+            # arbitrary overload with otherwise valid defaults.
             return None
         inherited = _inherited_template_arguments(
             preprocessor,

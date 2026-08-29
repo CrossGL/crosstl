@@ -1404,11 +1404,13 @@ Exact Scalar Physical Resource Layouts
 Source reflection records a ``scalarLayout`` only when the target-language
 resource has an exact physical representation covered by the project runtime
 contract. HLSL reflection supports ``StructuredBuffer`` and
-``RWStructuredBuffer`` resources whose element type is exactly ``float``,
-``int``, or ``uint``, together with ``cbuffer`` declarations containing one
-member of one of those types. GLSL reflection supports explicit ``std430``
-buffer blocks containing one scalar runtime-array member and explicit
-``std140`` uniform blocks containing one scalar member of those types.
+``RWStructuredBuffer`` resources whose element type is a scalar or up-to-four
+component vector of ``float``, ``int``, or ``uint``, plus scalar ``int64_t``
+and ``uint64_t`` elements. Single-member ``cbuffer`` declarations support the
+same types. GLSL reflection supports explicit ``std430`` buffer blocks
+containing one scalar runtime-array member and explicit ``std140`` uniform
+blocks containing one scalar member of type ``float``, ``int``, ``uint``,
+``int64_t``, or ``uint64_t``.
 
 The reflected layout records ``physicalType``, ``elementType``,
 ``elementSizeBytes``, ``elementStrideBytes``, ``alignmentBytes``,
@@ -1425,10 +1427,13 @@ uniform buffers require a fixed ``std140`` scalar block and zero-pad the upload
 to ``blockSizeBytes``; ``std430`` scalar runtime arrays retain their logical
 payload size for storage-buffer readback.
 
-Vectors, matrices, fixed arrays, aggregates, packed or widened scalar types,
-implicit GLSL block layouts, arbitrary member offsets, and multi-member blocks
-do not receive this layout metadata. Those shapes remain unresolved and fail
-closed when a native loader request requires a physical layout.
+GLSL vectors, HLSL 64-bit vectors, matrices, fixed arrays, aggregates,
+unsupported narrow or floating-point scalar widths, implicit GLSL block
+layouts, arbitrary member offsets, and multi-member blocks do not receive this
+layout metadata. Those shapes remain unresolved and fail closed when a native
+loader request requires a physical layout. Native requests range-check signed
+and unsigned 64-bit values and preserve them with little-endian 8-byte packing;
+64-bit specialization constants remain intentionally unsupported.
 
 At pinned MLX commit ``4367c73b60541ddd5a266ce4644fd93d20223b6e``, the
 ``arangeuint32`` entry from ``arange.metal`` is translated to DirectX and
@@ -1438,6 +1443,33 @@ and executed in Windows Direct3D and Linux EGL CI. With ``start = 3``,
 ``[3, 5, 7, 9]``. This is an end-to-end proof for one scalar kernel contract;
 it is not a claim of vector or aggregate layout support, full MLX runtime
 integration, or MLX test-suite parity.
+
+At current pinned MLX commit
+``846d176227a0ac13d2667e58d2bb68b322109ab0``, a bounded arg-reduce proof
+selects ``argmin_float32`` and ``argmax_float32`` for two axis-32 rows. The
+checked host dispatch formula produces workgroups ``[32, 1, 1]`` and dispatch
+``[1, 2, 1]`` with subgroup width 32. Signature-aware source instantiation
+materializes the scalar ``elem_to_loc<int64_t>`` helper rather than its
+``uint3`` overload. The generated HLSL artifacts pass official DXC 1.9.2602.24
+under ``cs_6_6`` with ``-enable-16bit-types`` and warnings as errors. OpenGL
+uses the explicit software subgroup and admits direct shuffle-helper calls only
+inside a proven canonical workgroup-uniform halving loop. Both GLSL modules
+pass ``glslangValidator`` and ``spirv-val``, contain five control barriers, and
+contain no group-nonuniform SPIR-V instruction.
+
+The reflected runtime contract includes exact signed and unsigned 64-bit
+scalar resources: float32 input, uint32 output, int32 shape, int64 stride, and
+uint64 size buffers or scalar blocks. Linux arm64 Mesa EGL executes rows with
+tied extrema and reads back argmin indices ``[5, 7]`` and argmax indices
+``[3, 2]``, proving lowest-index tie behavior; Windows CI requires the same
+workloads through Direct3D 12 WARP. This bounded proof does not unblock the
+24-entry aggregate DirectX/OpenGL artifact, which remains fail-closed with
+``project.translate.workgroup-size-entry-ambiguous``. Other axis sizes,
+dtypes, and entries, MLX host redirection, and the full MLX test suite remain
+outside the claim. Entry-scoped Metal also remains unavailable because the
+per-entry workgroup specialization rule fails explicitly with
+``project.translate.workgroup-size-rule-unsupported-target``; this proof does
+not claim a Metal round trip.
 
 At current pinned MLX commit
 ``846d176227a0ac13d2667e58d2bb68b322109ab0``, a bounded LayerNorm VJP proof

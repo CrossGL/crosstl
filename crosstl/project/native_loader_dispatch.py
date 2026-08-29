@@ -73,14 +73,35 @@ _BUFFER_DTYPE_ALIASES = {
     "u32": "uint32",
     "uint32": "uint32",
     "uint32_t": "uint32",
+    "i64": "int64",
+    "int64": "int64",
+    "int64_t": "int64",
+    "long": "int64",
+    "u64": "uint64",
+    "uint64": "uint64",
+    "uint64_t": "uint64",
+    "ulong": "uint64",
 }
 _SPECIALIZATION_DTYPE_ALIASES = {
-    **_BUFFER_DTYPE_ALIASES,
-    "bool": "bool",
-    "boolean": "bool",
+    alias: dtype
+    for alias, dtype in _BUFFER_DTYPE_ALIASES.items()
+    if dtype in {"float32", "int32", "uint32"}
 }
-_DTYPE_SIZES = {"float32": 4, "int32": 4, "uint32": 4}
-_PHYSICAL_TYPES = {"float32": "float", "int32": "int", "uint32": "uint"}
+_SPECIALIZATION_DTYPE_ALIASES.update({"bool": "bool", "boolean": "bool"})
+_DTYPE_SIZES = {
+    "float32": 4,
+    "int32": 4,
+    "uint32": 4,
+    "int64": 8,
+    "uint64": 8,
+}
+_PHYSICAL_TYPES = {
+    "float32": "float",
+    "int32": "int",
+    "uint32": "uint",
+    "int64": "int64_t",
+    "uint64": "uint64_t",
+}
 _TARGET_STORAGE_LAYOUTS = {
     "directx": {
         "buffer": "hlsl-structured-buffer",
@@ -94,6 +115,7 @@ _VALUE_FIELDS = frozenset(
 _ALIAS_METADATA_FIELDS = frozenset(("aliases", "resourceAliases", "bindingAliases"))
 _ENTRY_POINT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _UINT32_MAX = (1 << 32) - 1
+_UINT64_MAX = (1 << 64) - 1
 
 
 class NativeLoaderDispatchError(ValueError):
@@ -727,7 +749,8 @@ def _buffer_dtype(value: Any, *, path: str) -> str:
     if dtype is None:
         raise NativeLoaderDispatchError(
             "value-dtype-unsupported",
-            "Native runtime buffers support float32, int32, and uint32 values only.",
+            "Native runtime buffers support float32, int32, uint32, int64, "
+            "and uint64 values only.",
             path=path,
             details={"dtype": value},
         )
@@ -752,17 +775,19 @@ def _validate_buffer_values(
 ) -> None:
     for index, value in enumerate(values):
         valid = False
-        if dtype == "int32":
+        if dtype in {"int32", "int64"}:
+            bit_width = _DTYPE_SIZES[dtype] * 8
             valid = (
                 isinstance(value, int)
                 and not isinstance(value, bool)
-                and -(1 << 31) <= value < (1 << 31)
+                and -(1 << (bit_width - 1)) <= value < (1 << (bit_width - 1))
             )
-        elif dtype == "uint32":
+        elif dtype in {"uint32", "uint64"}:
+            maximum = _UINT32_MAX if dtype == "uint32" else _UINT64_MAX
             valid = (
                 isinstance(value, int)
                 and not isinstance(value, bool)
-                and 0 <= value <= _UINT32_MAX
+                and 0 <= value <= maximum
             )
         elif dtype == "float32":
             valid = isinstance(value, (int, float)) and not isinstance(value, bool)

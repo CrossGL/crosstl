@@ -3666,6 +3666,23 @@ class GLSLCodeGen:
             return expression
         return None
 
+    def glsl_software_subgroup_uniform_top_level_call_ids(self, body):
+        call_ids = set()
+        for statement in self.glsl_software_subgroup_statement_list(body):
+            call = self.glsl_software_subgroup_top_level_call(statement)
+            if call is not None:
+                call_ids.add(id(call))
+            if (
+                isinstance(statement, ForNode)
+                and id(statement) in self.glsl_software_subgroup_uniform_for_node_ids
+            ):
+                call_ids.update(
+                    self.glsl_software_subgroup_uniform_top_level_call_ids(
+                        getattr(statement, "body", None)
+                    )
+                )
+        return call_ids
+
     def validate_glsl_software_subgroup_helpers(
         self,
         ast,
@@ -3708,12 +3725,9 @@ class GLSLCodeGen:
             helpers.setdefault(name, (function, operation, node))
 
         helper_names = set(helpers)
-        entry_body = getattr(entry_function, "body", None)
-        direct_entry_call_ids = set()
-        for statement in self.glsl_software_subgroup_statement_list(entry_body):
-            call = self.glsl_software_subgroup_top_level_call(statement)
-            if call is not None and self.function_call_name(call) in helper_names:
-                direct_entry_call_ids.add(id(call))
+        uniform_entry_call_ids = self.glsl_software_subgroup_uniform_top_level_call_ids(
+            getattr(entry_function, "body", None)
+        )
 
         call_counts = {name: 0 for name in helper_names}
         for function in functions:
@@ -3727,12 +3741,12 @@ class GLSLCodeGen:
                 _helper, operation, operation_node = helpers[name]
                 if (
                     id(function) != id(entry_function)
-                    or id(node) not in direct_entry_call_ids
+                    or id(node) not in uniform_entry_call_ids
                 ):
                     raise self.glsl_software_subgroup_error(
                         "OpenGL software subgroup helper "
                         f"'{name}' must be called directly from the compute "
-                        "entry point as an unconditional top-level statement",
+                        "entry point as a statically uniform top-level statement",
                         workgroup_size=workgroup_size,
                         operation=operation,
                         reason="helper-call-not-uniform",
@@ -3748,7 +3762,7 @@ class GLSLCodeGen:
             _helper, operation, node = helpers[missing]
             raise self.glsl_software_subgroup_error(
                 "OpenGL software subgroup helper "
-                f"'{missing}' is not reached by an unconditional top-level "
+                f"'{missing}' is not reached by a statically uniform top-level "
                 "entry-point call",
                 workgroup_size=workgroup_size,
                 operation=operation,
@@ -3854,6 +3868,7 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
         self.glsl_software_subgroup_helper_function_names = set()
+        self.glsl_software_subgroup_candidate_helper_function_names = set()
         self.glsl_software_subgroup_uniform_for_node_ids = set()
         self.glsl_software_subgroup_workgroup_size = None
         self.glsl_software_subgroup_workgroup_invocation_count = None
@@ -3958,12 +3973,11 @@ class GLSLCodeGen:
             ):
                 if id(node) not in entry_node_ids:
                     helper_records.append((operation, node, function))
-        self.validate_glsl_software_subgroup_helpers(
-            ast,
-            entry_function,
-            helper_records,
-            tuple(concrete_workgroup_size),
-        )
+        self.glsl_software_subgroup_candidate_helper_function_names = {
+            getattr(function, "name", None)
+            for _operation, _node, function in helper_records
+            if getattr(function, "name", None)
+        }
 
         for node in self.walk_ast(ast):
             name = None
@@ -3997,6 +4011,12 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_analyze_uniform_statements(
             getattr(entry_function, "body", None),
             uniform_names,
+        )
+        self.validate_glsl_software_subgroup_helpers(
+            ast,
+            entry_function,
+            helper_records,
+            tuple(concrete_workgroup_size),
         )
 
     def glsl_software_subgroup_uniform_seed_names(
@@ -4198,7 +4218,15 @@ class GLSLCodeGen:
             return self.glsl_software_subgroup_analyze_uniform_if(statement, names)
         if isinstance(statement, ForNode):
             is_uniform = self.glsl_software_subgroup_uniform_for(statement, names)
-            if is_uniform and self.glsl_software_subgroup_first_operation(statement):
+            contains_subgroup_work = bool(
+                self.glsl_software_subgroup_first_operation(statement)
+            ) or any(
+                isinstance(child, FunctionCallNode)
+                and self.function_call_name(child)
+                in self.glsl_software_subgroup_candidate_helper_function_names
+                for child in self.walk_ast(getattr(statement, "body", None))
+            )
+            if is_uniform and contains_subgroup_work:
                 self.glsl_software_subgroup_uniform_for_node_ids.add(id(statement))
             initializer = getattr(statement, "init", None)
             loop_name = getattr(initializer, "name", None)
@@ -4315,16 +4343,41 @@ class GLSLCodeGen:
             return False
 
         update = getattr(node, "update", None)
-        if not isinstance(update, UnaryOpNode):
+        halving_update = False
+        if isinstance(update, UnaryOpNode):
+            update_operator = self.map_operator(
+                getattr(update, "op", getattr(update, "operator", None))
+            )
+            if update_operator not in {"++", "--"}:
+                return False
+            if self.expression_name(getattr(update, "operand", None)) != loop_name:
+                return False
+            increasing = update_operator == "++"
+        elif isinstance(update, AssignmentNode):
+            update_operator = self.map_operator(
+                getattr(update, "op", getattr(update, "operator", None))
+            )
+            if (
+                update_operator not in {"/=", ">>="}
+                or self.glsl_software_subgroup_assignment_target_name(update)
+                != loop_name
+            ):
+                return False
+            update_value = getattr(update, "value", getattr(update, "right", None))
+            concrete_update_value = evaluate_literal_int_expression(
+                update_value,
+                constants,
+            )
+            if (
+                concrete_update_value is None
+                or (update_operator == "/=" and concrete_update_value < 2)
+                or (update_operator == ">>=" and concrete_update_value < 1)
+            ):
+                return False
+            increasing = False
+            halving_update = True
+        else:
             return False
-        update_operator = self.map_operator(
-            getattr(update, "op", getattr(update, "operator", None))
-        )
-        if update_operator not in {"++", "--"}:
-            return False
-        if self.expression_name(getattr(update, "operand", None)) != loop_name:
-            return False
-        increasing = update_operator == "++"
         normalized_operator = (
             operator
             if loop_on_left
@@ -4335,7 +4388,13 @@ class GLSLCodeGen:
                 ">=": "<=",
             }[operator]
         )
-        if increasing != (normalized_operator in {"<", "<="}):
+        if halving_update:
+            # Integer division or right shift is only a termination proof for
+            # the canonical positive-to-zero reduction loop. Wider bounds can
+            # converge to a fixed point that still satisfies the condition.
+            if normalized_operator != ">" or literal_bound != 0:
+                return False
+        elif increasing != (normalized_operator in {"<", "<="}):
             return False
 
         bound_names = self.glsl_software_subgroup_expression_identifier_names(bound)

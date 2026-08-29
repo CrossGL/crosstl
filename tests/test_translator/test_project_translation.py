@@ -14469,6 +14469,93 @@ def test_plain_metal_helper_materialization_recovers_commented_function_boundary
     assert "uint3 elem" not in materialized.split("uint elem_to_loc_uint(", 1)[1]
 
 
+def test_source_instantiated_metal_kernel_selects_overloaded_helper_by_signature(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    (project_root / "index.metal").write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+template <typename IdxT>
+METAL_FUNC IdxT elem_to_loc(
+    IdxT elem,
+    constant int* shape,
+    constant IdxT* strides,
+    int ndim) {
+  IdxT loc = 0;
+  for (int i = ndim - 1; i >= 0; --i) {
+    loc += (elem % IdxT(shape[i])) * strides[i];
+    elem /= IdxT(shape[i]);
+  }
+  return loc;
+}
+
+template <typename IdxT>
+METAL_FUNC IdxT elem_to_loc(
+    uint3 elem,
+    constant int* shape,
+    constant IdxT* strides,
+    int ndim) {
+  return IdxT(elem.x) * strides[0] + IdxT(shape[0]) + IdxT(ndim);
+}
+
+template <typename T>
+kernel void gather_index(
+    const device T* in [[buffer(0)]],
+    device uint* out [[buffer(1)]],
+    constant int* shape [[buffer(2)]],
+    constant int64_t* strides [[buffer(3)]],
+    constant int& ndim [[buffer(4)]],
+    uint gid [[thread_position_in_grid]]) {
+  int64_t row_idx = int64_t(gid);
+  int64_t loc = elem_to_loc(row_idx, shape, strides, ndim);
+  out[gid] = uint(loc) + uint(in[gid] != T(0));
+}
+
+instantiate_kernel("gather_index_float", gather_index, float)
+""".strip() + "\n",
+        encoding="utf-8",
+    )
+    (project_root / "crosstl.toml").write_text(
+        """[project]
+include = ["index.metal"]
+targets = ["directx"]
+output_dir = "out"
+
+[project.sources]
+"**/*.metal" = "metal"
+""",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(project_root), format_output=False)
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    specializations = artifact["templateMaterialization"]["specializations"]
+    helper_specializations = [
+        item for item in specializations if item["name"] == "elem_to_loc"
+    ]
+    assert helper_specializations == [
+        {
+            "name": "elem_to_loc",
+            "materializedName": "elem_to_loc_int64_t",
+            "parameters": {"IdxT": "int64_t"},
+            "parameterSources": {"IdxT": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    generated = (project_root / artifact["path"]).read_text(encoding="utf-8")
+    assert "int64_t elem_to_loc_int64_t(int64_t elem," in generated
+    assert "elem_to_loc_int64_t(row_idx," in generated
+    assert "uint3 elem" not in generated
+
+
 def test_plain_metal_helper_materialization_retains_reachable_unbound_parameter():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 

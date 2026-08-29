@@ -1432,6 +1432,229 @@ MLX_OPENGL_LOGSUMEXP_SOFTWARE_RUNTIME_EVIDENCE = {
     "numerical_parity_claimed": False,
     "runtime_parity_claimed": False,
 }
+MLX_CURRENT_ARG_REDUCE_SHA256 = (
+    "3d413c4d7eb5a6c397a52487721f445e08ba206a997a90fddcb7e51bf126d1f2"
+)
+MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:9c9a196f8bf4c12264422136921d2c6cbf02e1f524e1791ef277406144df1c62"
+)
+MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_VARIANTS = {
+    "argmin-float32-axis-32-two-rows": {
+        "artifact_id": (
+            "sha256:3e7aebfb8869a3c9169b5941a5457b582cc72a098ba3bfd1aec8e4f73c4f8e25"
+        ),
+        "dispatch_variant_id": (
+            "sha256:c000ab737f30b46a98bd1354ccffe502ed0b1460a77b8ba7940469d266d71ae3"
+        ),
+        "entry_point": "argmin_float32",
+        "inputs": {
+            "argMax": False,
+            "axisSize": 32,
+            "dtype": "float32",
+            "nRows": 2,
+        },
+        "workgroup_size": [32, 1, 1],
+        "dispatch_workgroup_count": [1, 2, 1],
+    },
+    "argmax-float32-axis-32-two-rows": {
+        "artifact_id": (
+            "sha256:1281be909c51f5c74d898e4c1e9992de3572d0135abc42e6bb8ad8308332fa82"
+        ),
+        "dispatch_variant_id": (
+            "sha256:5f6dbeea6ab134cc1d25a3914e643600b4c6eb474eae60a1dac869e1c79b1f06"
+        ),
+        "entry_point": "argmax_float32",
+        "inputs": {
+            "argMax": True,
+            "axisSize": 32,
+            "dtype": "float32",
+            "nRows": 2,
+        },
+        "workgroup_size": [32, 1, 1],
+        "dispatch_workgroup_count": [1, 2, 1],
+    },
+}
+MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE = {
+    "status": "translated-packaged-and-cross-target-native-runtime-required",
+    "commit": MLX_CORPUS_COMMIT,
+    "source": MLX_ARG_REDUCE_SOURCE,
+    "source_sha256": MLX_CURRENT_ARG_REDUCE_SHA256,
+    "selected_entry_points": ["argmin_float32", "argmax_float32"],
+    "dispatch_contract": {
+        "path": (
+            "demos/integrations/mlx/contracts/" "arg_reduce.native-loader.dispatch.json"
+        ),
+        "content_identity": MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY,
+        "workload_count": len(MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_VARIANTS),
+        "host_formula": (
+            "roundUp(min(ceilDiv(axisSize, 4), " "maxThreadsPerWorkgroup), simdWidth)"
+        ),
+        "bounded_axis_size": 32,
+        "subgroup_width": 32,
+        "variants": MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_VARIANTS,
+    },
+    "project_translation": {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 2, "opengl": 2},
+        "translated_count_by_target": {"directx": 2, "opengl": 2},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+    },
+    "materialization": {
+        "concrete_specialization_count": 5,
+        "reachable_specialization_count": 10,
+        "dependency_discovery_work_count": 76,
+        "pruned_candidate_count": 274,
+        "selected_parameters_by_entry": {
+            "argmin_float32": {
+                "N_READS": "4",
+                "Op": "ArgMin<float>",
+                "T": "float",
+            },
+            "argmax_float32": {
+                "N_READS": "4",
+                "Op": "ArgMax<float>",
+                "T": "float",
+            },
+        },
+        "overloaded_helper_selection": {
+            "source_name": "elem_to_loc",
+            "materialized_name": "elem_to_loc_int64_t",
+            "selected_first_parameter": "int64_t",
+            "rejected_first_parameter": "uint3",
+            "resolution": "signature-aware-call-site-materialization",
+        },
+    },
+    "artifacts": {
+        "directx": {
+            "argmin_float32": {
+                "sha256": (
+                    "78d14c461e28b3d054d96bbb427ad02c525aa23313197fe981d7b446a80a03fd"
+                ),
+                "size_bytes": 5972,
+            },
+            "argmax_float32": {
+                "sha256": (
+                    "958abb3811d89124a74d6632ae2167df40fff2f690df0fd0ff4c699681de2333"
+                ),
+                "size_bytes": 5974,
+            },
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "compiler": "dxc",
+            "compiler_version": "1.9.2602.24",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types", "-WX"],
+            "compiler_validation_status": "passed",
+        },
+        "opengl": {
+            "argmin_float32": {
+                "sha256": (
+                    "b74534a5120665ad07755141af2a73702cb5ea504a0526b92306eabedfed4765"
+                ),
+                "size_bytes": 7581,
+            },
+            "argmax_float32": {
+                "sha256": (
+                    "d90e758132832490b7f356c6750d4deb2bdb3341f053a921228a9f24ce8d27d8"
+                ),
+                "size_bytes": 7587,
+            },
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "compiler": "glslangValidator",
+            "compiler_target": "OpenGL/SPIR-V 1.3",
+            "validator": "spirv-val",
+            "control_barrier_instruction_count": 5,
+            "group_non_uniform_instruction_count": 0,
+            "compiler_validation_status": "passed",
+        },
+    },
+    "software_subgroup": {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "selected_kernel_operations": [
+            "WaveShuffleDown(float, uint)",
+            "WaveShuffleDown(uint, uint)",
+        ],
+        "uniform_loop_contract": {
+            "condition": "offset > 0",
+            "updates": ["offset /= constant>=2", "offset >>= constant>=1"],
+            "helper_call_form": "direct-top-level-statement",
+            "unsafe_loop_behavior": "reject-before-artifact-emission",
+        },
+        "hardware_subgroup_extensions_emitted": False,
+        "group_non_uniform_instruction_count": 0,
+    },
+    "runtime_package": {
+        "artifact_count_per_variant_and_target": 1,
+        "ready_load_unit_count_per_variant_and_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count_by_target": {"directx": 9, "opengl": 8},
+        "resource_element_types": [
+            "float32",
+            "uint32",
+            "int32",
+            "int64",
+            "uint64",
+        ],
+        "directx_generated_dispatch_binding": "CrossGLDispatchInfo",
+        "scalar_64_bit_layout_reflected": True,
+    },
+    "workloads": {
+        "input_shape": [2, 32],
+        "input_values": (
+            "deterministic float32 rows with repeated extrema at distinct indices"
+        ),
+        "argmin_expected_indices": [5, 7],
+        "argmax_expected_indices": [3, 2],
+        "tie_behavior": "lowest index",
+        "output_dtype": "uint32",
+    },
+    "native_runtime": {
+        "directx": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_arg_reduce_native_loader.py::"
+                "test_pinned_mlx_arg_reduce_executes_through_directx_native_loader"
+            ),
+        },
+        "opengl": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-headless-egl-software-opengl",
+            "status": "required-on-ci",
+            "local_linux_arm64_validation": "passed",
+            "test": (
+                "tests/test_translator/test_mlx_arg_reduce_native_loader.py::"
+                "test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader"
+            ),
+        },
+    },
+    "metal_roundtrip_boundary": {
+        "status": "entry-workgroup-specialization-target-unsupported",
+        "diagnostic": "project.translate.workgroup-size-rule-unsupported-target",
+        "missing_capability": "execution.workgroup-size-specialization",
+    },
+    "remaining_scope": {
+        "other_axis_sizes_included": False,
+        "other_dtypes_included": False,
+        "remaining_host_named_entries_included": False,
+        "aggregate_directx_opengl_translation_unblocked": False,
+        "mlx_host_runtime_integration_included": False,
+        "full_mlx_test_suite_included": False,
+    },
+    "runtime_execution_attempted": True,
+    "runtime_integration_included": True,
+    "selected_workloads_numerical_parity_verified": True,
+    "complete_runtime_coverage_claimed": False,
+    "full_mlx_test_suite_included": False,
+    "numerical_parity_claimed": False,
+    "runtime_parity_claimed": False,
+}
 MLX_CURRENT_SOFTMAX_SHA256 = (
     "d19231c66973edc3944f12529d1cc393029e7f7262b914907c710ef9dbcb39e2"
 )

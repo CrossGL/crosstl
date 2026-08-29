@@ -419,13 +419,13 @@ HLSL_CONSTANT_RE = re.compile(
     re.IGNORECASE,
 )
 HLSL_VALUE_BLOCK_MEMBER_RE = re.compile(
-    r"\A\s*(?P<type>(?P<base>float|int|uint)(?P<width>[1-4])?)\s+"
+    r"\A\s*(?P<type>(?P<base>int64_t|uint64_t|float|int|uint)(?P<width>[1-4])?)\s+"
     r"(?P<name>[A-Za-z_]\w*)\s*;\s*\Z",
     re.IGNORECASE,
 )
 HLSL_STRUCTURED_VALUE_RE = re.compile(
     r"\A(?:RW)?StructuredBuffer\s*<\s*"
-    r"(?P<type>(?P<base>float|int|uint)(?P<width>[1-4])?)\s*>\Z",
+    r"(?P<type>(?P<base>int64_t|uint64_t|float|int|uint)(?P<width>[1-4])?)\s*>\Z",
     re.IGNORECASE,
 )
 HLSL_DISPATCH_INFO_BUFFER_RE = re.compile(r"\ACrossGLDispatchInfo_*\Z")
@@ -435,6 +435,15 @@ SCALAR_PHYSICAL_TYPES = {
     "float": "float32",
     "int": "int32",
     "uint": "uint32",
+    "int64_t": "int64",
+    "uint64_t": "uint64",
+}
+SCALAR_PHYSICAL_SIZES = {
+    "float": 4,
+    "int": 4,
+    "uint": 4,
+    "int64_t": 8,
+    "uint64_t": 8,
 }
 
 HLSL_ENTRY_STAGE_BY_NAME = {
@@ -818,9 +827,13 @@ def _hlsl_value_block_layout(
     match = HLSL_VALUE_BLOCK_MEMBER_RE.fullmatch(body)
     if match is None:
         return None
+    base_type = match.group("base")
+    vector_width = int(match.group("width") or 1)
+    if base_type.lower() in {"int64_t", "uint64_t"} and vector_width != 1:
+        return None
     return _physical_value_layout(
-        match.group("base"),
-        vector_width=int(match.group("width") or 1),
+        base_type,
+        vector_width=vector_width,
         member_name=match.group("name"),
         storage_layout="hlsl-constant-buffer",
         alignment_bytes=16,
@@ -833,9 +846,13 @@ def _hlsl_structured_value_layout(type_name: str) -> dict[str, Any] | None:
     match = HLSL_STRUCTURED_VALUE_RE.fullmatch(type_name)
     if match is None:
         return None
+    base_type = match.group("base")
+    vector_width = int(match.group("width") or 1)
+    if base_type.lower() in {"int64_t", "uint64_t"} and vector_width != 1:
+        return None
     return _physical_value_layout(
-        match.group("base"),
-        vector_width=int(match.group("width") or 1),
+        base_type,
+        vector_width=vector_width,
         storage_layout="hlsl-structured-buffer",
         alignment_bytes=4,
         runtime_sized=True,
@@ -879,7 +896,8 @@ GLSL_BLOCK_RESOURCE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 GLSL_SCALAR_BLOCK_MEMBER_RE = re.compile(
-    r"\A\s*(?P<type>float|int|uint)\s+(?P<name>[A-Za-z_]\w*)"
+    r"\A\s*(?P<type>int64_t|uint64_t|float|int|uint)\s+"
+    r"(?P<name>[A-Za-z_]\w*)"
     r"(?P<runtime_array>\s*\[\s*\])?\s*;\s*\Z",
     re.IGNORECASE,
 )
@@ -1112,7 +1130,8 @@ def _physical_value_layout(
     block_size_bytes: int | None = None,
 ) -> dict[str, Any]:
     normalized_type = physical_type.lower()
-    element_size_bytes = 4 * vector_width
+    component_size_bytes = SCALAR_PHYSICAL_SIZES[normalized_type]
+    element_size_bytes = component_size_bytes * vector_width
     layout: dict[str, Any] = {
         "physicalType": (
             normalized_type if vector_width == 1 else f"{normalized_type}{vector_width}"
@@ -1120,7 +1139,7 @@ def _physical_value_layout(
         "elementType": SCALAR_PHYSICAL_TYPES[normalized_type],
         "elementSizeBytes": element_size_bytes,
         "elementStrideBytes": element_size_bytes,
-        "alignmentBytes": alignment_bytes,
+        "alignmentBytes": max(alignment_bytes, component_size_bytes),
         "memberOffsetBytes": 0,
         "storageLayout": storage_layout,
         "runtimeSized": runtime_sized,

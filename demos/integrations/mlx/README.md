@@ -855,15 +855,52 @@ five such warnings under
 [#1568](https://github.com/CrossGL/crosstl/issues/1568). Qualified pointer and
 array aliases remain tracked in
 [#1567](https://github.com/CrossGL/crosstl/issues/1567).
-`arg_reduce.metal` materializes all 24 host-named entries. Vulkan emits the
-aggregate artifact, while DirectX and OpenGL full-source packaging fails closed
-with `project.translate.workgroup-size-entry-ambiguous` because the pinned host
-selects axis and pipeline limits at runtime. Project dispatch contract import
-was completed under [#1793](https://github.com/CrossGL/crosstl/issues/1793), but
-no bounded `arg_reduce.metal` manifest is supplied by this integration. Focused
-entry lowering preserves address-space pointer provenance, fixed private-array
-extents, and target dispatch dimensions, but does not establish an aggregate
-DirectX or OpenGL artifact frontier. Entry-scoped packaging remains tracked in
+`arg_reduce.metal` still materializes all 24 host-named entries. The historical
+aggregate run emits Vulkan but continues to fail closed for DirectX and OpenGL
+with `project.translate.workgroup-size-entry-ambiguous`, because one aggregate
+artifact cannot infer the runtime-selected axis and pipeline limits. That
+aggregate result no longer describes all available arg-reduce coverage.
+
+The checked
+[`contracts/arg_reduce.native-loader.dispatch.json`](contracts/arg_reduce.native-loader.dispatch.json)
+contract now selects current-pinned `argmin_float32` and `argmax_float32` for
+two axis-32 rows. It applies the host formula
+`roundUp(min(ceilDiv(axisSize, 4), maxThreadsPerWorkgroup), simdWidth)`, fixes a
+wave width of 32, emits `[32, 1, 1]`, and dispatches `[1, 2, 1]` workgroups.
+Signature-aware helper materialization selects the scalar
+`elem_to_loc<int64_t>` overload rather than the `uint3` overload. The HLSL
+artifacts are 5,972 and 5,974 bytes with SHA-256
+`78d14c461e28b3d054d96bbb427ad02c525aa23313197fe981d7b446a80a03fd`
+and `958abb3811d89124a74d6632ae2167df40fff2f690df0fd0ff4c699681de2333`;
+official DXC 1.9.2602.24 accepts both under `cs_6_6`,
+`-enable-16bit-types`, and warnings as errors.
+
+The explicit OpenGL software-subgroup artifacts are 7,581 and 7,587 bytes with
+SHA-256
+`b74534a5120665ad07755141af2a73702cb5ea504a0526b92306eabedfed4765`
+and `d90e758132832490b7f356c6750d4deb2bdb3341f053a921228a9f24ce8d27d8`.
+They admit direct shuffle-helper calls only inside a canonical workgroup-uniform
+halving loop (`offset > 0` with `/= constant >= 2` or `>>= constant >= 1`),
+while lane-varying, nonterminating, escaping, mutated, indirect, and nested
+forms remain rejected. Both modules pass `glslangValidator` and `spirv-val`,
+contain five control barriers, and contain no group-nonuniform SPIR-V
+instruction.
+
+The native ABI reflects float32 input, uint32 output, int32 shape, int64 stride,
+and uint64 size resources exactly: nine DirectX bindings include the generated
+`CrossGLDispatchInfo`, while OpenGL has eight bindings. Linux arm64 llvmpipe
+executed deterministic rows with repeated extrema and read back argmin indices
+`[5, 7]` and argmax indices `[3, 2]`, proving lowest-index tie behavior.
+Windows CI requires the same two workloads through Direct3D 12 WARP and Linux
+CI requires them through surfaceless Mesa EGL. Other axes, dtypes, and the
+remaining 22 host-named entries, MLX host redirection, and the full MLX test
+suite remain outside this bounded claim. Entry-scoped Metal output still fails
+explicitly at workgroup specialization with
+`project.translate.workgroup-size-rule-unsupported-target`; the native macOS
+aggregate baseline is separate and this proof does not claim an entry-scoped
+Metal round trip. Project dispatch import was completed under
+[#1793](https://github.com/CrossGL/crosstl/issues/1793), and remaining broad
+entry packaging stays tracked in
 [#1523](https://github.com/CrossGL/crosstl/issues/1523).
 The reduced reference-accessor fixture covers three non-template paths. The
 mutable scalar call returns the direct `val_frags[i * width + j]` lvalue and

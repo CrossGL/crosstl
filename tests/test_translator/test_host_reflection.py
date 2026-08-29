@@ -267,6 +267,94 @@ def test_hlsl_reflection_records_exact_vector_resource_layouts(tmp_path):
     }
 
 
+def test_source_reflection_records_exact_64_bit_scalar_layouts(tmp_path):
+    hlsl = _reflect_hlsl(
+        tmp_path,
+        """
+        StructuredBuffer<int64_t> inputStrides : register(t0);
+        RWStructuredBuffer<uint64_t> outputOffsets : register(u1);
+        cbuffer AxisStride : register(b2) { int64_t axisStride; };
+        cbuffer AxisSize : register(b3) { uint64_t axisSize; };
+        [numthreads(1, 1, 1)] void CSMain() {}
+        """,
+    )
+    hlsl_by_name = {resource["name"]: resource for resource in hlsl["resources"]}
+    assert hlsl_by_name["inputStrides"]["scalarLayout"] == {
+        "physicalType": "int64_t",
+        "elementType": "int64",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 8,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer",
+        "runtimeSized": True,
+    }
+    assert hlsl_by_name["outputOffsets"]["scalarLayout"]["elementType"] == ("uint64")
+    assert hlsl_by_name["AxisStride"]["scalarLayout"] == {
+        "physicalType": "int64_t",
+        "elementType": "int64",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-constant-buffer",
+        "runtimeSized": False,
+        "memberName": "axisStride",
+        "blockSizeBytes": 16,
+    }
+    assert hlsl_by_name["AxisSize"]["scalarLayout"]["elementType"] == "uint64"
+
+    artifact = tmp_path / "kernel.comp"
+    artifact.write_text(
+        textwrap.dedent("""
+            #version 450 core
+            #extension GL_ARB_gpu_shader_int64 : require
+            layout(std430, binding = 0) readonly buffer InputStrides {
+                int64_t inputStrides[];
+            };
+            layout(std430, binding = 1) buffer OutputOffsets {
+                uint64_t outputOffsets[];
+            };
+            layout(std140, binding = 2) uniform AxisStride {
+                int64_t axisStride;
+            };
+            layout(std140, binding = 3) uniform AxisSize {
+                uint64_t axisSize;
+            };
+            layout(local_size_x = 1) in;
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    glsl = reflect_target_host_interface(artifact, target="opengl", stage="compute")
+    glsl_by_name = {resource["name"]: resource for resource in glsl["resources"]}
+    assert glsl_by_name["InputStrides"]["scalarLayout"] == {
+        "physicalType": "int64_t",
+        "elementType": "int64",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 8,
+        "memberOffsetBytes": 0,
+        "storageLayout": "std430",
+        "runtimeSized": True,
+        "memberName": "inputStrides",
+    }
+    assert glsl_by_name["OutputOffsets"]["scalarLayout"]["elementType"] == ("uint64")
+    assert glsl_by_name["AxisStride"]["scalarLayout"] == {
+        "physicalType": "int64_t",
+        "elementType": "int64",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "std140",
+        "runtimeSized": False,
+        "memberName": "axisStride",
+        "blockSizeBytes": 16,
+    }
+    assert glsl_by_name["AxisSize"]["scalarLayout"]["elementType"] == "uint64"
+
+
 def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts(tmp_path):
     hlsl = _reflect_hlsl(
         tmp_path,
@@ -278,6 +366,8 @@ def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts(tmp_path
         };
         RWStructuredBuffer<Pair> pairs : register(u0);
         ByteAddressBuffer bytes : register(t0);
+        RWStructuredBuffer<uint64_t2> wideOffsets : register(u1);
+        cbuffer Wide : register(b1) { int64_t2 wide; };
         [numthreads(1, 1, 1)] void CSMain() {}
         """,
     )

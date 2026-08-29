@@ -20672,6 +20672,168 @@ def test_glsl_software_subgroup_accepts_uniform_top_level_helper_calls(tmp_path)
 
 
 @pytest.mark.parametrize(
+    "update",
+    [pytest.param("/= 2u", id="divide"), pytest.param(">>= 1u", id="shift")],
+)
+def test_glsl_software_subgroup_accepts_helper_calls_in_uniform_halving_loop(
+    update,
+    tmp_path,
+):
+    code = f"""
+    shader GLSLSoftwareSubgroupUniformHalvingHelper {{
+        float shuffleValue(float value, uint offset) {{
+            return WaveShuffleDown(value, offset);
+        }}
+
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                float value = float(gl_LocalInvocationID.x);
+                uint width = 32u;
+                for (
+                    uint offset = width / 2u;
+                    offset > 0u;
+                    offset {update}
+                ) {{
+                    float neighbor = shuffleValue(value, offset);
+                    value += neighbor;
+                }}
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert (
+        "return crossglSoftwareSubgroupShuffleDownFloat(value, uint(offset));"
+        in generated
+    )
+    assert "float neighbor = shuffleValue(value, offset);" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_uniform_halving_helper_"
+        + ("divide" if update.startswith("/") else "shift"),
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("initial", "condition", "update", "loop_body", "reason"),
+    [
+        (
+            "gl_LocalInvocationID.x / 2u",
+            "offset > 0u",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > gl_LocalInvocationID.x",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 1u",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset >= 1u",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset /= 1u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset >>= 0u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset /= 2u",
+            "offset--; float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset); break;",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset); return;",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset /= 2u",
+            "float neighbor = 1.0 + shuffleValue(value, offset);",
+            "helper-call-not-uniform",
+        ),
+    ],
+)
+def test_glsl_software_subgroup_halving_helper_loop_fails_closed(
+    initial,
+    condition,
+    update,
+    loop_body,
+    reason,
+):
+    code = f"""
+    shader GLSLSoftwareSubgroupUnsafeHalvingHelper {{
+        float shuffleValue(float value, uint offset) {{
+            return WaveShuffleDown(value, offset);
+        }}
+
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                float value = float(gl_LocalInvocationID.x);
+                uint width = 32u;
+                for (uint offset = {initial}; {condition}; {update}) {{
+                    {loop_body}
+                    value += 1.0;
+                }}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason in {reason, "helper-call-not-uniform"}
+    assert raised.value.operation == "WaveShuffleDown"
+
+
+@pytest.mark.parametrize(
     "entry_body",
     [
         """

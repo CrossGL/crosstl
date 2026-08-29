@@ -20,6 +20,7 @@ All notable changes to CrossTL are documented in this file.
 - Current-pinned MLX RMSNorm VJP axis-32, one-row, `has_w=true` native-loader execution with an exact ten-resource ABI, concrete DirectX and deferred-specialized OpenGL paths, and numerical `gx`/`gw` readback on WARP and Mesa.
 - Current-pinned MLX 512-thread float32 dot-product execution through Direct3D 12 WARP and a distinct sixteen-subgroup software OpenGL artifact on Mesa, with exact four-resource ABI, SPIR-V structure, artifact identity, and numerical readback evidence.
 - Current-pinned MLX block Softmax execution for two axis-32 rows and one axis-2049 row through Direct3D 12 WARP and explicit software-subgroup OpenGL on Mesa, with exact three-resource ABIs, deterministic guarded and software artifact identities, SPIR-V structure, and stable float32 numerical references.
+- Current-pinned MLX `argmin_float32` and `argmax_float32` execution for two axis-32 rows through Direct3D 12 WARP and explicit software-subgroup OpenGL on Mesa, with exact signed/unsigned 64-bit resource ABIs, deterministic tie-breaking readback, and separate aggregate and Metal limitations.
 - Deferred-specialization ABI packages retain a ready, actionable JSON runtime variant registry while marking the unsupported generated C++ registry header unavailable with an explicit reason.
 - Deferred Native Compilation CI workflow covering a three-platform contract matrix plus native Direct3D 12 and software OpenGL compile-and-dispatch jobs with pinned DXC verification and required device readback.
 
@@ -30,6 +31,8 @@ All notable changes to CrossTL are documented in this file.
 - OpenGL resource specialization includes the storage pointer view layout in specialization identity and generated helper names, so direct and reinterpreted calls against the same root receive distinct deterministic helpers regardless of call order.
 - Explicit OpenGL software subgroups accept uniquely identified helpers only when calls are direct, unconditional, top-level, and entry-owned; resource-specialized calls may reuse only identical-base workgroup proofs whose validated intervals cover the narrower request.
 - Explicit OpenGL software subgroups admit canonical runtime loops only when integer initializers and bounds are proven workgroup-uniform through constants, scalar blocks, workgroup builtins, and conservative local dataflow; lane-varying state, mutation, escaping control flow, and unresolved calls remain fail-closed.
+- Explicit OpenGL software subgroups admit direct top-level helper calls inside proven canonical workgroup-uniform halving loops using `/= constant` or `>>= constant`; nested calls, ambiguous identities, unsafe updates, mutation, and escaping flow remain fail-closed.
+- Native reflection and runtime requests support exact scalar `int64_t` and `uint64_t` structured/storage buffers and single-member constant/uniform blocks, including range-checked little-endian packing, readback, stride inference, and 16-byte scalar-block alignment.
 - HLSL compute stages are inferred from `numthreads` attributes, keeping deferred interface reflection aligned with DXC entry-point selection.
 - Project artifact report identities stay repository-relative on Windows by preferring lexical project-root containment.
 - Per-artifact time limits are applied to MLX full-corpus scouting so stalled units produce structured diagnostics and durable checkpoint records.
@@ -45,6 +48,7 @@ All notable changes to CrossTL are documented in this file.
 - OpenGL private arrays are preserved in resource-specialized callers, redundant same-view storage pointer casts are treated as idempotent, and reinterpreted storage byte bases are forwarded explicitly so nested helpers keep pointer arithmetic without capturing caller-local expressions or double-scaling offsets.
 - DirectX aggregate initialization: destination type information is preserved while probing typed-buffer atomic expressions, omitted structure and fixed-array fields are recursively value-initialized, and untyped array literals are rejected with a structured diagnostic instead of ambiguous HLSL brace expressions.
 - Metal helper calls preserve mutable resource pointer offsets in both DirectX and OpenGL output.
+- Source-instantiated Metal template helpers with overloaded names defer to signature-aware materialization, preventing scalar call sites from selecting vector overloads.
 - Direct3D shutdown with live pipelines and unverified HLSL includes now fail closed, and OpenGL adapter object ownership is hardened with caller-controlled context lifetime for injected contexts.
 - Worker timeout exceptions are distinguished from job deadlines so a timeout raised inside translation code remains a typed worker failure.
 - Python 3.8 and 3.9 compatibility preserved across entry discovery and deferred compilation tests.
