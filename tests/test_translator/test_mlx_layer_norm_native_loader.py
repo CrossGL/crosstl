@@ -33,47 +33,61 @@ from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
 
 ROOT = Path(__file__).resolve().parents[2]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
-MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
-MLX_RMS_NORM_SHA256 = "b2e04e377fdad1d645581f9beeaf9cbb06d1ad32926161e06cbc15240caf12bf"
-MLX_RMS_NORM_ENTRY = "rmsfloat32"
-MLX_RMS_NORM_ARTIFACT_ID = (
-    "sha256:00c05fccf276cf11f3fb9b617b8fe0bb3c5f8766c0e4ca1ed990c093e700422e"
+MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
+MLX_LAYER_NORM_SHA256 = (
+    "2d243f5abea7353929f9bc838ceb5a98e52a452dfc29609ad4d5974447ea689f"
 )
-MLX_RMS_NORM_DISPATCH_IDENTITY = (
-    "f733849c0ded2be96de6b5b6df6df662751c733fa13c2036baf9a834db3981c5"
+MLX_LAYER_NORM_ENTRY = "layer_normfloat32"
+MLX_LAYER_NORM_ARTIFACT_ID = (
+    "sha256:4b1c27c05949e3021e5b28aeb4552e668aad8dd00141a1880fe98e7ebc7b129e"
 )
-MLX_RMS_NORM_DISPATCH_CONTRACT = (
+MLX_LAYER_NORM_DISPATCH_IDENTITY = (
+    "320929bc503640b12748a28f72aa571f9a79123e498d5f8cda4a9827c2d01add"
+)
+MLX_LAYER_NORM_DISPATCH_CONTRACT = (
     ROOT
     / "demos"
     / "integrations"
     / "mlx"
     / "contracts"
-    / "rms_norm.native-loader.dispatch.json"
+    / "layer_norm.native-loader.dispatch.json"
 )
-MLX_RMS_NORM_GENERATED_ARTIFACTS = {
+MLX_LAYER_NORM_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "83f7b6e437122b2afe3dbc5d7649f6bc882d671947bcc72579ae5aa568fb2a5b",
-        "sizeBytes": 3486,
+        "sha256": "7fea4cd2ecf9b636ef2aa9a1a588e4186704bff5cb80163820c02fdb113194ba",
+        "sizeBytes": 5216,
     },
     "opengl": {
-        "sha256": "3180aba83b64add0ae3c2d471b9297eb5bada4c4ff2bd5c91a3db3698cf0df78",
-        "sizeBytes": 4393,
+        "sha256": "f86f83b6835b7d4b07ece9f153df883300f7a131bbcec5d084bf29084c1bf51a",
+        "sizeBytes": 5914,
     },
 }
-REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_RMS_NORM_DIRECTX_NATIVE_LOADER"
-REQUIRE_OPENGL_PROOF_ENV = "CROSTL_REQUIRE_MLX_RMS_NORM_OPENGL_NATIVE_LOADER"
+REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_LAYER_NORM_DIRECTX_NATIVE_LOADER"
+REQUIRE_OPENGL_PROOF_ENV = "CROSTL_REQUIRE_MLX_LAYER_NORM_OPENGL_NATIVE_LOADER"
 AXIS_SIZE = 32
 ROW_COUNT = 2
 EPSILON = 1e-5
-ABSOLUTE_TOLERANCE = 3e-5
-RELATIVE_TOLERANCE = 3e-5
+ABSOLUTE_TOLERANCE = 5e-5
+RELATIVE_TOLERANCE = 5e-5
+
+
+def _workgroup_access_assertion() -> str:
+    return textwrap.dedent(f"""
+        [[project.workgroup_access_assertions]]
+        source = "{MLX_LAYER_NORM_SOURCE}"
+        entry_point = "{MLX_LAYER_NORM_ENTRY}"
+        function = "*"
+        parameter = "*"
+        minimum = 0
+        maximum = 31
+        """).strip()
 
 
 def _directx_project_config(*, output_dir: str, dispatch_contract: str) -> str:
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
-        include = ["{MLX_RMS_NORM_SOURCE}"]
+        include = ["{MLX_LAYER_NORM_SOURCE}"]
         include_dirs = ["."]
         targets = ["directx"]
         output_dir = "{output_dir}"
@@ -81,6 +95,8 @@ def _directx_project_config(*, output_dir: str, dispatch_contract: str) -> str:
 
         [project.sources]
         "**/*.metal" = "metal"
+
+        {_workgroup_access_assertion()}
         """).strip()
 
 
@@ -88,7 +104,7 @@ def _opengl_project_config(*, output_dir: str) -> str:
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
-        include = ["{MLX_RMS_NORM_SOURCE}"]
+        include = ["{MLX_LAYER_NORM_SOURCE}"]
         include_dirs = ["."]
         targets = ["opengl"]
         output_dir = "{output_dir}"
@@ -97,10 +113,12 @@ def _opengl_project_config(*, output_dir: str) -> str:
         "**/*.metal" = "metal"
 
         [project.entry_points]
-        "{MLX_RMS_NORM_SOURCE}" = "{MLX_RMS_NORM_ENTRY}"
+        "{MLX_LAYER_NORM_SOURCE}" = "{MLX_LAYER_NORM_ENTRY}"
 
-        [project.entry_workgroup_size_rules."{MLX_RMS_NORM_SOURCE}"]
-        "{MLX_RMS_NORM_ENTRY}" = [32, 1, 1]
+        [project.entry_workgroup_size_rules."{MLX_LAYER_NORM_SOURCE}"]
+        "{MLX_LAYER_NORM_ENTRY}" = [32, 1, 1]
+
+        {_workgroup_access_assertion()}
 
         [project.source_options.metal.target_options.opengl]
         software_subgroup_width = 32
@@ -131,9 +149,9 @@ def _pinned_mlx_root() -> Path:
         pytest.skip("CROSTL_MLX_ROOT is not configured")
 
     mlx_root = Path(value).resolve()
-    source_path = mlx_root / MLX_RMS_NORM_SOURCE
+    source_path = mlx_root / MLX_LAYER_NORM_SOURCE
     if not source_path.is_file():
-        pytest.fail(f"Pinned MLX RMSNorm source is missing: {source_path}")
+        pytest.fail(f"Pinned MLX LayerNorm source is missing: {source_path}")
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=mlx_root,
@@ -142,16 +160,23 @@ def _pinned_mlx_root() -> Path:
         text=True,
     ).stdout.strip()
     assert commit == MLX_COMMIT
-    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == MLX_RMS_NORM_SHA256
+    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == (
+        MLX_LAYER_NORM_SHA256
+    )
     return mlx_root
 
 
 def _dispatch_variant():
-    manifest = load_dispatch_contract(MLX_RMS_NORM_DISPATCH_CONTRACT)
+    manifest = load_dispatch_contract(MLX_LAYER_NORM_DISPATCH_CONTRACT)
     assert manifest.provenance["commit"] == MLX_COMMIT
+    assert manifest.provenance["sourceReferences"] == {
+        "hostDispatch": "mlx/backend/metal/normalization.cpp",
+        "kernel": MLX_LAYER_NORM_SOURCE,
+        "test": "python/tests/test_fast.py::test_layer_norm",
+    }
     assert manifest.content_identity.to_json() == {
         "algorithm": "sha256",
-        "value": MLX_RMS_NORM_DISPATCH_IDENTITY,
+        "value": MLX_LAYER_NORM_DISPATCH_IDENTITY,
     }
     variants = manifest.evaluate()
     assert len(variants) == 1
@@ -163,19 +188,19 @@ def _dispatch_variant():
         "isVjp": False,
         "nRows": ROW_COUNT,
     }
-    assert variant.entry_point == MLX_RMS_NORM_ENTRY
+    assert variant.entry_point == MLX_LAYER_NORM_ENTRY
     assert variant.workgroup_size == (32, 1, 1)
     assert variant.subgroup_width == 32
     assert variant.dispatch_field == "workgroupCount"
     assert variant.dispatch_size == (ROW_COUNT, 1, 1)
     assert variant.specialization_constants == {}
-    assert variant.artifact_id == MLX_RMS_NORM_ARTIFACT_ID
+    assert variant.artifact_id == MLX_LAYER_NORM_ARTIFACT_ID
     return variant
 
 
 def _copy_dispatch_contract(destination: Path) -> None:
     _dispatch_variant()
-    shutil.copyfile(MLX_RMS_NORM_DISPATCH_CONTRACT, destination)
+    shutil.copyfile(MLX_LAYER_NORM_DISPATCH_CONTRACT, destination)
 
 
 def _assert_directx_compiles(generated_path: Path, work_dir: Path) -> None:
@@ -185,7 +210,7 @@ def _assert_directx_compiles(generated_path: Path, work_dir: Path) -> None:
     arguments = dxc_compiler_arguments_for_source(
         generated_path.read_text(encoding="utf-8")
     )
-    dxil_path = work_dir / "rmsfloat32.dxil"
+    dxil_path = work_dir / "layer_normfloat32.dxil"
     result = subprocess.run(
         [
             dxc,
@@ -214,11 +239,11 @@ def _assert_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
     if not all(tools.values()):
         if os.environ.get(REQUIRE_OPENGL_PROOF_ENV) == "1":
             missing = [name for name, value in tools.items() if value is None]
-            pytest.fail("The RMSNorm OpenGL proof requires: " + ", ".join(missing))
+            pytest.fail("The LayerNorm OpenGL proof requires: " + ", ".join(missing))
         return
 
-    spirv_path = work_dir / "rmsfloat32.spv"
-    assembly_path = work_dir / "rmsfloat32.spvasm"
+    spirv_path = work_dir / "layer_normfloat32.spv"
+    assembly_path = work_dir / "layer_normfloat32.spvasm"
     subprocess.run(
         [
             tools["glslangValidator"],
@@ -251,6 +276,30 @@ def _assert_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
     assembly = assembly_path.read_text(encoding="utf-8")
     assert assembly.count("OpControlBarrier") == 6
     assert "OpGroupNonUniform" not in assembly
+
+
+def _expected_binding_names(target: str) -> dict[int, str]:
+    if target == "directx":
+        return {
+            0: "x",
+            1: "w",
+            2: "b",
+            3: "out_",
+            4: "layer_normfloat32_eps_Constants",
+            5: "layer_normfloat32_axis_size_Constants",
+            6: "layer_normfloat32_w_stride_Constants",
+            7: "layer_normfloat32_b_stride_Constants",
+        }
+    return {
+        0: "xBuffer",
+        1: "wBuffer",
+        2: "bBuffer",
+        3: "out_Buffer",
+        4: "layer_normfloat32_eps_Args",
+        5: "layer_normfloat32_axis_size_Args",
+        6: "layer_normfloat32_w_stride_Args",
+        7: "layer_normfloat32_b_stride_Args",
+    }
 
 
 def _expected_layouts(target: str) -> dict[str, dict]:
@@ -287,34 +336,16 @@ def _expected_layouts(target: str) -> dict[str, dict]:
             "blockSizeBytes": 16,
         }
 
-    member_prefix = "rmsfloat32_" if target == "directx" else ""
+    prefix = "layer_normfloat32_" if target == "directx" else ""
     return {
         names[0]: runtime_array("x"),
         names[1]: runtime_array("w"),
-        names[2]: runtime_array("out_"),
-        names[3]: uniform("float", "float32", member_prefix + "eps"),
-        names[4]: uniform("uint", "uint32", member_prefix + "axis_size"),
-        names[5]: uniform("uint", "uint32", member_prefix + "w_stride"),
-    }
-
-
-def _expected_binding_names(target: str) -> dict[int, str]:
-    if target == "directx":
-        return {
-            0: "x",
-            1: "w",
-            2: "out_",
-            3: "rmsfloat32_eps_Constants",
-            4: "rmsfloat32_axis_size_Constants",
-            5: "rmsfloat32_w_stride_Constants",
-        }
-    return {
-        0: "xBuffer",
-        1: "wBuffer",
-        2: "out_Buffer",
-        3: "rmsfloat32_eps_Args",
-        4: "rmsfloat32_axis_size_Args",
-        5: "rmsfloat32_w_stride_Args",
+        names[2]: runtime_array("b"),
+        names[3]: runtime_array("out_"),
+        names[4]: uniform("float", "float32", prefix + "eps"),
+        names[5]: uniform("uint", "uint32", prefix + "axis_size"),
+        names[6]: uniform("uint", "uint32", prefix + "w_stride"),
+        names[7]: uniform("uint", "uint32", prefix + "b_stride"),
     }
 
 
@@ -322,7 +353,7 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     output_dir = work_dir / "out"
     config_path = work_dir / "crosstl.toml"
     if target == "directx":
-        contract_path = work_dir / "rms_norm.dispatch.json"
+        contract_path = work_dir / "layer_norm.dispatch.json"
         _copy_dispatch_contract(contract_path)
         config_text = _directx_project_config(
             output_dir=output_dir.relative_to(mlx_root).as_posix(),
@@ -347,13 +378,23 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     assert payload["summary"]["diagnosticCounts"]["error"] == 0
+    assert payload["project"]["workgroupAccessAssertions"] == [
+        {
+            "source": MLX_LAYER_NORM_SOURCE,
+            "entryPoint": MLX_LAYER_NORM_ENTRY,
+            "function": "*",
+            "parameter": "*",
+            "minimum": 0,
+            "maximum": 31,
+        }
+    ]
 
     artifact = payload["artifacts"][0]
-    expected = MLX_RMS_NORM_GENERATED_ARTIFACTS[target]
-    assert artifact["source"] == MLX_RMS_NORM_SOURCE
+    expected = MLX_LAYER_NORM_GENERATED_ARTIFACTS[target]
+    assert artifact["source"] == MLX_LAYER_NORM_SOURCE
     assert artifact["sourceHash"] == {
         "algorithm": "sha256",
-        "value": MLX_RMS_NORM_SHA256,
+        "value": MLX_LAYER_NORM_SHA256,
     }
     assert artifact["generatedHash"] == {
         "algorithm": "sha256",
@@ -361,7 +402,7 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     }
     assert artifact["generatedSizeBytes"] == expected["sizeBytes"]
     assert artifact["entryPoint"] == {
-        "source": MLX_RMS_NORM_ENTRY,
+        "source": MLX_LAYER_NORM_ENTRY,
         "target": "CSMain" if target == "directx" else "main",
         "stage": "compute",
     }
@@ -369,31 +410,40 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     assert "specializationMaterialization" not in artifact
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
-    assert materialization["specializationCount"] == 1
+    assert materialization["specializationCount"] == 3
     assert materialization["accounting"] == {
-        "reachableSpecializationCount": 4,
-        "dependencyDiscoveryWorkCount": 0,
-        "prunedCandidateCount": 168,
+        "reachableSpecializationCount": 6,
+        "dependencyDiscoveryWorkCount": 8,
+        "prunedCandidateCount": 194,
     }
+    assert [item["name"] for item in materialization["specializations"]] == [
+        "layer_norm_single_row",
+        "initialize_buffer",
+        "threadgroup_sum",
+    ]
     assert materialization["specializations"][0]["parameters"] == {
-        "N_READS": "RMS_N_READS",
+        "N_READS": "8",
         "T": "float",
     }
 
     entry = artifact["execution"]["entryPoints"][0]
-    assert entry["sourceEntryPoint"] == MLX_RMS_NORM_ENTRY
+    assert entry["sourceEntryPoint"] == MLX_LAYER_NORM_ENTRY
     assert entry["workgroupSize"] == [32, 1, 1]
     generated_path = mlx_root / artifact["path"]
     generated = generated_path.read_text(encoding="utf-8")
-    assert "has_w" not in generated
-    assert "rmsfloat32_local_inv_mean" in generated
-    assert "rmsfloat32_local_sums" in generated
+    assert "layer_normfloat32_local_buffer" in generated
+    assert "initialize_buffer_1" in generated
+    assert "threadgroup_sum_1" in generated
     if target == "directx":
         assert entry["subgroupWidth"] == 32
-        assert artifact["dispatchArtifact"]["artifactId"] == MLX_RMS_NORM_ARTIFACT_ID
+        assert artifact["dispatchArtifact"]["artifactId"] == (
+            MLX_LAYER_NORM_ARTIFACT_ID
+        )
         assert "[numthreads(32, 1, 1)]" in generated
         assert "[WaveSize(32)]" in generated
-        assert dxc_compiler_arguments_for_source(generated) == ("-enable-16bit-types",)
+        assert dxc_compiler_arguments_for_source(generated) == (
+            "-enable-16bit-types",
+        )
         assert generated.count("WaveActiveSum(") == 2
         assert generated.count("GroupMemoryBarrierWithGroupSync();") == 3
         _assert_directx_compiles(generated_path, work_dir)
@@ -410,6 +460,10 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "subgroupAdd" not in generated
         assert generated.count("crossglSoftwareSubgroupSumFloat(") == 3
         assert generated.count("barrier();") == 6
+        assert (
+            "threadgroup_sum_1_glsl_xs_layer_normfloat32_local_buffer_float_32"
+            in generated
+        )
         _assert_opengl_spirv(generated_path, work_dir)
 
     toolchain_runs = payload["validation"]["toolchainRuns"]
@@ -434,7 +488,7 @@ def _build_runtime_package(
     runtime_artifacts = build_runtime_artifact_manifest(report_path)
     assert runtime_artifacts["success"] is True
     assert runtime_artifacts["summary"]["artifactCount"] == 1
-    assert runtime_artifacts["summary"]["resourceBindingCount"] == 6
+    assert runtime_artifacts["summary"]["resourceBindingCount"] == 8
     assert runtime_artifacts["summary"]["specializationConstantCount"] == 0
     reflected = runtime_artifacts["artifacts"][0]
     assert reflected["hostInterface"]["status"] == "ready"
@@ -444,7 +498,7 @@ def _build_runtime_package(
         _expected_binding_names(target)
     )
     assert {resource["name"]: resource["access"] for resource in resources} == {
-        name: "read_write" if binding == 2 else "read"
+        name: "read_write" if binding == 3 else "read"
         for binding, name in _expected_binding_names(target).items()
     }
     assert {
@@ -486,45 +540,50 @@ def _build_runtime_package(
     return descriptor, package_dir
 
 
-def _workload() -> tuple[list[float], list[float], list[float]]:
+def _workload() -> tuple[list[float], list[float], list[float], list[float]]:
     values = [(index - 16) / 8.0 for index in range(AXIS_SIZE)]
     values.extend(((index % 9) - 4) * 0.3125 for index in range(AXIS_SIZE))
     weights = [0.5 + (index % 5) * 0.125 for index in range(AXIS_SIZE)]
-    expected = []
+    biases = [(index % 7 - 3) * 0.0625 for index in range(AXIS_SIZE)]
+    expected: list[float] = []
     for row in range(ROW_COUNT):
         row_values = values[row * AXIS_SIZE : (row + 1) * AXIS_SIZE]
-        mean_square = math.fsum(value * value for value in row_values) / AXIS_SIZE
-        inverse_mean = 1.0 / math.sqrt(mean_square + EPSILON)
+        mean = math.fsum(row_values) / AXIS_SIZE
+        centered = [value - mean for value in row_values]
+        variance = math.fsum(value * value for value in centered) / AXIS_SIZE
+        normalizer = 1.0 / math.sqrt(variance + EPSILON)
         expected.extend(
-            value * weights[index] * inverse_mean
-            for index, value in enumerate(row_values)
+            value * normalizer * weights[index] + biases[index]
+            for index, value in enumerate(centered)
         )
-    return values, weights, expected
+    return values, weights, biases, expected
 
 
 def _dispatch_request(descriptor: dict, package_dir: Path, target: str):
     names = _expected_binding_names(target)
-    values, weights, expected = _workload()
+    values, weights, biases, expected = _workload()
     request = build_native_loader_dispatch_request(
         descriptor,
         package_dir,
         {
             names[0]: {"dtype": "float32", "shape": [64], "values": values},
             names[1]: {"dtype": "float32", "shape": [32], "values": weights},
-            names[3]: {
+            names[2]: {"dtype": "float32", "shape": [32], "values": biases},
+            names[4]: {
                 "dtype": "float32",
                 "shape": [1],
                 "values": [EPSILON],
             },
-            names[4]: {
+            names[5]: {
                 "dtype": "uint32",
                 "shape": [1],
                 "values": [AXIS_SIZE],
             },
-            names[5]: {"dtype": "uint32", "shape": [1], "values": [1]},
+            names[6]: {"dtype": "uint32", "shape": [1], "values": [1]},
+            names[7]: {"dtype": "uint32", "shape": [1], "values": [1]},
         },
         {
-            names[2]: {
+            names[3]: {
                 "dtype": "float32",
                 "shape": [64],
                 "values": expected,
@@ -545,32 +604,32 @@ def _dispatch_request(descriptor: dict, package_dir: Path, target: str):
     return request, expected
 
 
-def test_rms_norm_native_loader_dispatch_contract_is_exact():
+def test_layer_norm_native_loader_dispatch_contract_is_exact():
     _dispatch_variant()
 
 
-def test_pinned_mlx_rms_norm_translates_to_directx_native_loader_artifact():
+def test_pinned_mlx_layer_norm_translates_to_directx_native_loader_artifact():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-rms-norm-directx-translation-",
+        prefix=".crosstl-layer-norm-directx-translation-",
         dir=mlx_root,
     ) as temporary_directory:
         _translate_artifact(mlx_root, Path(temporary_directory), "directx")
 
 
-def test_pinned_mlx_rms_norm_translates_to_software_subgroup_opengl():
+def test_pinned_mlx_layer_norm_translates_to_software_subgroup_opengl():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-rms-norm-opengl-translation-",
+        prefix=".crosstl-layer-norm-opengl-translation-",
         dir=mlx_root,
     ) as temporary_directory:
         _translate_artifact(mlx_root, Path(temporary_directory), "opengl")
 
 
-def test_pinned_mlx_rms_norm_executes_through_directx_native_loader():
+def test_pinned_mlx_layer_norm_executes_through_directx_native_loader():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-rms-norm-directx-native-loader-",
+        prefix=".crosstl-layer-norm-directx-native-loader-",
         dir=mlx_root,
     ) as temporary_directory:
         descriptor, package_dir = _build_runtime_package(
@@ -581,7 +640,7 @@ def test_pinned_mlx_rms_norm_executes_through_directx_native_loader():
         request, expected = _dispatch_request(descriptor, package_dir, "directx")
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
-                adapter_id="mlx-rms-norm-directx-native-loader",
+                adapter_id="mlx-layer-norm-directx-native-loader",
                 target="directx",
                 executor="directx",
                 adapter_kind="directx-native-runtime",
@@ -599,7 +658,7 @@ def test_pinned_mlx_rms_norm_executes_through_directx_native_loader():
         result = executor.run(request)
 
     assert result.status == "ok"
-    output_name = _expected_binding_names("directx")[2]
+    output_name = _expected_binding_names("directx")[3]
     assert result.outputs[output_name]["dtype"] == "float32"
     assert result.outputs[output_name]["shape"] == [64]
     assert result.outputs[output_name]["values"] == pytest.approx(
@@ -609,10 +668,10 @@ def test_pinned_mlx_rms_norm_executes_through_directx_native_loader():
     )
 
 
-def test_pinned_mlx_rms_norm_executes_through_opengl_native_loader():
+def test_pinned_mlx_layer_norm_executes_through_opengl_native_loader():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-rms-norm-opengl-native-loader-",
+        prefix=".crosstl-layer-norm-opengl-native-loader-",
         dir=mlx_root,
     ) as temporary_directory:
         descriptor, package_dir = _build_runtime_package(
@@ -623,7 +682,7 @@ def test_pinned_mlx_rms_norm_executes_through_opengl_native_loader():
         request, expected = _dispatch_request(descriptor, package_dir, "opengl")
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
-                adapter_id="mlx-rms-norm-software-opengl-native-loader",
+                adapter_id="mlx-layer-norm-software-opengl-native-loader",
                 target="opengl",
                 executor="opengl",
                 adapter_kind="opengl-native-runtime",
@@ -641,7 +700,7 @@ def test_pinned_mlx_rms_norm_executes_through_opengl_native_loader():
         result = executor.run(request)
 
     assert result.status == "ok"
-    output_name = _expected_binding_names("opengl")[2]
+    output_name = _expected_binding_names("opengl")[3]
     assert result.outputs[output_name]["dtype"] == "float32"
     assert result.outputs[output_name]["shape"] == [64]
     assert result.outputs[output_name]["values"] == pytest.approx(

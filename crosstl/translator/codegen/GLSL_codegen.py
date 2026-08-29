@@ -3616,10 +3616,139 @@ class GLSLCodeGen:
             source_location=source_location,
         )
 
+    def glsl_software_subgroup_functions(self, ast):
+        functions = []
+        seen = set()
+        for function in self.collect_functions(ast):
+            if id(function) in seen:
+                continue
+            seen.add(id(function))
+            functions.append(function)
+        return functions
+
+    @staticmethod
+    def glsl_software_subgroup_statement_list(body):
+        if hasattr(body, "statements"):
+            return list(body.statements or [])
+        if isinstance(body, list):
+            return list(body)
+        if body is None:
+            return []
+        return [body]
+
+    def glsl_software_subgroup_top_level_call(self, statement):
+        expression = statement
+        if isinstance(statement, ExpressionStatementNode):
+            expression = getattr(statement, "expression", None)
+        elif isinstance(statement, VariableNode):
+            expression = getattr(statement, "initial_value", None)
+        elif isinstance(statement, AssignmentNode):
+            expression = getattr(
+                statement,
+                "value",
+                getattr(statement, "right", None),
+            )
+        if isinstance(expression, FunctionCallNode):
+            return expression
+        return None
+
+    def validate_glsl_software_subgroup_helpers(
+        self,
+        ast,
+        entry_function,
+        helper_records,
+        workgroup_size,
+    ):
+        self.glsl_software_subgroup_helper_function_names = set()
+        if not helper_records:
+            return
+
+        functions = self.glsl_software_subgroup_functions(ast)
+        functions_by_name = {}
+        for function in functions:
+            name = getattr(function, "name", None)
+            if name:
+                functions_by_name.setdefault(name, []).append(function)
+
+        helpers = {}
+        for operation, node, function in helper_records:
+            name = getattr(function, "name", None)
+            if not name:
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software subgroup helpers require a stable source "
+                    "function identity",
+                    workgroup_size=workgroup_size,
+                    operation=operation,
+                    reason="helper-identity-invalid",
+                    source_location=getattr(node, "source_location", None),
+                )
+            if len(functions_by_name.get(name, ())) != 1:
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software subgroup helpers cannot use overloaded "
+                    f"source function name '{name}'",
+                    workgroup_size=workgroup_size,
+                    operation=operation,
+                    reason="helper-identity-ambiguous",
+                    source_location=getattr(node, "source_location", None),
+                )
+            helpers.setdefault(name, (function, operation, node))
+
+        helper_names = set(helpers)
+        entry_body = getattr(entry_function, "body", None)
+        direct_entry_call_ids = set()
+        for statement in self.glsl_software_subgroup_statement_list(entry_body):
+            call = self.glsl_software_subgroup_top_level_call(statement)
+            if call is not None and self.function_call_name(call) in helper_names:
+                direct_entry_call_ids.add(id(call))
+
+        call_counts = {name: 0 for name in helper_names}
+        for function in functions:
+            body = getattr(function, "body", None)
+            for node in self.walk_ast(body):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                name = self.function_call_name(node)
+                if name not in helper_names:
+                    continue
+                _helper, operation, operation_node = helpers[name]
+                if (
+                    id(function) != id(entry_function)
+                    or id(node) not in direct_entry_call_ids
+                ):
+                    raise self.glsl_software_subgroup_error(
+                        "OpenGL software subgroup helper "
+                        f"'{name}' must be called directly from the compute "
+                        "entry point as an unconditional top-level statement",
+                        workgroup_size=workgroup_size,
+                        operation=operation,
+                        reason="helper-call-not-uniform",
+                        source_location=getattr(node, "source_location", None)
+                        or getattr(operation_node, "source_location", None),
+                    )
+                call_counts[name] += 1
+
+        missing = next(
+            (name for name, count in call_counts.items() if count == 0), None
+        )
+        if missing is not None:
+            _helper, operation, node = helpers[missing]
+            raise self.glsl_software_subgroup_error(
+                "OpenGL software subgroup helper "
+                f"'{missing}' is not reached by an unconditional top-level "
+                "entry-point call",
+                workgroup_size=workgroup_size,
+                operation=operation,
+                reason="helper-call-unproven",
+                source_location=getattr(node, "source_location", None),
+            )
+
+        self.glsl_software_subgroup_helper_function_names = helper_names
+
     def validate_glsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
+        self.glsl_software_subgroup_helper_function_names = set()
         if self.software_subgroup_width is None:
             return
 
@@ -3690,24 +3819,21 @@ class GLSLCodeGen:
             getattr(entry_function, "body", None)
         )
         entry_node_ids = {id(node) for _operation, node in entry_records}
-        helper_record = next(
-            (
-                (operation, node)
-                for operation, node in all_records
-                if id(node) not in entry_node_ids
-            ),
-            None,
+        helper_records = []
+        for function in self.glsl_software_subgroup_functions(ast):
+            if id(function) == id(entry_function):
+                continue
+            for operation, node in self.glsl_software_subgroup_operation_records(
+                getattr(function, "body", None)
+            ):
+                if id(node) not in entry_node_ids:
+                    helper_records.append((operation, node, function))
+        self.validate_glsl_software_subgroup_helpers(
+            ast,
+            entry_function,
+            helper_records,
+            tuple(concrete_workgroup_size),
         )
-        if helper_record is not None:
-            operation, node = helper_record
-            raise self.glsl_software_subgroup_error(
-                "OpenGL software subgroup barriers may only be emitted directly "
-                "from the compute entry point",
-                workgroup_size=concrete_workgroup_size,
-                operation=operation,
-                reason="helper-operation-unsupported",
-                source_location=getattr(node, "source_location", None),
-            )
 
         for node in self.walk_ast(ast):
             name = None
@@ -9175,6 +9301,38 @@ class GLSLCodeGen:
         suffix = "_".join(suffix_parts)
         return f"{sanitize_type_name(func_name)}__glsl_{suffix}"
 
+    @staticmethod
+    def glsl_workgroup_specialization_key_contract(key):
+        if not isinstance(key, tuple) or len(key) != 3:
+            return key, None
+        key_parts = []
+        intervals = None
+        for part in key[2]:
+            if (
+                isinstance(part, tuple)
+                and len(part) == 2
+                and part[0] == "workgroup-proof-intervals"
+            ):
+                intervals = dict(part[1])
+            else:
+                key_parts.append(part)
+        return (key[0], key[1], tuple(key_parts)), intervals
+
+    @staticmethod
+    def glsl_workgroup_proof_intervals_cover(candidate, requested):
+        if candidate is None or requested is None:
+            return False
+        for name, candidate_interval in candidate.items():
+            requested_interval = requested.get(name)
+            if requested_interval is None:
+                return False
+            if (
+                requested_interval[0] < candidate_interval[0]
+                or requested_interval[1] > candidate_interval[1]
+            ):
+                return False
+        return True
+
     def glsl_resource_function_call_specialization(self, func_name, args):
         key, _ = self.glsl_resource_function_specialization_key(
             func_name,
@@ -9185,7 +9343,40 @@ class GLSLCodeGen:
         )
         if key is None:
             return None
-        return self.glsl_resource_function_specializations.get(key)
+        specialization = self.glsl_resource_function_specializations.get(key)
+        if specialization is not None:
+            return specialization
+
+        requested_base, requested_intervals = (
+            self.glsl_workgroup_specialization_key_contract(key)
+        )
+        if requested_intervals is None:
+            return None
+        compatible = []
+        for (
+            candidate_key,
+            candidate,
+        ) in self.glsl_resource_function_specializations.items():
+            candidate_base, candidate_intervals = (
+                self.glsl_workgroup_specialization_key_contract(candidate_key)
+            )
+            if candidate_base != requested_base:
+                continue
+            if self.glsl_workgroup_proof_intervals_cover(
+                candidate_intervals,
+                requested_intervals,
+            ):
+                compatible.append((candidate_intervals, candidate))
+        if not compatible:
+            return None
+        compatible.sort(
+            key=lambda item: (
+                -len(item[0]),
+                sum(upper - lower for lower, upper in item[0].values()),
+                getattr(item[1], "name", ""),
+            )
+        )
+        return compatible[0][1]
 
     def glsl_resource_specialized_call_arguments(self, specialized_func, args):
         bound_indices = getattr(specialized_func, "_glsl_resource_bound_indices", set())
@@ -25501,15 +25692,27 @@ complex64_t crossgl_complex64_mod_assign(
                 reason="operation-unsupported",
                 source_location=source_location,
             )
-        if (
-            self.current_glsl_source_function_name
-            != self.glsl_software_subgroup_entry_function_name
-        ):
+        current_function_name = self.current_glsl_source_function_name
+        approved_function = (
+            current_function_name == self.glsl_software_subgroup_entry_function_name
+            or current_function_name
+            in self.glsl_software_subgroup_helper_function_names
+        )
+        if not approved_function:
+            approved_function = any(
+                getattr(specialization, "name", None) == current_function_name
+                and getattr(specialization, "_glsl_resource_source_name", None)
+                in self.glsl_software_subgroup_helper_function_names
+                for specialization in (
+                    self.glsl_resource_function_specializations.values()
+                )
+            )
+        if not approved_function:
             raise self.glsl_software_subgroup_error(
-                "OpenGL software subgroup barriers may only be emitted directly "
-                "from the compute entry point",
+                "OpenGL software subgroup barriers require a statically uniform "
+                "entry-point or approved helper call",
                 operation=operation,
-                reason="helper-operation-unsupported",
+                reason="helper-call-not-uniform",
                 source_location=source_location,
             )
 

@@ -20374,11 +20374,115 @@ def test_glsl_software_subgroup_rejects_unsupported_payload_types(
     assert raised.value.operation == operation
 
 
-def test_glsl_software_subgroup_rejects_wave_operations_in_helpers():
+def test_glsl_software_subgroup_accepts_uniform_top_level_helper_calls(tmp_path):
     code = """
     shader GLSLSoftwareSubgroupHelperCall {
         float reduceValue(float value) {
             return WaveActiveMin(value);
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = reduceValue(float(gl_LocalInvocationID.x));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "float crossglSoftwareSubgroupMinFloat(float value)" in generated
+    assert "return crossglSoftwareSubgroupMinFloat(value);" in generated
+    assert "float value = reduceValue(float(gl_LocalInvocationID.x));" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_uniform_helper",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "entry_body",
+    [
+        """
+        float value = 0.0;
+        if (gl_LocalInvocationID.x == 0u) {
+            value = reduceValue(float(gl_LocalInvocationID.x));
+        }
+        """,
+        """
+        float value = 1.0 + reduceValue(float(gl_LocalInvocationID.x));
+        """,
+    ],
+)
+def test_glsl_software_subgroup_rejects_non_top_level_helper_calls(entry_body):
+    code = f"""
+    shader GLSLSoftwareSubgroupUnsafeHelperCall {{
+        float reduceValue(float value) {{
+            return WaveActiveMin(value);
+        }}
+
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {entry_body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "helper-call-not-uniform"
+    assert raised.value.operation == "WaveActiveMin"
+
+
+def test_glsl_software_subgroup_rejects_indirect_helper_calls():
+    code = """
+    shader GLSLSoftwareSubgroupIndirectHelperCall {
+        float reduceValue(float value) {
+            return WaveActiveMin(value);
+        }
+
+        float callReduce(float value) {
+            return reduceValue(value);
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = callReduce(float(gl_LocalInvocationID.x));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "helper-call-not-uniform"
+    assert raised.value.operation == "WaveActiveMin"
+
+
+def test_glsl_software_subgroup_rejects_overloaded_helper_identity():
+    code = """
+    shader GLSLSoftwareSubgroupOverloadedHelper {
+        float reduceValue(float value) {
+            return WaveActiveMin(value);
+        }
+
+        int reduceValue(int value) {
+            return value;
         }
 
         compute {
@@ -20395,8 +20499,85 @@ def test_glsl_software_subgroup_rejects_wave_operations_in_helpers():
             parse_code(tokenize_code(code))
         )
 
-    assert raised.value.reason == "helper-operation-unsupported"
+    assert raised.value.reason == "helper-identity-ambiguous"
     assert raised.value.operation == "WaveActiveMin"
+
+
+def test_glsl_software_subgroup_rejects_divergent_flow_inside_approved_helper():
+    code = """
+    shader GLSLSoftwareSubgroupDivergentHelper {
+        float reduceValue(float value) {
+            if (value > 0.0) {
+                return WaveActiveMin(value);
+            }
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = reduceValue(float(gl_LocalInvocationID.x));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveMin"
+
+
+def _glsl_workgroup_specialization_key(lower: int, upper: int):
+    return (
+        "threadgroup_sum_1",
+        ("float", "threadgroup float*", "ushort"),
+        (
+            (0, "workgroup-pointer", "local_buffer", "float", 32),
+            (
+                "workgroup-proof-intervals",
+                (("simd_group_id", (lower, upper)),),
+            ),
+        ),
+    )
+
+
+def test_glsl_workgroup_specialization_reuses_broader_proof(monkeypatch):
+    generator = GLSLCodeGen(software_subgroup_width=32)
+    requested_key = _glsl_workgroup_specialization_key(0, 0)
+    broader_key = _glsl_workgroup_specialization_key(0, 31)
+    specialization = object()
+    generator.glsl_resource_function_specializations = {broader_key: specialization}
+    monkeypatch.setattr(
+        generator,
+        "glsl_resource_function_specialization_key",
+        lambda *_args, **_kwargs: (requested_key, {}),
+    )
+
+    assert (
+        generator.glsl_resource_function_call_specialization("threadgroup_sum_1", [])
+        is specialization
+    )
+
+
+def test_glsl_workgroup_specialization_rejects_narrower_proof(monkeypatch):
+    generator = GLSLCodeGen(software_subgroup_width=32)
+    requested_key = _glsl_workgroup_specialization_key(0, 31)
+    narrower_key = _glsl_workgroup_specialization_key(0, 0)
+    generator.glsl_resource_function_specializations = {narrower_key: object()}
+    monkeypatch.setattr(
+        generator,
+        "glsl_resource_function_specialization_key",
+        lambda *_args, **_kwargs: (requested_key, {}),
+    )
+
+    assert (
+        generator.glsl_resource_function_call_specialization("threadgroup_sum_1", [])
+        is None
+    )
 
 
 @pytest.mark.parametrize(

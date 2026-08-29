@@ -10179,6 +10179,180 @@ def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
     assert "does not cover VJP, looped, float16, or bfloat16 entries" in readme
 
 
+def test_layer_norm_native_runtime_evidence_records_bounded_cross_target_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["layer_norm_native_runtime_status"]
+    assert status["status"] == "translated-packaged-and-native-runtime-required"
+    assert status["commit"] == "846d176227a0ac13d2667e58d2bb68b322109ab0"
+    assert status["source"] == "mlx/backend/metal/kernels/layer_norm.metal"
+    assert status["source_sha256"] == (
+        "2d243f5abea7353929f9bc838ceb5a98e52a452dfc29609ad4d5974447ea689f"
+    )
+    assert status["selected_entry_point"] == "layer_normfloat32"
+    assert status["selected_workload"] == "forward-float32-axis-32"
+    assert status["upstream_test"] == "python/tests/test_fast.py::test_layer_norm"
+    assert status["dispatch_contract"] == {
+        "path": (
+            "demos/integrations/mlx/contracts/" "layer_norm.native-loader.dispatch.json"
+        ),
+        "content_identity": (
+            "sha256:320929bc503640b12748a28f72aa571f9a79123e498d5f8cda4a9827c2d01add"
+        ),
+        "dispatch_variant_id": (
+            "sha256:3ffe2a2e8450658c4972b627679caa9a16290f4f596eab2af26888433de9870f"
+        ),
+        "artifact_id": (
+            "sha256:4b1c27c05949e3021e5b28aeb4552e668aad8dd00141a1880fe98e7ebc7b129e"
+        ),
+        "workload_count": 1,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width": 32,
+        "dispatch_workgroup_count": [2, 1, 1],
+        "function_constants": {},
+    }
+    assert status["workgroup_access_contract"] == {
+        "kind": "explicit-host-runtime-portability-precondition",
+        "source": "mlx/backend/metal/kernels/layer_norm.metal",
+        "entry_point": "layer_normfloat32",
+        "function": "*",
+        "parameter": "*",
+        "minimum": 0,
+        "maximum": 31,
+        "inferred": False,
+        "runtime_enforced": False,
+    }
+    assert status["materialization"] == {
+        "concrete_specialization_count": 3,
+        "reachable_specialization_count": 6,
+        "dependency_discovery_work_count": 8,
+        "pruned_candidate_count": 194,
+        "selected_specializations": {
+            "layer_norm_single_row": {"N_READS": "8", "T": "float"},
+            "initialize_buffer": {"N": "1"},
+            "threadgroup_sum": {"N": "1"},
+        },
+    }
+    assert status["artifacts"]["directx"]["sha256"] == (
+        "7fea4cd2ecf9b636ef2aa9a1a588e4186704bff5cb80163820c02fdb113194ba"
+    )
+    assert status["artifacts"]["directx"]["size_bytes"] == 5216
+    assert status["artifacts"]["directx"]["wave_active_sum_call_count"] == 2
+    assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
+        "required-on-ci"
+    )
+    assert status["artifacts"]["opengl"]["sha256"] == (
+        "f86f83b6835b7d4b07ece9f153df883300f7a131bbcec5d084bf29084c1bf51a"
+    )
+    assert status["artifacts"]["opengl"]["size_bytes"] == 5914
+    assert status["artifacts"]["opengl"]["control_barrier_instruction_count"] == 6
+    assert status["artifacts"]["opengl"]["group_non_uniform_instruction_count"] == 0
+    assert status["artifacts"]["opengl"]["local_validation"] == {
+        "platform": "linux-arm64",
+        "runtime": "mesa-headless-egl-llvmpipe",
+        "status": "passed",
+        "maximum_absolute_error": 8.876972712457132e-08,
+        "maximum_relative_error": 2.9057866258306256e-07,
+    }
+    assert status["artifacts"]["opengl"]["native_runtime"]["status"] == (
+        "required-on-ci"
+    )
+    software = status["software_subgroup"]
+    assert software["operations"] == ["WaveActiveSum(float)"]
+    assert software["width"] == 32
+    assert software["approved_helpers"] == ["threadgroup_sum_1"]
+    assert software["rejected_helper_contracts"] == [
+        "conditional-or-nested helper calls",
+        "indirect helper calls",
+        "ambiguous helper identities",
+        "subgroup operations in potentially divergent helper control flow",
+        "narrower or base-incompatible workgroup proof reuse",
+    ]
+    assert software["control_barrier_instruction_count"] == 6
+    assert software["group_non_uniform_instruction_count"] == 0
+    assert software["hardware_subgroup_extensions_emitted"] is False
+    assert software["unsupported_contract_behavior"] == (
+        "reject-before-artifact-emission"
+    )
+    assert status["runtime_package"]["resource_count"] == 8
+    assert status["runtime_package"]["specialization_constant_count"] == 0
+    assert status["runtime_package"]["ready_load_unit_count_by_target"] == {
+        "directx": 1,
+        "opengl": 1,
+    }
+    assert status["runtime_package"]["blocked_load_unit_count_by_target"] == {
+        "directx": 0,
+        "opengl": 0,
+    }
+    assert [
+        resource["role"] for resource in status["runtime_package"]["resources"]
+    ] == [
+        "input",
+        "weight",
+        "bias",
+        "output",
+        "epsilon",
+        "axis_size",
+        "weight_stride",
+        "bias_stride",
+    ]
+    assert status["workload"] == {
+        "dtype": "float32",
+        "shape": [2, 32],
+        "axis_size": 32,
+        "row_count": 2,
+        "weight_shape": [32],
+        "bias_shape": [32],
+        "epsilon": 0.00001,
+        "weight_stride": 1,
+        "bias_stride": 1,
+        "input_values": "row0=(index-16)/8; row1=((index%9)-4)*0.3125",
+        "weight_values": "0.5+(index%5)*0.125",
+        "bias_values": "((index%7)-3)*0.0625",
+        "reference": "((x-mean(x))/sqrt(mean((x-mean(x))^2)+epsilon))*weight+bias",
+        "output_element_count": 64,
+        "absolute_tolerance": 0.00005,
+        "relative_tolerance": 0.00005,
+    }
+    assert status["remaining_scope"] == {
+        "forward_entries_other_than_layer_normfloat32_included": False,
+        "vjp_entries_included": False,
+        "float16_and_bfloat16_included": False,
+        "looped_entries_included": False,
+        "other_axis_sizes_included": False,
+        "historical_axis_4096_and_vjp_dispatch_frontier_included": False,
+        "mlx_host_runtime_integration_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    historical = gaps["directx_toolchain_status"]["layer_norm_dispatch_frontier"]
+    assert historical["bounded_axis_32_native_runtime_evidence"] == (
+        "layer_norm_native_runtime_status"
+    )
+    assert historical["runtime_execution_attempted"] is False
+    assert historical["runtime_execution_scope"] == (
+        "historical-axis-4096-forward-and-vjp-variants-only"
+    )
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects the forward `layer_normfloat32` entry" in readme
+    assert "workgroup-access precondition bounds specialized helper views" in readme
+    assert "one stable non-overloaded source identity" in readme
+    assert "eight ready resources on both targets" in readme
+    assert "maximum absolute error below `8.88e-8`" in readme
+    assert "does not redirect MLX host execution" in readme
+
+
 def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(

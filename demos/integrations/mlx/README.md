@@ -989,7 +989,56 @@ host-derived workgroup sizes, function-constant values, exact subgroup-width
 enforcement, generated hashes, and artifact paths. Windows CI compiles both
 artifacts with DXC `cs_6_6` and warnings as errors. This extends the bounded
 proof into the repository-level project report; it does not add runtime
-execution or numerical parity.
+execution or numerical parity for those historical axis-size-4099 forward and
+axis-size-8192 VJP records.
+
+A separate current-corpus proof selects the forward `layer_normfloat32` entry at
+commit `846d176227a0ac13d2667e58d2bb68b322109ab0` through
+[`contracts/layer_norm.native-loader.dispatch.json`](contracts/layer_norm.native-loader.dispatch.json).
+It records the exact host formula
+`32 * ceil_div(ceil_div(axis_size, 8), 32)`, the upstream
+`python/tests/test_fast.py::test_layer_norm` provenance, axis size 32, two rows,
+a `[32, 1, 1]` workgroup, subgroup width 32, two dispatch workgroups, and no
+function constants. An explicit source/entry-qualified workgroup-access
+precondition bounds specialized helper views to indices 0 through 31; it is a
+stated host portability contract, not an inferred or runtime-enforced bound.
+Materialization emits the forward entry plus `initialize_buffer<1>` and
+`threadgroup_sum<1>` from six reachable specializations while pruning 194
+candidates.
+
+The generated HLSL artifact is 5,216 bytes with SHA-256
+`7fea4cd2ecf9b636ef2aa9a1a588e4186704bff5cb80163820c02fdb113194ba`.
+It retains `[WaveSize(32)]`, two `WaveActiveSum` calls, and compiles as
+`cs_6_6` with `-enable-16bit-types`; Windows CI requires Direct3D 12 WARP
+execution. The generated GLSL artifact is 5,914 bytes with SHA-256
+`f86f83b6835b7d4b07ece9f153df883300f7a131bbcec5d084bf29084c1bf51a`.
+Its explicit target-scoped software path admits a subgroup helper only when the
+helper has one stable non-overloaded source identity and every call is direct,
+unconditional, top-level, and made from the sole compute entry. Conditional,
+nested, indirect, ambiguous, or potentially divergent helper use rejects
+translation. Resource-specialized helper lookup may reuse a prevalidated
+workgroup proof only when its base key is identical and its intervals cover the
+requested narrower proof; incompatible or narrower assumptions remain
+rejected.
+
+The software GLSL contains the shared-memory sum helper and six barriers, but no
+KHR subgroup extension, `gl_Subgroup*` use, `subgroupAdd`, or SPIR-V
+`OpGroupNonUniform` instruction. `glslangValidator` and `spirv-val` accept it;
+its disassembly contains six `OpControlBarrier` instructions. The native-loader
+package reflects eight ready resources on both targets: float32 input, weight,
+bias, and output arrays, plus 16-byte float32 epsilon and uint32 axis-size,
+weight-stride, and bias-stride blocks. DirectX uses structured/constant-buffer
+layouts and OpenGL uses std430/std140 layouts.
+
+The deterministic workload uses two 32-element rows, 32 weights, 32 biases,
+epsilon `1e-5`, and unit weight/bias strides. It compares 64 outputs with
+`((x - mean) / sqrt(mean((x - mean)^2) + epsilon)) * weight + bias` at `5e-5`
+absolute and relative tolerance. A local Linux arm64 llvmpipe EGL dispatch
+passed with maximum absolute error below `8.88e-8`; Linux CI requires the same
+Mesa numerical readback. This is bounded execution evidence for one float32
+forward workload only. It does not redirect MLX host execution, run the MLX
+test suite, or cover VJP, float16, bfloat16, looped entries, other axis sizes,
+or the historical wider dispatch records above.
 
 Validate the fixture schema, provenance, deterministic identities, and bounded
 evaluation with:
