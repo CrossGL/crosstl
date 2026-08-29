@@ -1949,6 +1949,7 @@ class HLSLCodeGen:
         cooperative_matrix_software_lowering=False,
         relative_wave_shuffle_out_of_range="undefined",
         software_subgroup_width=None,
+        widen_native_float16=False,
     ):
         """Initialize DirectX type maps and per-generation resource state."""
         if not isinstance(cooperative_matrix_software_lowering, bool):
@@ -1957,6 +1958,7 @@ class HLSLCodeGen:
         self.cooperative_matrix_software_lowering = cooperative_matrix_software_lowering
         self.set_relative_wave_shuffle_out_of_range(relative_wave_shuffle_out_of_range)
         self.set_software_subgroup_width(software_subgroup_width)
+        self.set_widen_native_float16(widen_native_float16)
         self.directx_cooperative_matrix_lowerings = {}
         self.texture_variables = set()
         self.sampler_variables = set()
@@ -2495,6 +2497,11 @@ class HLSLCodeGen:
                 "relative_wave_shuffle_out_of_range must be one of: " f"{choices}"
             )
         self.relative_wave_shuffle_out_of_range = normalized
+
+    def set_widen_native_float16(self, enabled):
+        if not isinstance(enabled, bool):
+            raise TypeError("widen_native_float16 must be a boolean")
+        self.widen_native_float16 = enabled
 
     def set_software_subgroup_width(self, width):
         """Configure fail-closed barrier-backed DirectX subgroup lowering."""
@@ -19807,7 +19814,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_explicit_bitcast_type_info(self, type_name):
         if not type_name:
             return None
-        mapped_type = self.map_type(type_name)
+        source_name = str(self.type_name_string(type_name) or "").strip()
+        widened_float16 = re.fullmatch(
+            r"(?:float16_t|float16|half|f16)(?P<shape>[234]?)",
+            source_name,
+        )
+        if self.widen_native_float16 and widened_float16 is not None:
+            mapped_type = "float16_t" + (widened_float16.group("shape") or "")
+        else:
+            mapped_type = self.map_type(type_name)
         component_widths = (
             ("uint64_t", 64),
             ("int64_t", 64),
@@ -19908,6 +19923,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and target_info["component_width"] == 16
             and source_info["component_width"] == 16
         ):
+            if (
+                self.widen_native_float16
+                and source_info["component"] == "float16_t"
+                and target_info["component"] != "float16_t"
+            ):
+                raise ValueError(
+                    "DirectX widen_native_float16 cannot bitcast a widened "
+                    "float32 value back to a native 16-bit payload without "
+                    "reintroducing binary16 rounding"
+                )
+            if self.widen_native_float16 and target_info["component"] == "float16_t":
+                width = target_info["lanes"]
+                uint_type = "uint" if width == 1 else f"uint{width}"
+                payload = argument_code
+                if source_info["component"] != "uint16_t":
+                    payload = f"asuint16({payload})"
+                self.require_hlsl_explicit_bitcast_helper("binary16_to_float")
+                return "__crossgl_binary16_to_float(" f"{uint_type}({payload}))"
             intrinsic = {
                 "float16_t": "asfloat16",
                 "int16_t": "asint16",
@@ -19996,7 +20029,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return bfloat_bitcast
         target_type = self.map_type(source_target_type)
         explicit_bitcast = self.hlsl_explicit_bitcast_expression(
-            target_type, source_type, argument_code
+            source_target_type, source_type, argument_code
         )
         if explicit_bitcast is not None:
             return explicit_bitcast
@@ -42503,6 +42536,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             source_name,
         )
         if native_source_match is not None:
+            shape = native_source_match.group("shape") or ""
+            if self.widen_native_float16 and source_name.startswith("float16_t"):
+                return f"float{shape}"
             native_mapped_type = source_name
             if self.target_profile == "dx11":
                 raise DirectXNative16BitUnsupportedError(
@@ -42528,7 +42564,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 str(mapped_type),
             )
             if type_match is not None:
-                native_mapped_type = native_type + (type_match.group("shape") or "")
+                shape = type_match.group("shape") or ""
+                if self.widen_native_float16 and native_type == "float16_t":
+                    return f"float{shape}"
+                native_mapped_type = native_type + shape
                 if self.target_profile == "dx11":
                     raise DirectXNative16BitUnsupportedError(
                         "DirectX profile dx11 cannot preserve exact 16-bit source "

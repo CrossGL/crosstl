@@ -1531,6 +1531,7 @@ SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
 DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION = (
     "relative_wave_shuffle_out_of_range"
 )
+DIRECTX_WIDEN_NATIVE_FLOAT16_SOURCE_OPTION = "widen_native_float16"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
 SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY = "source_specialization_constants"
@@ -26082,6 +26083,21 @@ def _project_directx_relative_wave_shuffle_out_of_range(
     return policy
 
 
+def _project_directx_widen_native_float16(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> Any | None:
+    option = DIRECTX_WIDEN_NATIVE_FLOAT16_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    enabled = source_options[option]
+    if target != "directx":
+        raise ValueError("widen_native_float16 is supported only by the DirectX target")
+    if not isinstance(enabled, bool):
+        raise TypeError("widen_native_float16 must be a boolean")
+    return enabled
+
+
 def _generate_project_target_from_crossgl_ast(
     *,
     ast: Any,
@@ -26093,8 +26109,14 @@ def _generate_project_target_from_crossgl_ast(
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
     directx_relative_wave_shuffle_out_of_range: Any | None = None,
+    directx_widen_native_float16: Any | None = None,
 ) -> str:
     codegen = get_codegen(target)
+    if directx_widen_native_float16 is not None:
+        configure_float16_widening = getattr(codegen, "set_widen_native_float16", None)
+        if not callable(configure_float16_widening):
+            raise ValueError(f"Target '{target}' does not consume widen_native_float16")
+        configure_float16_widening(directx_widen_native_float16)
     if directx_relative_wave_shuffle_out_of_range is not None:
         configure_relative_shuffle = getattr(
             codegen, "set_relative_wave_shuffle_out_of_range", None
@@ -27098,6 +27120,7 @@ def _translate_project_impl(
                 )
                 software_subgroup_width = None
                 directx_relative_wave_shuffle_out_of_range = None
+                directx_widen_native_float16 = None
                 try:
                     software_subgroup_width = _project_software_subgroup_width(
                         target,
@@ -27105,6 +27128,12 @@ def _translate_project_impl(
                     )
                     directx_relative_wave_shuffle_out_of_range = (
                         _project_directx_relative_wave_shuffle_out_of_range(
+                            target,
+                            source_options,
+                        )
+                    )
+                    directx_widen_native_float16 = (
+                        _project_directx_widen_native_float16(
                             target,
                             source_options,
                         )
@@ -27385,6 +27414,7 @@ def _translate_project_impl(
                         or requires_subgroup_specialization
                         or software_subgroup_width is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
+                        or directx_widen_native_float16 is not None
                     ):
                         crossgl_ast = _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -27551,6 +27581,9 @@ def _translate_project_impl(
                                             directx_relative_wave_shuffle_out_of_range=(
                                                 directx_relative_wave_shuffle_out_of_range
                                             ),
+                                            directx_widen_native_float16=(
+                                                directx_widen_native_float16
+                                            ),
                                         )
                                     except Exception as exc:
                                         if getattr(
@@ -27620,6 +27653,9 @@ def _translate_project_impl(
                                         directx_relative_wave_shuffle_out_of_range=(
                                             directx_relative_wave_shuffle_out_of_range
                                         ),
+                                        directx_widen_native_float16=(
+                                            directx_widen_native_float16
+                                        ),
                                     )
                                 except Exception as exc:
                                     if getattr(
@@ -27646,6 +27682,7 @@ def _translate_project_impl(
                         or workgroup_access_assertions
                         or software_subgroup_width is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
+                        or directx_widen_native_float16 is not None
                     ):
                         crossgl_ast = crossgl_ast or _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -27671,6 +27708,7 @@ def _translate_project_impl(
                             directx_relative_wave_shuffle_out_of_range=(
                                 directx_relative_wave_shuffle_out_of_range
                             ),
+                            directx_widen_native_float16=directx_widen_native_float16,
                         )
                     if generated_source is None:
                         generated_source = translate(

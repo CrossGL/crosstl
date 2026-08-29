@@ -12511,15 +12511,15 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625"
+                "7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a"
             ),
-            "size_bytes": 9240,
+            "size_bytes": 9118,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
             "compiler_profile": "cs_6_6",
             "compiler_arguments": ["-enable-16bit-types", "-WX"],
-            "compiled_artifact_size_bytes": 4644,
+            "compiled_artifact_size_bytes": 4720,
             "compiler_validation_status": "passed",
         },
         "opengl": {
@@ -12545,11 +12545,14 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "finite_test": "single-evaluation IEEE-754 float32 exponent mask",
         "sign_test": "exact IEEE-754 float32 sign bit",
         "private_scalar_struct_view": "read-only exact one-member layout",
-        "directx_binary16_bitcast": (
-            "native-asfloat16-asint16-asuint16-reinterpretation"
-        ),
+        "directx_binary16_bitcast": "target-scoped-integer-ieee754-binary16-to-float32",
         "directx_binary16_mixed_arithmetic": (
-            "integer-ieee754-binary16-decode-before-float32-operation-and-float16-rounding"
+            "source-scoped-native-float16-widening-with-float32-arithmetic-"
+            "and-no-half-roundtrip"
+        ),
+        "directx_native_float16_widening": (
+            "project.source_options.metal.target_options.directx."
+            "widen_native_float16"
         ),
         "opengl_binary16_bitcast": "exact-low-16-bit-payload-via-pack-unpack-half",
         "global_scale_read": "statically-eliminated-for-has_global_scale-false",
@@ -12592,15 +12595,32 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
             "observed_nonzero_outputs": "signed-zero-only",
             "rejected_dxil_decode": "legacy-f16-to-f32",
         },
-        "corrected_dxil_contract": {
+        "integer_decode_half_roundtrip_rejection": {
             "artifact_sha256": (
                 "936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625"
             ),
             "artifact_size_bytes": 9240,
-            "source_bitcast": "native-asfloat16",
+            "workflow_run": 33275550062,
+            "job": 99161501105,
+            "output_element_count": 32,
+            "mismatched_nonzero_output_count": 28,
+            "observed_nonzero_outputs": "signed-zero-only",
+            "integer_decode": "uitofp-i32-to-float",
+            "rejected_dxil_roundtrip": (
+                "fptrunc-float-to-half-fsub-half-fpext-half-to-float"
+            ),
+        },
+        "corrected_dxil_contract": {
+            "artifact_sha256": (
+                "7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a"
+            ),
+            "artifact_size_bytes": 9118,
+            "source_bitcast": "integer-ieee754-binary16-to-float32",
             "subnormal_decode": "integer-ieee754-binary16-to-float32",
             "arithmetic": "fmul-float",
-            "rounding": "fptrunc-float-to-half",
+            "logical_float16_representation": "widened-float32",
+            "native_half_operation_count": 0,
+            "rounding": "none-in-selected-widened-path",
         },
     }
     assert status["software_subgroup"] == {

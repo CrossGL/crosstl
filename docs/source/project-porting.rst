@@ -1530,30 +1530,36 @@ The same current pin has a bounded MXFP4 quantize/dequantize contract for
 ``quantized.cpp`` and ``fp_quantized.h`` fixes float32 input, group size 32,
 four payload bits, no global scale, workgroup ``[32, 1, 1]``, and one dispatched
 workgroup. Entry-scoped translation materializes only that specialization. The
-9,240-byte HLSL has SHA-256
-``936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625`` and
+9,118-byte HLSL has SHA-256
+``7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a`` and
 passes DXC under ``cs_6_6``, ``-enable-16bit-types``, and warnings as errors.
-DirectX lowers source ``as_type<float16_t>(uint16_t)`` to native
-``asfloat16`` reinterpretation (and matching signed/inverse forms to
-``asint16``/``asuint16``). Mixed ``float16_t *= float`` then reconstructs the
-exact float32 value with integer IEEE-754 masks for zeros, subnormals, normals,
-infinities, and NaNs before float32 arithmetic and one final binary16 rounding.
-The optimized 4,724-byte DXIL uses integer masks, ``uitofp i32``, and
-``fmul float`` with no ``LegacyF16ToF32`` or half multiply.
+Its 4,720-byte DXIL uses the explicit DirectX-only
+``project.source_options.metal.target_options.directx.widen_native_float16``
+mode. Source ``as_type<float16_t>(uint16_t)`` reconstructs its payload directly
+as float32 with integer IEEE-754 masks, while logical ``float16_t`` locals,
+parameters, and returns stay widened through arithmetic, sign application, and
+the consuming conversion. DXIL contains ``uitofp i32`` and ``fmul float`` but
+no ``LegacyF16ToF32``, ``half``, ``fptrunc``, or ``fpext``. The default native
+binary16 contract remains exact ``asfloat16``/``asint16``/``asuint16`` and is
+unchanged when this target-scoped option is absent.
 
-Three Windows failures bound this contract. The 7,809-byte HLSL under SHA-256
+Four Windows failures bound this contract. The 7,809-byte HLSL under SHA-256
 ``3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361``
 produced numeric ``uitofp i16 ... to half``; workflow run 33271117475, job
 99149649480 collapsed all 28 nonzero values to signed zero on WARP. Exact
 ``bitcast i16 ... to half`` produced same-size HLSL under SHA-256
 ``4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352``,
-but run 33272842347, job 99154326814 still consumed the constructed subnormal
-in ``fmul half`` and produced the same 28 signed zeros. Moving arithmetic to
-float32 produced 7,909-byte HLSL under SHA-256
+but run 33272842347, job 99154326814 consumed the constructed subnormal in
+``fmul half`` and produced the same result. Moving arithmetic to float32
+produced 7,909-byte HLSL under SHA-256
 ``938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627``;
-``dx.op.legacyF16ToF32`` nevertheless yielded the identical signed-zero result
-in run 33274360343, job 99158370210. Integer reconstruction removes WARP half
-conversion from the payload path entirely.
+``dx.op.legacyF16ToF32`` still failed in run 33274360343, job 99158370210.
+Integer decoding produced 9,240-byte HLSL under SHA-256
+``936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625``,
+but the remaining ``fptrunc float to half``, half sign operation, and
+``fpext half to float`` returned the identical 28 signed zeros in run
+33275550062, job 99161501105. The corrected contract therefore removes every
+native-half operation from the selected path rather than stopping at decode.
 
 The 9,571-byte explicit-software-subgroup GLSL has SHA-256
 ``cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da``;

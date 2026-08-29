@@ -15812,6 +15812,58 @@ def test_hlsl_native_binary16_compound_assignment_promotes_exact_payload(tmp_pat
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_native_binary16_widening_eliminates_native_half_roundtrip(tmp_path):
+    shader = """
+    shader HlslWidenNativeBinary16 {
+        float16_t scalePayload(uint16_t bits, bool negative) {
+            float16_t value = as_type<float16_t>(bits);
+            value *= 16384.0;
+            return negative ? -value : value;
+        }
+
+        float consumePayload(uint16_t bits) {
+            return float(scalePayload(bits, false));
+        }
+
+        compute {
+            @ stage_entry
+            @ numthreads(1, 1, 1)
+            void main() {}
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(widen_native_float16=True).generate(
+        crosstl.translator.parse(shader)
+    )
+
+    assert "float scalePayload(uint16_t bits, bool negative)" in generated
+    assert "float value = __crossgl_binary16_to_float(uint(bits));" in generated
+    assert "value *= 16384.0;" in generated
+    assert "-value" in generated
+    assert "asfloat16(" not in generated
+    assert "float16_t value" not in generated
+    assert "f16tof32(" not in generated
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+    inverse_shader = """
+    shader HlslRejectWidenedBinary16InverseBitcast {
+        uint16_t encodePayload(float16_t value) {
+            return as_type<uint16_t>(value);
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="cannot bitcast a widened float32 value back to a native 16-bit payload",
+    ):
+        HLSLCodeGen(widen_native_float16=True).generate(
+            crosstl.translator.parse(inverse_shader)
+        )
+    with pytest.raises(TypeError, match="widen_native_float16 must be a boolean"):
+        HLSLCodeGen(widen_native_float16="true")
+
+
 @pytest.mark.parametrize(
     ("source_type", "target_type", "message"),
     [

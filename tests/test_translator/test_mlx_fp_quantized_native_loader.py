@@ -55,8 +55,8 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625",
-        "sizeBytes": 9240,
+        "sha256": "7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a",
+        "sizeBytes": 9118,
     },
     "opengl": {
         "sha256": "cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da",
@@ -203,6 +203,11 @@ def _project_config(
                 [project.source_options.metal.target_options.opengl]
                 software_subgroup_width = 32
                 """).strip())
+    else:
+        sections.append(textwrap.dedent("""
+                [project.source_options.metal.target_options.directx]
+                widen_native_float16 = true
+                """).strip())
     return "\n\n".join(sections)
 
 
@@ -259,6 +264,9 @@ def _assert_directx_compiles(generated_path: Path) -> None:
         assert "fmul half" not in assembly
         assert "uitofp i16" not in assembly
         assert "sitofp i16" not in assembly
+        assert "fptrunc" not in assembly
+        assert "fpext" not in assembly
+        assert " half " not in assembly
 
 
 def _assert_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
@@ -361,6 +369,10 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert payload["project"]["sourceOptions"]["metal"]["target_options"] == {
             "opengl": {"software_subgroup_width": 32}
         }
+    else:
+        assert payload["project"]["sourceOptions"]["metal"]["target_options"] == {
+            "directx": {"widen_native_float16": True}
+        }
 
     artifact = payload["artifacts"][0]
     expected = MLX_MXFP4_GENERATED_ARTIFACTS[target]
@@ -431,15 +443,16 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "[WaveSize(32)]" in generated
         assert "scale_dec_b = WaveActiveMax(abs(w_thread));" in generated
         assert "float scale = fp8_e8m0__operator_float(" in generated
-        assert generated.count("asfloat16(") == 2
+        assert "asfloat16(" not in generated
         assert (
-            generated.count("__crossgl_binary16_to_float(uint(asuint16(converted)))")
-            == 2
-        )
-        assert "float16_t(uint16_t(" not in generated
+            "float converted = __crossgl_binary16_to_float("
+            "uint(uint16_t(((self.bits & 7) << 9))));"
+        ) in generated
+        assert "float converted = __crossgl_binary16_to_float(uint(v));" in generated
+        assert "float16_t converted" not in generated
         assert "f16tof32(" not in generated
-        assert "converted *= 16384.0;" not in generated
-        assert "converted *= 256.0;" not in generated
+        assert "converted *= 16384.0;" in generated
+        assert "converted *= 256.0;" in generated
         assert "int n = int(round(le));" in generated
         assert "metal_u3a_u3a" not in generated
         assert "__crossgl_physical_subgroup" not in generated
