@@ -17,8 +17,7 @@ def _write_fixture(repo):
     source_path = repo / SOURCE
     source_path.parent.mkdir(parents=True)
     source_path.write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             #include <metal_stdlib>
             using namespace metal;
 
@@ -32,9 +31,7 @@ def _write_fixture(repo):
                 output[invocation] = shuffled
                     + float(subgroup_id) + float(subgroup_lane);
             }
-            """
-        ).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -63,8 +60,7 @@ def _diagnostic(payload):
     return next(
         item
         for item in payload["diagnostics"]
-        if item["code"]
-        == "project.translate.directx-software-subgroup-invalid"
+        if item["code"] == "project.translate.directx-software-subgroup-invalid"
     )
 
 
@@ -103,7 +99,9 @@ def test_project_directx_target_option_emits_logical_software_subgroups(tmp_path
 
     generated_path = repo / artifact["path"]
     generated = generated_path.read_text(encoding="utf-8")
-    assert "groupshared float __crossgl_software_subgroup_scratch_float[64];" in generated
+    assert (
+        "groupshared float __crossgl_software_subgroup_scratch_float[64];" in generated
+    )
     assert "__crossgl_software_subgroup_shuffle_down_float" in generated
     assert generated.count("GroupMemoryBarrierWithGroupSync();") == 2
     assert "uint subgroup_id = (invocation / 32u);" in generated
@@ -117,9 +115,9 @@ def test_project_directx_target_option_emits_logical_software_subgroups(tmp_path
     assert validate_project_report(report_path)["success"] is True
     runtime_manifest = build_runtime_artifact_manifest(report_path)
     assert runtime_manifest["success"] is True
-    execution_config = runtime_manifest["artifacts"][0]["hostInterface"][
-        "entryPoints"
-    ][0]["executionConfig"]
+    execution_config = runtime_manifest["artifacts"][0]["hostInterface"]["entryPoints"][
+        0
+    ]["executionConfig"]
     assert execution_config == {"numthreads": [32, 2, 1]}
     assert "subgroupWidth" not in execution_config
 
@@ -141,9 +139,7 @@ def test_project_directx_rejects_invalid_software_subgroup_width(tmp_path, width
     assert not (repo / payload["artifacts"][0]["path"]).exists()
     diagnostic = _diagnostic(payload)
     assert diagnostic["checkKind"] == "execution-specialization"
-    assert diagnostic["missingCapabilities"] == [
-        "directx.software-subgroup-lowering"
-    ]
+    assert diagnostic["missingCapabilities"] == ["directx.software-subgroup-lowering"]
     specialization = diagnostic["details"]["executionSpecialization"]
     assert specialization["reason"] == "configured-width-invalid"
     assert specialization["softwareSubgroupWidth"] == width

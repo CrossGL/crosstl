@@ -15732,6 +15732,85 @@ def test_hlsl_bitcast_builtins_lower_to_native_as_intrinsics():
     assert "uintBitsToFloat" not in generated_code
 
 
+def test_hlsl_metal_as_type_native_binary16_uses_exact_intrinsics(tmp_path):
+    shader = """
+    shader HlslNativeBinary16Bitcasts {
+        float16_t decodeScalar(uint16_t bits) {
+            return as_type<float16_t>(bits);
+        }
+
+        uint16_t encodeScalar(float16_t value) {
+            return as_type<uint16_t>(value);
+        }
+
+        float16_t2 decodeVector(uint16_t2 bits) {
+            return as_type<float16_t2>(bits);
+        }
+
+        int16_t2 signedVector(uint16_t2 bits) {
+            return as_type<int16_t2>(bits);
+        }
+
+        uint16_t2 encodeVector(float16_t2 value) {
+            return as_type<uint16_t2>(value);
+        }
+
+        compute {
+            @ stage_entry
+            @ numthreads(1, 1, 1)
+            void main() {}
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return asfloat16(bits);" in generated
+    assert "return asuint16(value);" in generated
+    assert "return asint16(bits);" in generated
+    assert "return float16_t(bits);" not in generated
+    assert "return uint16_t(value);" not in generated
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("source_type", "target_type", "message"),
+    [
+        pytest.param(
+            "uint",
+            "float16_t",
+            r"DirectX cannot bitcast uint \(32 bits\) to float16_t \(16 bits\)",
+            id="total-width",
+        ),
+        pytest.param(
+            "uint",
+            "float16_t2",
+            "DirectX explicit bitcast lowering does not support uint to float16_t2",
+            id="lane-shape",
+        ),
+    ],
+)
+def test_hlsl_metal_as_type_native_binary16_rejects_mismatched_shapes(
+    source_type, target_type, message
+):
+    shader = f"""
+    shader HlslInvalidNativeBinary16Bitcast {{
+        {target_type} invalid({source_type} value) {{
+            return as_type<{target_type}>(value);
+        }}
+
+        compute {{
+            @ stage_entry
+            @ numthreads(1, 1, 1)
+            void main() {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 _HLSL_EXPLICIT_AS_TYPE_SHAPES_SHADER = """
 shader HlslExplicitAsTypeShapes {
     uvec2 u64ToUvec2(uint64 u64Bits) {

@@ -961,18 +961,26 @@ and
 Entry-scoped translation materializes only the selected specialization with
 `T=float`, `group_size=32`, `bits=4`, and `has_global_scale=false`. The
 7,809-byte HLSL has SHA-256
-`3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361`,
+`4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352`,
 retains `[numthreads(32, 1, 1)]` and `[WaveSize(32)]`, and passes DXC under
 `cs_6_6`, `-enable-16bit-types`, and warnings as errors. Its compiled DXIL is
-4,644 bytes. The 9,571-byte GLSL has SHA-256
+4,644 bytes. Source `as_type<float16_t>(uint16_t)` now emits DXC's native
+`asfloat16` reinterpretation (with `asint16`/`asuint16` for matching signed and
+inverse contracts), so DXIL uses `bitcast i16 ... to half` rather than numeric
+conversion. The rejected same-size HLSL under SHA-256
+`3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361`
+produced `uitofp i16 ... to half`; workflow run 33271117475, job 99149649480
+therefore collapsed all 28 nonzero values to signed zero on WARP.
+
+The 9,571-byte GLSL has SHA-256
 `cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da`,
 uses one explicit 32-lane software subgroup for `WaveActiveMax(float)`, and
 passes `glslangValidator` and `spirv-val`. Its 10,488-byte SPIR-V has three
 control barriers, no group-nonuniform instruction, and local size
-`[32, 1, 1]`. Because GLSL widens source binary16 values to float32, source
-`as_type<float16_t>(uint16_t)` calls now preserve the low 16-bit payload through
-`unpackHalf2x16` rather than incorrectly reinterpreting the widened integer as a
-32-bit float; the inverse form uses `packHalf2x16` and exact low-bit extraction.
+`[32, 1, 1]`. Because GLSL widens source binary16 values to float32, the same
+source bitcast preserves the low 16-bit payload through `unpackHalf2x16` rather
+than incorrectly reinterpreting the widened integer as a 32-bit float; the
+inverse form uses `packHalf2x16` and exact low-bit extraction.
 
 The scale conversion invokes the source `fp8_e8m0(float)` constructor factory
 before the selected sibling float conversion operator; aggregate field

@@ -12511,7 +12511,7 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361"
+                "4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352"
             ),
             "size_bytes": 7809,
             "workgroup_size": [32, 1, 1],
@@ -12545,8 +12545,24 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "finite_test": "single-evaluation IEEE-754 float32 exponent mask",
         "sign_test": "exact IEEE-754 float32 sign bit",
         "private_scalar_struct_view": "read-only exact one-member layout",
-        "binary16_bitcast": "exact-low-16-bit-payload-via-pack-unpack-half",
+        "directx_binary16_bitcast": (
+            "native-asfloat16-asint16-asuint16-reinterpretation"
+        ),
+        "opengl_binary16_bitcast": "exact-low-16-bit-payload-via-pack-unpack-half",
         "global_scale_read": "statically-eliminated-for-has_global_scale-false",
+    }
+    assert status["directx_binary16_diagnostic"] == {
+        "rejected_artifact_sha256": (
+            "3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361"
+        ),
+        "rejected_artifact_size_bytes": 7809,
+        "workflow_run": 33271117475,
+        "job": 99149649480,
+        "output_element_count": 32,
+        "mismatched_nonzero_output_count": 28,
+        "observed_nonzero_outputs": "signed-zero-only",
+        "rejected_dxil_conversion": "uitofp-i16-to-half",
+        "corrected_dxil_conversion": "bitcast-i16-to-half",
     }
     assert status["software_subgroup"] == {
         "configuration": (

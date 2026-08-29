@@ -19647,6 +19647,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ("float", 32),
             ("uint", 32),
             ("int", 32),
+            ("float16_t", 16),
+            ("uint16_t", 16),
+            ("int16_t", 16),
         )
         for component_type, component_width in component_widths:
             if mapped_type == component_type:
@@ -19731,6 +19734,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 result = self.hlsl_explicit_bitcast_from_uint2(target_info, payload)
                 if result is not None:
                     return result
+
+        if (
+            target_info["lanes"] == source_info["lanes"]
+            and target_info["component_width"] == 16
+            and source_info["component_width"] == 16
+        ):
+            intrinsic = {
+                "float16_t": "asfloat16",
+                "int16_t": "asint16",
+                "uint16_t": "asuint16",
+            }[target_info["component"]]
+            return f"{intrinsic}({argument_code})"
 
         if (
             target_info["lanes"] == source_info["lanes"]

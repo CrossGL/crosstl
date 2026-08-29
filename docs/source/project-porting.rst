@@ -1531,15 +1531,24 @@ The same current pin has a bounded MXFP4 quantize/dequantize contract for
 four payload bits, no global scale, workgroup ``[32, 1, 1]``, and one dispatched
 workgroup. Entry-scoped translation materializes only that specialization. The
 7,809-byte HLSL has SHA-256
-``3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361`` and
+``4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352`` and
 passes DXC under ``cs_6_6``, ``-enable-16bit-types``, and warnings as errors.
+DirectX lowers source ``as_type<float16_t>(uint16_t)`` to native
+``asfloat16`` reinterpretation (and matching signed/inverse forms to
+``asint16``/``asuint16``), producing ``bitcast i16 ... to half`` in DXIL. The
+rejected same-size HLSL under SHA-256
+``3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361``
+instead produced numeric ``uitofp i16 ... to half``. Workflow run 33271117475,
+job 99149649480 consequently collapsed all 28 nonzero values to signed zero on
+WARP.
+
 The 9,571-byte explicit-software-subgroup GLSL has SHA-256
 ``cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da``;
 ``glslangValidator`` and ``spirv-val`` accept its three-barrier SPIR-V, which
 contains no group-nonuniform instruction. GLSL widens binary16 values to
-float32, so source ``as_type<float16_t>(uint16_t)`` preserves the exact low
-16-bit payload through ``unpackHalf2x16`` rather than a float32 bitcast; inverse
-forms use ``packHalf2x16`` with exact low-bit extraction.
+float32, so the same source bitcast preserves the exact low 16-bit payload
+through ``unpackHalf2x16`` rather than a float32 bitcast; inverse forms use
+``packHalf2x16`` with exact low-bit extraction.
 
 Exact scale semantics require the source ``fp8_e8m0(float)`` constructor
 factory before conversion back to float. Qualified ``metal::round`` maps to the

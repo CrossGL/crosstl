@@ -55,7 +55,7 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361",
+        "sha256": "4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352",
         "sizeBytes": 7809,
     },
     "opengl": {
@@ -230,6 +230,7 @@ def _assert_directx_compiles(generated_path: Path) -> None:
         work_dir = Path(temporary)
         source_path = work_dir / "m.hlsl"
         dxil_path = work_dir / "m.dxil"
+        assembly_path = work_dir / "m.asm"
         source_path.write_text(source, encoding="utf-8")
         result = subprocess.run(
             [
@@ -242,6 +243,8 @@ def _assert_directx_compiles(generated_path: Path) -> None:
                 "CSMain",
                 "-Fo",
                 str(dxil_path),
+                "-Fc",
+                str(assembly_path),
                 str(source_path),
             ],
             capture_output=True,
@@ -249,6 +252,10 @@ def _assert_directx_compiles(generated_path: Path) -> None:
         )
         assert result.returncode == 0, result.stderr
         assert dxil_path.stat().st_size > 0
+        assembly = assembly_path.read_text(encoding="utf-8")
+        assert "bitcast i16" in assembly
+        assert "uitofp i16" not in assembly
+        assert "sitofp i16" not in assembly
 
 
 def _assert_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
@@ -421,6 +428,8 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "[WaveSize(32)]" in generated
         assert "scale_dec_b = WaveActiveMax(abs(w_thread));" in generated
         assert "float scale = fp8_e8m0__operator_float(" in generated
+        assert generated.count("asfloat16(") == 2
+        assert "float16_t(uint16_t(" not in generated
         assert "int n = int(round(le));" in generated
         assert "metal_u3a_u3a" not in generated
         assert "__crossgl_physical_subgroup" not in generated
