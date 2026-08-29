@@ -86,7 +86,7 @@ The current harness verifies:
   emitting a target file. The blocked contract is tracked by
   [#1537](https://github.com/CrossGL/crosstl/issues/1537);
 - materialization evidence for all 24 host-named `arg_reduce.metal` compute
-  entries within 51 total specializations. Vulkan emits the aggregate artifact.
+  entries within 39 total specializations. Vulkan emits the aggregate artifact.
   DirectX and OpenGL fail before emission with
   `project.translate.workgroup-size-entry-ambiguous` because pinned host
   dispatch uses runtime axis and pipeline-limit operands unavailable to source
@@ -188,7 +188,8 @@ The current harness verifies:
   runtime contract requires `GL_KHR_shader_subgroup` and rejects a device whose
   `GL_SUBGROUP_SIZE_KHR` value is not 32 before shader compilation or dispatch;
 - full project materialization of pinned `gemv.metal` for DirectX. The gate
-  requires 225 materialized specializations, no unsupported materializations or
+  requires 226 materialized specializations—224 host-named entries plus both
+  reachable `elem_to_loc` helper overloads—no unsupported materializations or
   unresolved residue, no bare pure value-discard statements, one aggregate HLSL
   artifact, and exactly 224 host-named report execution entries joined by
   materialization identity. Every generated target entry and `numthreads`
@@ -198,14 +199,14 @@ The current harness verifies:
   224 functions in one `lib_6_6` invocation with the same flag, an exact
   export set, and exact profile-warning classification;
 - full project materialization of pinned `gemv.metal` for OpenGL. The gate
-  requires all 225 specializations materialized, all 224 entry-scoped GLSL
+  requires all 226 specializations materialized, all 224 entry-scoped GLSL
   artifacts emitted, exact workgroup and subgroup execution records, and the
   five explicit host index-range preconditions used for 64-bit source indices.
   Linux CI compiles every artifact with `glslangValidator` and validates every
   resulting SPIR-V 1.3 module with `spirv-val`. This does not establish runtime
   execution or numerical parity;
 - on Linux CI, full project materialization and translation of `gemv.metal` to
-  Vulkan produces 225 specializations and 224 `GLCompute` entry points. The
+  Vulkan produces 226 specializations and 224 `GLCompute` entry points. The
   generated artifact passes both `spirv-as` and `spirv-val` for `vulkan1.1`
   with zero semantic warnings and no known codegen fallbacks. This is structural
   validation, not numerical runtime parity;
@@ -766,16 +767,18 @@ and numerical parity with MLX's Metal backend remain outside this check.
 The pinned `gemv.metal` DirectX compiler frontier verifies source SHA-256
 `c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f` and
 source size 5,383 bytes before translation. The project report must contain one
-clean translated artifact, all 225 materializations with no unsupported
+clean translated artifact, all 226 materializations with no unsupported
 records, no unresolved materialization residue, and no standalone pure
 value-discard statements such as `lid;`. Its generated SHA-256 and byte count
 are checked against the emitted HLSL. Project configuration sets
 `[project.workgroup_size_rules]` for `gemv.metal` to `[32, "BN", "BM"]`; the
 report must retain the normalized `["32", "BN", "BM"]` rule. Exactly 224 of the
-225 materializations must be host-named, and exactly 224 report execution
-entries must join those records by `(hostName, materializedName)` identity. The
-artifact must expose the exact target set `CSMain`, `CSMain_2`, ...,
-`CSMain_224`, independently of report or materialization list order.
+226 materializations must be host-named; the other two are signature-selected
+`elem_to_loc<uint>` and `elem_to_loc<uint32_t>` helpers. Exactly 224 report
+execution entries must join the host-named records by
+`(hostName, materializedName)` identity. The artifact must expose the exact
+target set `CSMain`, `CSMain_2`, ..., `CSMain_224`, independently of report or
+materialization list order.
 
 The resolved report sizes must be exactly `[32, 1, 1]`, `[32, 1, 4]`,
 `[32, 1, 8]`, `[32, 2, 1]`, `[32, 4, 1]`, `[32, 8, 1]`, and `[32, 16, 1]`.
@@ -802,7 +805,7 @@ runtime execution, numerical parity, or whole-kernel semantic validity.
 The pinned `gemv.metal` OpenGL gate uses the same 4,096-specialization limit and
 2,097,152-item materialization work budget. It requires SHA-256
 `c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f`, one
-source unit, all 225 specializations materialized without unsupported records,
+source unit, all 226 specializations materialized without unsupported records,
 and all 224 entry-scoped GLSL artifacts emitted without diagnostics. Every
 artifact must retain its source entry identity, generated hash, source map,
 source remap, resolved workgroup size, and exact subgroup-width contract.
@@ -1500,7 +1503,7 @@ Future scouts should add issue-backed blockers only when there are
 concrete repros. Host runtime integration gaps should be handled in repository
 integration code or downstream runtime adapters, not hidden as shader
 translation successes.
-The full GEMV Vulkan gate materializes all 225 source specializations and emits
+The full GEMV Vulkan gate materializes all 226 source specializations and emits
 224 `GLCompute` entry points. The generated artifact passes both `spirv-as` and
 `spirv-val` for `vulkan1.1`, with zero semantic warnings and no known codegen
 fallbacks. This is structural validation only: runtime integration is not

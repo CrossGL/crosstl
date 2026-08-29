@@ -1415,7 +1415,7 @@ jobs:
                   or gemv_directx["artifactPackaging"]
                   != "single-aggregate-artifact"
                   or gemv_directx["projectDiagnosticCount"] != 0
-                  or gemv_directx["templateSpecializationCount"] != 225
+                  or gemv_directx["templateSpecializationCount"] != 226
                   or gemv_directx["hostNamedMaterializationCount"] != 224
                   or gemv_directx["unsupportedSpecializationCount"] != 0
                   or gemv_directx["workgroupSizeRule"]

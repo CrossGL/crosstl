@@ -1417,7 +1417,7 @@
     },
     "materialization": {
       "status": "materialized",
-      "specialization_count": 225,
+      "specialization_count": 226,
       "host_named_specialization_count": 224,
       "unsupported_specialization_count": 0,
       "unresolved_residue_count": 0,
@@ -1555,7 +1555,7 @@
     },
     "materialization": {
       "status": "materialized",
-      "specialization_count": 225,
+      "specialization_count": 226,
       "unsupported_specialization_count": 0,
       "artifact_packaging": "entry-scoped-artifacts"
     },
@@ -4966,7 +4966,7 @@
     "status": "passed",
     "source": "mlx/backend/metal/kernels/gemv.metal",
     "target": "vulkan",
-    "specialization_count": 225,
+    "specialization_count": 226,
     "entry_point_count": 224,
     "structural_validation_status": "validated",
     "available_validators": [

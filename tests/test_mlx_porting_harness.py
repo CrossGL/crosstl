@@ -7071,17 +7071,21 @@ def _gemv_directx_contract_fixture(module):
         },
         "identity": _test_contract_identity("gemv-directx-execution"),
     }
-    helper_record = {
-        "name": "GEMVKernel::run",
-        "materializedName": "gemv_helper_materialization",
-        "parameters": {"BM": "1", "BN": "1", "T": "float"},
-        "parameterSources": {
-            "BM": "call-site",
-            "BN": "call-site",
-            "T": "call-site",
+    helper_records = [
+        {
+            "name": "elem_to_loc",
+            "materializedName": "elem_to_loc_uint",
+            "parameters": {"IdxT": "uint"},
+            "parameterSources": {"IdxT": "call-site"},
         },
-    }
-    return [helper_record, *host_records], execution
+        {
+            "name": "elem_to_loc",
+            "materializedName": "elem_to_loc_uint32_t",
+            "parameters": {"IdxT": "uint32_t"},
+            "parameterSources": {"IdxT": "call-site"},
+        },
+    ]
+    return [*helper_records, *host_records], execution
 
 
 def _gemv_directx_frontier_source(module, *, replace_entry=None):
@@ -7353,7 +7357,7 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
         "intermediate": "crossgl",
         "pipeline": "single-file-translate",
     }
-    assert result["templateSpecializationCount"] == 225
+    assert result["templateSpecializationCount"] == 226
     assert result["unsupportedSpecializationCount"] == 0
     assert result["hostNamedMaterializationCount"] == 224
     assert result["reportExecutionEntryCount"] == 224
@@ -7911,7 +7915,7 @@ def test_gemv_vulkan_toolchain_check_structurally_validates_full_artifact(
     result = module._check_gemv_vulkan_toolchain(*paths, "python")
 
     assert result["status"] == "passed"
-    assert result["specializationCount"] == 225
+    assert result["specializationCount"] == 226
     assert result["entryPointCount"] == 224
     assert result["structuralValidationStatus"] == "validated"
     assert result["semanticReadinessStatus"] == "no-known-codegen-fallbacks"
@@ -11682,7 +11686,7 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
     }
     assert status["materialization"] == {
         "status": "materialized",
-        "specialization_count": 225,
+        "specialization_count": 226,
         "host_named_specialization_count": 224,
         "unsupported_specialization_count": 0,
         "unresolved_residue_count": 0,
@@ -11789,7 +11793,7 @@ def test_gemv_opengl_evidence_records_all_entry_toolchain_validation():
     }
     assert status["materialization"] == {
         "status": "materialized",
-        "specialization_count": 225,
+        "specialization_count": 226,
         "unsupported_specialization_count": 0,
         "artifact_packaging": "entry-scoped-artifacts",
     }
@@ -11837,7 +11841,7 @@ def test_gemv_opengl_evidence_records_all_entry_toolchain_validation():
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
     assert "--require-opengl-gemv-toolchain" in readme
-    assert "all 225 specializations materialized" in readme
+    assert "all 226 specializations materialized" in readme
     assert "all 224 entry-scoped GLSL artifacts" in readme
     assert "validates every resulting SPIR-V 1.3 module" in readme
     assert "five explicit host index-range preconditions" in readme
