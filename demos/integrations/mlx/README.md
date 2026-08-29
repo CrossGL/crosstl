@@ -881,17 +881,29 @@ and
 
 Entry-scoped translation materializes only the selected GEMV and
 `elem_to_loc_uint`, with no unsupported record or project diagnostic. The
-8,410-byte HLSL has SHA-256
-`f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d`,
+8,188-byte HLSL has SHA-256
+`9972997d87bb4c8c5fac0c0f7182bb19648654ca2c30eacd4b304bfaf18f64d2`,
 retains `[numthreads(32, 2, 1)]` and `[WaveSize(32)]`, and passes official DXC
 1.9.2602.24 under `cs_6_6`, `-enable-16bit-types`, and warnings as errors.
 Direct3D does not guarantee that a multidimensional workgroup's flattened
-`SV_GroupIndex` values are contiguous within each physical wave. The entry
-therefore assigns one uniform, collision-safe ID per physical wave through a
-workgroup-synchronized counter instead of dividing every lane's group index by
-`WaveGetLaneCount()`; fixed one-wave entries retain the valid quotient fast path.
-GEMV also opts into the branch-free calling-lane fallback for relative shuffle
-sources outside the wave, so WARP never consumes undefined high-lane values.
+`SV_GroupIndex` values are contiguous within each physical wave, so this entry
+explicitly enables target-scoped 32-lane software subgroups. Logical subgroup
+and lane IDs are `SV_GroupIndex / 32` and `SV_GroupIndex % 32`; a 64-float
+`groupshared` array carries each shuffle, with two
+`GroupMemoryBarrierWithGroupSync` calls. The source lane is validated before
+addition, preventing unsigned-delta wrap, and an out-of-range shuffle returns
+the calling invocation's value. The artifact contains no `WaveReadLaneAt`,
+`WaveGetLaneIndex`, or physical-wave atomic allocator. `[WaveSize(32)]` remains
+a source/reflection contract, not a dependency on physical lane topology.
+
+The replaced 8,410-byte physical-wave artifact is retained as rejected
+diagnostic evidence under SHA-256
+`f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d`.
+Windows workflow run 33268998061, job 99143984804 mismatched all 32 outputs:
+its reduction substituted logical lanes 5 through 8 with physical lanes 21
+through 24, with maximum absolute error 1.90625. That exact signature rules out
+a tolerance adjustment or merely guarding invalid high-lane reads.
+
 The OpenGL target needs only the selected matrix-index assertion
 `uint64(bm + tm) * marix_ld + out_col + tn` in the unsigned 32-bit range. Its
 7,705-byte GLSL has SHA-256
@@ -899,13 +911,17 @@ The OpenGL target needs only the selected matrix-index assertion
 and partitions the 64-thread workgroup into two logical 32-lane subgroups with
 a 64-float shared shuffle scratch array.
 
-The generic software-subgroup proof now recognizes either `value > 0` or the
-integral-equivalent `value >= 1` as a canonical positive-to-zero halving loop
-when paired with `/= 2` or `>>= 1`. That admits the source's
-`sm >= 1; sm >>= 1` segmented shuffle reduction while wider bounds, mutation,
-nontermination, escaping control flow, indirect calls, and nested helper calls
-continue to fail closed. `glslangValidator` and `spirv-val` accept the emitted
-module; SPIR-V contains three control barriers and no group-nonuniform
+Both target-specific software-subgroup analyses recognize either `value > 0`
+or the integral-equivalent `value >= 1` as a canonical positive-to-zero
+halving loop when paired with `/= 2` or `>>= 1`. That admits the source's
+`sm >= 1; sm >>= 1` segmented shuffle reduction. DirectX additionally requires
+one bounded compute entry, a concrete width-compatible workgroup, explicit
+calling-invocation fallback, a supported scalar shuffle, an unambiguous helper
+call graph, logical invocation identity, and statically uniform control flow;
+violations fail before artifact emission. OpenGL retains rejection for wider
+bounds, mutation, nontermination, escaping control flow, indirect calls, and
+nested helper calls. `glslangValidator` and `spirv-val` accept the emitted
+OpenGL module; SPIR-V contains three control barriers and no group-nonuniform
 instruction or hardware-subgroup extension.
 
 Both runtime packages expose the same 15 logical resources: matrix, vector,

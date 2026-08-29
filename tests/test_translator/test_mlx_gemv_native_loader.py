@@ -53,8 +53,8 @@ MLX_GEMV_VARIANT_ID = (
 )
 MLX_GEMV_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d",
-        "sizeBytes": 8410,
+        "sha256": "9972997d87bb4c8c5fac0c0f7182bb19648654ca2c30eacd4b304bfaf18f64d2",
+        "sizeBytes": 8188,
     },
     "opengl": {
         "sha256": "f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562",
@@ -200,6 +200,7 @@ def _project_config(target: str, *, output_dir: str) -> str:
         sections.append(textwrap.dedent("""
                 [project.source_options.metal.target_options.directx]
                 relative_wave_shuffle_out_of_range = "self"
+                software_subgroup_width = 32
                 """).strip())
     elif target == "opengl":
         sections.append(textwrap.dedent("""
@@ -347,7 +348,10 @@ def _build_runtime_package(
     ]
     if target == "directx":
         assert payload["project"]["sourceOptions"]["metal"]["target_options"] == {
-            "directx": {"relative_wave_shuffle_out_of_range": "self"}
+            "directx": {
+                "relative_wave_shuffle_out_of_range": "self",
+                "software_subgroup_width": 32,
+            }
         }
     elif target == "opengl":
         assert payload["project"]["indexRangeAssertions"] == [INDEX_ASSERTION]
@@ -399,19 +403,30 @@ def _build_runtime_package(
         assert "[numthreads(32, 2, 1)]" in generated
         assert "[WaveSize(32)]" in generated
         assert (
-            "float __crossgl_wave_shuffle_down_self_float(float value, uint delta)"
+            "groupshared float __crossgl_software_subgroup_scratch_float[64];"
             in generated
         )
-        assert "bool valid = delta < (laneCount - lane);" in generated
-        assert "WaveReadLaneAt(value, sourceLane)" in generated
-        assert "WaveReadLaneAt(result[tn]" not in generated
         assert (
-            "__crossgl_wave_shuffle_down_self_float(result[tn], uint((4 * int(sm))))"
-            in generated
+            "float __crossgl_software_subgroup_shuffle_down_float("
+            "float value, uint delta, uint invocation)" in generated
         )
-        assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated
-        assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated
-        assert "uint simd_gid = crossglPhysicalSubgroupID;" in generated
+        assert "uint lane = invocation % 32u;" in generated
+        assert "uint subgroupBase = invocation - lane;" in generated
+        assert "bool sourceValid = delta < (32u - lane);" in generated
+        assert "uint sourceLane = sourceValid ? lane + delta : lane;" in generated
+        assert "subgroupBase + lane + delta" not in generated
+        assert generated.count("GroupMemoryBarrierWithGroupSync();") == 3
+        assert (
+            "__crossgl_software_subgroup_shuffle_down_float("
+            "result[tn], uint((4 * int(sm)))" in generated
+        )
+        assert "uint(lid.x) + 32u * (uint(lid.y) + 2u * uint(lid.z))" in generated
+        assert "uint simd_gid = (groupIndex / 32u);" in generated
+        assert "uint simd_lid = (groupIndex % 32u);" in generated
+        assert "WaveReadLaneAt" not in generated
+        assert "WaveGetLaneIndex" not in generated
+        assert "__crossgl_physical_subgroup" not in generated
+        assert "InterlockedAdd" not in generated
     else:
         assert "layout(local_size_x = 32, local_size_y = 2" in generated
         assert "#define CROSSTL_SOFTWARE_SUBGROUP_WIDTH 32u" in generated

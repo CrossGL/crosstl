@@ -3960,6 +3960,31 @@ def test_mlx_project_porting_workflow_runs_current_gemv_runtime_proofs():
         "Checkout current MLX runtime proof corpus",
     )
 
+    software_step_name = "Validate Direct3D software subgroup shuffle execution"
+    software_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        software_step_name,
+    )
+    assert "if: runner.os == 'Windows'" in software_step
+    assert 'CROSTL_RUN_DIRECTX_SOFTWARE_SUBGROUP_DEVICE_TEST: "1"' in software_step
+    assert "python -m pytest -q -n auto" in software_step
+    assert (
+        "tests/test_translator/test_native_runtime_drivers.py::"
+        "test_directx_compute_runtime_executes_software_subgroup_shuffle_on_device"
+        in software_step
+    )
+    assert "-k" not in software_step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        software_step_name,
+        "Checkout current MLX runtime proof corpus",
+    )
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        directx_step_name,
+        software_step_name,
+    )
+
     opengl_step_name = "Prove current MLX GEMV OpenGL native-loader execution"
     opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,

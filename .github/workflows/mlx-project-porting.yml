@@ -315,6 +315,14 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_scaled_dot_product_attention_native_loader.py::test_pinned_mlx_attention_executes_through_directx_native_loader
 
+      - name: Validate Direct3D software subgroup shuffle execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_RUN_DIRECTX_SOFTWARE_SUBGROUP_DEVICE_TEST: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_native_runtime_drivers.py::test_directx_compute_runtime_executes_software_subgroup_shuffle_on_device
+
       - name: Prove current MLX GEMV Direct3D native-loader execution
         if: runner.os == 'Windows'
         env:

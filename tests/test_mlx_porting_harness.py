@@ -12252,11 +12252,15 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d"
+                "9972997d87bb4c8c5fac0c0f7182bb19648654ca2c30eacd4b304bfaf18f64d2"
             ),
-            "size_bytes": 8410,
-            "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
-            "relative_shuffle_out_of_range": "calling-lane-value",
+            "size_bytes": 8188,
+            "subgroup_id_lowering": "flattened-logical-software-subgroups",
+            "relative_shuffle_out_of_range": "calling-invocation-value",
+            "software_subgroup_width": 32,
+            "logical_subgroup_count": 2,
+            "shared_float_element_count": 64,
+            "hardware_wave_read_count": 0,
             "workgroup_size": [32, 2, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
@@ -12280,6 +12284,36 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
             "group_non_uniform_instruction_count": 0,
             "compiler_validation_status": "passed",
         },
+    }
+    assert status["directx_software_subgroup"] == {
+        "configuration": (
+            "project.source_options.metal.target_options.directx."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "logical_subgroup_count": 2,
+        "shared_float_element_count": 64,
+        "logical_invocation_index": "flattened-SV_GroupIndex",
+        "selected_kernel_operations": ["WaveShuffleDown(float,uint)"],
+        "barrier": "GroupMemoryBarrierWithGroupSync",
+        "out_of_range_value": "calling-invocation-value",
+        "hardware_wave_reads_emitted": False,
+        "unsupported_contract_behavior": "reject-before-artifact-emission",
+    }
+    assert status["directx_warp_diagnostic"] == {
+        "rejected_artifact_sha256": (
+            "f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d"
+        ),
+        "rejected_artifact_size_bytes": 8410,
+        "workflow_run": 33268998061,
+        "job": 99143984804,
+        "mismatched_output_count": 32,
+        "output_element_count": 32,
+        "max_absolute_error": 1.90625,
+        "max_relative_error": 0.1382488479262673,
+        "first_obtained": 6.78125,
+        "first_expected": 5.84375,
+        "reduction_signature": "logical-lanes-5-through-8-replaced-by-21-through-24",
     }
     assert status["software_subgroup"] == {
         "configuration": (

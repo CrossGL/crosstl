@@ -6,6 +6,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Added
 
+- Explicit target-scoped DirectX 32-lane software subgroup lowering for supported scalar shuffle-down operations, using flattened `SV_GroupIndex` identities, bounded groupshared scratch storage, synchronized reads, and exact calling-invocation fallback without hardware wave-lane reads.
 - Native Direct3D and OpenGL loader target adapters with a stable generation registry, structured diagnostics, artifact verification, SPIR-V specialization, and translated-device proofs.
 - Exact native runtime variant dispatch packages that bind ready variants to copied target artifacts, verified loader descriptors, and deterministic C++17 execution wrappers, with Python and C++ lookup interfaces.
 - Bounded deferred native compilation: a closed versioned request contract, verified input packaging with deterministic provenance, a success-only output cache keyed by request and toolchain identity, and execution through native runtimes (HLSL to DXIL, GLSL to OpenGL SPIR-V).
@@ -30,6 +31,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Improved
 
+- DirectX software subgroup admission fails closed unless one bounded compute entry has concrete width-compatible dimensions, a supported payload and operation, unambiguous helper identity, logical invocation identity, explicit out-of-range policy, and statically uniform barrier control flow; relative source indexing is guarded before unsigned addition.
 - HLSL host-reflection collision checks now distinguish CBV, SRV, UAV, and sampler register namespaces, allowing legal coordinates such as `b0` and `t0` while continuing to reject duplicate bindings within one namespace.
 - Explicit 32-lane OpenGL software subgroups now partition bounded workgroups of up to 1,024 invocations into independent logical subgroups and admit narrow typed-identity-masked divergent `WaveActiveSum`, `WaveActiveMin`, and `WaveActiveMax` assignments while all generated barriers remain workgroup-uniform; conditional shuffle and ambiguous control flow still fail closed.
 - Explicit OpenGL software subgroups synchronize canonical subgroup-ID-strided runtime loops across complete workgroup rounds when the bound is workgroup-uniform, the stride equals the logical subgroup count, and exactly one supported masked reduction is present; unsafe declarations, mutation, escaping control flow, and multiple collectives remain fail-closed.
@@ -50,6 +52,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Current-pinned multidimensional MLX GEMV no longer relies on WARP physical-wave lane topology: its DirectX reduction now uses deterministic logical 32-lane software subgroups, fixing the observed replacement of logical lanes 5–8 by physical lanes 21–24.
 - DirectX compute `gl_SubgroupID` lowering assigns a synchronized, wave-uniform physical ID in multi-wave workgroups instead of dividing each lane's flattened `SV_GroupIndex`; proven one-wave workgroups retain the valid quotient fast path.
 - OpenGL bitcasts involving widened binary16 values preserve scalar and packed-half payloads through `packHalf2x16`/`unpackHalf2x16` instead of incorrectly reinterpreting them as float32 payloads.
 - Metal conversion analysis treats parenthesized returns as control syntax, resolves proven local conditional aliases to concrete constructor factories without guessing unresolved branches, and recognizes qualified `round`; OpenGL emits exact single-evaluation float32 `isfinite` and `signbit` bit tests while preserving user overloads and structured fail-closed diagnostics.

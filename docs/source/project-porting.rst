@@ -1479,23 +1479,38 @@ At the same current pin, a bounded GEMV proof selects
 float32 vector-matrix product with ``M=1``, ``N=32``, and ``K=32``. The
 host-derived contract fixes workgroup ``[32, 2, 1]``, subgroup width 32, and
 one dispatched workgroup. Entry-scoped translation materializes the selected
-GEMV and ``elem_to_loc_uint`` only. Its 8,410-byte HLSL has SHA-256
-``f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d``
+GEMV and ``elem_to_loc_uint`` only. Its 8,188-byte HLSL has SHA-256
+``9972997d87bb4c8c5fac0c0f7182bb19648654ca2c30eacd4b304bfaf18f64d2``
 and passes official DXC 1.9.2602.24 under ``cs_6_6``,
-``-enable-16bit-types``, and warnings as errors. Because physical waves need not
-contain contiguous flattened ``SV_GroupIndex`` values, generated HLSL assigns
-one uniform subgroup ID per wave through a workgroup-synchronized counter;
-proven one-wave entries retain the valid quotient fast path. GEMV additionally
-sets ``relative_wave_shuffle_out_of_range = "self"`` so every shuffle executes
-once with either the valid relative source lane or the calling lane, avoiding
-undefined high-lane reads on WARP.
+``-enable-16bit-types``, and warnings as errors. DirectX explicitly enables a
+32-lane target-scoped software subgroup because physical waves need not contain
+contiguous flattened ``SV_GroupIndex`` values. Logical subgroup and lane IDs
+are ``SV_GroupIndex / 32`` and ``SV_GroupIndex % 32``. A 64-float
+``groupshared`` array carries each shuffle between two
+``GroupMemoryBarrierWithGroupSync`` calls; the source lane is validated before
+addition so an extreme unsigned delta cannot wrap the scratch index, and an
+out-of-range source returns the calling invocation's value. The HLSL contains
+no ``WaveReadLaneAt``, ``WaveGetLaneIndex``, or physical-wave atomic allocator.
+``[WaveSize(32)]`` remains the source/reflection contract without making the
+reduction depend on physical lane topology.
+
+The superseded 8,410-byte physical-wave artifact remains recorded as rejected
+evidence under SHA-256
+``f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d``.
+Windows workflow run 33268998061, job 99143984804 mismatched every output: the
+reduction replaced logical lanes 5 through 8 with physical lanes 21 through
+24, reaching maximum absolute error 1.90625. This exact substitution rules out
+a tolerance adjustment or merely guarding invalid high-lane reads.
 
 OpenGL uses two logical 32-lane software subgroups in the 64-thread workgroup.
-The fail-closed software-subgroup analysis admits the source's
+Both target-specific fail-closed analyses admit the source's
 ``sm >= 1; sm >>= 1`` loop as the integral-equivalent positive-to-zero form of
-``sm > 0`` while retaining rejection for wider bounds, mutation,
-nontermination, escaping control flow, and indirect or nested helper calls.
-The 7,705-byte GLSL has SHA-256
+``sm > 0``. DirectX also requires one bounded compute entry, concrete
+width-compatible dimensions, explicit calling-invocation fallback, a supported
+scalar shuffle, unambiguous helper identity, logical invocation identity, and
+statically uniform control flow before artifact emission. OpenGL retains
+rejection for wider bounds, mutation, nontermination, escaping control flow,
+and indirect or nested helper calls. The 7,705-byte GLSL has SHA-256
 ``f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562``;
 ``glslangValidator`` and ``spirv-val`` accept it, and its SPIR-V contains three
 control barriers with no group-nonuniform instruction.
