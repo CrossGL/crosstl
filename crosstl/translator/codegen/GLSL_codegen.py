@@ -1685,6 +1685,18 @@ class GLSLCodeGen:
             "gl_SubgroupInvocationID",
         }
     )
+    GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS = frozenset(
+        {
+            "gl_WorkGroupID",
+            "gl_NumWorkGroups",
+            "gl_WorkGroupSize",
+            # Explicit 32-lane software mode has exactly one subgroup. These
+            # values are therefore invocation-uniform after builtin lowering.
+            "gl_NumSubgroups",
+            "gl_SubgroupID",
+            "gl_SubgroupSize",
+        }
+    )
     GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES = {
         "float": "Float",
         "int": "Int",
@@ -2174,6 +2186,7 @@ class GLSLCodeGen:
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
+        self.glsl_software_subgroup_uniform_for_node_ids = set()
         self.glsl_cooperative_matrix_fragment_contracts = {}
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
         self.required_glsl_cooperative_matrix_helpers = set()
@@ -3749,6 +3762,7 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
         self.glsl_software_subgroup_helper_function_names = set()
+        self.glsl_software_subgroup_uniform_for_node_ids = set()
         if self.software_subgroup_width is None:
             return
 
@@ -3859,6 +3873,256 @@ class GLSLCodeGen:
                     source_location=getattr(node, "source_location", None),
                 )
 
+        uniform_names = self.glsl_software_subgroup_uniform_seed_names(
+            ast,
+            entry_function,
+            target_stage,
+        )
+        self.glsl_software_subgroup_analyze_uniform_statements(
+            getattr(entry_function, "body", None),
+            uniform_names,
+        )
+
+    def glsl_software_subgroup_uniform_seed_names(
+        self,
+        ast,
+        entry_function,
+        target_stage=None,
+    ):
+        names = set(self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS)
+        for node in (
+            *(getattr(ast, "constants", []) or []),
+            *(getattr(ast, "global_variables", []) or []),
+        ):
+            name = getattr(node, "name", None)
+            qualifiers = {
+                str(qualifier).strip().lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }
+            if name and (
+                node in (getattr(ast, "constants", []) or [])
+                or qualifiers & {"const", "constant", "uniform"}
+            ):
+                names.add(name)
+
+        cbuffers = list(getattr(ast, "cbuffers", []) or [])
+        cbuffers.extend(collect_stage_local_cbuffers(ast, target_stage))
+        for cbuffer in cbuffers:
+            for member in getattr(cbuffer, "members", []) or []:
+                name = getattr(member, "name", None)
+                if name:
+                    names.add(name)
+
+        for parameter in getattr(entry_function, "parameters", []) or []:
+            name = getattr(parameter, "name", None)
+            if not name:
+                continue
+            qualifiers = {
+                str(qualifier).strip().lower()
+                for qualifier in getattr(parameter, "qualifiers", []) or []
+            }
+            semantic = self.semantic_from_node(parameter)
+            mapped_semantic = self.map_semantic(semantic) if semantic else None
+            if qualifiers & {"const", "constant", "uniform"} or (
+                mapped_semantic
+                in self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS
+            ):
+                names.add(name)
+                if mapped_semantic:
+                    names.add(mapped_semantic)
+        return names
+
+    def glsl_software_subgroup_uniform_expression(self, expression, uniform_names):
+        if expression is None:
+            return False
+        constants = self.glsl_active_literal_int_constants()
+        if evaluate_literal_int_expression(expression, constants) is not None:
+            return True
+        for node in self.walk_ast(expression):
+            if isinstance(node, (AssignmentNode, FunctionCallNode, WaveOpNode)):
+                return False
+            if isinstance(node, UnaryOpNode) and self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            ) in {"++", "--"}:
+                return False
+            if not isinstance(node, IdentifierNode):
+                continue
+            semantic = self.semantic_from_node(node)
+            mapped_semantic = self.map_semantic(semantic) if semantic else None
+            name = getattr(node, "name", None)
+            if mapped_semantic:
+                if (
+                    mapped_semantic
+                    not in self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS
+                ):
+                    return False
+            elif name not in uniform_names:
+                return False
+        return True
+
+    def glsl_software_subgroup_assignment_target_name(self, node):
+        target = getattr(node, "target", getattr(node, "left", None))
+        return self.expression_name(target)
+
+    def glsl_software_subgroup_assigned_names(self, root):
+        names = set()
+        for node in self.walk_ast(root):
+            if isinstance(node, AssignmentNode):
+                name = self.glsl_software_subgroup_assignment_target_name(node)
+                if name:
+                    names.add(name)
+            elif isinstance(node, UnaryOpNode) and self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            ) in {"++", "--"}:
+                name = self.expression_name(getattr(node, "operand", None))
+                if name:
+                    names.add(name)
+        return names
+
+    def glsl_software_subgroup_expression_identifier_names(self, expression):
+        return {
+            node.name
+            for node in self.walk_ast(expression)
+            if isinstance(node, IdentifierNode) and getattr(node, "name", None)
+        }
+
+    def glsl_software_subgroup_analyze_uniform_if(self, node, uniform_names):
+        conditions = [
+            getattr(node, "condition", getattr(node, "if_condition", None)),
+            *(getattr(node, "else_if_conditions", []) or []),
+        ]
+        bodies = [node.if_body, *(getattr(node, "else_if_bodies", []) or [])]
+        else_body = getattr(node, "else_body", None)
+        if not all(
+            self.glsl_software_subgroup_uniform_expression(condition, uniform_names)
+            for condition in conditions
+        ):
+            assigned = set()
+            for body in [*bodies, else_body]:
+                assigned.update(self.glsl_software_subgroup_assigned_names(body))
+            return set(uniform_names) - assigned
+
+        branch_results = [
+            self.glsl_software_subgroup_analyze_uniform_statements(
+                body,
+                set(uniform_names),
+            )
+            for body in bodies
+        ]
+        branch_results.append(
+            self.glsl_software_subgroup_analyze_uniform_statements(
+                else_body,
+                set(uniform_names),
+            )
+            if else_body is not None
+            else set(uniform_names)
+        )
+        return (
+            set.intersection(*branch_results) if branch_results else set(uniform_names)
+        )
+
+    def glsl_software_subgroup_analyze_uniform_statement(
+        self,
+        statement,
+        uniform_names,
+    ):
+        names = set(uniform_names)
+        if statement is None:
+            return names
+        if isinstance(statement, BlockNode) or hasattr(statement, "statements"):
+            return self.glsl_software_subgroup_analyze_uniform_statements(
+                statement,
+                names,
+            )
+        if isinstance(statement, ExpressionStatementNode):
+            return self.glsl_software_subgroup_analyze_uniform_statement(
+                getattr(statement, "expression", None),
+                names,
+            )
+        if isinstance(statement, VariableNode):
+            name = getattr(statement, "name", None)
+            if name:
+                if self.glsl_software_subgroup_uniform_expression(
+                    getattr(statement, "initial_value", None),
+                    names,
+                ):
+                    names.add(name)
+                else:
+                    names.discard(name)
+            return names
+        if isinstance(statement, AssignmentNode):
+            name = self.glsl_software_subgroup_assignment_target_name(statement)
+            if not name:
+                return names
+            operator = self.map_operator(
+                getattr(statement, "op", getattr(statement, "operator", "="))
+            )
+            value = getattr(statement, "value", getattr(statement, "right", None))
+            value_is_uniform = self.glsl_software_subgroup_uniform_expression(
+                value,
+                names,
+            )
+            if value_is_uniform and (operator == "=" or name in names):
+                names.add(name)
+            else:
+                names.discard(name)
+            return names
+        if isinstance(statement, UnaryOpNode):
+            operator = self.map_operator(
+                getattr(statement, "op", getattr(statement, "operator", None))
+            )
+            if operator in {"++", "--"}:
+                name = self.expression_name(getattr(statement, "operand", None))
+                if name not in names:
+                    names.discard(name)
+            return names
+        if isinstance(statement, IfNode):
+            return self.glsl_software_subgroup_analyze_uniform_if(statement, names)
+        if isinstance(statement, ForNode):
+            is_uniform = self.glsl_software_subgroup_uniform_for(statement, names)
+            if is_uniform and self.glsl_software_subgroup_first_operation(statement):
+                self.glsl_software_subgroup_uniform_for_node_ids.add(id(statement))
+            initializer = getattr(statement, "init", None)
+            loop_name = getattr(initializer, "name", None)
+            nested_names = set(names)
+            if is_uniform and loop_name:
+                nested_names.add(loop_name)
+            self.glsl_software_subgroup_analyze_uniform_statements(
+                getattr(statement, "body", None),
+                nested_names,
+            )
+            return names - (
+                self.glsl_software_subgroup_assigned_names(
+                    getattr(statement, "body", None)
+                )
+                & names
+            )
+        if isinstance(
+            statement, (WhileNode, DoWhileNode, LoopNode, SwitchNode, MatchNode)
+        ):
+            return names - self.glsl_software_subgroup_assigned_names(statement)
+        if isinstance(statement, FunctionCallNode):
+            # CrossGL parameters may be references. Without a resolved pure-call
+            # contract, a call that observes a proven-uniform name may mutate it.
+            observed = self.glsl_software_subgroup_expression_identifier_names(
+                statement
+            )
+            return names - observed
+        return names
+
+    def glsl_software_subgroup_analyze_uniform_statements(
+        self,
+        body,
+        uniform_names,
+    ):
+        names = set(uniform_names)
+        for statement in self.glsl_software_subgroup_statement_list(body):
+            names = self.glsl_software_subgroup_analyze_uniform_statement(
+                statement,
+                names,
+            )
+        return names
+
     def glsl_software_subgroup_first_operation(self, root):
         records = self.glsl_software_subgroup_operation_records(root)
         return records[0] if records else None
@@ -3879,7 +4143,7 @@ class GLSLCodeGen:
             source_location=getattr(node, "source_location", None),
         )
 
-    def glsl_software_subgroup_uniform_for(self, node):
+    def glsl_software_subgroup_uniform_for(self, node, uniform_names=None):
         if self.software_subgroup_width is None:
             return True
         initializer = getattr(node, "init", None)
@@ -3890,10 +4154,15 @@ class GLSLCodeGen:
         if not loop_name or loop_type not in {"int", "uint"}:
             return False
         constants = self.glsl_active_literal_int_constants()
-        initial_value = evaluate_literal_int_expression(
-            getattr(initializer, "initial_value", None), constants
-        )
-        if initial_value is None:
+        initial_expression = getattr(initializer, "initial_value", None)
+        initial_value = evaluate_literal_int_expression(initial_expression, constants)
+        if initial_value is None and (
+            uniform_names is None
+            or not self.glsl_software_subgroup_uniform_expression(
+                initial_expression,
+                uniform_names,
+            )
+        ):
             return False
 
         condition = getattr(node, "condition", None)
@@ -3914,7 +4183,14 @@ class GLSLCodeGen:
             loop_on_left = False
         else:
             return False
-        if evaluate_literal_int_expression(bound, constants) is None:
+        literal_bound = evaluate_literal_int_expression(bound, constants)
+        if literal_bound is None and (
+            uniform_names is None
+            or not self.glsl_software_subgroup_uniform_expression(
+                bound,
+                set(uniform_names) | {loop_name},
+            )
+        ):
             return False
 
         update = getattr(node, "update", None)
@@ -3941,17 +4217,25 @@ class GLSLCodeGen:
         if increasing != (normalized_operator in {"<", "<="}):
             return False
 
+        bound_names = self.glsl_software_subgroup_expression_identifier_names(bound)
         for child in self.walk_ast(getattr(node, "body", None)):
             if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
                 return False
             if isinstance(child, AssignmentNode):
-                target = getattr(child, "target", getattr(child, "left", None))
-                if self.expression_name(target) == loop_name:
+                target_name = self.glsl_software_subgroup_assignment_target_name(child)
+                if target_name == loop_name or target_name in bound_names:
                     return False
             if isinstance(child, UnaryOpNode) and self.map_operator(
                 getattr(child, "op", getattr(child, "operator", None))
             ) in {"++", "--"}:
-                if self.expression_name(getattr(child, "operand", None)) == loop_name:
+                target_name = self.expression_name(getattr(child, "operand", None))
+                if target_name == loop_name or target_name in bound_names:
+                    return False
+            if isinstance(child, FunctionCallNode):
+                observed = self.glsl_software_subgroup_expression_identifier_names(
+                    child
+                )
+                if observed & bound_names:
                     return False
         return True
 
@@ -4968,6 +5252,7 @@ class GLSLCodeGen:
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
+        self.glsl_software_subgroup_uniform_for_node_ids = set()
         self.current_glsl_disabled_extensions = set()
         self.glsl_cooperative_matrix_fragment_contracts = {}
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
@@ -23436,7 +23721,11 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_for(self, node, indent, is_main=False):
         indent_str = "    " * indent
-        if not self.glsl_software_subgroup_uniform_for(node):
+        if id(
+            node
+        ) not in self.glsl_software_subgroup_uniform_for_node_ids and not self.glsl_software_subgroup_uniform_for(
+            node
+        ):
             self.reject_glsl_software_subgroup_control_flow(node)
         initializer_node = getattr(node, "init", None)
         initializer_declared_names = set()

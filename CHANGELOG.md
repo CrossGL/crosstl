@@ -17,6 +17,7 @@ All notable changes to CrossTL are documented in this file.
 - Pinned MLX native execution evidence: a binary kernel executed on DirectX and OpenGL with exact device readback, quantized OpenGL lowering and quantized gather provenance proofs, and bounded LayerNorm host dispatch integrated into the MLX porting frontier.
 - Current-pinned MLX LayerNorm axis-32 native-loader packages with exact eight-resource ABIs, Direct3D 12 WARP and Mesa EGL numerical CI, deterministic HLSL/GLSL identities, and an upstream-derived dispatch contract.
 - Current-pinned MLX LayerNorm VJP axis-32, one-row, `has_w=true` native-loader execution with exact eight-resource ABI, concrete DirectX and deferred-specialized OpenGL paths, and numerical `gx`/`gw` readback on WARP and Mesa.
+- Current-pinned MLX RMSNorm VJP axis-32, one-row, `has_w=true` native-loader execution with an exact ten-resource ABI, concrete DirectX and deferred-specialized OpenGL paths, and numerical `gx`/`gw` readback on WARP and Mesa.
 - Deferred-specialization ABI packages retain a ready, actionable JSON runtime variant registry while marking the unsupported generated C++ registry header unavailable with an explicit reason.
 - Deferred Native Compilation CI workflow covering a three-platform contract matrix plus native Direct3D 12 and software OpenGL compile-and-dispatch jobs with pinned DXC verification and required device readback.
 
@@ -25,6 +26,7 @@ All notable changes to CrossTL are documented in this file.
 - Metal analysis performance: lexical scope lookups are indexed and repeated whole-tree traversals eliminated.
 - OpenGL resource specialization includes the storage pointer view layout in specialization identity and generated helper names, so direct and reinterpreted calls against the same root receive distinct deterministic helpers regardless of call order.
 - Explicit OpenGL software subgroups accept uniquely identified helpers only when calls are direct, unconditional, top-level, and entry-owned; resource-specialized calls may reuse only identical-base workgroup proofs whose validated intervals cover the narrower request.
+- Explicit OpenGL software subgroups admit canonical runtime loops only when integer initializers and bounds are proven workgroup-uniform through constants, scalar blocks, workgroup builtins, and conservative local dataflow; lane-varying state, mutation, escaping control flow, and unresolved calls remain fail-closed.
 - HLSL compute stages are inferred from `numthreads` attributes, keeping deferred interface reflection aligned with DXC entry-point selection.
 - Project artifact report identities stay repository-relative on Windows by preferring lexical project-root containment.
 - Per-artifact time limits are applied to MLX full-corpus scouting so stalled units produce structured diagnostics and durable checkpoint records.
@@ -43,6 +45,7 @@ All notable changes to CrossTL are documented in this file.
 - Direct3D shutdown with live pipelines and unverified HLSL includes now fail closed, and OpenGL adapter object ownership is hardened with caller-controlled context lifetime for injected contexts.
 - Worker timeout exceptions are distinguished from job deadlines so a timeout raised inside translation code remains a typed worker failure.
 - Python 3.8 and 3.9 compatibility preserved across entry discovery and deferred compilation tests.
+- Deferred native-loader proof annotations remain importable on Python 3.8 and 3.9.
 
 ---
 

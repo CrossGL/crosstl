@@ -1338,9 +1338,50 @@ weights and compares 64 outputs against
 tolerance. CI requires the same package and readback on Direct3D 12 WARP and
 Mesa software OpenGL. This is bounded execution evidence for one forward
 float32 workload; it does not redirect the MLX host runtime, run the MLX test
-suite, or cover complete RMSNorm runtime parity. In particular, it does not
-cover VJP, looped, float16, or bfloat16 entries, other axis sizes, or the
-remaining host/device dispatch space.
+suite, or cover complete RMSNorm runtime parity. In particular, that forward
+proof does not cover VJP, looped, float16, or bfloat16 entries, other axis
+sizes, or the remaining host/device dispatch space.
+
+A sibling current-corpus VJP proof selects `vjp_rmsfloat32` through
+[`contracts/rms_norm_vjp.native-loader.dispatch.json`](contracts/rms_norm_vjp.native-loader.dispatch.json).
+It fixes one float32 row of axis size 32, `has_w=true` through function constant
+ID `20`, a `[32, 1, 1]` workgroup and 32-lane subgroup, one dispatch workgroup,
+and the two explicit 0-through-31 index-range assertions needed by the bounded
+input and cotangent views. Materialization selects
+`vjp_rms_single_row<float, RMS_N_READS>` from four reachable specializations
+while pruning 168 unrelated candidates.
+
+The generated HLSL is 6,795 bytes with SHA-256
+`008a7a6f1614cb7c087d11c7e65adef919b58504e5fff3bd6479940aebc0aa1d`.
+It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
+`WaveActiveSum` calls, and compiles as `cs_6_6` with
+`-enable-16bit-types`. The generated software-subgroup GLSL is 7,771 bytes
+with SHA-256
+`2112adeb6c1693fa42c48fe3013cd57637f34a9393c0d468b547ed06ab42cf73`.
+It retains deferred OpenGL specialization constant `20`, emits six control
+barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
+instruction, and passes `glslangValidator` plus `spirv-val`.
+
+RMSNorm VJP exercises a canonical runtime row loop. The explicit software
+subgroup path accepts that loop only after proving its initializer and bound
+workgroup-uniform from `gl_WorkGroupID` and read-only scalar blocks; lane-varying
+inputs, bound mutation, unresolved calls, and `break`, `continue`, or `return`
+remain fail-closed. Default OpenGL generation remains on the hardware-subgroup
+path.
+
+The ten-resource native-loader ABI contains float32 `x`, `w`, `g`, `gx`, and
+one-group `gw` buffers plus float32 epsilon and uint32 axis-size, weight-stride,
+row-count, and rows-per-group scalar blocks. The deterministic request compares
+all 32 `gx` and 32 `gw` values at `7e-5` absolute and relative tolerance. A
+local Linux arm64 llvmpipe EGL run passed deferred GLSL-to-SPIR-V execution with
+maximum absolute errors below `3.54e-8` for `gx` and `3.40e-8` for `gw`; CI
+requires the same package and numerical readback through Direct3D 12 WARP and
+Mesa software OpenGL.
+
+This proof is intentionally one row and one group, so the kernel's group-local
+`gw` result is also the final host-reduced weight gradient. It does not cover
+multi-row weight reduction, `has_w=false`, float16 or bfloat16, looped entries,
+other axis sizes, MLX host redirection, or the full MLX test suite.
 
 `fence.metal` emits no DirectX, OpenGL, or Vulkan target artifact. The harness
 requires the target-specific structured diagnostics and the exact requested

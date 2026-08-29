@@ -40,65 +40,67 @@ from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
 
 ROOT = Path(__file__).resolve().parents[2]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
-MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
-MLX_LAYER_NORM_SHA256 = (
-    "2d243f5abea7353929f9bc838ceb5a98e52a452dfc29609ad4d5974447ea689f"
+MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
+MLX_RMS_NORM_SHA256 = "b2e04e377fdad1d645581f9beeaf9cbb06d1ad32926161e06cbc15240caf12bf"
+MLX_RMS_NORM_VJP_ENTRY = "vjp_rmsfloat32"
+MLX_RMS_NORM_VJP_ARTIFACT_ID = (
+    "sha256:a9be06b43a6156fb9ee1f9a6955d03d6bda0940c2a8223b58f564c2d12bd0cd0"
 )
-MLX_LAYER_NORM_VJP_ENTRY = "vjp_layer_normfloat32"
-MLX_LAYER_NORM_VJP_ARTIFACT_ID = (
-    "sha256:89b99b1316177ae5a2cae5a0aa57767219e01e9c4efc0497f6831e5e367fd9db"
+MLX_RMS_NORM_VJP_VARIANT_ID = (
+    "sha256:5f30015f711d2884061ea69c110e54a5ac2e1c03361315e6cac9de2b2c7891a5"
 )
-MLX_LAYER_NORM_VJP_VARIANT_ID = (
-    "sha256:7bbb4b949deb3bfcd443016f4e5d8bb46f297ffb5f8508a9fd73619496c41cf3"
+MLX_RMS_NORM_VJP_DISPATCH_IDENTITY = (
+    "6b80c42a03de10db01881cbf2ca01c119ee4537cb5c221b0be9efcff138edfb3"
 )
-MLX_LAYER_NORM_VJP_DISPATCH_IDENTITY = (
-    "e0e47ea5589f6fa812990617f0ac9f0de4f7749054a7f68ab1959dbcb5f8859c"
-)
-MLX_LAYER_NORM_VJP_DISPATCH_CONTRACT = (
+MLX_RMS_NORM_VJP_DISPATCH_CONTRACT = (
     ROOT
     / "demos"
     / "integrations"
     / "mlx"
     / "contracts"
-    / "layer_norm_vjp.native-loader.dispatch.json"
+    / "rms_norm_vjp.native-loader.dispatch.json"
 )
-MLX_LAYER_NORM_VJP_GENERATED_ARTIFACTS = {
+MLX_RMS_NORM_VJP_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "7d45e40974cc5419bb93c106708460eb1edd5d68ec21a6afba7e9b7f6f05cf7e",
-        "sizeBytes": 7504,
+        "sha256": "008a7a6f1614cb7c087d11c7e65adef919b58504e5fff3bd6479940aebc0aa1d",
+        "sizeBytes": 6795,
     },
     "opengl": {
-        "sha256": "9e6c4e6201e1c78e981a346275b849c37e6c8d834e7509d662f7aec5782980fa",
-        "sizeBytes": 8291,
+        "sha256": "2112adeb6c1693fa42c48fe3013cd57637f34a9393c0d468b547ed06ab42cf73",
+        "sizeBytes": 7771,
     },
 }
-REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_LAYER_NORM_VJP_DIRECTX_NATIVE_LOADER"
-REQUIRE_OPENGL_PROOF_ENV = "CROSTL_REQUIRE_MLX_LAYER_NORM_VJP_OPENGL_NATIVE_LOADER"
+REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_RMS_NORM_VJP_DIRECTX_NATIVE_LOADER"
+REQUIRE_OPENGL_PROOF_ENV = "CROSTL_REQUIRE_MLX_RMS_NORM_VJP_OPENGL_NATIVE_LOADER"
 AXIS_SIZE = 32
 ROW_COUNT = 1
+TARGET_GROUPS = 512
+ROWS_PER_GROUP = 1
 EPSILON = 1e-5
 HAS_W_CONSTANT_ID = 20
 ABSOLUTE_TOLERANCE = 7e-5
 RELATIVE_TOLERANCE = 7e-5
+INDEX_RANGE_ASSERTIONS = (
+    "uint64(row) * axis_size + lid * RMS_N_READS",
+    "uint64(gid) * axis_size + lid * RMS_N_READS",
+)
 
 
-def _workgroup_access_assertion() -> str:
-    return textwrap.dedent(f"""
-        [[project.workgroup_access_assertions]]
-        source = "{MLX_LAYER_NORM_SOURCE}"
-        entry_point = "{MLX_LAYER_NORM_VJP_ENTRY}"
-        function = "*"
-        parameter = "*"
-        minimum = 0
-        maximum = 95
-        """).strip()
+def _index_range_assertions() -> str:
+    return "\n\n".join(textwrap.dedent(f"""
+            [[project.index_range_assertions]]
+            source = "{MLX_RMS_NORM_SOURCE}"
+            expression = "{expression}"
+            minimum = 0
+            maximum = 31
+            """).strip() for expression in INDEX_RANGE_ASSERTIONS)
 
 
 def _directx_project_config(*, output_dir: str, dispatch_contract: str) -> str:
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
-        include = ["{MLX_LAYER_NORM_SOURCE}"]
+        include = ["{MLX_RMS_NORM_SOURCE}"]
         include_dirs = ["."]
         targets = ["directx"]
         output_dir = "{output_dir}"
@@ -107,19 +109,18 @@ def _directx_project_config(*, output_dir: str, dispatch_contract: str) -> str:
         [project.sources]
         "**/*.metal" = "metal"
 
-        {_workgroup_access_assertion()}
+        {_index_range_assertions()}
         """).strip()
 
 
 def _opengl_project_config(*, output_dir: str) -> str:
-    # The software-subgroup path intentionally omits the hardware subgroup-width
-    # rule. The checked dispatch contract supplies the same entry, workgroup,
-    # and specialization values, while this target-specific projection replaces
-    # only the hardware WaveSize requirement with the explicit software path.
+    # This target-specific projection replaces the checked hardware WaveSize
+    # contract with an explicit one-workgroup software subgroup. The dispatch
+    # fixture remains authoritative for entry, workgroup, and constant values.
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
-        include = ["{MLX_LAYER_NORM_SOURCE}"]
+        include = ["{MLX_RMS_NORM_SOURCE}"]
         include_dirs = ["."]
         targets = ["opengl"]
         output_dir = "{output_dir}"
@@ -128,15 +129,15 @@ def _opengl_project_config(*, output_dir: str) -> str:
         "**/*.metal" = "metal"
 
         [project.entry_points]
-        "{MLX_LAYER_NORM_SOURCE}" = "{MLX_LAYER_NORM_VJP_ENTRY}"
+        "{MLX_RMS_NORM_SOURCE}" = "{MLX_RMS_NORM_VJP_ENTRY}"
 
-        [project.entry_workgroup_size_rules."{MLX_LAYER_NORM_SOURCE}"]
-        "{MLX_LAYER_NORM_VJP_ENTRY}" = [32, 1, 1]
+        [project.entry_workgroup_size_rules."{MLX_RMS_NORM_SOURCE}"]
+        "{MLX_RMS_NORM_VJP_ENTRY}" = [32, 1, 1]
 
         [project.specialization_constants]
         "20" = true
 
-        {_workgroup_access_assertion()}
+        {_index_range_assertions()}
 
         [project.source_options.metal.target_options.opengl]
         software_subgroup_width = 32
@@ -167,9 +168,9 @@ def _pinned_mlx_root() -> Path:
         pytest.skip("CROSTL_MLX_ROOT is not configured")
 
     mlx_root = Path(value).resolve()
-    source_path = mlx_root / MLX_LAYER_NORM_SOURCE
+    source_path = mlx_root / MLX_RMS_NORM_SOURCE
     if not source_path.is_file():
-        pytest.fail(f"Pinned MLX LayerNorm source is missing: {source_path}")
+        pytest.fail(f"Pinned MLX RMSNorm source is missing: {source_path}")
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=mlx_root,
@@ -178,23 +179,21 @@ def _pinned_mlx_root() -> Path:
         text=True,
     ).stdout.strip()
     assert commit == MLX_COMMIT
-    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == (
-        MLX_LAYER_NORM_SHA256
-    )
+    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == MLX_RMS_NORM_SHA256
     return mlx_root
 
 
 def _dispatch_variant():
-    manifest = load_dispatch_contract(MLX_LAYER_NORM_VJP_DISPATCH_CONTRACT)
+    manifest = load_dispatch_contract(MLX_RMS_NORM_VJP_DISPATCH_CONTRACT)
     assert manifest.provenance["commit"] == MLX_COMMIT
     assert manifest.provenance["sourceReferences"] == {
         "hostDispatch": "mlx/backend/metal/normalization.cpp",
-        "kernel": MLX_LAYER_NORM_SOURCE,
-        "test": "python/tests/test_fast.py::test_layer_norm_grad",
+        "kernel": MLX_RMS_NORM_SOURCE,
+        "test": "python/tests/test_fast.py::test_rms_norm_grad",
     }
     assert manifest.content_identity.to_json() == {
         "algorithm": "sha256",
-        "value": MLX_LAYER_NORM_VJP_DISPATCH_IDENTITY,
+        "value": MLX_RMS_NORM_VJP_DISPATCH_IDENTITY,
     }
     variants = manifest.evaluate()
     assert len(variants) == 1
@@ -206,21 +205,22 @@ def _dispatch_variant():
         "hasW": True,
         "isVjp": True,
         "nRows": ROW_COUNT,
+        "targetGroups": TARGET_GROUPS,
     }
-    assert variant.variant_id == MLX_LAYER_NORM_VJP_VARIANT_ID
-    assert variant.artifact_id == MLX_LAYER_NORM_VJP_ARTIFACT_ID
-    assert variant.entry_point == MLX_LAYER_NORM_VJP_ENTRY
+    assert variant.variant_id == MLX_RMS_NORM_VJP_VARIANT_ID
+    assert variant.artifact_id == MLX_RMS_NORM_VJP_ARTIFACT_ID
+    assert variant.entry_point == MLX_RMS_NORM_VJP_ENTRY
     assert variant.workgroup_size == (32, 1, 1)
     assert variant.subgroup_width == 32
     assert variant.dispatch_field == "workgroupCount"
-    assert variant.dispatch_size == (ROW_COUNT, 1, 1)
+    assert variant.dispatch_size == (1, 1, 1)
     assert variant.specialization_constants == {"20": True}
     return variant
 
 
 def _copy_dispatch_contract(destination: Path) -> None:
     _dispatch_variant()
-    shutil.copyfile(MLX_LAYER_NORM_VJP_DISPATCH_CONTRACT, destination)
+    shutil.copyfile(MLX_RMS_NORM_VJP_DISPATCH_CONTRACT, destination)
 
 
 def _assert_directx_compiles(generated_path: Path, work_dir: Path) -> None:
@@ -230,7 +230,7 @@ def _assert_directx_compiles(generated_path: Path, work_dir: Path) -> None:
     source = generated_path.read_text(encoding="utf-8")
     arguments = dxc_compiler_arguments_for_source(source)
     assert arguments == ("-enable-16bit-types",)
-    dxil_path = work_dir / "vjp_layer_normfloat32.dxil"
+    dxil_path = work_dir / "vjp_rmsfloat32.dxil"
     result = subprocess.run(
         [
             dxc,
@@ -259,13 +259,11 @@ def _assert_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
     if not all(tools.values()):
         if os.environ.get(REQUIRE_OPENGL_PROOF_ENV) == "1":
             missing = [name for name, value in tools.items() if value is None]
-            pytest.fail(
-                "The LayerNorm VJP OpenGL proof requires: " + ", ".join(missing)
-            )
+            pytest.fail("The RMSNorm VJP OpenGL proof requires: " + ", ".join(missing))
         return
 
-    spirv_path = work_dir / "vjp_layer_normfloat32.spv"
-    assembly_path = work_dir / "vjp_layer_normfloat32.spvasm"
+    spirv_path = work_dir / "vjp_rmsfloat32.spv"
+    assembly_path = work_dir / "vjp_rmsfloat32.spvasm"
     subprocess.run(
         [
             tools["glslangValidator"],
@@ -296,7 +294,7 @@ def _assert_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
         text=True,
     )
     assembly = assembly_path.read_text(encoding="utf-8")
-    assert assembly.count("OpControlBarrier") == 8
+    assert assembly.count("OpControlBarrier") == 6
     assert "OpGroupNonUniform" not in assembly
     assert "OpSpecConstantTrue" in assembly or "OpSpecConstantFalse" in assembly
 
@@ -309,9 +307,11 @@ def _expected_binding_names(target: str) -> dict[int, str]:
             2: "g",
             3: "gx",
             4: "gw",
-            5: "vjp_layer_normfloat32_eps_Constants",
-            6: "vjp_layer_normfloat32_axis_size_Constants",
-            7: "vjp_layer_normfloat32_w_stride_Constants",
+            5: "vjp_rmsfloat32_eps_Constants",
+            6: "vjp_rmsfloat32_axis_size_Constants",
+            7: "vjp_rmsfloat32_w_stride_Constants",
+            8: "vjp_rmsfloat32_n_rows_Constants",
+            9: "vjp_rmsfloat32_rows_per_group_Constants",
         }
     return {
         0: "xBuffer",
@@ -319,9 +319,11 @@ def _expected_binding_names(target: str) -> dict[int, str]:
         2: "gBuffer",
         3: "gxBuffer",
         4: "gwBuffer",
-        5: "vjp_layer_normfloat32_eps_Args",
-        6: "vjp_layer_normfloat32_axis_size_Args",
-        7: "vjp_layer_normfloat32_w_stride_Args",
+        5: "vjp_rmsfloat32_eps_Args",
+        6: "vjp_rmsfloat32_axis_size_Args",
+        7: "vjp_rmsfloat32_w_stride_Args",
+        8: "vjp_rmsfloat32_n_rows_Args",
+        9: "vjp_rmsfloat32_rows_per_group_Args",
     }
 
 
@@ -359,7 +361,7 @@ def _expected_layouts(target: str) -> dict[str, dict]:
             "blockSizeBytes": 16,
         }
 
-    prefix = "vjp_layer_normfloat32_" if target == "directx" else ""
+    prefix = "vjp_rmsfloat32_" if target == "directx" else ""
     return {
         names[0]: runtime_array("x"),
         names[1]: runtime_array("w"),
@@ -369,6 +371,8 @@ def _expected_layouts(target: str) -> dict[str, dict]:
         names[5]: uniform("float", "float32", prefix + "eps"),
         names[6]: uniform("uint", "uint32", prefix + "axis_size"),
         names[7]: uniform("uint", "uint32", prefix + "w_stride"),
+        names[8]: uniform("uint", "uint32", prefix + "n_rows"),
+        names[9]: uniform("uint", "uint32", prefix + "rows_per_group"),
     }
 
 
@@ -376,7 +380,7 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     output_dir = work_dir / "out"
     config_path = work_dir / "crosstl.toml"
     if target == "directx":
-        contract_path = work_dir / "layer_norm_vjp.dispatch.json"
+        contract_path = work_dir / "rms_norm_vjp.dispatch.json"
         _copy_dispatch_contract(contract_path)
         config_text = _directx_project_config(
             output_dir=output_dir.relative_to(mlx_root).as_posix(),
@@ -402,23 +406,22 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     assert payload["summary"]["diagnosticCounts"]["error"] == 0
-    assert payload["project"]["workgroupAccessAssertions"] == [
+    assert payload["project"]["indexRangeAssertions"] == [
         {
-            "source": MLX_LAYER_NORM_SOURCE,
-            "entryPoint": MLX_LAYER_NORM_VJP_ENTRY,
-            "function": "*",
-            "parameter": "*",
+            "source": MLX_RMS_NORM_SOURCE,
+            "expression": expression,
             "minimum": 0,
-            "maximum": 95,
+            "maximum": 31,
         }
+        for expression in INDEX_RANGE_ASSERTIONS
     ]
 
     artifact = payload["artifacts"][0]
-    expected = MLX_LAYER_NORM_VJP_GENERATED_ARTIFACTS[target]
-    assert artifact["source"] == MLX_LAYER_NORM_SOURCE
+    expected = MLX_RMS_NORM_VJP_GENERATED_ARTIFACTS[target]
+    assert artifact["source"] == MLX_RMS_NORM_SOURCE
     assert artifact["sourceHash"] == {
         "algorithm": "sha256",
-        "value": MLX_LAYER_NORM_SHA256,
+        "value": MLX_RMS_NORM_SHA256,
     }
     assert artifact["generatedHash"] == {
         "algorithm": "sha256",
@@ -426,7 +429,7 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     }
     assert artifact["generatedSizeBytes"] == expected["sizeBytes"]
     assert artifact["entryPoint"] == {
-        "source": MLX_LAYER_NORM_VJP_ENTRY,
+        "source": MLX_RMS_NORM_VJP_ENTRY,
         "target": "CSMain" if target == "directx" else "main",
         "stage": "compute",
     }
@@ -447,41 +450,34 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
 
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
-    assert materialization["specializationCount"] == 4
+    assert materialization["specializationCount"] == 1
     assert materialization["accounting"] == {
-        "reachableSpecializationCount": 7,
-        "dependencyDiscoveryWorkCount": 8,
-        "prunedCandidateCount": 194,
+        "reachableSpecializationCount": 4,
+        "dependencyDiscoveryWorkCount": 0,
+        "prunedCandidateCount": 168,
     }
-    assert [
-        item["materializedName"] for item in materialization["specializations"]
-    ] == [
-        MLX_LAYER_NORM_VJP_ENTRY,
-        "initialize_buffer_3",
-        "threadgroup_sum_3",
-        "threadgroup_sum_1",
-    ]
+    assert materialization["specializations"][0]["materializedName"] == (
+        MLX_RMS_NORM_VJP_ENTRY
+    )
     assert materialization["specializations"][0]["parameters"] == {
-        "N_READS": "8",
+        "N_READS": "RMS_N_READS",
         "T": "float",
     }
 
     entry = artifact["execution"]["entryPoints"][0]
-    assert entry["sourceEntryPoint"] == MLX_LAYER_NORM_VJP_ENTRY
+    assert entry["sourceEntryPoint"] == MLX_RMS_NORM_VJP_ENTRY
     assert entry["workgroupSize"] == [32, 1, 1]
     generated_path = mlx_root / artifact["path"]
     generated = generated_path.read_text(encoding="utf-8")
-    assert "vjp_layer_normfloat32_local_buffer" in generated
-    assert "initialize_buffer_3" in generated
-    assert "threadgroup_sum_3" in generated
-    assert "threadgroup_sum_1" in generated
+    for name in ("local_sumx2", "local_sumgwx", "local_normalizer", "local_meangwx"):
+        assert f"vjp_rmsfloat32_{name}" in generated
     if target == "directx":
         assert entry["subgroupWidth"] == 32
         assert artifact["dispatchArtifact"]["artifactId"] == (
-            MLX_LAYER_NORM_VJP_ARTIFACT_ID
+            MLX_RMS_NORM_VJP_ARTIFACT_ID
         )
         assert artifact["dispatchArtifact"]["dispatchVariantIds"] == [
-            MLX_LAYER_NORM_VJP_VARIANT_ID
+            MLX_RMS_NORM_VJP_VARIANT_ID
         ]
         assert "[numthreads(32, 1, 1)]" in generated
         assert "[WaveSize(32)]" in generated
@@ -489,7 +485,7 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "constant_id" not in generated
         assert dxc_compiler_arguments_for_source(generated) == ("-enable-16bit-types",)
         assert generated.count("WaveActiveSum(") == 4
-        assert generated.count("GroupMemoryBarrierWithGroupSync();") == 5
+        assert generated.count("GroupMemoryBarrierWithGroupSync();") == 3
         _assert_directx_compiles(generated_path, work_dir)
     else:
         assert "subgroupWidth" not in entry
@@ -505,7 +501,8 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "subgroupAdd" not in generated
         assert "layout(constant_id = 20) const bool has_w = false;" in generated
         assert generated.count("crossglSoftwareSubgroupSumFloat(") == 5
-        assert generated.count("barrier();") == 8
+        assert generated.count("barrier();") == 6
+        assert "for (uint row = (gid * rows_per_group);" in generated
         _assert_opengl_spirv(generated_path, work_dir)
 
     toolchain_runs = payload["validation"]["toolchainRuns"]
@@ -530,7 +527,7 @@ def _build_runtime_package(
     runtime_artifacts = build_runtime_artifact_manifest(report_path)
     assert runtime_artifacts["success"] is True
     assert runtime_artifacts["summary"]["artifactCount"] == 1
-    assert runtime_artifacts["summary"]["resourceBindingCount"] == 8
+    assert runtime_artifacts["summary"]["resourceBindingCount"] == 10
     assert runtime_artifacts["summary"]["specializationConstantCount"] == 1
     reflected = runtime_artifacts["artifacts"][0]
     assert reflected["hostInterface"]["status"] == "ready"
@@ -647,30 +644,23 @@ def _workload() -> (
     values = [(index - 16) / 8.0 for index in range(AXIS_SIZE)]
     weights = [0.625 + (index % 7) * 0.09375 for index in range(AXIS_SIZE)]
     gradients = [((index % 11) - 5) * 0.1875 + 0.03125 for index in range(AXIS_SIZE)]
-    mean = math.fsum(values) / AXIS_SIZE
-    centered = [value - mean for value in values]
-    mean_wg = (
-        math.fsum(weight * gradient for weight, gradient in zip(weights, gradients))
-        / AXIS_SIZE
-    )
-    mean_wg_xc = (
+    mean_square = math.fsum(value * value for value in values) / AXIS_SIZE
+    normalizer = 1.0 / math.sqrt(mean_square + EPSILON)
+    mean_gwx = (
         math.fsum(
-            weight * gradient * value
-            for weight, gradient, value in zip(weights, gradients, centered)
+            value * weight * gradient
+            for value, weight, gradient in zip(values, weights, gradients)
         )
         / AXIS_SIZE
     )
-    inverse_variance = 1.0 / (
-        math.fsum(value * value for value in centered) / AXIS_SIZE + EPSILON
-    )
-    normalizer = math.sqrt(inverse_variance)
-    normalized = [value * normalizer for value in centered]
+    normalizer3 = normalizer * normalizer * normalizer
     expected_gx = [
-        normalizer * (weight * gradient - mean_wg)
-        - value * mean_wg_xc * inverse_variance
-        for weight, gradient, value in zip(weights, gradients, normalized)
+        gradient * weight * normalizer - value * mean_gwx * normalizer3
+        for value, weight, gradient in zip(values, weights, gradients)
     ]
-    expected_gw = [gradient * value for gradient, value in zip(gradients, normalized)]
+    expected_gw = [
+        gradient * value * normalizer for value, gradient in zip(values, gradients)
+    ]
     return values, weights, gradients, expected_gx, expected_gw
 
 
@@ -684,6 +674,12 @@ def _runtime_values(target: str):
         names[5]: {"dtype": "float32", "shape": [1], "values": [EPSILON]},
         names[6]: {"dtype": "uint32", "shape": [1], "values": [AXIS_SIZE]},
         names[7]: {"dtype": "uint32", "shape": [1], "values": [1]},
+        names[8]: {"dtype": "uint32", "shape": [1], "values": [ROW_COUNT]},
+        names[9]: {
+            "dtype": "uint32",
+            "shape": [1],
+            "values": [ROWS_PER_GROUP],
+        },
     }
     outputs = {
         names[3]: {
@@ -715,7 +711,7 @@ def _directx_dispatch_request(descriptor: dict, package_dir: Path):
         package_dir,
         inputs,
         outputs,
-        (ROW_COUNT, 1, 1),
+        (1, 1, 1),
         {HAS_W_CONSTANT_ID: True},
         expected_target="directx",
     )
@@ -732,23 +728,23 @@ def _directx_dispatch_request(descriptor: dict, package_dir: Path):
     return request, expected_gx, expected_gw
 
 
-def test_layer_norm_vjp_native_loader_dispatch_contract_is_exact():
+def test_rms_norm_vjp_native_loader_dispatch_contract_is_exact():
     _dispatch_variant()
 
 
-def test_pinned_mlx_layer_norm_vjp_translates_to_directx_native_loader_artifact():
+def test_pinned_mlx_rms_norm_vjp_translates_to_directx_native_loader_artifact():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-vjp-directx-translation-",
+        prefix=".crosstl-rms-norm-vjp-directx-translation-",
         dir=mlx_root,
     ) as temporary_directory:
         _translate_artifact(mlx_root, Path(temporary_directory), "directx")
 
 
-def test_pinned_mlx_layer_norm_vjp_translates_to_deferred_software_opengl():
+def test_pinned_mlx_rms_norm_vjp_translates_to_deferred_software_opengl():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-vjp-opengl-translation-",
+        prefix=".crosstl-rms-norm-vjp-opengl-translation-",
         dir=mlx_root,
     ) as temporary_directory:
         _descriptor, _package_dir, deferred = _build_runtime_package(
@@ -759,10 +755,10 @@ def test_pinned_mlx_layer_norm_vjp_translates_to_deferred_software_opengl():
         assert deferred is not None
 
 
-def test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader():
+def test_pinned_mlx_rms_norm_vjp_executes_through_directx_native_loader():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-vjp-directx-native-loader-",
+        prefix=".crosstl-rms-norm-vjp-directx-native-loader-",
         dir=mlx_root,
     ) as temporary_directory:
         descriptor, package_dir, deferred = _build_runtime_package(
@@ -777,7 +773,7 @@ def test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader():
         )
         executor = RuntimeParityExecutor(
             RuntimeTestAdapterSpec(
-                adapter_id="mlx-layer-norm-vjp-directx-native-loader",
+                adapter_id="mlx-rms-norm-vjp-directx-native-loader",
                 target="directx",
                 executor="directx",
                 adapter_kind="directx-native-runtime",
@@ -812,10 +808,10 @@ def test_pinned_mlx_layer_norm_vjp_executes_through_directx_native_loader():
     )
 
 
-def test_pinned_mlx_layer_norm_vjp_executes_through_opengl_native_loader():
+def test_pinned_mlx_rms_norm_vjp_executes_through_opengl_native_loader():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-layer-norm-vjp-opengl-native-loader-",
+        prefix=".crosstl-rms-norm-vjp-opengl-native-loader-",
         dir=mlx_root,
     ) as temporary_directory:
         work_dir = Path(temporary_directory)
@@ -834,7 +830,7 @@ def test_pinned_mlx_layer_norm_vjp_executes_through_opengl_native_loader():
                 work_dir / "deferred-cache",
                 inputs,
                 outputs,
-                (ROW_COUNT, 1, 1),
+                (1, 1, 1),
                 runtime_adapter=OpenGLRuntimeParityAdapter(
                     runtime=OpenGLComputeRuntime(context_backends=("egl",))
                 ),

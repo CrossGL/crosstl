@@ -20699,6 +20699,121 @@ def test_glsl_software_subgroup_accepts_static_if_and_uniform_constant_loop(
     )
 
 
+def test_glsl_software_subgroup_accepts_workgroup_uniform_runtime_loop(
+    tmp_path,
+):
+    code = """
+    shader GLSLSoftwareSubgroupWorkgroupUniformLoop {
+        cbuffer Dispatch @binding(0) {
+            uint nRows;
+            uint rowsPerGroup;
+        };
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main(uint3 group @ gl_WorkGroupID) {
+                uint rowEnd = group.x * rowsPerGroup + rowsPerGroup;
+                if (rowEnd > nRows) {
+                    rowEnd = nRows;
+                }
+                for (
+                    uint row = group.x * rowsPerGroup;
+                    row < rowEnd;
+                    row++
+                ) {
+                    float value = WaveActiveSum(
+                        float(row + gl_LocalInvocationID.x)
+                    );
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "if ((rowEnd > nRows))" in generated
+    assert (
+        "for (uint row = (gl_WorkGroupID.x * rowsPerGroup); " "(row < rowEnd); (row++))"
+    ) in generated
+    assert "crossglSoftwareSubgroupSumFloat(" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_workgroup_uniform_runtime_loop",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("loop_setup", "loop_initial", "loop_bound", "loop_body_prefix"),
+    [
+        (
+            """
+            uint rowEnd = nRows;
+            if (gl_LocalInvocationID.x == 0u) {
+                rowEnd = 0u;
+            }
+            """,
+            "0u",
+            "rowEnd",
+            "",
+        ),
+        ("uint rowEnd = nRows;", "0u", "rowEnd", "rowEnd--;"),
+        (
+            "uint rowEnd = nRows;",
+            "gl_LocalInvocationID.x",
+            "rowEnd",
+            "",
+        ),
+        (
+            "uint rowEnd = nRows;",
+            "0u",
+            "gl_LocalInvocationID.x",
+            "",
+        ),
+        ("uint rowEnd = nRows;", "0u", "rowEnd", "break;"),
+        ("uint rowEnd = nRows;", "0u", "rowEnd", "continue;"),
+        ("uint rowEnd = nRows;", "0u", "rowEnd", "return;"),
+    ],
+)
+def test_glsl_software_subgroup_runtime_loop_proof_fails_closed(
+    loop_setup,
+    loop_initial,
+    loop_bound,
+    loop_body_prefix,
+):
+    code = f"""
+    shader GLSLSoftwareSubgroupUnsafeRuntimeLoop {{
+        cbuffer Dispatch @binding(0) {{
+            uint nRows;
+        }};
+
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {loop_setup}
+                for (uint row = {loop_initial}; row < {loop_bound}; row++) {{
+                    {loop_body_prefix}
+                    float value = WaveActiveSum(float(gl_LocalInvocationID.x));
+                }}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveSum"
+
+
 def test_glsl_software_subgroup_lowers_one_subgroup_builtin_semantics(tmp_path):
     code = """
     shader GLSLSoftwareSubgroupBuiltinSemantics {

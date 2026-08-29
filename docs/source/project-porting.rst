@@ -1429,6 +1429,19 @@ temporary is also the final host-reduced result. This proof excludes the
 separate bias-gradient dispatch, multi-row weight reduction, other dtypes and
 axis sizes, MLX host redirection, and the full MLX test suite.
 
+The same current pin also has a bounded RMSNorm VJP proof for
+``vjp_rmsfloat32`` with one axis-32 row, ``has_w=true``, one 32-thread
+workgroup, and ten reflected resources. DirectX concretizes the function
+constant and executes HLSL through WARP. OpenGL retains constant ID 20, lowers
+four reductions through the explicit software subgroup, and admits the
+kernel's runtime row loop only after proving its initializer and bound
+workgroup-uniform. The deferred path compiles GLSL to SPIR-V, specializes the
+constant, verifies the interface, and executes through Mesa EGL. Both targets
+compare all 32 input-gradient and 32 one-group weight-gradient values. The
+one-row/one-group boundary makes the group-local weight gradient equal to the
+final host reduction; multi-row reduction, other dtypes and axes, MLX host
+redirection, and the full MLX test suite remain outside this proof.
+
 Build a versioned native loader ABI descriptor and optional C declarations for
 one ready load unit:
 
