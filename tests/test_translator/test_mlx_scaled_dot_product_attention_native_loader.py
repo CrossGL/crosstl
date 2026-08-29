@@ -64,8 +64,8 @@ MLX_ATTENTION_DISPATCH_CONTRACT = (
 )
 MLX_ATTENTION_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "1aee3a25b49c0fa6efb8ea6ae0b29d77c09a496cb4119d3a295901c9dedd2fc9",
-        "sizeBytes": 8151,
+        "sha256": "2182a09b1e03815f11e36c3ab1addb2138257e0bcf69284f99a0c33ec344816b",
+        "sizeBytes": 8721,
     },
     "opengl": {
         "sha256": "9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b",
@@ -461,6 +461,9 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "static const bool has_mask = false;" in generated
         assert generated.count("WaveActiveSum(") == 3
         assert generated.count("WaveActiveMax(") == 1
+        assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated
+        assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated
+        assert "uint crossglPhysicalSubgroupID = " in generated
         _assert_directx_compiles(generated_path, work_dir)
     else:
         assert "subgroupWidth" not in entry

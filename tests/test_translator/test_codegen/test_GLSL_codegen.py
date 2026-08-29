@@ -35863,6 +35863,98 @@ def test_opengl_int64_upgrades_legacy_desktop_profile_to_extension_minimum():
     assert "uint64_t increment(uint64_t value)" in generated_code
 
 
+def test_opengl_widened_float16_as_type_preserves_binary16_payloads(tmp_path):
+    shader = """
+    shader WidenedFloat16Bitcasts {
+        float decodeUnsigned(uint16_t bits) {
+            return as_type<float16_t>(bits);
+        }
+
+        float decodeSigned(int16_t bits) {
+            return as_type<half>(bits);
+        }
+
+        uint16_t encodeUnsigned(float16_t value) {
+            return as_type<uint16_t>(value);
+        }
+
+        int16_t encodeSigned(half value) {
+            return as_type<int16_t>(value);
+        }
+
+        half2 decodePair(uint bits) {
+            return as_type<half2>(bits);
+        }
+
+        uint encodePair(half2 value) {
+            return as_type<uint>(value);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return unpackHalf2x16((bits & 0xffffu)).x;" in generated_code
+    assert "return unpackHalf2x16((uint(bits) & 0xffffu)).x;" in generated_code
+    assert "packHalf2x16(vec2(value, 0.0))" in generated_code
+    assert "return unpackHalf2x16(bits);" in generated_code
+    assert "return packHalf2x16(value);" in generated_code
+    assert "uintBitsToFloat(bits)" not in generated_code
+    assert "floatBitsToUint(value)" not in generated_code
+    assert "float16_t" not in generated_code
+    assert "half " not in generated_code
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        return
+    source_path = tmp_path / "widened_float16.comp"
+    output_path = tmp_path / "widened_float16.spv"
+    source_path.write_text(generated_code, encoding="utf-8")
+    result = subprocess.run(
+        [
+            glslang,
+            "-G",
+            "-S",
+            "comp",
+            str(source_path),
+            "-o",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    diagnostics = "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+    assert result.returncode == 0, diagnostics
+    assert output_path.is_file()
+
+
+def test_opengl_widened_float16_as_type_rejects_non_16_bit_scalar_payload():
+    shader = """
+    shader InvalidWidenedFloat16Bitcast {
+        float decode(uint bits) {
+            return as_type<float16_t>(bits);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL as_type<float16_t> cannot bitcast from uint: binary16 "
+            "requires one exact 16-bit integer payload"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_opengl_bfloat16_asuint_alias_lowers_to_uint_payload():
     shader = """
     shader BFloat16BitcastAlias {

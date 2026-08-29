@@ -53,8 +53,8 @@ MLX_GEMV_VARIANT_ID = (
 )
 MLX_GEMV_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "afd239804cf10adc9c31bb2f70cd80554729f2f1381e9312a96f4fc727db0c27",
-        "sizeBytes": 7496,
+        "sha256": "5f4ad43cd3bf08f7dc4fd78756d9c6b64eb8fe2d690af00442678c79b21ead41",
+        "sizeBytes": 8066,
     },
     "opengl": {
         "sha256": "f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562",
@@ -390,6 +390,9 @@ def _build_runtime_package(
         assert "[numthreads(32, 2, 1)]" in generated
         assert "[WaveSize(32)]" in generated
         assert "WaveReadLaneAt(result[tn]" in generated
+        assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated
+        assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated
+        assert "uint simd_gid = crossglPhysicalSubgroupID;" in generated
     else:
         assert "layout(local_size_x = 32, local_size_y = 2" in generated
         assert "#define CROSSTL_SOFTWARE_SUBGROUP_WIDTH 32u" in generated

@@ -1479,10 +1479,13 @@ At the same current pin, a bounded GEMV proof selects
 float32 vector-matrix product with ``M=1``, ``N=32``, and ``K=32``. The
 host-derived contract fixes workgroup ``[32, 2, 1]``, subgroup width 32, and
 one dispatched workgroup. Entry-scoped translation materializes the selected
-GEMV and ``elem_to_loc_uint`` only. Its 7,496-byte HLSL has SHA-256
-``afd239804cf10adc9c31bb2f70cd80554729f2f1381e9312a96f4fc727db0c27``
+GEMV and ``elem_to_loc_uint`` only. Its 8,066-byte HLSL has SHA-256
+``5f4ad43cd3bf08f7dc4fd78756d9c6b64eb8fe2d690af00442678c79b21ead41``
 and passes official DXC 1.9.2602.24 under ``cs_6_6``,
-``-enable-16bit-types``, and warnings as errors.
+``-enable-16bit-types``, and warnings as errors. Because physical waves need not
+contain contiguous flattened ``SV_GroupIndex`` values, generated HLSL assigns
+one uniform subgroup ID per wave through a workgroup-synchronized counter;
+proven one-wave entries retain the valid quotient fast path.
 
 OpenGL uses two logical 32-lane software subgroups in the 64-thread workgroup.
 The fail-closed software-subgroup analysis admits the source's
@@ -1512,10 +1515,13 @@ workgroup. Entry-scoped translation materializes only that specialization. The
 7,809-byte HLSL has SHA-256
 ``3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361`` and
 passes DXC under ``cs_6_6``, ``-enable-16bit-types``, and warnings as errors.
-The 9,545-byte explicit-software-subgroup GLSL has SHA-256
-``44b4a07a94e11ffd6da4e82db285dee1b5796387c85dca3e49d6808bfd5b4c7c``;
+The 9,571-byte explicit-software-subgroup GLSL has SHA-256
+``cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da``;
 ``glslangValidator`` and ``spirv-val`` accept its three-barrier SPIR-V, which
-contains no group-nonuniform instruction.
+contains no group-nonuniform instruction. GLSL widens binary16 values to
+float32, so source ``as_type<float16_t>(uint16_t)`` preserves the exact low
+16-bit payload through ``unpackHalf2x16`` rather than a float32 bitcast; inverse
+forms use ``packHalf2x16`` with exact low-bit extraction.
 
 Exact scale semantics require the source ``fp8_e8m0(float)`` constructor
 factory before conversion back to float. Qualified ``metal::round`` maps to the
@@ -1578,10 +1584,12 @@ counts of one, key length 4, dimensions ``D=64`` and ``V=64``, scale ``0.125``,
 and no mask, causal mode, or sinks. It fixes ``[1024, 1, 1]`` with 32 logical
 subgroups and one dispatched workgroup. Function constants 20 through 25 are
 all false; two-pass-only ID 26 is not part of this artifact. The exact HLSL is
-8,151 bytes with SHA-256
-``1aee3a25b49c0fa6efb8ea6ae0b29d77c09a496cb4119d3a295901c9dedd2fc9``
+8,721 bytes with SHA-256
+``2182a09b1e03815f11e36c3ab1addb2138257e0bcf69284f99a0c33ec344816b``
 and passes DXC 1.9.2602.24 under ``cs_6_6``, ``-enable-16bit-types``, and
-warnings as errors.
+warnings as errors. Its 32 physical waves receive unique, wave-uniform IDs
+through the synchronized allocator; no lane-varying flattened-index quotient
+remains.
 
 OpenGL uses an explicit 32-lane software artifact across the full 1,024-thread
 workgroup. The subgroup-ID-strided runtime loop is synchronized round by round;
@@ -1642,8 +1650,10 @@ the default guarded hardware-subgroup artifacts and separately packages
 explicit 32-lane software-subgroup artifacts; the wide artifact partitions 544
 invocations into 17 logical subgroups and uses typed inactive-lane identities
 for masked maximum and sum reductions. Official DXC accepts both HLSL artifacts
-under ``cs_6_6`` with ``-enable-16bit-types`` and warnings as errors. Both
-software modules pass
+under ``cs_6_6`` with ``-enable-16bit-types`` and warnings as errors. The
+32-thread entry is provably one wave and retains the zero-ID quotient fast path;
+the 544-thread entry allocates one uniform ID for each physical wave through a
+workgroup-synchronized counter. Both software modules pass
 ``glslangValidator`` and ``spirv-val``, contain 11 control barriers, and contain
 no group-nonuniform SPIR-V instruction.
 

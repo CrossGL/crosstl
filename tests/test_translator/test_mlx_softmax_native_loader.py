@@ -81,9 +81,9 @@ MLX_SOFTMAX_GUARDED_ARTIFACTS = {
         },
         544: {
             "sha256": (
-                "2849c2143f4d7e5195aa69f4b0f26c0b5adac34e533bfd72ed99413ca711c807"
+                "3a3f443fdb6df38e37bda4828601b967cc6aa216c0805e6dc060be7e7bddd02c"
             ),
-            "sizeBytes": 4214,
+            "sizeBytes": 4784,
         },
     },
     "opengl": {
@@ -311,6 +311,18 @@ def test_pinned_mlx_softmax_translates_to_guarded_dispatch_artifacts(target):
                 assert "[WaveSize(32)]" in generated
                 assert generated.count("WaveActiveMax(") == 2
                 assert generated.count("WaveActiveSum(") == 2
+                if workgroup_size == 32:
+                    assert "__crossgl_physical_subgroup" not in generated
+                else:
+                    assert (
+                        "groupshared uint __crossgl_physical_subgroup_counter;"
+                        in generated
+                    )
+                    assert (
+                        "InterlockedAdd(__crossgl_physical_subgroup_counter"
+                        in generated
+                    )
+                    assert "uint crossglPhysicalSubgroupID = " in generated
             else:
                 assert (
                     f"layout(local_size_x = {workgroup_size}, "

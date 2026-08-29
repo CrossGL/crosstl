@@ -50,6 +50,8 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- DirectX compute `gl_SubgroupID` lowering assigns a synchronized, wave-uniform physical ID in multi-wave workgroups instead of dividing each lane's flattened `SV_GroupIndex`; proven one-wave workgroups retain the valid quotient fast path.
+- OpenGL bitcasts involving widened binary16 values preserve scalar and packed-half payloads through `packHalf2x16`/`unpackHalf2x16` instead of incorrectly reinterpreting them as float32 payloads.
 - Metal conversion analysis treats parenthesized returns as control syntax, resolves proven local conditional aliases to concrete constructor factories without guessing unresolved branches, and recognizes qualified `round`; OpenGL emits exact single-evaluation float32 `isfinite` and `signbit` bit tests while preserving user overloads and structured fail-closed diagnostics.
 - OpenGL resource specialization propagates provably dead default-null storage pointers through direct forwarding chains, decodes exact materialized Metal `vec<T,N>` constructor names, and emits every collision-safe overloaded specialization body; unresolved or observable pointer uses remain fail-closed.
 - DirectX relative wave-shuffle lowering now offers an explicit target-scoped `self` policy that selects only valid source lanes and returns the calling lane for out-of-range down/up/xor reads; the default undefined policy and unrelated artifact identities remain unchanged.

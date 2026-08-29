@@ -34,8 +34,8 @@ MLX_DOT_SHA256 = "97bcad13d09c3d5fed87482a0bb9719d6eeff9b21d364967cd6aec5b695b34
 MLX_DOT_ENTRY = "dot_product_float32_it32_tg512_sg16"
 MLX_DOT_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "81dd21ff3219ea9333fffff7f00b494117b96bcbec9e30018aa88d458951ca60",
-        "sizeBytes": 4540,
+        "sha256": "f902bae0e7603d302340327c61e5a82ab392b9ce1afffb5557b1760592a1465f",
+        "sizeBytes": 5110,
     },
     "opengl": {
         "sha256": "ef69a757339fe09897a38804c27be279a19a7db146e2e02f85f0349c59f3168d",
@@ -220,6 +220,9 @@ def _translate_dot_artifact(
         assert generated.count("asfloat(asuint(a[uint(") >= 4
         assert generated.count("asfloat(asuint(b[uint(") >= 4
         assert generated.count("WaveActiveSum(sum)") == 2
+        assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated
+        assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated
+        assert "uint crossglPhysicalSubgroupID = " in generated
     elif software_subgroups:
         assert "layout(local_size_x = 512" in generated
         assert "#define CROSSTL_SOFTWARE_SUBGROUP_WIDTH 32u" in generated

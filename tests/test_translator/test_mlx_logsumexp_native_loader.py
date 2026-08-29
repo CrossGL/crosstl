@@ -45,9 +45,9 @@ MLX_LOGSUMEXP_GENERATED_ARTIFACTS = {
     "directx": {
         "sha256:ae512c102a88628c05a49f28a872c44ab582bacf74584e8ca7e6ae765263afe0": {
             "sha256": (
-                "5e21981d80e5d546d1cadd0d245e998d0be78a2be8dba16cd864d60ca71bb8e6"
+                "cb7d718c167d87eb1fb202ea60c5e9be85223201fae8f5a90a6fc063bd0c0d47"
             ),
-            "sizeBytes": 3229,
+            "sizeBytes": 3799,
         },
         MLX_LOGSUMEXP_AXIS_32_ARTIFACT: {
             "sha256": (
@@ -422,6 +422,18 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
             "value": generated_identity["sha256"],
         }
         assert artifact["generatedSizeBytes"] == generated_identity["sizeBytes"]
+        generated_source = (mlx_root / artifact["path"]).read_text(encoding="utf-8")
+        if artifact_id == MLX_LOGSUMEXP_AXIS_32_ARTIFACT:
+            assert "__crossgl_physical_subgroup" not in generated_source
+        else:
+            assert (
+                "groupshared uint __crossgl_physical_subgroup_counter;"
+                in generated_source
+            )
+            assert (
+                "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated_source
+            )
+            assert "uint crossglPhysicalSubgroupID = " in generated_source
     axis_32_artifact = next(
         artifact
         for artifact in report_payload["artifacts"]

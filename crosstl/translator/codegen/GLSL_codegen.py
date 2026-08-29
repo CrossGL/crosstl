@@ -26814,6 +26814,98 @@ complex64_t crossgl_complex64_mod_assign(
             f"{source_name}; the equal-width shape is unsupported"
         )
 
+    def generate_glsl_widened_16bit_as_type(
+        self,
+        source_type,
+        target_type,
+        value,
+    ):
+        source_name = self.glsl_normalized_source_type(source_type)
+        target_name = self.glsl_normalized_source_type(target_type)
+        half_scalar_types = {"f16", "float16", "float16_t", "half"}
+        half_vector_types = {
+            "f16vec2",
+            "float16_t2",
+            "half2",
+            "f16vec3",
+            "float16_t3",
+            "half3",
+            "f16vec4",
+            "float16_t4",
+            "half4",
+        }
+        source_narrow = self.glsl_narrow_integer_contract(source_name)
+        target_narrow = self.glsl_narrow_integer_contract(target_name)
+
+        if target_name in half_scalar_types:
+            if source_name in half_scalar_types:
+                return value
+            if (
+                source_narrow is not None
+                and source_narrow["bits"] == 16
+                and source_narrow["width"] == 1
+            ):
+                payload = value if not source_narrow["signed"] else f"uint({value})"
+                return f"unpackHalf2x16(({payload} & 0xffffu)).x"
+            source_display = source_name or self.map_type(source_type)
+            raise ValueError(
+                f"OpenGL as_type<{target_name}> cannot bitcast from "
+                f"{source_display}: binary16 requires one exact 16-bit integer "
+                "payload"
+            )
+
+        if source_name in half_scalar_types:
+            if (
+                target_narrow is not None
+                and target_narrow["bits"] == 16
+                and target_narrow["width"] == 1
+            ):
+                payload = f"packHalf2x16(vec2({value}, 0.0))"
+                if target_narrow["signed"]:
+                    return f"bitfieldExtract(int({payload}), 0, 16)"
+                return f"bitfieldExtract({payload}, 0, 16)"
+            target_display = target_name or self.map_type(target_type)
+            raise ValueError(
+                f"OpenGL as_type<{target_display}> cannot bitcast from "
+                f"{source_name}: binary16 requires one exact 16-bit integer "
+                "result"
+            )
+
+        if target_name in {"f16vec2", "float16_t2", "half2"}:
+            source_mapped = self.map_type(source_type)
+            if source_mapped in {"int", "uint"} and source_narrow is None:
+                payload = value if source_mapped == "uint" else f"uint({value})"
+                return f"unpackHalf2x16({payload})"
+            raise ValueError(
+                f"OpenGL as_type<{target_name}> requires one exact 32-bit "
+                "integer payload"
+            )
+
+        if source_name in {"f16vec2", "float16_t2", "half2"}:
+            target_mapped = self.map_type(target_type)
+            if target_mapped in {"int", "uint"} and target_narrow is None:
+                payload = f"packHalf2x16({value})"
+                return payload if target_mapped == "uint" else f"int({payload})"
+            raise ValueError(
+                f"OpenGL as_type<{target_name}> cannot bitcast from "
+                f"{source_name}: binary16x2 requires one exact 32-bit integer "
+                "result"
+            )
+
+        if source_name in half_vector_types or target_name in half_vector_types:
+            raise ValueError(
+                f"OpenGL as_type<{target_name}> cannot exactly bitcast from "
+                f"{source_name}: widened binary16 vector shape is unsupported"
+            )
+
+        if source_name in self.GLSL_BFLOAT16_ALIASES and target_narrow is not None:
+            if target_narrow["bits"] == 16 and target_narrow["width"] == 1:
+                payload = f"(floatBitsToUint({value}) >> 16u)"
+                if target_narrow["signed"]:
+                    return f"bitfieldExtract(int({payload}), 0, 16)"
+                return f"bitfieldExtract({payload}, 0, 16)"
+        return None
+
     def generate_metal_as_type_call(self, func_name, args):
         if func_name in self.function_return_types:
             return None
@@ -26831,6 +26923,15 @@ complex64_t crossgl_complex64_mod_assign(
                 f"OpenGL as_type<{target_type}> cannot infer its source type"
             )
 
+        value = self.generate_expression(value_expr)
+        widened_16bit = self.generate_glsl_widened_16bit_as_type(
+            source_type,
+            target_type,
+            value,
+        )
+        if widened_16bit is not None:
+            return widened_16bit
+
         if target_type in self.GLSL_BFLOAT16_ALIASES:
             value_type = self.map_type(source_type)
             component_type = self.vector_component_type(value_type) or value_type
@@ -26839,11 +26940,9 @@ complex64_t crossgl_complex64_mod_assign(
                     "OpenGL as_type<bfloat16_t> requires an integer payload"
                 )
 
-            value = self.generate_expression(value_expr)
             payload = value if component_type == "uint" else f"uint({value})"
             return f"uintBitsToFloat(({payload} << 16u))"
 
-        value = self.generate_expression(value_expr)
         return self.generate_glsl_explicit_bitcast(
             self.map_type(source_type), self.map_type(target_type), value
         )

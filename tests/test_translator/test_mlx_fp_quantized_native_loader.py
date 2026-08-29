@@ -59,8 +59,8 @@ MLX_MXFP4_GENERATED_ARTIFACTS = {
         "sizeBytes": 7809,
     },
     "opengl": {
-        "sha256": "44b4a07a94e11ffd6da4e82db285dee1b5796387c85dca3e49d6808bfd5b4c7c",
-        "sizeBytes": 9545,
+        "sha256": "cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da",
+        "sizeBytes": 9571,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_MXFP4_DIRECTX_NATIVE_LOADER"
@@ -423,6 +423,7 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "float scale = fp8_e8m0__operator_float(" in generated
         assert "int n = int(round(le));" in generated
         assert "metal_u3a_u3a" not in generated
+        assert "__crossgl_physical_subgroup" not in generated
         _assert_directx_compiles(generated_path)
     else:
         assert "layout(local_size_x = 32, local_size_y = 1" in generated
@@ -437,6 +438,8 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "GL_KHR_shader_subgroup" not in generated
         assert "gl_Subgroup" not in generated
         assert "subgroupMax" not in generated
+        assert generated.count("unpackHalf2x16(") == 2
+        assert "float converted = unpackHalf2x16((v & 0xffffu)).x;" in generated
         assert generated.count("barrier();") == 3
         _assert_opengl_spirv(generated_path, work_dir)
 

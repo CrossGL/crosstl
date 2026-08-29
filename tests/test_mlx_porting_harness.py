@@ -10277,14 +10277,17 @@ def test_scaled_attention_native_runtime_evidence_records_bounded_cross_target_p
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "1aee3a25b49c0fa6efb8ea6ae0b29d77c09a496cb4119d3a295901c9dedd2fc9"
+        "2182a09b1e03815f11e36c3ab1addb2138257e0bcf69284f99a0c33ec344816b"
     )
-    assert directx["size_bytes"] == 8151
+    assert directx["size_bytes"] == 8721
     assert directx["compiler_version"] == "1.9.2602.24"
     assert directx["compiler_profile"] == "cs_6_6"
     assert directx["compiler_arguments"] == ["-enable-16bit-types", "-WX"]
-    assert directx["compiled_dxil_size_bytes"] == 8728
+    assert directx["compiled_dxil_size_bytes"] == 9000
     assert directx["compiler_validation_status"] == "passed"
+    assert directx["subgroup_id_lowering"] == (
+        "workgroup-synchronized-physical-wave-allocation"
+    )
 
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
@@ -10407,10 +10410,12 @@ def test_softmax_native_runtime_evidence_records_bounded_cross_target_proof():
     assert status["guarded_artifacts"]["directx"]["block-float32-axis-32-two-rows"] == {
         "sha256": "de5ae241c037cf9a0b37f456d777d51c544c8f725cf2efe8a51c45ae968a0fc2",
         "size_bytes": 4213,
+        "subgroup_id_lowering": "fixed-single-wave-group-index-quotient",
     }
     assert status["guarded_artifacts"]["directx"]["block-float32-axis-2049"] == {
-        "sha256": "2849c2143f4d7e5195aa69f4b0f26c0b5adac34e533bfd72ed99413ca711c807",
-        "size_bytes": 4214,
+        "sha256": "3a3f443fdb6df38e37bda4828601b967cc6aa216c0805e6dc060be7e7bddd02c",
+        "size_bytes": 4784,
+        "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
     }
     directx_artifacts = status["guarded_artifacts"]["directx"]
     assert directx_artifacts["compiler_profile"] == "cs_6_6"
@@ -11241,9 +11246,10 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     }
     assert status["artifacts"]["directx"] == {
         "target_entry_point": "CSMain",
-        "sha256": "81dd21ff3219ea9333fffff7f00b494117b96bcbec9e30018aa88d458951ca60",
-        "size_bytes": 4540,
+        "sha256": "f902bae0e7603d302340327c61e5a82ab392b9ce1afffb5557b1760592a1465f",
+        "size_bytes": 5110,
         "subgroup_enforcement": "hlsl-wave-size-attribute",
+        "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
         "native_runtime": {
             "platform": "windows-latest",
             "runtime": "direct3d-12-warp",
@@ -12246,9 +12252,10 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "afd239804cf10adc9c31bb2f70cd80554729f2f1381e9312a96f4fc727db0c27"
+                "5f4ad43cd3bf08f7dc4fd78756d9c6b64eb8fe2d690af00442678c79b21ead41"
             ),
-            "size_bytes": 7496,
+            "size_bytes": 8066,
+            "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
             "workgroup_size": [32, 2, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
@@ -12483,15 +12490,15 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "opengl": {
             "target_entry_point": "main",
             "sha256": (
-                "44b4a07a94e11ffd6da4e82db285dee1b5796387c85dca3e49d6808bfd5b4c7c"
+                "cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da"
             ),
-            "size_bytes": 9545,
+            "size_bytes": 9571,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
             "compiler_target": "OpenGL/SPIR-V 1.3",
             "validator": "spirv-val",
-            "compiled_artifact_size_bytes": 10408,
+            "compiled_artifact_size_bytes": 10488,
             "control_barrier_instruction_count": 3,
             "group_non_uniform_instruction_count": 0,
             "compiler_validation_status": "passed",
@@ -12503,6 +12510,7 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "finite_test": "single-evaluation IEEE-754 float32 exponent mask",
         "sign_test": "exact IEEE-754 float32 sign bit",
         "private_scalar_struct_view": "read-only exact one-member layout",
+        "binary16_bitcast": "exact-low-16-bit-payload-via-pack-unpack-half",
         "global_scale_read": "statically-eliminated-for-has_global_scale-false",
     }
     assert status["software_subgroup"] == {

@@ -881,11 +881,16 @@ and
 
 Entry-scoped translation materializes only the selected GEMV and
 `elem_to_loc_uint`, with no unsupported record or project diagnostic. The
-7,496-byte HLSL has SHA-256
-`afd239804cf10adc9c31bb2f70cd80554729f2f1381e9312a96f4fc727db0c27`,
+8,066-byte HLSL has SHA-256
+`5f4ad43cd3bf08f7dc4fd78756d9c6b64eb8fe2d690af00442678c79b21ead41`,
 retains `[numthreads(32, 2, 1)]` and `[WaveSize(32)]`, and passes official DXC
-1.9.2602.24 under `cs_6_6`, `-enable-16bit-types`, and warnings as errors. The
-OpenGL target needs only the selected matrix-index assertion
+1.9.2602.24 under `cs_6_6`, `-enable-16bit-types`, and warnings as errors.
+Direct3D does not guarantee that a multidimensional workgroup's flattened
+`SV_GroupIndex` values are contiguous within each physical wave. The entry
+therefore assigns one uniform, collision-safe ID per physical wave through a
+workgroup-synchronized counter instead of dividing every lane's group index by
+`WaveGetLaneCount()`; fixed one-wave entries retain the valid quotient fast path.
+The OpenGL target needs only the selected matrix-index assertion
 `uint64(bm + tm) * marix_ld + out_col + tn` in the unsigned 32-bit range. Its
 7,705-byte GLSL has SHA-256
 `f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562`
@@ -941,12 +946,15 @@ Entry-scoped translation materializes only the selected specialization with
 `3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361`,
 retains `[numthreads(32, 1, 1)]` and `[WaveSize(32)]`, and passes DXC under
 `cs_6_6`, `-enable-16bit-types`, and warnings as errors. Its compiled DXIL is
-4,644 bytes. The 9,545-byte GLSL has SHA-256
-`44b4a07a94e11ffd6da4e82db285dee1b5796387c85dca3e49d6808bfd5b4c7c`,
+4,644 bytes. The 9,571-byte GLSL has SHA-256
+`cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da`,
 uses one explicit 32-lane software subgroup for `WaveActiveMax(float)`, and
-passes `glslangValidator` and `spirv-val`. Its 10,408-byte SPIR-V has three
+passes `glslangValidator` and `spirv-val`. Its 10,488-byte SPIR-V has three
 control barriers, no group-nonuniform instruction, and local size
-`[32, 1, 1]`.
+`[32, 1, 1]`. Because GLSL widens source binary16 values to float32, source
+`as_type<float16_t>(uint16_t)` calls now preserve the low 16-bit payload through
+`unpackHalf2x16` rather than incorrectly reinterpreting the widened integer as a
+32-bit float; the inverse form uses `packHalf2x16` and exact low-bit extraction.
 
 The scale conversion invokes the source `fp8_e8m0(float)` constructor factory
 before the selected sibling float conversion operator; aggregate field
@@ -1082,11 +1090,13 @@ with variant ID
 and artifact ID
 `sha256:dd0138695bd82e1f8ea49bd667052b484420ee96cb2849c6eed20ba5eae39a89`.
 
-The 8,151-byte HLSL artifact has SHA-256
-`1aee3a25b49c0fa6efb8ea6ae0b29d77c09a496cb4119d3a295901c9dedd2fc9`.
+The 8,721-byte HLSL artifact has SHA-256
+`2182a09b1e03815f11e36c3ab1addb2138257e0bcf69284f99a0c33ec344816b`.
 Official DXC 1.9.2602.24 accepts `CSMain` under `cs_6_6`,
-`-enable-16bit-types`, and warnings as errors, producing 8,728 bytes of DXIL.
-The 12,089-byte explicit software-subgroup GLSL artifact has SHA-256
+`-enable-16bit-types`, and warnings as errors, producing 9,000 bytes of DXIL.
+Its 32 physical waves receive unique workgroup-synchronized subgroup IDs; no
+lane-varying `SV_GroupIndex / WaveGetLaneCount()` derivation remains. The
+12,089-byte explicit software-subgroup GLSL artifact has SHA-256
 `9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b`.
 It partitions 1,024 invocations into 32 logical subgroups and synchronizes the
 source subgroup-ID-strided runtime loop across every workgroup round. Inactive
@@ -1459,8 +1469,11 @@ DirectX emits one guarded `CSMain` artifact for each workgroup size, retaining
 `[WaveSize(32)]`. Official DXC 1.9.2602.24 accepts both under `cs_6_6` with
 `-enable-16bit-types` and warnings as errors. Their SHA-256 values are
 `de5ae241c037cf9a0b37f456d777d51c544c8f725cf2efe8a51c45ae968a0fc2`
-and `2849c2143f4d7e5195aa69f4b0f26c0b5adac34e533bfd72ed99413ca711c807`.
-The default OpenGL path remains a separate guarded hardware-subgroup artifact.
+and `3a3f443fdb6df38e37bda4828601b967cc6aa216c0805e6dc060be7e7bddd02c`.
+The 32-thread entry is provably one wave and keeps the zero-ID quotient fast
+path; the 544-thread entry allocates one uniform ID per physical wave through a
+workgroup-synchronized counter. The default OpenGL path remains a separate
+guarded hardware-subgroup artifact.
 The runtime proof opts into explicit software subgroups instead, producing a
 5,585-byte axis-32 artifact with SHA-256
 `f69dad597cefc34f7908799aaf0ba2eac47a0dcdd91e5f2bf3d7247172fa84b9`
@@ -1503,7 +1516,9 @@ preserve the read-only `float4` storage views as four bit-preserving scalar
 loads, both subgroup reductions, the 16-element workgroup reduction buffer, and
 the final output store. Their portability report and runtime manifest retain
 the source entry, target entry, workgroup size, subgroup requirement, and all
-four reflected resource layouts.
+four reflected resource layouts. For DirectX, the 16 physical waves receive
+unique, wave-uniform IDs through the synchronized allocator rather than a
+lane-varying flattened-index quotient.
 
 Windows CI compiles the HLSL artifact with DXC, packages its native-loader ABI,
 and dispatches one workgroup through Direct3D 12 WARP. The bounded workload

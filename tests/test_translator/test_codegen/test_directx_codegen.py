@@ -7419,15 +7419,17 @@ def test_hlsl_compute_subgroup_builtin_body_references_lower_to_wave_intrinsics(
     assert "gl_SubgroupSize" not in generated_code
 
 
-def test_hlsl_compute_subgroup_id_body_reference_lowers_to_group_index_division():
-    # gl_SubgroupID (Metal [[simdgroup_index_in_threadgroup]]) is the simdgroup
-    # index within the threadgroup; HLSL has no wave intrinsic for it, so it is
-    # SV_GroupIndex / WaveGetLaneCount(). The SV_GroupIndex parameter must be
-    # injected into the compute entry so the expansion has its dependency in scope.
+def test_hlsl_compute_subgroup_id_body_reference_allocates_physical_wave_id(
+    tmp_path,
+):
+    # Direct3D does not guarantee that flattened SV_GroupIndex values are assigned
+    # to physical waves contiguously. Allocate one ID per physical wave in a
+    # workgroup-uniform entry prologue rather than dividing SV_GroupIndex by the
+    # wave width (which corrupts multidimensional groups on WARP).
     shader = """
     shader SubgroupIDBody {
         compute {
-            layout(local_size_x = 64) in;
+            layout(local_size_x = 32, local_size_y = 2) in;
             layout(set = 0, binding = 0) buffer float* data;
             void main() {
                 uint sg = gl_SubgroupID;
@@ -7441,10 +7443,44 @@ def test_hlsl_compute_subgroup_id_body_reference_lowers_to_group_index_division(
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert ": SV_GroupIndex" in generated_code
-    assert "WaveGetLaneCount()" in generated_code
-    assert re.search(r"uint sg = \(\w+ / WaveGetLaneCount\(\)\);", generated_code)
+    assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated_code
+    assert "uint __crossgl_physical_subgroup_id(uint groupIndex)" in generated_code
+    assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated_code
+    assert "subgroupIndex = WaveReadLaneFirst(subgroupIndex);" in generated_code
+    assert (
+        "uint crossglPhysicalSubgroupID = "
+        "__crossgl_physical_subgroup_id(groupIndex);" in generated_code
+    )
+    assert "uint sg = crossglPhysicalSubgroupID;" in generated_code
+    assert "/ WaveGetLaneCount()" not in generated_code
     assert "gl_SubgroupID" not in generated_code
     assert "__CROSSGL" not in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_compute_subgroup_id_fixed_single_wave_keeps_zero_id_fast_path(
+    tmp_path,
+):
+    shader = """
+    shader SingleWaveSubgroupID {
+        compute {
+            @ stage_entry
+            @ numthreads(32, 1, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint simd_group_id @gl_SubgroupID) @ WaveSize(32) {
+                output[0] = simd_group_id;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "[WaveSize(32)]" in generated_code
+    assert "uint simd_group_id = (groupIndex / WaveGetLaneCount());" in generated_code
+    assert "__crossgl_physical_subgroup" not in generated_code
+    assert generated_code.count(": SV_GroupIndex") == 1
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
 
 def test_hlsl_compute_num_subgroups_body_reference_lowers_to_group_size_ceildiv():
@@ -7497,6 +7533,9 @@ def test_hlsl_compute_subgroup_id_reuses_local_invocation_index_group_index_para
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert generated_code.count(": SV_GroupIndex") == 1
+    assert generated_code.count("__crossgl_physical_subgroup_id(groupIndex)") == 1
+    assert "uint sg = crossglPhysicalSubgroupID;" in generated_code
+    assert "/ WaveGetLaneCount()" not in generated_code
     assert "gl_SubgroupID" not in generated_code
     assert "gl_LocalInvocationIndex" not in generated_code
     assert "__CROSSGL" not in generated_code
@@ -7506,8 +7545,8 @@ def test_hlsl_compute_subgroup_id_and_num_subgroups_parameters_lower_to_wave_for
     # Metal [[simdgroup_index_in_threadgroup]] / [[simdgroups_per_threadgroup]]
     # arrive as explicit parameters carrying gl_SubgroupID / gl_NumSubgroups
     # semantics; HLSL has no matching system-value semantic, so they become body
-    # locals derived from SV_GroupIndex / the thread-group size, with a single
-    # SV_GroupIndex parameter injected.
+    # locals derived from one workgroup-synchronized physical-wave allocation and
+    # the thread-group size, with a single SV_GroupIndex parameter injected.
     shader = """
     shader WaveGroupParamCompute {
         compute {
@@ -7529,7 +7568,8 @@ def test_hlsl_compute_subgroup_id_and_num_subgroups_parameters_lower_to_wave_for
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert generated_code.count(": SV_GroupIndex") == 1
-    assert re.search(r"uint sgid = \(\w+ / WaveGetLaneCount\(\)\);", generated_code)
+    assert "uint sgid = crossglPhysicalSubgroupID;" in generated_code
+    assert generated_code.count("__crossgl_physical_subgroup_id(groupIndex)") == 1
     assert (
         "uint nsg = ((64u + WaveGetLaneCount() - 1u) / WaveGetLaneCount());"
         in generated_code
@@ -7540,6 +7580,36 @@ def test_hlsl_compute_subgroup_id_and_num_subgroups_parameters_lower_to_wave_for
     assert "gl_NumSubgroups" not in generated_code
     assert ": gl_Subgroup" not in generated_code
     assert "__CROSSGL" not in generated_code
+
+
+def test_hlsl_compute_subgroup_id_helper_names_are_collision_safe_and_reused():
+    shader = """
+    shader SubgroupIDCollisions {
+        compute {
+            layout(local_size_x = 32, local_size_y = 2) in;
+            layout(set = 0, binding = 0) buffer uint* output;
+            void main() {
+                uint __crossgl_physical_subgroup_counter = 0u;
+                uint __crossgl_physical_subgroup_id = 0u;
+                uint first = gl_SubgroupID;
+                uint second = gl_SubgroupID;
+                output[gl_LocalInvocationIndex] = first + second
+                    + __crossgl_physical_subgroup_counter
+                    + __crossgl_physical_subgroup_id;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "groupshared uint __crossgl_physical_subgroup_counter_;" in generated_code
+    assert "uint __crossgl_physical_subgroup_id_(uint groupIndex)" in generated_code
+    assert generated_code.count("__crossgl_physical_subgroup_id_(groupIndex)") == 1
+    assert "uint first = crossglPhysicalSubgroupID;" in generated_code
+    assert "uint second = crossglPhysicalSubgroupID;" in generated_code
+    assert generated_code.count(": SV_GroupIndex") == 1
+    assert "/ WaveGetLaneCount()" not in generated_code
 
 
 def test_hlsl_non_entry_compute_helper_drops_glsl_builtin_parameter_semantics():
@@ -7742,7 +7812,7 @@ def test_hlsl_entry_scoped_generation_reports_available_entries():
     assert error.value.available_entry_points == ("first", "second")
 
 
-def test_hlsl_compute_unused_value_builtin_parameters_are_dropped():
+def test_hlsl_compute_unused_value_builtin_parameters_are_dropped(tmp_path):
     # A generated compute entry can carry unused [[threads_per_grid]] (gsize) and
     # [[threads_per_threadgroup]] (gl_WorkGroupSize, lsize) parameters alongside
     # subgroup builtins it does use. The unused grid extent is dropped, while
@@ -7773,11 +7843,15 @@ def test_hlsl_compute_unused_value_builtin_parameters_are_dropped():
     assert not re.search(r"\bgl_[A-Z]", generated_code)
     # The unused, unrepresentable threads_per_grid parameter is dropped entirely.
     assert "gsize" not in generated_code
-    # gl_SubgroupID still lowers to the SV_GroupIndex / lane-count derivation.
-    assert "WaveGetLaneCount()" in generated_code
+    # gl_SubgroupID lowers to one workgroup-synchronized ID per physical wave;
+    # no lane-varying SV_GroupIndex division may survive.
+    assert "uint simd_group_id = crossglPhysicalSubgroupID;" in generated_code
+    assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated_code
+    assert "/ WaveGetLaneCount()" not in generated_code
     assert ": SV_GroupIndex" in generated_code
     assert "__CROSSGL" not in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
 
 def test_hlsl_compute_threads_per_grid_parameter_uses_dispatch_info_cbuffer():

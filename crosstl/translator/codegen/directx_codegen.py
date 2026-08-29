@@ -1822,19 +1822,18 @@ class HLSLCodeGen:
     }
     # Subgroup/wave builtins (Metal [[thread_index_in_simdgroup]] /
     # [[threads_per_simdgroup]], canonicalised to gl_Subgroup* in CrossGL) have no
-    # HLSL system-value semantic; HLSL exposes them only through wave intrinsics.
-    # gl_SubgroupID / gl_NumSubgroups have no direct wave intrinsic either, so they
-    # are derived from SV_GroupIndex and the (compile-time) thread group size:
-    #   simdgroup index within threadgroup = SV_GroupIndex / WaveGetLaneCount()
-    #   simdgroups per threadgroup         = ceil(GROUPSIZE / WaveGetLaneCount())
-    # The SV_GroupIndex placeholder below is rewritten to the actual emitted
-    # SV_GroupIndex parameter (or GROUPSIZE constant) at lowering time.
-    HLSL_WAVE_GROUP_INDEX_PLACEHOLDER = "__CROSSGL_SV_GROUP_INDEX__"
+    # HLSL system-value semantic. Invocation ID and size map to wave intrinsics;
+    # gl_NumSubgroups derives from the compile-time thread-group size.
+    #
+    # gl_SubgroupID is intentionally absent from this expression table. Direct3D
+    # does not guarantee that flattened SV_GroupIndex values are contiguous within
+    # a physical wave, so dividing by WaveGetLaneCount() is valid only when a fixed
+    # WaveSize proves the whole workgroup occupies one wave. Other entries route it
+    # through the synchronized, collision-safe physical-wave allocator.
     HLSL_WAVE_GROUP_SIZE_PLACEHOLDER = "__CROSSGL_GROUP_SIZE__"
     HLSL_WAVE_BUILTIN_INTRINSICS = {
         "gl_SubgroupInvocationID": "WaveGetLaneIndex()",
         "gl_SubgroupSize": "WaveGetLaneCount()",
-        "gl_SubgroupID": f"({HLSL_WAVE_GROUP_INDEX_PLACEHOLDER} / WaveGetLaneCount())",
         "gl_NumSubgroups": (
             f"(({HLSL_WAVE_GROUP_SIZE_PLACEHOLDER} + WaveGetLaneCount() - 1u) "
             "/ WaveGetLaneCount())"
@@ -2052,6 +2051,8 @@ class HLSLCodeGen:
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
+        self.required_hlsl_physical_subgroup_id_helper = False
+        self.hlsl_physical_subgroup_id_helper_names = {}
         self.hlsl_lowered_struct_resource_members = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
@@ -2965,6 +2966,8 @@ class HLSLCodeGen:
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
+        self.required_hlsl_physical_subgroup_id_helper = False
+        self.hlsl_physical_subgroup_id_helper_names = {}
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
         self.current_hlsl_hull_output_element_type = None
@@ -3148,6 +3151,7 @@ class HLSLCodeGen:
         )
         self.prepare_hlsl_trailing_zero_helper_names(functions)
         self.prepare_hlsl_inverse_hyperbolic_helper_names(functions)
+        self.prepare_hlsl_physical_subgroup_id_helper_names(functions)
         self.vertex_entry_output_struct_names = (
             self.collect_hlsl_vertex_entry_output_struct_names(ast, target_stage)
         )
@@ -4224,6 +4228,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_inverse_hyperbolic_helpers()
         code += self.generate_hlsl_complex64_helpers()
         code += self.generate_hlsl_defined_relative_wave_shuffle_helpers()
+        code += self.generate_hlsl_physical_subgroup_id_helper()
         code += self.generate_hlsl_bfloat16_helpers()
         code += self.generate_hlsl_explicit_bitcast_helpers()
         code += self.generate_hlsl_union_storage_helpers()
@@ -4280,6 +4285,50 @@ class HLSLCodeGen:
                 helper_name += "_"
             self.hlsl_trailing_zero_helper_names[operand_type] = helper_name
             used_names.add(helper_name)
+
+    def prepare_hlsl_physical_subgroup_id_helper_names(self, functions):
+        used_names = self.hlsl_helper_reserved_names(functions)
+        used_names.update(self.hlsl_trailing_zero_helper_names.values())
+        used_names.update(self.hlsl_inverse_hyperbolic_helper_names.values())
+        names = {}
+        for key, base_name in (
+            ("counter", "__crossgl_physical_subgroup_counter"),
+            ("helper", "__crossgl_physical_subgroup_id"),
+        ):
+            name = base_name
+            while name in used_names:
+                name += "_"
+            names[key] = name
+            used_names.add(name)
+        self.hlsl_physical_subgroup_id_helper_names = names
+
+    def hlsl_physical_subgroup_id_helper_name(self):
+        helper_name = self.hlsl_physical_subgroup_id_helper_names.get("helper")
+        if helper_name is not None:
+            return helper_name
+        self.prepare_hlsl_physical_subgroup_id_helper_names(())
+        return self.hlsl_physical_subgroup_id_helper_names["helper"]
+
+    def generate_hlsl_physical_subgroup_id_helper(self):
+        if not self.required_hlsl_physical_subgroup_id_helper:
+            return ""
+        counter_name = self.hlsl_physical_subgroup_id_helper_names["counter"]
+        helper_name = self.hlsl_physical_subgroup_id_helper_name()
+        return f"""groupshared uint {counter_name};
+uint {helper_name}(uint groupIndex) {{
+    if (groupIndex == 0u) {{
+        {counter_name} = 0u;
+    }}
+    GroupMemoryBarrierWithGroupSync();
+    uint subgroupIndex = 0u;
+    if (WaveIsFirstLane()) {{
+        InterlockedAdd({counter_name}, 1u, subgroupIndex);
+    }}
+    subgroupIndex = WaveReadLaneFirst(subgroupIndex);
+    GroupMemoryBarrierWithGroupSync();
+    return subgroupIndex;
+}}
+"""
 
     def hlsl_trailing_zero_helper_name(self, operand_type):
         helper_name = self.hlsl_trailing_zero_helper_names.get(operand_type)
@@ -8130,6 +8179,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         # parameter needs injected, populated lazily while emitting parameters and
         # consumed by the post-loop compute-builtin parameter pass.
         self.current_hlsl_compute_group_index_param = None
+        self.current_hlsl_compute_subgroup_id_local = None
+        self.current_hlsl_compute_subgroup_id_group_index = None
         self.current_hlsl_stage_output_lowering = stage_output_lowering
         self.current_identifier_reserved_names = (
             self.collect_hlsl_function_identifier_names(func)
@@ -8288,7 +8339,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if effective_shader_type == "compute":
                 wave_builtin_prologue = (
                     self.hlsl_compute_wave_builtin_parameter_prologue(
-                        p, param_type, semantic, execution_config, param_list
+                        p,
+                        param_type,
+                        semantic,
+                        func,
+                        execution_config,
+                        param_list,
                     )
                 )
                 if wave_builtin_prologue is not None:
@@ -8473,6 +8529,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 param_names.add(group_index_param)
                 self.local_variable_types[group_index_param] = "uint"
+            subgroup_id_local = self.current_hlsl_compute_subgroup_id_local
+            if subgroup_id_local is not None:
+                helper_name = self.hlsl_physical_subgroup_id_helper_name()
+                group_index_name = self.current_hlsl_compute_subgroup_id_group_index
+                parameter_prologue_statements.insert(
+                    0,
+                    f"uint {subgroup_id_local} = "
+                    f"{helper_name}({group_index_name});",
+                )
         elif effective_shader_type == "vertex":
             for (
                 name,
@@ -18050,7 +18115,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return semantic.strip() in self.HLSL_GLSL_COMPUTE_BUILTIN_SEMANTICS
 
     def hlsl_compute_wave_builtin_parameter_prologue(
-        self, parameter, param_type, semantic, execution_config=None, param_list=None
+        self,
+        parameter,
+        param_type,
+        semantic,
+        func,
+        execution_config=None,
+        param_list=None,
     ):
         """Bridge an explicit compute parameter that carries a subgroup/wave
         builtin semantic into HLSL.
@@ -18061,12 +18132,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ``gl_SubgroupID`` / ``gl_NumSubgroups``) have no HLSL system-value
         semantic, so they cannot be emitted as entry-point parameters. Instead the
         parameter becomes a body-local initialised from the matching wave intrinsic
-        (``WaveGetLaneIndex()`` / ``WaveGetLaneCount()``) or, for
-        ``gl_SubgroupID`` / ``gl_NumSubgroups``, the SV_GroupIndex / thread-group
-        size derivation. Returns the prologue statement, or ``None`` when the
-        parameter does not carry a wave builtin semantic.
+        (``WaveGetLaneIndex()`` / ``WaveGetLaneCount()``), a proven single-wave zero
+        ID or synchronized unique physical-wave ID for ``gl_SubgroupID``, or the
+        compile-time thread-group size derivation for ``gl_NumSubgroups``. Returns
+        the prologue statement, or ``None`` when the parameter does not carry a wave
+        builtin semantic.
         """
-        intrinsic = self.hlsl_wave_builtin_intrinsic_expression(semantic)
+        canonical_semantic = semantic.strip() if isinstance(semantic, str) else semantic
+        if canonical_semantic == "gl_SubgroupID":
+            intrinsic = self.hlsl_compute_subgroup_id_expression(
+                func,
+                execution_config,
+                param_list=param_list,
+            )
+        else:
+            intrinsic = self.hlsl_wave_builtin_intrinsic_expression(semantic)
         if intrinsic is None:
             return None
 
@@ -18083,12 +18163,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.HLSL_WAVE_GROUP_SIZE_PLACEHOLDER,
                 self.hlsl_compute_group_size_constant(execution_config),
             )
-        if self.HLSL_WAVE_GROUP_INDEX_PLACEHOLDER in intrinsic:
-            intrinsic = intrinsic.replace(
-                self.HLSL_WAVE_GROUP_INDEX_PLACEHOLDER,
-                self.hlsl_compute_group_index_dependency_name(param_list),
-            )
-
         local_name = self.hlsl_declaration_identifier_name(parameter_name)
         self.local_variable_types[local_name] = base_type
         return f"{base_type} {local_name} = {intrinsic};"
@@ -18243,6 +18317,77 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_hlsl_compute_group_index_param = name
         self.local_variable_types[name] = "uint"
         return name
+
+    def hlsl_compute_minimum_wave_size(self, func):
+        wave_size_values = None
+        for attr in getattr(func, "attributes", []) or []:
+            if not self.hlsl_wave_size_attribute(attr):
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) not in {1, 2, 3}:
+                return None
+            labels = (
+                ("lane count",)
+                if len(arguments) == 1
+                else ("minimum", "maximum", "preferred")
+            )
+            wave_size_values = [
+                self.hlsl_wave_size_lane_value(argument, labels[index])
+                for index, argument in enumerate(arguments)
+            ]
+        return wave_size_values[0] if wave_size_values else None
+
+    def hlsl_compute_single_wave_proven(self, func, execution_config=None):
+        minimum_wave_size = self.hlsl_compute_minimum_wave_size(func)
+        if minimum_wave_size is None:
+            return False
+        try:
+            workgroup_size = 1
+            for dimension in compute_local_size(execution_config):
+                workgroup_size *= int(str(dimension).strip())
+        except (TypeError, ValueError):
+            return False
+        return 0 < workgroup_size <= minimum_wave_size
+
+    def hlsl_compute_subgroup_id_expression(
+        self,
+        func,
+        execution_config=None,
+        *,
+        param_list=None,
+        group_index_name=None,
+    ):
+        if self.hlsl_compute_single_wave_proven(func, execution_config):
+            if group_index_name is None:
+                group_index_name = self.hlsl_compute_group_index_dependency_name(
+                    param_list
+                )
+            return f"({group_index_name} / WaveGetLaneCount())"
+        return self.hlsl_compute_physical_subgroup_id_dependency_name(
+            param_list,
+            group_index_name=group_index_name,
+        )
+
+    def hlsl_compute_physical_subgroup_id_dependency_name(
+        self, param_list=None, *, group_index_name=None
+    ):
+        if self.current_hlsl_compute_subgroup_id_local is not None:
+            return self.current_hlsl_compute_subgroup_id_local
+
+        if group_index_name is None:
+            group_index_name = self.hlsl_compute_group_index_dependency_name(param_list)
+        reserved_names = set(self.local_variable_types)
+        reserved_names.update(self.global_variable_types)
+        reserved_names.update(self.current_identifier_reserved_names)
+        reserved_names.update(self.current_identifier_aliases.values())
+        local_name = self.hlsl_unique_local_identifier(
+            "crossglPhysicalSubgroupID", reserved_names
+        )
+        self.current_hlsl_compute_subgroup_id_local = local_name
+        self.current_hlsl_compute_subgroup_id_group_index = group_index_name
+        self.local_variable_types[local_name] = "uint"
+        self.required_hlsl_physical_subgroup_id_helper = True
+        return local_name
 
     def hlsl_metal_simd_shuffle_name(self, func_name):
         if not func_name:
@@ -29179,6 +29324,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "gl_WorkGroupSize",
             "gl_NumWorkGroups",
             "threads_per_grid",
+            "gl_SubgroupID",
             *self.HLSL_WAVE_BUILTIN_INTRINSICS,
         }
         used_names = set()
@@ -29259,11 +29405,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         reserved_names.update(self.current_identifier_reserved_names)
         reserved_names.update(self.current_identifier_aliases.values())
 
-        # gl_SubgroupID (simdgroup index within the threadgroup) has no direct HLSL
-        # wave intrinsic; it is SV_GroupIndex / WaveGetLaneCount(). It therefore
-        # depends on the flattened local thread index. Reuse the SV_GroupIndex
-        # parameter emitted for gl_LocalInvocationIndex when present, otherwise
-        # inject a dedicated one so the expansion has its dependency in scope.
+        # gl_SubgroupID (the physical wave index within the threadgroup) has no
+        # direct HLSL intrinsic. SV_GroupIndex / WaveGetLaneCount() is not valid:
+        # Direct3D does not promise that flattened group indices are assigned to
+        # waves contiguously (notably for multidimensional groups). Allocate one
+        # collision-safe wave ID in a uniform entry prologue and reuse it here.
         subgroup_id_used = "gl_SubgroupID" in used_names
         group_index_name = None
 
@@ -29302,9 +29448,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         None,
                     )
                 )
-            subgroup_id_alias = self.HLSL_WAVE_BUILTIN_INTRINSICS[
-                "gl_SubgroupID"
-            ].replace(self.HLSL_WAVE_GROUP_INDEX_PLACEHOLDER, group_index_name)
+            subgroup_id_alias = self.hlsl_compute_subgroup_id_expression(
+                func,
+                execution_config,
+                group_index_name=group_index_name,
+            )
             required_parameters.append(
                 ("gl_SubgroupID", None, None, None, subgroup_id_alias)
             )

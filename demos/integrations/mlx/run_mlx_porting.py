@@ -1765,16 +1765,17 @@ MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "1aee3a25b49c0fa6efb8ea6ae0b29d77c09a496cb4119d3a295901c9dedd2fc9"
+                "2182a09b1e03815f11e36c3ab1addb2138257e0bcf69284f99a0c33ec344816b"
             ),
-            "size_bytes": 8151,
+            "size_bytes": 8721,
             "workgroup_size": [1024, 1, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
             "compiler": "dxc",
             "compiler_version": "1.9.2602.24",
             "compiler_profile": "cs_6_6",
             "compiler_arguments": ["-enable-16bit-types", "-WX"],
-            "compiled_dxil_size_bytes": 8728,
+            "compiled_dxil_size_bytes": 9000,
             "compiler_validation_status": "passed",
             "specialization_materialization": "concrete",
         },
@@ -1976,12 +1977,16 @@ MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
                     "de5ae241c037cf9a0b37f456d777d51c544c8f725cf2efe8a51c45ae968a0fc2"
                 ),
                 "size_bytes": 4213,
+                "subgroup_id_lowering": "fixed-single-wave-group-index-quotient",
             },
             "block-float32-axis-2049": {
                 "sha256": (
-                    "2849c2143f4d7e5195aa69f4b0f26c0b5adac34e533bfd72ed99413ca711c807"
+                    "3a3f443fdb6df38e37bda4828601b967cc6aa216c0805e6dc060be7e7bddd02c"
                 ),
-                "size_bytes": 4214,
+                "size_bytes": 4784,
+                "subgroup_id_lowering": (
+                    "workgroup-synchronized-physical-wave-allocation"
+                ),
             },
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
