@@ -73,6 +73,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXResourcePointerParameterError,
     DirectXSemanticArraySizeError,
     DirectXSignBitError,
+    DirectXSoftwareSubgroupError,
     DirectXSpecializationConstantError,
     DirectXTextureOffsetError,
     DirectXTrailingZeroBuiltinError,
@@ -45487,3 +45488,236 @@ def test_hlsl_metal_observed_default_null_resource_pointer_still_fails_closed(
     assert exc_info.value.reason == "call-backing-unresolved"
     assert exc_info.value.address_space == "device"
     assert exc_info.value.parameter_name == "values"
+
+
+def test_hlsl_software_subgroup_shuffle_uses_logical_group_index_and_shared_storage(
+    tmp_path,
+):
+    code = """
+    shader HLSLSoftwareSubgroupShuffle {
+        compute {
+            @ stage_entry
+            @ numthreads(32, 2, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint groupIndex @gl_LocalInvocationIndex,
+                      uint subgroupID @gl_SubgroupID,
+                      uint subgroupLane @gl_SubgroupInvocationID) @ WaveSize(32) {
+                uint value = groupIndex + 1u;
+                value += WaveShuffleDown(value, 1u);
+                output[groupIndex] = value + subgroupID + subgroupLane;
+            }
+        }
+    }
+    """
+    codegen = HLSLCodeGen(
+        relative_wave_shuffle_out_of_range="self",
+        software_subgroup_width=32,
+    )
+
+    generated = codegen.generate(parse_code(tokenize_code(code)))
+
+    assert "[numthreads(32, 2, 1)]" in generated
+    assert "[WaveSize(32)]" in generated
+    assert "groupshared uint __crossgl_software_subgroup_scratch_uint[64];" in generated
+    assert (
+        "uint __crossgl_software_subgroup_shuffle_down_uint("
+        "uint value, uint delta, uint invocation)" in generated
+    )
+    assert "uint lane = invocation % 32u;" in generated
+    assert "bool sourceValid = delta < (32u - lane);" in generated
+    assert "uint sourceLane = sourceValid ? lane + delta : lane;" in generated
+    assert "subgroupBase + lane + delta" not in generated
+    assert generated.count("GroupMemoryBarrierWithGroupSync();") == 2
+    assert "uint subgroupID = (groupIndex / 32u);" in generated
+    assert "uint subgroupLane = (groupIndex % 32u);" in generated
+    assert "__crossgl_software_subgroup_shuffle_down_uint(" in generated
+    assert "WaveReadLaneAt" not in generated
+    assert "WaveGetLaneIndex" not in generated
+    assert "__crossgl_physical_subgroup" not in generated
+    assert_directx_warnings_clean_if_available(
+        generated,
+        tmp_path,
+        profile="cs_6_6",
+    )
+
+
+def test_hlsl_software_subgroup_rejects_divergent_shuffle_control_flow():
+    code = """
+    shader HLSLSoftwareSubgroupDivergent {
+        compute {
+            @ stage_entry
+            @ numthreads(32, 2, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint groupIndex @gl_LocalInvocationIndex) @ WaveSize(32) {
+                if (groupIndex < 32u) {
+                    output[groupIndex] = WaveShuffleDown(groupIndex, 1u);
+                }
+            }
+        }
+    }
+    """
+    codegen = HLSLCodeGen(
+        relative_wave_shuffle_out_of_range="self",
+        software_subgroup_width=32,
+    )
+
+    with pytest.raises(
+        DirectXSoftwareSubgroupError,
+        match="statically uniform control flow",
+    ) as excinfo:
+        codegen.generate(parse_code(tokenize_code(code)))
+
+    assert excinfo.value.reason == "potentially-divergent-control-flow"
+    assert excinfo.value.operation == "WaveShuffleDown"
+    assert excinfo.value.workgroup_size == (32, 2, 1)
+
+
+def test_hlsl_software_subgroup_rejects_helper_without_invocation_identity():
+    code = """
+    shader HLSLSoftwareSubgroupMissingIdentity {
+        uint shuffled(uint value) {
+            value += WaveShuffleDown(value, 1u);
+            return value;
+        }
+
+        compute {
+            @ stage_entry
+            @ numthreads(32, 2, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint groupIndex @gl_LocalInvocationIndex) @ WaveSize(32) {
+                output[groupIndex] = shuffled(groupIndex);
+            }
+        }
+    }
+    """
+    codegen = HLSLCodeGen(
+        relative_wave_shuffle_out_of_range="self",
+        software_subgroup_width=32,
+    )
+
+    with pytest.raises(
+        DirectXSoftwareSubgroupError,
+        match="require a local-invocation index",
+    ) as excinfo:
+        codegen.generate(parse_code(tokenize_code(code)))
+
+    assert excinfo.value.reason == "invocation-index-unavailable"
+
+
+def test_hlsl_software_subgroup_rejects_unsupported_operation():
+    code = """
+    shader HLSLSoftwareSubgroupUnsupported {
+        compute {
+            @ stage_entry
+            @ numthreads(32, 2, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint groupIndex @gl_LocalInvocationIndex) @ WaveSize(32) {
+                output[groupIndex] = WaveActiveSum(groupIndex);
+            }
+        }
+    }
+    """
+    codegen = HLSLCodeGen(
+        relative_wave_shuffle_out_of_range="self",
+        software_subgroup_width=32,
+    )
+
+    with pytest.raises(
+        DirectXSoftwareSubgroupError,
+        match="does not support 'WaveActiveSum'",
+    ) as excinfo:
+        codegen.generate(parse_code(tokenize_code(code)))
+
+    assert excinfo.value.reason == "operation-unsupported"
+    assert excinfo.value.operation == "WaveActiveSum"
+
+
+def test_hlsl_software_subgroup_rejects_mixed_metal_shuffle_operations():
+    code = """
+    shader HLSLSoftwareSubgroupMixedMetalShuffles {
+        compute {
+            @ stage_entry
+            @ numthreads(32, 2, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint groupIndex @gl_LocalInvocationIndex) @ WaveSize(32) {
+                uint value = simd_shuffle_down(groupIndex, 1u);
+                output[groupIndex] = simd_shuffle_up(value, 1u);
+            }
+        }
+    }
+    """
+    codegen = HLSLCodeGen(
+        relative_wave_shuffle_out_of_range="self",
+        software_subgroup_width=32,
+    )
+
+    with pytest.raises(
+        DirectXSoftwareSubgroupError,
+        match="does not support 'WaveShuffleUp'",
+    ) as excinfo:
+        codegen.generate(parse_code(tokenize_code(code)))
+
+    assert excinfo.value.reason == "operation-unsupported"
+    assert excinfo.value.operation == "WaveShuffleUp"
+
+
+def test_hlsl_software_subgroup_rejects_short_circuit_shuffle_control_flow():
+    code = """
+    shader HLSLSoftwareSubgroupShortCircuit {
+        compute {
+            @ stage_entry
+            @ numthreads(32, 2, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint groupIndex @gl_LocalInvocationIndex) @ WaveSize(32) {
+                bool selected = groupIndex != 0u
+                    && WaveShuffleDown(groupIndex, 1u) != 0u;
+                output[groupIndex] = selected ? 1u : 0u;
+            }
+        }
+    }
+    """
+    codegen = HLSLCodeGen(
+        relative_wave_shuffle_out_of_range="self",
+        software_subgroup_width=32,
+    )
+
+    with pytest.raises(
+        DirectXSoftwareSubgroupError,
+        match="short-circuit expression",
+    ) as excinfo:
+        codegen.generate(parse_code(tokenize_code(code)))
+
+    assert excinfo.value.reason == "potentially-divergent-control-flow"
+    assert excinfo.value.operation == "WaveShuffleDown"
+
+
+@pytest.mark.parametrize("width", [True, 0, 16, 64, "32"])
+def test_hlsl_software_subgroup_rejects_invalid_width(width):
+    error_type = TypeError if isinstance(width, (bool, str)) else ValueError
+    with pytest.raises(error_type, match="software_subgroup_width"):
+        HLSLCodeGen(software_subgroup_width=width)
+
+
+def test_hlsl_software_subgroup_requires_explicit_relative_fallback_policy():
+    code = """
+    shader HLSLSoftwareSubgroupPolicy {
+        compute {
+            @ stage_entry
+            @ numthreads(32, 2, 1)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      uint groupIndex @gl_LocalInvocationIndex) @ WaveSize(32) {
+                output[groupIndex] = WaveShuffleDown(groupIndex, 1u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXSoftwareSubgroupError,
+        match="calling-lane out-of-range policy",
+    ) as excinfo:
+        HLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert excinfo.value.reason == "out-of-range-policy-unproven"

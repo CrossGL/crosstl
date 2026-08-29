@@ -78,6 +78,7 @@ from crosstl.translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
 from crosstl.translator.codegen.GLSL_codegen import OpenGLSoftwareSubgroupError
 from crosstl.translator.codegen.index_range_contracts import (
     IndexRangeAssertion,
@@ -1526,7 +1527,7 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 )
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
-OPENGL_SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
+SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
 DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION = (
     "relative_wave_shuffle_out_of_range"
 )
@@ -6172,7 +6173,7 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
         not in {
             TEMPLATE_VARIANTS_SOURCE_OPTION,
             TARGET_SOURCE_OPTIONS_KEY,
-            OPENGL_SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
+            SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
             DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
             METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
             METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
@@ -23741,6 +23742,7 @@ def _workgroup_size_failure_details(
         "project.translate.subgroup-width-rule-invalid",
         "project.translate.subgroup-width-materialization-invalid",
         "project.translate.opengl-software-subgroup-invalid",
+        "project.translate.directx-software-subgroup-invalid",
     }:
         return {}
     execution: dict[str, Any] = {
@@ -26047,16 +26049,17 @@ def _project_workgroup_execution_metadata(
     }
 
 
-def _project_opengl_software_subgroup_width(
+def _project_software_subgroup_width(
     target: str,
     source_options: Mapping[str, Any],
 ) -> Any | None:
-    if OPENGL_SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION not in source_options:
+    if SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION not in source_options:
         return None
-    width = source_options[OPENGL_SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION]
-    if target != "opengl":
+    width = source_options[SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION]
+    if target not in {"directx", "opengl"}:
         raise OpenGLSoftwareSubgroupError(
-            "software_subgroup_width is supported only by the OpenGL target",
+            "software_subgroup_width is supported only by the DirectX and "
+            "OpenGL targets",
             software_subgroup_width=width,
             reason="target-not-supported",
         )
@@ -26103,11 +26106,16 @@ def _generate_project_target_from_crossgl_ast(
             )
         configure_relative_shuffle(directx_relative_wave_shuffle_out_of_range)
     if software_subgroup_width is not None:
+        software_subgroup_error = (
+            DirectXSoftwareSubgroupError
+            if target == "directx"
+            else OpenGLSoftwareSubgroupError
+        )
         configure_software_subgroup = getattr(
             codegen, "set_software_subgroup_width", None
         )
         if not callable(configure_software_subgroup):
-            raise OpenGLSoftwareSubgroupError(
+            raise software_subgroup_error(
                 f"Target '{target}' does not consume software_subgroup_width",
                 software_subgroup_width=software_subgroup_width,
                 reason="target-not-supported",
@@ -26115,7 +26123,7 @@ def _generate_project_target_from_crossgl_ast(
         try:
             configure_software_subgroup(software_subgroup_width)
         except (TypeError, ValueError) as exc:
-            raise OpenGLSoftwareSubgroupError(
+            raise software_subgroup_error(
                 "software_subgroup_width must be the integer 32",
                 software_subgroup_width=software_subgroup_width,
                 reason="configured-width-invalid",
@@ -27091,7 +27099,7 @@ def _translate_project_impl(
                 software_subgroup_width = None
                 directx_relative_wave_shuffle_out_of_range = None
                 try:
-                    software_subgroup_width = _project_opengl_software_subgroup_width(
+                    software_subgroup_width = _project_software_subgroup_width(
                         target,
                         source_options,
                     )

@@ -441,6 +441,33 @@ class DirectXWorkgroupSizeError(ValueError):
         self.reason = reason
 
 
+class DirectXSoftwareSubgroupError(ValueError):
+    """Raised when barrier-backed HLSL subgroup emulation is not provably safe."""
+
+    project_diagnostic_code = "project.translate.directx-software-subgroup-invalid"
+    missing_capabilities = ("directx.software-subgroup-lowering",)
+    check_kind = "execution-specialization"
+
+    def __init__(
+        self,
+        message,
+        *,
+        software_subgroup_width=None,
+        workgroup_size=None,
+        operation=None,
+        reason,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.software_subgroup_width = software_subgroup_width
+        self.workgroup_size = (
+            tuple(workgroup_size) if workgroup_size is not None else None
+        )
+        self.operation = operation
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXEntryPointSelectionError(ValueError):
     """Raised when a requested standalone DirectX entry cannot be selected."""
 
@@ -1911,6 +1938,9 @@ class HLSLCodeGen:
     HLSL_GLSL_BUILTIN_INT_CONSTANTS = GLSL_BUILTIN_INT_LIMITS
     HLSL_SPECIALIZATION_CONSTANT_TYPES = frozenset({"bool", "int", "uint", "float"})
     HLSL_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_POLICIES = frozenset({"undefined", "self"})
+    HLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH = 32
+    HLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset({"WaveShuffleDown"})
+    HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
 
     def __init__(
         self,
@@ -1918,6 +1948,7 @@ class HLSLCodeGen:
         *,
         cooperative_matrix_software_lowering=False,
         relative_wave_shuffle_out_of_range="undefined",
+        software_subgroup_width=None,
     ):
         """Initialize DirectX type maps and per-generation resource state."""
         if not isinstance(cooperative_matrix_software_lowering, bool):
@@ -1925,6 +1956,7 @@ class HLSLCodeGen:
         self.target_profile = self.normalize_directx_target_profile(target_profile)
         self.cooperative_matrix_software_lowering = cooperative_matrix_software_lowering
         self.set_relative_wave_shuffle_out_of_range(relative_wave_shuffle_out_of_range)
+        self.set_software_subgroup_width(software_subgroup_width)
         self.directx_cooperative_matrix_lowerings = {}
         self.texture_variables = set()
         self.sampler_variables = set()
@@ -2051,6 +2083,12 @@ class HLSLCodeGen:
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
+        self.required_hlsl_software_subgroup_helpers = set()
+        self.hlsl_software_subgroup_helper_names = {}
+        self.hlsl_software_subgroup_workgroup_size = None
+        self.hlsl_software_subgroup_invocation_count = None
+        self.hlsl_software_subgroup_function_names = set()
+        self.hlsl_software_subgroup_invocation_expressions = {}
         self.required_hlsl_physical_subgroup_id_helper = False
         self.hlsl_physical_subgroup_id_helper_names = {}
         self.hlsl_lowered_struct_resource_members = {}
@@ -2457,6 +2495,20 @@ class HLSLCodeGen:
                 "relative_wave_shuffle_out_of_range must be one of: " f"{choices}"
             )
         self.relative_wave_shuffle_out_of_range = normalized
+
+    def set_software_subgroup_width(self, width):
+        """Configure fail-closed barrier-backed DirectX subgroup lowering."""
+        if width is not None and (
+            isinstance(width, bool) or not isinstance(width, int)
+        ):
+            raise TypeError("software_subgroup_width must be an integer or None")
+        if width not in {None, self.HLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH}:
+            raise ValueError(
+                "software_subgroup_width currently supports only an exact width "
+                f"of {self.HLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH}"
+            )
+        self.software_subgroup_width = width
+        return self
 
     def generate(self, ast):
         """Generate complete HLSL source for a CrossGL AST."""
@@ -2966,6 +3018,12 @@ class HLSLCodeGen:
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
+        self.required_hlsl_software_subgroup_helpers = set()
+        self.hlsl_software_subgroup_helper_names = {}
+        self.hlsl_software_subgroup_workgroup_size = None
+        self.hlsl_software_subgroup_invocation_count = None
+        self.hlsl_software_subgroup_function_names = set()
+        self.hlsl_software_subgroup_invocation_expressions = {}
         self.required_hlsl_physical_subgroup_id_helper = False
         self.hlsl_physical_subgroup_id_helper_names = {}
         self.current_hlsl_available_functions = {}
@@ -3380,6 +3438,7 @@ class HLSLCodeGen:
         self.unsupported_glsl_buffer_block_functions = (
             self.collect_unsupported_glsl_buffer_block_functions(functions)
         )
+        self.prepare_hlsl_software_subgroup_contract(ast, target_stage)
         self.validate_global_resource_shadows(ast)
         self.global_mixed_sampler_names = self.collect_global_mixed_sampler_names(ast)
         self.global_mixed_sampler_aliases = {
@@ -4227,6 +4286,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_inverse_hyperbolic_helpers()
         code += self.generate_hlsl_complex64_helpers()
+        code += self.generate_hlsl_software_subgroup_helpers()
         code += self.generate_hlsl_defined_relative_wave_shuffle_helpers()
         code += self.generate_hlsl_physical_subgroup_id_helper()
         code += self.generate_hlsl_bfloat16_helpers()
@@ -4285,6 +4345,677 @@ class HLSLCodeGen:
                 helper_name += "_"
             self.hlsl_trailing_zero_helper_names[operand_type] = helper_name
             used_names.add(helper_name)
+
+    def hlsl_software_subgroup_error(
+        self,
+        message,
+        *,
+        workgroup_size=None,
+        operation=None,
+        reason,
+        source_location=None,
+    ):
+        return DirectXSoftwareSubgroupError(
+            message,
+            software_subgroup_width=self.software_subgroup_width,
+            workgroup_size=workgroup_size,
+            operation=operation,
+            reason=reason,
+            source_location=source_location,
+        )
+
+    @staticmethod
+    def hlsl_software_subgroup_statement_list(body):
+        if hasattr(body, "statements"):
+            return list(body.statements or [])
+        if isinstance(body, list):
+            return list(body)
+        if body is None:
+            return []
+        return [body]
+
+    def hlsl_software_subgroup_operation_records(self, root):
+        records = []
+        for node in self.walk_ast(root):
+            operation = None
+            if isinstance(node, WaveOpNode):
+                operation = node.operation
+            elif isinstance(node, FunctionCallNode):
+                function_name = self.function_call_name(node)
+                metal_name = self.hlsl_metal_simd_shuffle_name(function_name)
+                if metal_name is not None:
+                    operation = {
+                        "simd_broadcast": "WaveReadLaneAt",
+                        "simd_shuffle": "WaveReadLaneAt",
+                        "simd_shuffle_down": "WaveShuffleDown",
+                        "simd_shuffle_up": "WaveShuffleUp",
+                        "simd_shuffle_and_fill_up": "WaveShuffleAndFillUp",
+                    }[metal_name]
+                elif function_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
+                    operation = function_name
+            if operation in self.HLSL_WAVE_INTRINSIC_ARITIES:
+                records.append((operation, node))
+        return records
+
+    def hlsl_software_subgroup_stage_entries(self, ast, target_stage=None):
+        entries = []
+        seen = set()
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if target_stage is not None and stage_name != target_stage:
+                continue
+            function = getattr(stage, "entry_point", None)
+            if function is None or id(function) in seen:
+                continue
+            seen.add(id(function))
+            entries.append(
+                (stage_name, function, getattr(stage, "execution_config", None))
+            )
+        for function in getattr(ast, "functions", []) or []:
+            stage_name = function_stage_name(function)
+            if stage_name is None:
+                continue
+            if target_stage is not None and stage_name != target_stage:
+                continue
+            if id(function) in seen:
+                continue
+            seen.add(id(function))
+            entries.append(
+                (
+                    stage_name,
+                    function,
+                    getattr(function, "execution_config", None),
+                )
+            )
+        return entries
+
+    def hlsl_software_subgroup_parameter_expression(self, function):
+        local_index = None
+        local_id = None
+        subgroup_id = None
+        subgroup_lane = None
+        for parameter in (
+            getattr(function, "parameters", getattr(function, "params", [])) or []
+        ):
+            name = getattr(parameter, "name", None)
+            if not name:
+                continue
+            name = self.hlsl_declaration_identifier_name(name)
+            semantic = self.semantic_from_node(parameter)
+            canonical = self.hlsl_canonical_semantic(semantic)
+            if semantic == "gl_LocalInvocationIndex" or canonical == "SV_GroupIndex":
+                local_index = name
+            elif semantic == "gl_LocalInvocationID" or canonical == "SV_GroupThreadID":
+                local_id = name
+            elif semantic == "gl_SubgroupID":
+                subgroup_id = name
+            elif semantic == "gl_SubgroupInvocationID":
+                subgroup_lane = name
+
+        if local_index is not None:
+            return f"uint({local_index})"
+        if local_id is not None:
+            x, y, _z = self.hlsl_software_subgroup_workgroup_size
+            return (
+                f"(uint({local_id}.x) + {x}u * "
+                f"(uint({local_id}.y) + {y}u * uint({local_id}.z)))"
+            )
+        if subgroup_id is not None and subgroup_lane is not None:
+            return (
+                f"(uint({subgroup_id}) * {self.software_subgroup_width}u + "
+                f"uint({subgroup_lane}))"
+            )
+        return None
+
+    def hlsl_software_subgroup_expression_identifier_names(self, expression):
+        return {
+            node.name
+            for node in self.walk_ast(expression)
+            if isinstance(node, IdentifierNode) and getattr(node, "name", None)
+        }
+
+    def hlsl_software_subgroup_assignment_target_name(self, node):
+        target = getattr(node, "target", getattr(node, "left", None))
+        return self.expression_name(target)
+
+    def hlsl_software_subgroup_uniform_expression(self, expression, uniform_names):
+        if expression is None:
+            return False
+        if (
+            evaluate_literal_int_expression(expression, self.literal_int_constants)
+            is not None
+        ):
+            return True
+        for node in self.walk_ast(expression):
+            if isinstance(node, (AssignmentNode, FunctionCallNode, WaveOpNode)):
+                return False
+            if isinstance(node, UnaryOpNode) and self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            ) in {"++", "--"}:
+                return False
+            if isinstance(node, IdentifierNode) and node.name not in uniform_names:
+                return False
+        return True
+
+    def hlsl_software_subgroup_uniform_for(self, node, uniform_names):
+        initializer = getattr(node, "init", None)
+        if not isinstance(initializer, VariableNode):
+            return False
+        loop_name = getattr(initializer, "name", None)
+        loop_type = self.map_type(getattr(initializer, "var_type", None))
+        if not loop_name or loop_type not in {
+            "int",
+            "uint",
+            "int16_t",
+            "uint16_t",
+            "min16int",
+            "min16uint",
+        }:
+            return False
+        constants = self.literal_int_constants
+        initial_expression = getattr(initializer, "initial_value", None)
+        initial_value = evaluate_literal_int_expression(initial_expression, constants)
+        if (
+            initial_value is None
+            and not self.hlsl_software_subgroup_uniform_expression(
+                initial_expression, uniform_names
+            )
+        ):
+            return False
+
+        condition = getattr(node, "condition", None)
+        if not isinstance(condition, BinaryOpNode):
+            return False
+        operator = self.map_operator(
+            getattr(condition, "op", getattr(condition, "operator", None))
+        )
+        if operator not in {"<", "<=", ">", ">="}:
+            return False
+        left_name = self.expression_name(condition.left)
+        right_name = self.expression_name(condition.right)
+        if left_name == loop_name and right_name != loop_name:
+            bound = condition.right
+            loop_on_left = True
+        elif right_name == loop_name and left_name != loop_name:
+            bound = condition.left
+            loop_on_left = False
+        else:
+            return False
+        literal_bound = evaluate_literal_int_expression(bound, constants)
+        if (
+            literal_bound is None
+            and not self.hlsl_software_subgroup_uniform_expression(
+                bound, set(uniform_names) | {loop_name}
+            )
+        ):
+            return False
+
+        update = getattr(node, "update", None)
+        halving_update = False
+        if isinstance(update, UnaryOpNode):
+            update_operator = self.map_operator(
+                getattr(update, "op", getattr(update, "operator", None))
+            )
+            if update_operator not in {"++", "--"}:
+                return False
+            if self.expression_name(getattr(update, "operand", None)) != loop_name:
+                return False
+            increasing = update_operator == "++"
+        elif isinstance(update, AssignmentNode):
+            update_operator = self.map_operator(
+                getattr(update, "op", getattr(update, "operator", None))
+            )
+            if (
+                update_operator not in {"/=", ">>="}
+                or self.hlsl_software_subgroup_assignment_target_name(update)
+                != loop_name
+            ):
+                return False
+            update_value = getattr(update, "value", getattr(update, "right", None))
+            concrete_update_value = evaluate_literal_int_expression(
+                update_value, constants
+            )
+            if (
+                concrete_update_value is None
+                or (update_operator == "/=" and concrete_update_value < 2)
+                or (update_operator == ">>=" and concrete_update_value < 1)
+            ):
+                return False
+            increasing = False
+            halving_update = True
+        else:
+            return False
+
+        normalized_operator = (
+            operator
+            if loop_on_left
+            else {"<": ">", "<=": ">=", ">": "<", ">=": "<="}[operator]
+        )
+        if halving_update:
+            canonical_positive_bound = (
+                normalized_operator == ">" and literal_bound == 0
+            ) or (normalized_operator == ">=" and literal_bound == 1)
+            if not canonical_positive_bound:
+                return False
+        elif increasing != (normalized_operator in {"<", "<="}):
+            return False
+
+        bound_names = self.hlsl_software_subgroup_expression_identifier_names(bound)
+        for child in self.walk_ast(getattr(node, "body", None)):
+            if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
+                return False
+            if isinstance(child, AssignmentNode):
+                target_name = self.hlsl_software_subgroup_assignment_target_name(child)
+                if target_name == loop_name or target_name in bound_names:
+                    return False
+            if isinstance(child, UnaryOpNode) and self.map_operator(
+                getattr(child, "op", getattr(child, "operator", None))
+            ) in {"++", "--"}:
+                target_name = self.expression_name(getattr(child, "operand", None))
+                if target_name == loop_name or target_name in bound_names:
+                    return False
+        return True
+
+    def hlsl_software_subgroup_contains_work(self, root, dependent_names):
+        if self.hlsl_software_subgroup_operation_records(root):
+            return True
+        return any(
+            isinstance(node, FunctionCallNode)
+            and self.function_call_name(node) in dependent_names
+            for node in self.walk_ast(root)
+        )
+
+    def validate_hlsl_software_subgroup_control_flow(
+        self, function, dependent_names, uniform_names
+    ):
+        body = getattr(function, "body", None)
+        operation_records = self.hlsl_software_subgroup_operation_records(body)
+        operation = operation_records[0][0] if operation_records else "WaveShuffleDown"
+        source_location = (
+            getattr(operation_records[0][1], "source_location", None)
+            if operation_records
+            else getattr(function, "source_location", None)
+        )
+        if any(isinstance(node, ReturnNode) for node in self.walk_ast(body)):
+            raise self.hlsl_software_subgroup_error(
+                "DirectX software subgroup barriers cannot be reached through a "
+                "function containing an early return",
+                workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                operation=operation,
+                reason="early-return-unproven",
+                source_location=source_location,
+            )
+
+        def validate_statements(statements, names):
+            for statement in self.hlsl_software_subgroup_statement_list(statements):
+                if not self.hlsl_software_subgroup_contains_work(
+                    statement, dependent_names
+                ):
+                    continue
+                if isinstance(statement, (BlockNode,)) or hasattr(
+                    statement, "statements"
+                ):
+                    validate_statements(statement, set(names))
+                    continue
+                if isinstance(statement, ForNode):
+                    if not self.hlsl_software_subgroup_uniform_for(statement, names):
+                        raise self.hlsl_software_subgroup_error(
+                            "DirectX software subgroup barriers require a "
+                            "statically uniform for loop",
+                            workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                            operation=operation,
+                            reason="potentially-divergent-control-flow",
+                            source_location=getattr(
+                                statement, "source_location", source_location
+                            ),
+                        )
+                    initializer = getattr(statement, "init", None)
+                    nested_names = set(names)
+                    if isinstance(initializer, VariableNode) and initializer.name:
+                        nested_names.add(initializer.name)
+                    validate_statements(getattr(statement, "body", None), nested_names)
+                    continue
+                if isinstance(
+                    statement,
+                    (
+                        IfNode,
+                        WhileNode,
+                        DoWhileNode,
+                        LoopNode,
+                        SwitchNode,
+                        MatchNode,
+                        ForInNode,
+                    ),
+                ):
+                    raise self.hlsl_software_subgroup_error(
+                        "DirectX software subgroup barriers require statically "
+                        "uniform control flow",
+                        workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                        operation=operation,
+                        reason="potentially-divergent-control-flow",
+                        source_location=getattr(
+                            statement, "source_location", source_location
+                        ),
+                    )
+                if any(
+                    isinstance(child, TernaryOpNode)
+                    and self.hlsl_software_subgroup_contains_work(
+                        child, dependent_names
+                    )
+                    for child in self.walk_ast(statement)
+                ):
+                    raise self.hlsl_software_subgroup_error(
+                        "DirectX software subgroup barriers cannot be selected by "
+                        "a conditional expression",
+                        workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                        operation=operation,
+                        reason="potentially-divergent-control-flow",
+                        source_location=source_location,
+                    )
+                if any(
+                    isinstance(child, BinaryOpNode)
+                    and self.map_operator(
+                        getattr(child, "op", getattr(child, "operator", None))
+                    )
+                    in {"&&", "||"}
+                    and self.hlsl_software_subgroup_contains_work(
+                        child, dependent_names
+                    )
+                    for child in self.walk_ast(statement)
+                ):
+                    raise self.hlsl_software_subgroup_error(
+                        "DirectX software subgroup barriers cannot be selected by "
+                        "a short-circuit expression",
+                        workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                        operation=operation,
+                        reason="potentially-divergent-control-flow",
+                        source_location=source_location,
+                    )
+
+        validate_statements(body, set(uniform_names))
+
+    def prepare_hlsl_software_subgroup_contract(self, ast, target_stage=None):
+        self.required_hlsl_software_subgroup_helpers = set()
+        self.hlsl_software_subgroup_helper_names = {}
+        self.hlsl_software_subgroup_workgroup_size = None
+        self.hlsl_software_subgroup_invocation_count = None
+        self.hlsl_software_subgroup_function_names = set()
+        self.hlsl_software_subgroup_invocation_expressions = {}
+        if self.software_subgroup_width is None:
+            return
+
+        entries = self.hlsl_software_subgroup_stage_entries(ast, target_stage)
+        if len(entries) != 1 or entries[0][0] != "compute":
+            raise self.hlsl_software_subgroup_error(
+                "DirectX software subgroup lowering requires exactly one compute "
+                "entry point and no other emitted stages",
+                reason="entry-point-contract-invalid",
+            )
+        _stage_name, entry_function, execution_config = entries[0]
+        raw_workgroup_size = tuple(compute_local_size(execution_config))
+        concrete_workgroup_size = []
+        for value in raw_workgroup_size:
+            text = str(value).strip()
+            if not re.fullmatch(r"[0-9]+", text):
+                concrete_workgroup_size = []
+                break
+            concrete_workgroup_size.append(int(text))
+        concrete_workgroup_size = tuple(concrete_workgroup_size)
+        invocation_count = (
+            concrete_workgroup_size[0]
+            * concrete_workgroup_size[1]
+            * concrete_workgroup_size[2]
+            if len(concrete_workgroup_size) == 3
+            else 0
+        )
+        if not (
+            len(concrete_workgroup_size) == 3
+            and all(value > 0 for value in concrete_workgroup_size)
+            and concrete_workgroup_size[0] % self.software_subgroup_width == 0
+            and invocation_count <= 1024
+        ):
+            raise self.hlsl_software_subgroup_error(
+                "DirectX software subgroup lowering requires concrete positive "
+                "local dimensions, local_size_x divisible by the software "
+                "subgroup width, and at most 1024 invocations",
+                workgroup_size=raw_workgroup_size,
+                reason="workgroup-size-mismatch",
+                source_location=getattr(entry_function, "source_location", None),
+            )
+        self.hlsl_software_subgroup_workgroup_size = concrete_workgroup_size
+        self.hlsl_software_subgroup_invocation_count = invocation_count
+
+        if self.relative_wave_shuffle_out_of_range != "self":
+            raise self.hlsl_software_subgroup_error(
+                "DirectX software relative shuffles require the explicit "
+                "calling-lane out-of-range policy",
+                workgroup_size=concrete_workgroup_size,
+                reason="out-of-range-policy-unproven",
+                source_location=getattr(entry_function, "source_location", None),
+            )
+
+        wave_attributes = [
+            attribute
+            for attribute in getattr(entry_function, "attributes", []) or []
+            if self.hlsl_wave_size_attribute(attribute)
+        ]
+        for attribute in wave_attributes:
+            arguments = list(getattr(attribute, "arguments", []) or [])
+            width = (
+                self.hlsl_int_literal_value(arguments[0])
+                if len(arguments) == 1
+                else None
+            )
+            if width != self.software_subgroup_width:
+                raise self.hlsl_software_subgroup_error(
+                    "DirectX software subgroup width conflicts with the source "
+                    "WaveSize contract",
+                    workgroup_size=concrete_workgroup_size,
+                    reason="hardware-contract-conflict",
+                    source_location=getattr(attribute, "source_location", None),
+                )
+
+        all_records = self.hlsl_software_subgroup_operation_records(ast)
+        if not all_records:
+            raise self.hlsl_software_subgroup_error(
+                "DirectX software subgroup lowering was requested but no subgroup "
+                "operation is present",
+                workgroup_size=concrete_workgroup_size,
+                reason="operation-set-empty",
+                source_location=getattr(entry_function, "source_location", None),
+            )
+        for operation, node in all_records:
+            if operation not in self.HLSL_SOFTWARE_SUBGROUP_OPERATIONS:
+                raise self.hlsl_software_subgroup_error(
+                    f"DirectX software subgroup lowering does not support "
+                    f"'{operation}'",
+                    workgroup_size=concrete_workgroup_size,
+                    operation=operation,
+                    reason="operation-unsupported",
+                    source_location=getattr(node, "source_location", None),
+                )
+
+        functions = self.collect_functions(ast)
+        functions_by_name = {}
+        duplicate_names = set()
+        for function in functions:
+            name = getattr(function, "name", None)
+            if not name:
+                continue
+            if name in functions_by_name:
+                duplicate_names.add(name)
+            else:
+                functions_by_name[name] = function
+        direct_names = {
+            name
+            for name, function in functions_by_name.items()
+            if self.hlsl_software_subgroup_operation_records(
+                getattr(function, "body", None)
+            )
+        }
+        dependent_names = set(direct_names)
+        changed = True
+        while changed:
+            changed = False
+            for name, function in functions_by_name.items():
+                if name in dependent_names:
+                    continue
+                if any(
+                    isinstance(node, FunctionCallNode)
+                    and self.function_call_name(node) in dependent_names
+                    for node in self.walk_ast(getattr(function, "body", None))
+                ):
+                    dependent_names.add(name)
+                    changed = True
+        if duplicate_names & dependent_names:
+            ambiguous = sorted(duplicate_names & dependent_names)[0]
+            raise self.hlsl_software_subgroup_error(
+                "DirectX software subgroup lowering cannot prove the overloaded "
+                f"helper '{ambiguous}'",
+                workgroup_size=concrete_workgroup_size,
+                reason="helper-identity-ambiguous",
+                source_location=getattr(entry_function, "source_location", None),
+            )
+        entry_name = getattr(entry_function, "name", None)
+        if entry_name not in dependent_names:
+            raise self.hlsl_software_subgroup_error(
+                "DirectX software subgroup operations are not reached from the "
+                "compute entry point",
+                workgroup_size=concrete_workgroup_size,
+                reason="helper-call-unproven",
+                source_location=getattr(entry_function, "source_location", None),
+            )
+
+        self.hlsl_software_subgroup_function_names = dependent_names
+        for name in direct_names:
+            function = functions_by_name[name]
+            expression = self.hlsl_software_subgroup_parameter_expression(function)
+            if expression is None:
+                records = self.hlsl_software_subgroup_operation_records(
+                    getattr(function, "body", None)
+                )
+                raise self.hlsl_software_subgroup_error(
+                    "DirectX software subgroup helpers require a local-invocation "
+                    "index, local-invocation ID, or logical subgroup ID/lane pair",
+                    workgroup_size=concrete_workgroup_size,
+                    operation=records[0][0],
+                    reason="invocation-index-unavailable",
+                    source_location=getattr(records[0][1], "source_location", None),
+                )
+            self.hlsl_software_subgroup_invocation_expressions[name] = expression
+
+        uniform_names = set(self.literal_int_constants)
+        uniform_names.update(
+            parameter.name
+            for parameter in getattr(entry_function, "parameters", []) or []
+            if getattr(parameter, "name", None)
+            and (
+                "uniform" in (getattr(parameter, "qualifiers", []) or [])
+                or "constant" in (getattr(parameter, "qualifiers", []) or [])
+            )
+        )
+        for name in dependent_names:
+            self.validate_hlsl_software_subgroup_control_flow(
+                functions_by_name[name], dependent_names, uniform_names
+            )
+
+    def hlsl_software_subgroup_identifier(self, key, base_name):
+        existing = self.hlsl_software_subgroup_helper_names.get(key)
+        if existing is not None:
+            return existing
+        reserved_names = set(self.function_return_types)
+        reserved_names.update(self.global_variable_types)
+        reserved_names.update(self.structs_by_name)
+        reserved_names.update(self.hlsl_software_subgroup_helper_names.values())
+        name = base_name
+        suffix = 1
+        while name in reserved_names:
+            name = f"{base_name}_{suffix}"
+            suffix += 1
+        self.hlsl_software_subgroup_helper_names[key] = name
+        return name
+
+    def hlsl_software_subgroup_scratch_name(self, value_type):
+        suffix = re.sub(r"[^A-Za-z0-9_]", "_", value_type)
+        return self.hlsl_software_subgroup_identifier(
+            ("scratch", value_type),
+            f"__crossgl_software_subgroup_scratch_{suffix}",
+        )
+
+    def hlsl_software_subgroup_helper_name(self, operation, value_type):
+        suffix = re.sub(r"[^A-Za-z0-9_]", "_", value_type)
+        return self.hlsl_software_subgroup_identifier(
+            ("helper", operation, value_type),
+            f"__crossgl_software_subgroup_shuffle_down_{suffix}",
+        )
+
+    def hlsl_software_subgroup_shuffle_call(
+        self, operation, value_type, value_expression, delta_expression
+    ):
+        mapped_value_type = self.map_type(value_type)
+        if mapped_value_type not in self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES:
+            raise self.hlsl_software_subgroup_error(
+                "DirectX software subgroup shuffles support only 32-bit float, "
+                "int, and uint scalar payloads",
+                workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                operation=operation,
+                reason="value-type-unsupported",
+            )
+        invocation = self.hlsl_software_subgroup_invocation_expressions.get(
+            self.current_function_name
+        )
+        if invocation is None:
+            raise self.hlsl_software_subgroup_error(
+                "DirectX software subgroup shuffle has no proven logical "
+                "invocation index in the current function",
+                workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                operation=operation,
+                reason="invocation-index-unavailable",
+            )
+        key = (operation, mapped_value_type)
+        self.required_hlsl_software_subgroup_helpers.add(key)
+        helper = self.hlsl_software_subgroup_helper_name(operation, mapped_value_type)
+        return (
+            f"{helper}({value_expression}, uint({delta_expression}), "
+            f"uint({invocation}))"
+        )
+
+    def generate_hlsl_software_subgroup_helpers(self):
+        if not self.required_hlsl_software_subgroup_helpers:
+            return ""
+        invocation_count = self.hlsl_software_subgroup_invocation_count
+        width = self.software_subgroup_width
+        value_types = sorted(
+            value_type
+            for _operation, value_type in self.required_hlsl_software_subgroup_helpers
+        )
+        code = ""
+        for value_type in value_types:
+            scratch = self.hlsl_software_subgroup_scratch_name(value_type)
+            code += f"groupshared {value_type} {scratch}[{invocation_count}];\n"
+        code += "\n"
+        for operation, value_type in sorted(
+            self.required_hlsl_software_subgroup_helpers
+        ):
+            helper = self.hlsl_software_subgroup_helper_name(operation, value_type)
+            scratch = self.hlsl_software_subgroup_scratch_name(value_type)
+            code += (
+                f"{value_type} {helper}({value_type} value, uint delta, "
+                "uint invocation) {\n"
+                f"    uint lane = invocation % {width}u;\n"
+                "    uint subgroupBase = invocation - lane;\n"
+                f"    {scratch}[invocation] = value;\n"
+                "    GroupMemoryBarrierWithGroupSync();\n"
+                f"    bool sourceValid = delta < ({width}u - lane);\n"
+                "    uint sourceLane = sourceValid ? lane + delta : lane;\n"
+                f"    {value_type} result = sourceValid\n"
+                f"        ? {scratch}[subgroupBase + sourceLane]\n"
+                "        : value;\n"
+                "    GroupMemoryBarrierWithGroupSync();\n"
+                "    return result;\n"
+                "}\n\n"
+            )
+        return code
 
     def prepare_hlsl_physical_subgroup_id_helper_names(self, functions):
         used_names = self.hlsl_helper_reserved_names(functions)
@@ -18114,6 +18845,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         return semantic.strip() in self.HLSL_GLSL_COMPUTE_BUILTIN_SEMANTICS
 
+    def hlsl_software_subgroup_builtin_expression(
+        self,
+        semantic,
+        execution_config=None,
+        *,
+        param_list=None,
+        group_index_name=None,
+    ):
+        if self.software_subgroup_width is None:
+            return None
+        canonical = semantic.strip() if isinstance(semantic, str) else semantic
+        if canonical == "gl_SubgroupSize":
+            return f"{self.software_subgroup_width}u"
+        if canonical == "gl_NumSubgroups":
+            group_size = self.hlsl_compute_group_size_constant(execution_config)
+            return f"({group_size} / {self.software_subgroup_width}u)"
+        if canonical not in {"gl_SubgroupID", "gl_SubgroupInvocationID"}:
+            return None
+        if group_index_name is None:
+            group_index_name = self.hlsl_compute_group_index_dependency_name(param_list)
+        operator = "/" if canonical == "gl_SubgroupID" else "%"
+        return f"({group_index_name} {operator} " f"{self.software_subgroup_width}u)"
+
     def hlsl_compute_wave_builtin_parameter_prologue(
         self,
         parameter,
@@ -18139,13 +18893,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         builtin semantic.
         """
         canonical_semantic = semantic.strip() if isinstance(semantic, str) else semantic
-        if canonical_semantic == "gl_SubgroupID":
+        intrinsic = None
+        if self.software_subgroup_width is not None:
+            intrinsic = self.hlsl_software_subgroup_builtin_expression(
+                canonical_semantic,
+                execution_config,
+                param_list=param_list,
+            )
+        if intrinsic is None and canonical_semantic == "gl_SubgroupID":
             intrinsic = self.hlsl_compute_subgroup_id_expression(
                 func,
                 execution_config,
                 param_list=param_list,
             )
-        else:
+        elif intrinsic is None:
             intrinsic = self.hlsl_wave_builtin_intrinsic_expression(semantic)
         if intrinsic is None:
             return None
@@ -18357,6 +19118,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         param_list=None,
         group_index_name=None,
     ):
+        if self.software_subgroup_width is not None:
+            return self.hlsl_software_subgroup_builtin_expression(
+                "gl_SubgroupID",
+                execution_config,
+                param_list=param_list,
+                group_index_name=group_index_name,
+            )
         if self.hlsl_compute_single_wave_proven(func, execution_config):
             if group_index_name is None:
                 group_index_name = self.hlsl_compute_group_index_dependency_name(
@@ -18437,6 +19205,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if simd_name == "simd_shuffle_down" and len(args) == 2:
             data = self.generate_expression_with_expected(args[0], None)
             delta = self.generate_expression_with_expected(args[1], "uint")
+            if self.software_subgroup_width is not None:
+                return self.hlsl_cast_metal_simd_shuffle_result(
+                    self.hlsl_software_subgroup_shuffle_call(
+                        "WaveShuffleDown", value_type, data, delta
+                    )
+                )
             if self.relative_wave_shuffle_out_of_range == "self":
                 return self.hlsl_cast_metal_simd_shuffle_result(
                     self.hlsl_defined_relative_wave_shuffle_call(
@@ -19349,7 +20123,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             mapped_value_type = self.map_type(value_type)
             value = self.generate_expression_with_expected(args[0], mapped_value_type)
             delta = self.generate_expression_with_expected(args[1], "uint")
-            if self.relative_wave_shuffle_out_of_range == "self":
+            if self.software_subgroup_width is not None:
+                result = self.hlsl_software_subgroup_shuffle_call(
+                    operation,
+                    mapped_value_type,
+                    value,
+                    delta,
+                )
+            elif self.relative_wave_shuffle_out_of_range == "self":
                 result = self.hlsl_defined_relative_wave_shuffle_call(
                     operation,
                     mapped_value_type,
@@ -29339,6 +30120,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def required_hlsl_compute_builtin_parameters(self, func, execution_config=None):
         used_names = self.used_hlsl_compute_builtin_names(getattr(func, "body", []))
+        subgroup_invocation_expression = self.HLSL_WAVE_BUILTIN_INTRINSICS[
+            "gl_SubgroupInvocationID"
+        ]
+        subgroup_size_expression = self.HLSL_WAVE_BUILTIN_INTRINSICS["gl_SubgroupSize"]
+        subgroup_count_expression = self.HLSL_WAVE_BUILTIN_INTRINSICS[
+            "gl_NumSubgroups"
+        ].replace(
+            self.HLSL_WAVE_GROUP_SIZE_PLACEHOLDER,
+            self.hlsl_compute_group_size_constant(execution_config),
+        )
+        if self.software_subgroup_width is not None:
+            if "gl_SubgroupInvocationID" in used_names:
+                subgroup_invocation_expression = (
+                    self.hlsl_software_subgroup_builtin_expression(
+                        "gl_SubgroupInvocationID", execution_config
+                    )
+                )
+            subgroup_size_expression = self.hlsl_software_subgroup_builtin_expression(
+                "gl_SubgroupSize", execution_config
+            )
+            subgroup_count_expression = self.hlsl_software_subgroup_builtin_expression(
+                "gl_NumSubgroups", execution_config
+            )
         builtin_parameters = [
             (
                 "gl_GlobalInvocationID",
@@ -29380,24 +30184,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 None,
                 None,
                 None,
-                self.HLSL_WAVE_BUILTIN_INTRINSICS["gl_SubgroupInvocationID"],
+                subgroup_invocation_expression,
             ),
             (
                 "gl_SubgroupSize",
                 None,
                 None,
                 None,
-                self.HLSL_WAVE_BUILTIN_INTRINSICS["gl_SubgroupSize"],
+                subgroup_size_expression,
             ),
             (
                 "gl_NumSubgroups",
                 None,
                 None,
                 None,
-                self.HLSL_WAVE_BUILTIN_INTRINSICS["gl_NumSubgroups"].replace(
-                    self.HLSL_WAVE_GROUP_SIZE_PLACEHOLDER,
-                    self.hlsl_compute_group_size_constant(execution_config),
-                ),
+                subgroup_count_expression,
             ),
         ]
         reserved_names = set(self.local_variable_types)
@@ -29405,11 +30206,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         reserved_names.update(self.current_identifier_reserved_names)
         reserved_names.update(self.current_identifier_aliases.values())
 
-        # gl_SubgroupID (the physical wave index within the threadgroup) has no
-        # direct HLSL intrinsic. SV_GroupIndex / WaveGetLaneCount() is not valid:
-        # Direct3D does not promise that flattened group indices are assigned to
-        # waves contiguously (notably for multidimensional groups). Allocate one
-        # collision-safe wave ID in a uniform entry prologue and reuse it here.
+        # gl_SubgroupID has no direct HLSL system-value semantic. Explicit
+        # software-subgroup mode derives a deterministic logical ID from
+        # SV_GroupIndex; physical-wave mode cannot divide by WaveGetLaneCount()
+        # because Direct3D does not promise contiguous flattened group indices in
+        # each wave, so it allocates one collision-safe ID in a uniform prologue.
         subgroup_id_used = "gl_SubgroupID" in used_names
         group_index_name = None
 

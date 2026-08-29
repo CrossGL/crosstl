@@ -59,6 +59,7 @@ from crosstl.project.runtime_verification import (
     prepare_runtime_execution,
     verify_runtime_test_manifest,
 )
+from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer
@@ -2298,6 +2299,94 @@ def test_directx_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_de
             "tolerance": {"absolute": 0.0, "relative": 0.0},
             "expected": {"dtype": "uint32", "shape": [8]},
             "actual": {"dtype": "uint32", "shape": [8]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
+
+
+def test_directx_compute_runtime_executes_software_subgroup_shuffle_on_device(
+    tmp_path,
+):
+    if os.environ.get("CROSTL_RUN_DIRECTX_SOFTWARE_SUBGROUP_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_DIRECTX_SOFTWARE_SUBGROUP_DEVICE_TEST=1 to run "
+            "the Direct3D software subgroup test"
+        )
+    if not sys.platform.startswith("win32"):
+        pytest.fail("Direct3D software subgroup runtime proof requires Windows")
+    if shutil.which("dxc") is None:
+        pytest.fail("DXC is required for the Direct3D software subgroup proof")
+    try:
+        __import__("compushady")
+    except ImportError as exc:
+        pytest.fail(f"Direct3D software subgroup dependency is unavailable: {exc}")
+
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "directx"
+    source_path = fixture_dir / "software_subgroup_shuffle.cgl"
+    artifact_report = json.loads(
+        (fixture_dir / "software_subgroup_shuffle.artifacts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    ast = Parser(Lexer(source_path.read_text(encoding="utf-8")).get_tokens()).parse()
+    generated = HLSLCodeGen(
+        relative_wave_shuffle_out_of_range="self",
+        software_subgroup_width=32,
+    ).generate(ast)
+    assert "[numthreads(32, 2, 1)]" in generated
+    assert "[WaveSize(32)]" in generated
+    assert "groupshared uint __crossgl_software_subgroup_scratch_uint[64];" in generated
+    assert "__crossgl_software_subgroup_shuffle_down_uint" in generated
+    assert "bool sourceValid = delta < (32u - lane);" in generated
+    assert "uint sourceLane = sourceValid ? lane + delta : lane;" in generated
+    assert "subgroupBase + lane + delta" not in generated
+    assert "uint subgroupID = (groupIndex / 32u);" in generated
+    assert "uint subgroupLane = (groupIndex % 32u);" in generated
+    assert "WaveReadLaneAt" not in generated
+    assert "WaveGetLaneIndex" not in generated
+    assert "__crossgl_physical_subgroup" not in generated
+
+    artifact_report["project"]["root"] = str(tmp_path)
+    artifact_path = tmp_path / artifact_report["artifacts"][0]["path"]
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(generated, encoding="utf-8")
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "software_subgroup_shuffle.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    assert manifest["success"] is True, json.dumps(manifest, indent=2)
+
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={
+            "directx": DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+        },
+    )
+
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
+    assert report["summary"]["fixtureCount"] == 1
+    assert report["summary"]["passedCount"] == 1
+    assert report["summary"]["failedCount"] == 0
+    assert report["summary"]["skippedCount"] == 0
+    assert report["summary"]["unavailableCount"] == 0
+    assert report["summary"]["translationFailedCount"] == 0
+    assert report["summary"]["runtimeFailedCount"] == 0
+    assert report["summary"]["comparisonFailedCount"] == 0
+    result = report["results"][0]
+    assert result["status"] == "passed", failure_context
+    assert result["comparisons"] == [
+        {
+            "name": "output",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [64]},
+            "actual": {"dtype": "uint32", "shape": [64]},
             "mismatchCount": 0,
             "maxAbsoluteError": 0.0,
             "maxRelativeError": 0.0,

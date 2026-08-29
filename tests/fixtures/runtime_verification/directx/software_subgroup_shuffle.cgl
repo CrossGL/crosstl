@@ -1,0 +1,17 @@
+shader DirectXSoftwareSubgroupShuffle {
+    RWStructuredBuffer<uint> output @ binding(0);
+
+    compute {
+        layout(local_size_x = 32, local_size_y = 2, local_size_z = 1) in;
+
+        void main(
+            uint groupIndex @ gl_LocalInvocationIndex,
+            uint subgroupID @ gl_SubgroupID,
+            uint subgroupLane @ gl_SubgroupInvocationID
+        ) @ WaveSize(32) {
+            uint value = groupIndex + 1u;
+            uint shuffled = WaveShuffleDown(value, 1u);
+            output[groupIndex] = shuffled + subgroupID * 1000u + subgroupLane * 100u;
+        }
+    }
+}
