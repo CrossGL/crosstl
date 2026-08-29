@@ -1530,10 +1530,10 @@ The same current pin has a bounded MXFP4 quantize/dequantize contract for
 ``quantized.cpp`` and ``fp_quantized.h`` fixes float32 input, group size 32,
 four payload bits, no global scale, workgroup ``[32, 1, 1]``, and one dispatched
 workgroup. Entry-scoped translation materializes only that specialization. The
-9,118-byte HLSL has SHA-256
-``7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a`` and
+9,123-byte HLSL has SHA-256
+``3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d`` and
 passes DXC under ``cs_6_6``, ``-enable-16bit-types``, and warnings as errors.
-Its 4,720-byte DXIL uses the explicit DirectX-only
+Its 4,716-byte DXIL uses the explicit DirectX-only
 ``project.source_options.metal.target_options.directx.widen_native_float16``
 mode. Source ``as_type<float16_t>(uint16_t)`` reconstructs its payload directly
 as float32 with integer IEEE-754 masks, while logical ``float16_t`` locals,
@@ -1558,8 +1558,15 @@ Integer decoding produced 9,240-byte HLSL under SHA-256
 ``936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625``,
 but the remaining ``fptrunc float to half``, half sign operation, and
 ``fpext half to float`` returned the identical 28 signed zeros in run
-33275550062, job 99161501105. The corrected contract therefore removes every
-native-half operation from the selected path rather than stopping at decode.
+33275550062, job 99161501105. Removing every half instruction produced a
+9,118-byte artifact under SHA-256
+``7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a``,
+but run 33277494856, job 99166677942 still returned the same signed zeros.
+DXIL then exposed the actual remaining defect: absent Metal/C++ scalar integer
+promotion reduced ``uint16_t(bits) << 23`` to a 16-bit shift by 7 plus an
+``0xffff`` mask. The corrected HLSL emits ``int(uint16_t(bits)) << 23`` and
+DXIL shifts the 32-bit value by 23 before ``asfloat``, with no native-half
+operation anywhere in the selected path.
 
 The 9,571-byte explicit-software-subgroup GLSL has SHA-256
 ``cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da``;

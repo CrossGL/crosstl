@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -55,8 +56,8 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a",
-        "sizeBytes": 9118,
+        "sha256": "3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d",
+        "sizeBytes": 9123,
     },
     "opengl": {
         "sha256": "cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da",
@@ -267,6 +268,8 @@ def _assert_directx_compiles(generated_path: Path) -> None:
         assert "fptrunc" not in assembly
         assert "fpext" not in assembly
         assert " half " not in assembly
+        assert re.search(r"shl(?: nsw)? i32 [^,\n]+, 23", assembly)
+        assert not re.search(r"shl(?: nsw)? i32 [^,\n]+, 7", assembly)
 
 
 def _assert_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
@@ -443,6 +446,7 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "[WaveSize(32)]" in generated
         assert "scale_dec_b = WaveActiveMax(abs(w_thread));" in generated
         assert "float scale = fp8_e8m0__operator_float(" in generated
+        assert "(int(uint16_t(self.bits)) << 23)" in generated
         assert "asfloat16(" not in generated
         assert (
             "float converted = __crossgl_binary16_to_float("

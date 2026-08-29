@@ -12511,15 +12511,15 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a"
+                "3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d"
             ),
-            "size_bytes": 9118,
+            "size_bytes": 9123,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
             "compiler_profile": "cs_6_6",
             "compiler_arguments": ["-enable-16bit-types", "-WX"],
-            "compiled_artifact_size_bytes": 4720,
+            "compiled_artifact_size_bytes": 4716,
             "compiler_validation_status": "passed",
         },
         "opengl": {
@@ -12553,6 +12553,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx_native_float16_widening": (
             "project.source_options.metal.target_options.directx."
             "widen_native_float16"
+        ),
+        "directx_native_16_bit_integer_promotion": (
+            "scalar-int16-and-uint16-promote-to-int-before-shifts-and-arithmetic"
         ),
         "opengl_binary16_bitcast": "exact-low-16-bit-payload-via-pack-unpack-half",
         "global_scale_read": "statically-eliminated-for-has_global_scale-false",
@@ -12610,16 +12613,32 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
                 "fptrunc-float-to-half-fsub-half-fpext-half-to-float"
             ),
         },
-        "corrected_dxil_contract": {
+        "widened_float16_narrow_shift_rejection": {
             "artifact_sha256": (
                 "7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a"
             ),
             "artifact_size_bytes": 9118,
+            "workflow_run": 33277494856,
+            "job": 99166677942,
+            "output_element_count": 32,
+            "mismatched_nonzero_output_count": 28,
+            "observed_nonzero_outputs": "signed-zero-only",
+            "native_half_operation_count": 0,
+            "rejected_dxil_scale_bit_construction": (
+                "native-uint16-shift-23-truncated-to-shift-7-and-mask-0xffff"
+            ),
+        },
+        "corrected_dxil_contract": {
+            "artifact_sha256": (
+                "3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d"
+            ),
+            "artifact_size_bytes": 9123,
             "source_bitcast": "integer-ieee754-binary16-to-float32",
             "subnormal_decode": "integer-ieee754-binary16-to-float32",
             "arithmetic": "fmul-float",
             "logical_float16_representation": "widened-float32",
             "native_half_operation_count": 0,
+            "scale_bit_construction": "promoted-int-shift-23-before-asfloat",
             "rounding": "none-in-selected-widened-path",
         },
     }

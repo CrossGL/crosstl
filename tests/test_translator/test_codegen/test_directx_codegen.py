@@ -6085,6 +6085,22 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
             return lhs + rhs;
         }
 
+        int shiftNarrowUnsignedByUint(uint16_t lhs, uint rhs) {
+            return lhs << rhs;
+        }
+
+        uint shiftUintByNarrow(uint lhs, uint16_t rhs) {
+            return lhs >> rhs;
+        }
+
+        ivec2 shiftNarrowVectors(int16_t2 lhs, uint16_t2 rhs) {
+            return lhs << rhs;
+        }
+
+        ivec2 shiftNarrowVectorByWide(int16_t2 lhs, uint rhs) {
+            return lhs >> rhs;
+        }
+
         float16_t2 mixedHalfVector(uint index, float16_t2 step) {
             return index * step;
         }
@@ -6138,6 +6154,11 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
     assert generated.count("return (int(lhs) + int(rhs));") == 2
     assert "return (uint(lhs) + rhs);" in generated
     assert "return (int(lhs) + rhs);" in generated
+    assert "return (int(lhs) << rhs);" in generated
+    assert "return (lhs >> int(rhs));" in generated
+    assert "return (int2(lhs) << int2(rhs));" in generated
+    assert "return (int2(lhs) >> rhs);" in generated
+    assert "return (uint(lhs) << rhs);" not in generated
     assert "return (float16_t(index) * step);" in generated
     assert "return (lhs + int16_t(rhs));" in generated
     assert "return (lhs + uint16_t(rhs));" in generated
@@ -6145,6 +6166,40 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
     assert generated.count("nextIndex(calls)") == 1
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("right_type", "reason"),
+    [
+        pytest.param(
+            "float16_t",
+            "non-integral-shift-operand",
+            id="non-integral-count",
+        ),
+        pytest.param(
+            "uint16_t2",
+            "scalar-left-vector-shift-unsupported",
+            id="scalar-left-vector-count",
+        ),
+    ],
+)
+def test_hlsl_native_16_bit_shift_rejects_unrepresentable_operands(right_type, reason):
+    shader = f"""
+    shader Native16BitShiftRejection {{
+        int combine(uint16_t lhs, {right_type} rhs) {{
+            return lhs << rhs;
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXNative16BitArithmeticError) as exc_info:
+        HLSLCodeGen(target_profile="dx12").generate(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.operator == "<<"
+    assert diagnostic.left_type == "uint16_t"
+    assert diagnostic.right_type == right_type
+    assert diagnostic.reason == reason
 
 
 def test_hlsl_native_16_bit_arithmetic_vector_width_mismatch_is_diagnostic():
@@ -15825,6 +15880,10 @@ def test_hlsl_native_binary16_widening_eliminates_native_half_roundtrip(tmp_path
             return float(scalePayload(bits, false));
         }
 
+        uint widenShift(uint16_t bits) {
+            return uint(bits << 23);
+        }
+
         compute {
             @ stage_entry
             @ numthreads(1, 1, 1)
@@ -15840,6 +15899,7 @@ def test_hlsl_native_binary16_widening_eliminates_native_half_roundtrip(tmp_path
     assert "float scalePayload(uint16_t bits, bool negative)" in generated
     assert "float value = __crossgl_binary16_to_float(uint(bits));" in generated
     assert "value *= 16384.0;" in generated
+    assert "return uint((int(bits) << 23));" in generated
     assert "-value" in generated
     assert "asfloat16(" not in generated
     assert "float16_t value" not in generated

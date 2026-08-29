@@ -10865,6 +10865,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "&",
             "|",
             "^",
+            "<<",
+            ">>",
             "==",
             "!=",
             "<",
@@ -10903,65 +10905,99 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ),
             )
 
-        if left_width > 1 and right_width > 1:
-            if left_info["mapped_type"] != right_info["mapped_type"]:
+        if operator in {"<<", ">>"}:
+            if left_integer is None or right_integer is None:
                 self.hlsl_native_16_bit_arithmetic_error(
                     node,
                     operator,
                     left_type,
                     right_type,
-                    reason="incompatible-vector-element-types",
+                    reason="non-integral-shift-operand",
+                    detail="Metal shift operands require independent integer promotion",
+                )
+            if left_width == 1 and right_width > 1:
+                self.hlsl_native_16_bit_arithmetic_error(
+                    node,
+                    operator,
+                    left_type,
+                    right_type,
+                    reason="scalar-left-vector-shift-unsupported",
                     detail=(
-                        "Metal does not implicitly convert between vector element "
-                        f"types '{left_info['mapped_type']}' and "
-                        f"'{right_info['mapped_type']}'"
+                        "a scalar left operand cannot preserve a vector shift-count "
+                        "shape"
                     ),
                 )
-            operation_base = left_info["base_type"]
-        elif left_width > 1 or right_width > 1:
-            vector_info = left_info if left_width > 1 else right_info
-            scalar_floating = right_floating if left_width > 1 else left_floating
-            vector_is_integer = (
-                left_integer is not None
-                if left_width > 1
-                else right_integer is not None
+            left_operation_base = self.hlsl_promoted_integer_arithmetic_base_type(
+                left_integer
             )
-            if vector_is_integer and scalar_floating is not None:
-                self.hlsl_native_16_bit_arithmetic_error(
-                    node,
-                    operator,
-                    left_type,
-                    right_type,
-                    reason="floating-to-integer-vector-conversion",
-                    detail=(
-                        "Metal does not implicitly convert a floating scalar to an "
-                        f"integer vector '{vector_info['mapped_type']}'"
-                    ),
-                )
-            operation_base = vector_info["base_type"]
+            right_operation_base = self.hlsl_promoted_integer_arithmetic_base_type(
+                right_integer
+            )
+            operation_base = left_operation_base
+            result_width = left_width
         else:
-            floating_infos = [
-                info for info in (left_floating, right_floating) if info is not None
-            ]
-            if floating_infos:
-                if operator in {"%", "&", "|", "^"}:
-                    return None
-                floating_bases = {info["base_type"] for info in floating_infos}
-                if "double" in floating_bases:
-                    operation_base = "double"
-                elif "float" in floating_bases:
-                    operation_base = "float"
-                elif "float16_t" in floating_bases:
-                    operation_base = "float16_t"
-                else:
-                    return None
-            else:
-                operation_base = self.hlsl_common_integer_arithmetic_base_type(
-                    left_integer,
-                    right_integer,
+            if left_width > 1 and right_width > 1:
+                if left_info["mapped_type"] != right_info["mapped_type"]:
+                    self.hlsl_native_16_bit_arithmetic_error(
+                        node,
+                        operator,
+                        left_type,
+                        right_type,
+                        reason="incompatible-vector-element-types",
+                        detail=(
+                            "Metal does not implicitly convert between vector element "
+                            f"types '{left_info['mapped_type']}' and "
+                            f"'{right_info['mapped_type']}'"
+                        ),
+                    )
+                operation_base = left_info["base_type"]
+            elif left_width > 1 or right_width > 1:
+                vector_info = left_info if left_width > 1 else right_info
+                scalar_floating = right_floating if left_width > 1 else left_floating
+                vector_is_integer = (
+                    left_integer is not None
+                    if left_width > 1
+                    else right_integer is not None
                 )
+                if vector_is_integer and scalar_floating is not None:
+                    self.hlsl_native_16_bit_arithmetic_error(
+                        node,
+                        operator,
+                        left_type,
+                        right_type,
+                        reason="floating-to-integer-vector-conversion",
+                        detail=(
+                            "Metal does not implicitly convert a floating scalar to an "
+                            f"integer vector '{vector_info['mapped_type']}'"
+                        ),
+                    )
+                operation_base = vector_info["base_type"]
+            else:
+                floating_infos = [
+                    info for info in (left_floating, right_floating) if info is not None
+                ]
+                if floating_infos:
+                    if operator in {"%", "&", "|", "^"}:
+                        return None
+                    floating_bases = {info["base_type"] for info in floating_infos}
+                    if "double" in floating_bases:
+                        operation_base = "double"
+                    elif "float" in floating_bases:
+                        operation_base = "float"
+                    elif "float16_t" in floating_bases:
+                        operation_base = "float16_t"
+                    else:
+                        return None
+                else:
+                    operation_base = self.hlsl_common_integer_arithmetic_base_type(
+                        left_integer,
+                        right_integer,
+                    )
 
-        result_width = max(left_width, right_width)
+            left_operation_base = operation_base
+            right_operation_base = operation_base
+            result_width = max(left_width, right_width)
+
         operation_type = operation_base + (
             "" if result_width == 1 else str(result_width)
         )
@@ -10969,6 +11005,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "left": left_info,
             "right": right_info,
             "operation_base": operation_base,
+            "left_operation_base": left_operation_base,
+            "right_operation_base": right_operation_base,
             "operation_type": operation_type,
             "result_width": result_width,
         }
@@ -11067,12 +11105,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         left = self.hlsl_native_16_bit_arithmetic_operand(
             lhs,
             contract["left"],
-            contract["operation_base"],
+            contract["left_operation_base"],
         )
         right = self.hlsl_native_16_bit_arithmetic_operand(
             rhs,
             contract["right"],
-            contract["operation_base"],
+            contract["right_operation_base"],
         )
         operation = f"({left} {binary_operator} {right})"
         return f"{lhs} = {target_info['mapped_type']}({operation})"
@@ -11095,12 +11133,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         left = self.hlsl_native_16_bit_arithmetic_operand(
             left,
             contract["left"],
-            contract["operation_base"],
+            contract["left_operation_base"],
         )
         right = self.hlsl_native_16_bit_arithmetic_operand(
             right,
             contract["right"],
-            contract["operation_base"],
+            contract["right_operation_base"],
         )
         return f"({left} {operator} {right})"
 

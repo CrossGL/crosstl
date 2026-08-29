@@ -960,11 +960,11 @@ and
 
 Entry-scoped translation materializes only the selected specialization with
 `T=float`, `group_size=32`, `bits=4`, and `has_global_scale=false`. The
-9,118-byte HLSL has SHA-256
-`7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a`,
+9,123-byte HLSL has SHA-256
+`3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d`,
 retains `[numthreads(32, 1, 1)]` and `[WaveSize(32)]`, and passes DXC under
 `cs_6_6`, `-enable-16bit-types`, and warnings as errors. Its compiled DXIL is
-4,720 bytes. This artifact explicitly enables the DirectX-only
+4,716 bytes. This artifact explicitly enables the DirectX-only
 `project.source_options.metal.target_options.directx.widen_native_float16`
 mode. Source `as_type<float16_t>(uint16_t)` reconstructs its exact payload as
 float32 with integer IEEE-754 masks, and logical `float16_t` locals, function
@@ -990,8 +990,15 @@ job 99158370210. Integer decoding then produced 9,240-byte HLSL under SHA-256
 `936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625`,
 but its remaining `fptrunc float to half`, half sign operation, and
 `fpext half to float` still returned the same 28 signed zeros in run
-33275550062, job 99161501105. The corrected contract removes native half from
-the selected payload, arithmetic, sign, return, and consumer path entirely.
+33275550062, job 99161501105. Removing every half instruction produced the
+9,118-byte artifact under SHA-256
+`7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a`,
+but run 33277494856, job 99166677942 still returned the same signed zeros.
+Its DXIL exposed the actual remaining defect: Metal/C++ scalar integer promotion
+was missing, so `(uint16_t(bits) << 23)` became a 16-bit shift reduced to 7 and
+masked with `0xffff`. The corrected HLSL emits
+`int(uint16_t(bits)) << 23`; DXIL now shifts the 32-bit value by 23 before
+`asfloat`, while retaining zero native-half instructions.
 
 The 9,571-byte GLSL has SHA-256
 `cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da`,
