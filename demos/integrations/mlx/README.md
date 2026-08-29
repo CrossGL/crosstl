@@ -1040,6 +1040,52 @@ forward workload only. It does not redirect MLX host execution, run the MLX
 test suite, or cover VJP, float16, bfloat16, looped entries, other axis sizes,
 or the historical wider dispatch records above.
 
+A sibling current-corpus proof selects `vjp_layer_normfloat32` at axis size 32
+through
+[`contracts/layer_norm_vjp.native-loader.dispatch.json`](contracts/layer_norm_vjp.native-loader.dispatch.json).
+It fixes one float32 row, `has_w=true` through function constant ID `20`, a
+`[32, 1, 1]` workgroup and 32-lane subgroup, one dispatch workgroup, and the
+explicit helper-access interval 0 through 95 required by three SIMD-sized
+threadgroup slices. The pinned
+`python/tests/test_fast.py::test_layer_norm_grad` case supplies the upstream
+shape and weighted-gradient provenance. Materialization selects
+`vjp_layer_norm_single_row<float, 8>`, `initialize_buffer<3>`,
+`threadgroup_sum<3>`, and `threadgroup_sum<1>` from seven reachable
+specializations while pruning 194 candidates.
+
+The generated HLSL is 7,504 bytes with SHA-256
+`7d45e40974cc5419bb93c106708460eb1edd5d68ec21a6afba7e9b7f6f05cf7e`.
+It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
+`WaveActiveSum` calls, compiles as `cs_6_6` with `-enable-16bit-types`, and
+must execute numerically through Direct3D 12 WARP on Windows CI. The generated
+software-subgroup GLSL is 8,291 bytes with SHA-256
+`9e6c4e6201e1c78e981a346275b849c37e6c8d834e7509d662f7aec5782980fa`.
+It retains deferred OpenGL specialization constant `20`, emits eight control
+barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
+instruction, and passes `glslangValidator` plus `spirv-val`.
+
+The OpenGL ABI package keeps its exact JSON runtime variant registry ready and
+actionable. Its generated native C++ registry header is deliberately marked
+unavailable with reason `specialization-requires-deferred-compilation`, because
+the GLSL source still requires specialization. The runtime derives a bounded
+deferred-compilation request, compiles GLSL to SPIR-V, applies `has_w=true`
+through the OpenGL SPIR-V specialization API, then dispatches the resulting
+module. This is not an unavailable or blocked runtime variant.
+
+The eight-resource native-loader ABI contains float32 `x`, `w`, `g`, `gx`, and
+per-row `gw` buffers plus float32 epsilon, uint32 axis-size, and uint32
+weight-stride scalar blocks. The deterministic request compares all 32 `gx`
+and 32 `gw` values at `7e-5` absolute and relative tolerance. A local Linux
+arm64 llvmpipe EGL run passed with maximum absolute errors below `4.82e-8` for
+`gx` and `5.44e-8` for `gw`; Linux CI requires the same deferred SPIR-V Mesa
+execution.
+
+This proof is intentionally one row: the one-row boundary makes the per-row
+`gw` temporary equal to the host's final reduced weight gradient. It does not
+include the separate bias-gradient reduction, multi-row weight reduction,
+`has_w=false`, float16 or bfloat16, looped entries, other axis sizes, MLX host
+redirection, or the full MLX test suite.
+
 Validate the fixture schema, provenance, deterministic identities, and bounded
 evaluation with:
 

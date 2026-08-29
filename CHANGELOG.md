@@ -16,6 +16,8 @@ All notable changes to CrossTL are documented in this file.
 - Multiple project entry artifacts per source, a backend-neutral project source entry-point discovery contract with Metal enumeration, and opt-in discovered-entry expansion for selected sources recorded in reports, artifact matrices, and checkpoints.
 - Pinned MLX native execution evidence: a binary kernel executed on DirectX and OpenGL with exact device readback, quantized OpenGL lowering and quantized gather provenance proofs, and bounded LayerNorm host dispatch integrated into the MLX porting frontier.
 - Current-pinned MLX LayerNorm axis-32 native-loader packages with exact eight-resource ABIs, Direct3D 12 WARP and Mesa EGL numerical CI, deterministic HLSL/GLSL identities, and an upstream-derived dispatch contract.
+- Current-pinned MLX LayerNorm VJP axis-32, one-row, `has_w=true` native-loader execution with exact eight-resource ABI, concrete DirectX and deferred-specialized OpenGL paths, and numerical `gx`/`gw` readback on WARP and Mesa.
+- Deferred-specialization ABI packages retain a ready, actionable JSON runtime variant registry while marking the unsupported generated C++ registry header unavailable with an explicit reason.
 - Deferred Native Compilation CI workflow covering a three-platform contract matrix plus native Direct3D 12 and software OpenGL compile-and-dispatch jobs with pinned DXC verification and required device readback.
 
 ### Improved

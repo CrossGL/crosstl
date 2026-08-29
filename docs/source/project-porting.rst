@@ -1415,6 +1415,20 @@ and executed in Windows Direct3D and Linux EGL CI. With ``start = 3``,
 it is not a claim of vector or aggregate layout support, full MLX runtime
 integration, or MLX test-suite parity.
 
+At current pinned MLX commit
+``846d176227a0ac13d2667e58d2bb68b322109ab0``, a bounded LayerNorm VJP proof
+selects ``vjp_layer_normfloat32`` for one axis-32 row with function constant
+``has_w=true``, workgroup and subgroup width 32, and eight reflected resources.
+DirectX materializes the constant and executes the generated HLSL through
+Direct3D 12 WARP. OpenGL retains constant ID 20 in GLSL, lowers the reductions
+to an explicit software subgroup, derives a verified deferred-compilation
+request, compiles to SPIR-V, specializes ``has_w=true``, and executes through
+Mesa EGL. Both paths compare all 32 input-gradient and 32 per-row
+weight-gradient values. The one-row boundary means the per-row weight-gradient
+temporary is also the final host-reduced result. This proof excludes the
+separate bias-gradient dispatch, multi-row weight reduction, other dtypes and
+axis sizes, MLX host redirection, and the full MLX test suite.
+
 Build a versioned native loader ABI descriptor and optional C declarations for
 one ready load unit:
 
@@ -1516,6 +1530,13 @@ canonical runtime variant keys to unit execution wrappers and retains the exact
 target, entry point, workgroup size, subgroup width, and specialization
 payloads selected during packaging. Packages containing targets without a
 reference adapter keep the JSON registry but mark the native header unavailable.
+A ready OpenGL GLSL-source variant that still carries specialization constants
+also keeps its JSON registry ready, copied artifact, and exact lookup key, but
+marks the native header unavailable with reason
+``specialization-requires-deferred-compilation``. The C++ header cannot express
+that compile-then-specialize step; callers instead derive and execute the
+verified deferred SPIR-V compilation request. Other registry-generation errors
+remain fatal and are not converted into this fallback.
 
 The same operations are available through the public project API:
 

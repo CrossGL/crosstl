@@ -474,6 +474,170 @@ def test_runtime_loader_manifest_builds_deterministic_multi_target_abi_package(
         assert (first_root / artifact_path).is_file()
 
 
+def test_runtime_loader_abi_package_routes_glsl_specialization_through_deferred_compilation(
+    tmp_path,
+):
+    from crosstl.project import (
+        build_runtime_variant_deferred_compilation_request,
+        load_project_config,
+    )
+
+    repo = tmp_path / "specialized-opengl-repo"
+    kernel_dir = repo / "kernels"
+    kernel_dir.mkdir(parents=True)
+    (kernel_dir / "copy.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant bool enabled [[function_constant(3)]];
+
+            [[kernel]] void copy_values(
+                const device float* source_values [[buffer(0)]],
+                device float* destination_values [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                destination_values[gid] = enabled ? source_values[gid] : 0.0f;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config_path = repo / "crosstl.toml"
+    config_path.write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["kernels"]
+            include = ["kernels/*.metal"]
+            targets = ["opengl"]
+            output_dir = "translated"
+
+            [project.sources]
+            "**/*.metal" = "metal"
+
+            [project.specialization_constants]
+            "3" = true
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    report = translate_project(
+        load_project_config(repo, config_path),
+        targets=("opengl",),
+        output_dir="translated",
+        format_output=False,
+    )
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    artifact_manifest_path = repo / "translated" / "runtime-artifacts.json"
+    artifact_manifest_path.write_text(
+        json.dumps(
+            build_runtime_artifact_manifest(report_path), indent=2, sort_keys=True
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runtime_package_dir = repo / "runtime-package"
+    runtime_package = build_runtime_package(
+        artifact_manifest_path,
+        runtime_package_dir,
+    )
+    loader_manifest = build_runtime_loader_manifest(
+        runtime_package_dir / "runtime-package.json"
+    )
+    loader_manifest_path = runtime_package_dir / "runtime-loader-manifest.json"
+    loader_manifest_path.write_text(
+        json.dumps(loader_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    package_root = repo / "native-loader-package"
+    package = build_native_loader_abi_package(loader_manifest_path, package_root)
+
+    assert package["success"] is True
+    assert package["runtimeVariantRegistry"]["available"] is True
+    assert package["runtimeVariantRegistry"]["nativeHeader"] == {
+        "available": False,
+        "reason": "specialization-requires-deferred-compilation",
+    }
+    assert not (package_root / NATIVE_RUNTIME_VARIANT_REGISTRY_HEADER_PATH).exists()
+    registry = json.loads(
+        (package_root / package["runtimeVariantRegistry"]["path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert registry["status"] == "ready"
+    assert registry["summary"]["readyVariantCount"] == 1
+    key = registry["lookup"]["readyKeys"][0]
+    request = build_runtime_variant_deferred_compilation_request(
+        registry,
+        key,
+        package_root / NATIVE_LOADER_ABI_PACKAGE_MANIFEST,
+    )
+    assert request["source"]["format"] == "GLSL source"
+    assert request["target"] == {
+        "backend": "opengl",
+        "profile": None,
+        "stage": "compute",
+        "entryPoint": "main",
+        "outputFormat": "SPIR-V binary",
+    }
+    assert request["variant"]["specializationValues"] == [
+        {"id": 3, "name": "enabled", "value": True}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("code", "details"),
+    (
+        (
+            "specializations-invalid",
+            {"target": "opengl", "artifactFormat": "GLSL source"},
+        ),
+        (
+            "specialization-mechanism-unsupported",
+            {"target": "directx", "artifactFormat": "GLSL source"},
+        ),
+        (
+            "specialization-mechanism-unsupported",
+            {"target": "opengl", "artifactFormat": "SPIR-V binary"},
+        ),
+    ),
+)
+def test_runtime_loader_abi_package_does_not_hide_other_registry_failures(
+    tmp_path,
+    reduced_runtime_package,
+    monkeypatch,
+    code,
+    details,
+):
+    def fail_generation(_registry, _units):
+        raise native_loader_abi_package.NativeRuntimeVariantRegistryError(
+            code,
+            "Native registry generation failed.",
+            path="$.runtimeVariantRegistry",
+            details=details,
+        )
+
+    monkeypatch.setattr(
+        native_loader_abi_package,
+        "generate_native_runtime_variant_registry",
+        fail_generation,
+    )
+    package_root = tmp_path / "abi-package"
+
+    with pytest.raises(NativeLoaderABIError) as exc_info:
+        build_native_loader_abi_package(
+            reduced_runtime_package["loader_manifest_path"],
+            package_root,
+        )
+
+    assert exc_info.value.code == (
+        "project.native-loader-abi." "native-runtime-variant-registry-generation-failed"
+    )
+    assert exc_info.value.path == "$.runtimeVariantRegistry"
+    assert exc_info.value.details["diagnostic"]["code"].endswith(f".{code}")
+    assert exc_info.value.details["diagnostic"]["details"] == details
+    assert not package_root.exists()
+
+
 def test_runtime_loader_abi_package_reports_unavailable_target_adapters(
     tmp_path, reduced_runtime_package, monkeypatch
 ):

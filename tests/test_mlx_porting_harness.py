@@ -10353,6 +10353,154 @@ def test_layer_norm_native_runtime_evidence_records_bounded_cross_target_proof()
     assert "does not redirect MLX host execution" in readme
 
 
+def test_layer_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["layer_norm_vjp_native_runtime_status"]
+    assert status["status"] == (
+        "translated-packaged-deferred-specialized-and-native-runtime-required"
+    )
+    assert status["commit"] == "846d176227a0ac13d2667e58d2bb68b322109ab0"
+    assert status["source"] == "mlx/backend/metal/kernels/layer_norm.metal"
+    assert status["source_sha256"] == (
+        "2d243f5abea7353929f9bc838ceb5a98e52a452dfc29609ad4d5974447ea689f"
+    )
+    assert status["selected_entry_point"] == "vjp_layer_normfloat32"
+    assert status["selected_workload"] == ("vjp-float32-axis-32-one-row-has-w")
+    assert status["upstream_test"] == (
+        "python/tests/test_fast.py::test_layer_norm_grad"
+    )
+    assert status["dispatch_contract"] == {
+        "path": (
+            "demos/integrations/mlx/contracts/"
+            "layer_norm_vjp.native-loader.dispatch.json"
+        ),
+        "content_identity": (
+            "sha256:e0e47ea5589f6fa812990617f0ac9f0de4f7749054a7f68ab1959dbcb5f8859c"
+        ),
+        "dispatch_variant_id": (
+            "sha256:7bbb4b949deb3bfcd443016f4e5d8bb46f297ffb5f8508a9fd73619496c41cf3"
+        ),
+        "artifact_id": (
+            "sha256:89b99b1316177ae5a2cae5a0aa57767219e01e9c4efc0497f6831e5e367fd9db"
+        ),
+        "workload_count": 1,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width": 32,
+        "dispatch_workgroup_count": [1, 1, 1],
+        "function_constants": {"20": True},
+    }
+    assert status["workgroup_access_contract"] == {
+        "kind": "explicit-host-runtime-portability-precondition",
+        "source": "mlx/backend/metal/kernels/layer_norm.metal",
+        "entry_point": "vjp_layer_normfloat32",
+        "function": "*",
+        "parameter": "*",
+        "minimum": 0,
+        "maximum": 95,
+        "inferred": False,
+        "runtime_enforced": False,
+    }
+    assert status["materialization"] == {
+        "concrete_specialization_count": 4,
+        "reachable_specialization_count": 7,
+        "dependency_discovery_work_count": 8,
+        "pruned_candidate_count": 194,
+        "selected_specializations": {
+            "vjp_layer_norm_single_row": {"N_READS": "8", "T": "float"},
+            "initialize_buffer": {"N": "3"},
+            "threadgroup_sum_3": {"N": "3"},
+            "threadgroup_sum_1": {"N": "1"},
+        },
+    }
+    specialization = status["specialization"]
+    assert specialization["name"] == "has_w"
+    assert specialization["constant_id"] == 20
+    assert specialization["value"] is True
+    assert specialization["directx_materialization"] == "concrete-crossgl-variant"
+    assert specialization["opengl_materialization"] == ("deferred-layout-constant-id")
+    assert specialization["native_header_available"] is False
+    assert specialization["native_header_unavailable_reason"] == (
+        "specialization-requires-deferred-compilation"
+    )
+    assert specialization["deferred_compilation_request_status"] == "ready"
+    assert specialization["deferred_output_format"] == "SPIR-V binary"
+
+    directx = status["artifacts"]["directx"]
+    assert directx["sha256"] == (
+        "7d45e40974cc5419bb93c106708460eb1edd5d68ec21a6afba7e9b7f6f05cf7e"
+    )
+    assert directx["size_bytes"] == 7504
+    assert directx["wave_active_sum_call_count"] == 4
+    assert directx["native_runtime"]["status"] == "required-on-ci"
+    opengl = status["artifacts"]["opengl"]
+    assert opengl["sha256"] == (
+        "9e6c4e6201e1c78e981a346275b849c37e6c8d834e7509d662f7aec5782980fa"
+    )
+    assert opengl["size_bytes"] == 8291
+    assert opengl["specialization_enforcement"] == (
+        "deferred-opengl-spirv-specialization"
+    )
+    assert opengl["control_barrier_instruction_count"] == 8
+    assert opengl["group_non_uniform_instruction_count"] == 0
+    assert opengl["local_validation"] == {
+        "platform": "linux-arm64",
+        "runtime": "mesa-headless-egl-llvmpipe",
+        "status": "passed",
+        "gx_maximum_absolute_error": 4.8107191008561756e-08,
+        "gx_maximum_relative_error": 6.617471155711408e-06,
+        "gw_maximum_absolute_error": 5.43903434513382e-08,
+        "gw_maximum_relative_error": 1.198717416402971e-07,
+    }
+    assert opengl["native_runtime"]["status"] == "required-on-ci"
+    assert status["runtime_package"]["resource_count"] == 8
+    assert status["runtime_package"]["specialization_constant_count"] == 1
+    assert [
+        resource["role"] for resource in status["runtime_package"]["resources"]
+    ] == [
+        "input",
+        "weight",
+        "output_cotangent",
+        "input_gradient",
+        "per_row_weight_gradient",
+        "epsilon",
+        "axis_size",
+        "weight_stride",
+    ]
+    assert status["one_row_boundary"] == {
+        "per_row_weight_gradient_equals_final_reduced_gradient": True,
+        "follow_on_weight_reduction_dispatch_required": False,
+        "bias_gradient_reduction_included": False,
+    }
+    assert status["remaining_scope"] == {
+        "multi_row_weight_reduction_included": False,
+        "bias_gradient_reduction_included": False,
+        "has_w_false_included": False,
+        "float16_and_bfloat16_included": False,
+        "looped_entries_included": False,
+        "other_axis_sizes_included": False,
+        "mlx_host_runtime_integration_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects `vjp_layer_normfloat32` at axis size 32" in readme
+    assert "deferred OpenGL specialization constant `20`" in readme
+    assert "one-row boundary makes the per-row `gw` temporary" in readme
+    assert "eight-resource native-loader ABI" in readme
+    assert "does not include the separate bias-gradient reduction" in readme
+
+
 def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
