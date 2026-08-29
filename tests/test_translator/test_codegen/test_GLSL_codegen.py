@@ -3443,6 +3443,132 @@ def test_opengl_statically_null_unreachable_workgroup_pointer_is_elided(tmp_path
     )
 
 
+def test_opengl_emits_every_overloaded_resource_specialization_body(tmp_path):
+    shader = """
+    shader OverloadedStoragePointerSpecializations {
+        void writeValue(device float* values) {
+            values[0] = 1.0;
+        }
+
+        void writeValue(device float* values, float scale) {
+            values[1] = scale;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @binding(0)) {
+                writeValue(output);
+                writeValue(output, 2.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    definitions = re.findall(
+        r"\bvoid\s+(writeValue_glsl_[A-Za-z0-9_]+)\s*\([^;]*\)\s*\{",
+        generated,
+    )
+    assert len(definitions) == 2, generated
+    assert len(set(definitions)) == 2, generated
+    assert any(name.endswith("_2") for name in definitions), generated
+    for name in definitions:
+        assert len(re.findall(rf"\b{re.escape(name)}\s*\(", generated)) >= 3
+    assert "output_[values_offset] = 1.0;" in generated
+    assert "output_[(values_offset + 1)] = scale;" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "overloaded_resource_specialization_bodies",
+    )
+
+
+def test_glsl_decodes_encoded_materialized_generic_vector_constructor():
+    ast = ShaderNode(
+        "EncodedGenericVectorConstructor",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "make_pair",
+                VectorType(PrimitiveType("float"), 2),
+                [
+                    ParameterNode("x", PrimitiveType("float")),
+                    ParameterNode("y", PrimitiveType("float")),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("vec_u3cfloat_u2c2_u3e"),
+                                [IdentifierNode("x"), IdentifierNode("y")],
+                            )
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "return vec2(x, y);" in generated
+    assert "vec_u3cfloat_u2c2_u3e" not in generated
+
+
+def test_opengl_statically_null_unused_storage_pointer_can_share_specialization_with_workgroup_pointer(
+    tmp_path,
+):
+    shader = """
+    shader NullUnusedStoragePointerAlongsideWorkgroup {
+        void ignoreOptional(device float* optionalValues) {
+            if (false) {
+                optionalValues[0] = 9.0;
+            }
+        }
+
+        void maybeWrite(
+            threadgroup float* sharedValues,
+            device float* optionalValues
+        ) {
+            sharedValues[0] = 1.0;
+            ignoreOptional(optionalValues);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                maybeWrite(storage, nullptr);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "nullptr" not in generated
+    assert "optionalValues[" not in generated
+    assert re.search(
+        r"\bmain_storage\s*\[[A-Za-z_]\w*\]\s*=\s*1\.0\s*;",
+        generated,
+    ), generated
+    helper = re.search(
+        r"void\s+([A-Za-z_]\w*)\s*\(\s*int\s+[A-Za-z_]\w*\s*\)",
+        generated,
+    )
+    assert helper is not None, generated
+    assert f"{helper.group(1)}(int(0));" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "statically_null_unused_storage_with_workgroup_pointer",
+    )
+
+
 def test_opengl_statically_null_reachable_workgroup_pointer_reports_error():
     shader = """
     shader NullUsedWorkgroupPointer {

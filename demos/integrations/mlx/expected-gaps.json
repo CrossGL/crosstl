@@ -1147,6 +1147,162 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
+  "opengl_fft_current_corpus_status": {
+    "status": "translated-glslang-spirv-val-mesa-executed",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/fft.metal",
+    "source_sha256": "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e",
+    "source_size_bytes": 3436,
+    "target": "opengl",
+    "selected_entry_point": "fft_mem_256_float2_float2",
+    "target_entry_point": "main",
+    "workgroup_size": [
+      1,
+      1,
+      64
+    ],
+    "project_translation": {
+      "unit_count": 1,
+      "artifact_count": 1,
+      "translated_count": 1,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "index_range_assertion_count": 5,
+      "workgroup_access_assertion_count": 1,
+      "source_remap_mapping_count": 90,
+      "max_template_specializations": 4096,
+      "max_template_materialization_work": 2097152
+    },
+    "specialization": {
+      "configured_function_constant_count": 23,
+      "deferred_function_constant_count": 21,
+      "deferred_function_constant_ids": [
+        0,
+        1,
+        2,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21
+      ],
+      "pruned_function_constant_ids": [
+        3,
+        22
+      ],
+      "mode": "deferred"
+    },
+    "materialization": {
+      "status": "materialized",
+      "specialization_count": 37,
+      "unsupported_specialization_count": 0,
+      "reachable_specialization_count": 42,
+      "dependency_discovery_work_count": 0,
+      "pruned_candidate_count": 2120
+    },
+    "artifact": {
+      "sha256": "7af6f757c7e8721bc982075ee4e9f772a09823a914bfb34ce957f8f37bfdad09",
+      "size_bytes": 83187,
+      "source_remap_mapping_count": 90,
+      "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
+      "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
+      "encoded_generic_vector_constructor_residue": false,
+      "all_overload_specialization_declarations_defined": true
+    },
+    "native_validation": {
+      "compiler": "glslangValidator",
+      "validator": "spirv-val",
+      "status": "passed",
+      "control_barrier_count": 19,
+      "group_non_uniform_instruction_count": 0,
+      "canonical_probe_spirv": {
+        "sha256": "4b35be378cbcb7910ae6826fb7e6518a437afeeb2839760f3505f6ec8c1015d5",
+        "size_bytes": 167428,
+        "identity_scope": "probe-glslang-version-only"
+      }
+    },
+    "runtime_package": {
+      "resource_binding_count": 4,
+      "specialization_constant_count": 21,
+      "blocked_variant_count": 0,
+      "registry_status": "ready",
+      "input_layout": {
+        "physical_type": "float2",
+        "element_type": "float32",
+        "element_size_bytes": 8,
+        "element_stride_bytes": 8,
+        "alignment_bytes": 8,
+        "storage_layout": "std430"
+      },
+      "output_layout": {
+        "physical_type": "float2",
+        "element_type": "float32",
+        "element_size_bytes": 8,
+        "element_stride_bytes": 8,
+        "alignment_bytes": 8,
+        "storage_layout": "std430"
+      }
+    },
+    "native_runtime": {
+      "platform": "ubuntu-latest",
+      "runtime": "mesa-llvmpipe-opengl",
+      "adapter": "opengl-native-runtime",
+      "specialization_mode": "deferred-spirv",
+      "status": "required-on-ci",
+      "test": "tests/test_translator/test_mlx_fft_native_loader.py::test_current_mlx_fft_executes_through_opengl_native_loader",
+      "workgroup_count": [
+        1,
+        1,
+        1
+      ],
+      "input": {
+        "kind": "complex-unit-impulse",
+        "index": 1,
+        "shape": [
+          256,
+          2
+        ]
+      },
+      "expected_output": {
+        "kind": "forward-dft-unit-circle",
+        "shape": [
+          256,
+          2
+        ],
+        "absolute_tolerance": 0.0002,
+        "relative_tolerance": 0.0002
+      },
+      "observed_max_absolute_error": 9.264554161336758e-08,
+      "interface_status": "verified",
+      "cache_status": "published"
+    },
+    "resolved_blockers": [
+      "transitive-statically-dead-null-storage-pointer-specialization",
+      "encoded-metal-generic-vector-constructor",
+      "overload-specialization-body-name-deduplication",
+      "std430-vector-resource-layout-reflection"
+    ],
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": true,
+    "selected_workload_numerical_parity_verified": true,
+    "cross_target_selected_workload_numerical_parity_verified": true,
+    "full_mlx_test_suite_included": false,
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "opengl_fft_translation_status": {
     "status": "translated-glslang-spirv-val-validated",
     "source": "mlx/backend/metal/kernels/fft.metal",

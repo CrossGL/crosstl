@@ -756,6 +756,32 @@ broader pointer-offset contract. The historical proof remains separately
 recorded under its own commit provenance; it is no longer being used as a
 substitute for current-corpus evidence.
 
+The current FFT source now also emits an 83,187-byte GLSL artifact with
+SHA-256
+`7af6f757c7e8721bc982075ee4e9f772a09823a914bfb34ce957f8f37bfdad09`
+and 90 source-remap mappings. OpenGL keeps the 21 reachable function constants
+as 21 deferred specialization constants and uses the same `[1, 1, 64]`
+workgroup contract. A fifth current-source index assertion bounds
+`batch_idx + index + r`. Generic specialization lowering now follows a
+statically null storage pointer through direct forwarding calls and omits it
+only when every reachable use is dead; observable null uses still fail closed.
+The GLSL generator also decodes materialized Metal `vec<T,N>` constructor
+names and emits every collision-safe overloaded resource-specialization body.
+The generated module compiles with `glslangValidator`, passes `spirv-val`, and
+has 19 control barriers and no group-nonuniform instructions.
+
+Host reflection now records each runtime `vec2` SSBO element as `float32x2`
+with 8-byte size, stride, and alignment under `std430`; the two scalar argument
+blocks retain their 16-byte `std140` block identities. The resulting four-
+resource native ABI has no blocked variants and publishes a ready deferred
+SPIR-V request. Linux CI specializes and dispatches that request through a
+surfaceless Mesa llvmpipe OpenGL context. For the same index-1 complex impulse,
+all 256 complex outputs match the analytical forward DFT within the required
+`2e-4` tolerances; the container probe observed maximum absolute error
+`9.264554161336758e-08`, verified the interface, and published the compilation
+cache. This is one exact current-pinned workload and does not establish full
+FFT, MLX host-runtime, or backend parity.
+
 A dedicated project replay now translates the complete pinned `fft.metal`
 source to one standalone OpenGL compute shader with a 4,096-specialization
 limit and a 2,097,152-item materialization work budget. The report records 99

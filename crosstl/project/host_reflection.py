@@ -895,12 +895,24 @@ GLSL_BLOCK_RESOURCE_RE = re.compile(
     r"(?P<name>[A-Za-z_]\w*)?\s*;",
     re.IGNORECASE | re.DOTALL,
 )
-GLSL_SCALAR_BLOCK_MEMBER_RE = re.compile(
-    r"\A\s*(?P<type>int64_t|uint64_t|float|int|uint|bool)\s+"
+GLSL_VALUE_BLOCK_MEMBER_RE = re.compile(
+    r"\A\s*(?P<type>[A-Za-z_]\w*)\s+"
     r"(?P<name>[A-Za-z_]\w*)"
     r"(?P<runtime_array>\s*\[\s*\])?\s*;\s*\Z",
     re.IGNORECASE,
 )
+GLSL_VECTOR_VALUE_RE = re.compile(
+    r"\A(?P<family>vec|ivec|uvec|bvec|i64vec|u64vec)(?P<width>[2-4])\Z",
+    re.IGNORECASE,
+)
+GLSL_VECTOR_BASE_TYPES = {
+    "vec": "float",
+    "ivec": "int",
+    "uvec": "uint",
+    "bvec": "bool",
+    "i64vec": "int64_t",
+    "u64vec": "uint64_t",
+}
 GLSL_RESOURCE_RE = re.compile(
     r"(?:layout\s*\((?P<layout>[^)]*)\)\s*)?"
     r"(?P<qualifiers>(?:(?:readonly|writeonly|coherent|restrict|volatile)\s+)*)"
@@ -1085,12 +1097,38 @@ def _parse_layout(layout: str | None) -> dict[str, Any]:
     return values
 
 
+def _glsl_value_type_shape(type_name: str) -> tuple[str, int] | None:
+    normalized_type = type_name.lower()
+    if normalized_type in SCALAR_PHYSICAL_TYPES or normalized_type == "bool":
+        return normalized_type, 1
+    vector_match = GLSL_VECTOR_VALUE_RE.fullmatch(normalized_type)
+    if vector_match is None:
+        return None
+    return (
+        GLSL_VECTOR_BASE_TYPES[vector_match.group("family").lower()],
+        int(vector_match.group("width")),
+    )
+
+
 def _glsl_scalar_block_layout(
     *, storage: str, layout_text: str | None, body: str
 ) -> dict[str, Any] | None:
-    match = GLSL_SCALAR_BLOCK_MEMBER_RE.fullmatch(body)
+    match = GLSL_VALUE_BLOCK_MEMBER_RE.fullmatch(body)
     if match is None:
         return None
+    value_shape = _glsl_value_type_shape(match.group("type"))
+    if value_shape is None:
+        return None
+    base_type, vector_width = value_shape
+    normalized_base_type = "uint" if base_type == "bool" else base_type
+    component_size_bytes = SCALAR_PHYSICAL_SIZES[normalized_base_type]
+    element_size_bytes = component_size_bytes * vector_width
+    base_alignment_bytes = component_size_bytes
+    if vector_width == 2:
+        base_alignment_bytes *= 2
+    elif vector_width in {3, 4}:
+        base_alignment_bytes *= 4
+
     runtime_sized = match.group("runtime_array") is not None
     qualifiers = {
         part.strip().lower()
@@ -1100,22 +1138,36 @@ def _glsl_scalar_block_layout(
     if storage == "uniform":
         if runtime_sized or "std140" not in qualifiers:
             return None
+        block_alignment_bytes = max(16, base_alignment_bytes)
+        block_size_bytes = (
+            (element_size_bytes + block_alignment_bytes - 1)
+            // block_alignment_bytes
+            * block_alignment_bytes
+        )
         return _physical_value_layout(
-            match.group("type"),
+            base_type,
+            vector_width=vector_width,
             member_name=match.group("name"),
             storage_layout="std140",
-            alignment_bytes=16,
+            alignment_bytes=block_alignment_bytes,
             runtime_sized=False,
-            block_size_bytes=16,
+            block_size_bytes=block_size_bytes,
         )
     if not runtime_sized or "std430" not in qualifiers:
         return None
+    element_stride_bytes = (
+        (element_size_bytes + base_alignment_bytes - 1)
+        // base_alignment_bytes
+        * base_alignment_bytes
+    )
     return _physical_value_layout(
-        match.group("type"),
+        base_type,
+        vector_width=vector_width,
         member_name=match.group("name"),
         storage_layout="std430",
-        alignment_bytes=4,
+        alignment_bytes=base_alignment_bytes,
         runtime_sized=True,
+        element_stride_bytes=element_stride_bytes,
     )
 
 
@@ -1128,6 +1180,7 @@ def _physical_value_layout(
     runtime_sized: bool,
     member_name: str | None = None,
     block_size_bytes: int | None = None,
+    element_stride_bytes: int | None = None,
 ) -> dict[str, Any]:
     normalized_type = physical_type.lower()
     # HLSL and GLSL block-storage booleans occupy one 32-bit scalar slot.
@@ -1143,7 +1196,9 @@ def _physical_value_layout(
         ),
         "elementType": SCALAR_PHYSICAL_TYPES[normalized_type],
         "elementSizeBytes": element_size_bytes,
-        "elementStrideBytes": element_size_bytes,
+        "elementStrideBytes": (
+            element_size_bytes if element_stride_bytes is None else element_stride_bytes
+        ),
         "alignmentBytes": max(alignment_bytes, component_size_bytes),
         "memberOffsetBytes": 0,
         "storageLayout": storage_layout,

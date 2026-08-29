@@ -11780,6 +11780,119 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
     assert "no longer being used as a substitute for current-corpus evidence" in readme
 
 
+def test_fft_current_opengl_evidence_records_native_runtime_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["opengl_fft_current_corpus_status"]
+    assert status["status"] == "translated-glslang-spirv-val-mesa-executed"
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/fft.metal"
+    assert status["source_sha256"] == (
+        "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e"
+    )
+    assert status["source_size_bytes"] == 3436
+    assert status["target"] == "opengl"
+    assert status["selected_entry_point"] == "fft_mem_256_float2_float2"
+    assert status["target_entry_point"] == "main"
+    assert status["workgroup_size"] == [1, 1, 64]
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "index_range_assertion_count": 5,
+        "workgroup_access_assertion_count": 1,
+        "source_remap_mapping_count": 90,
+        "max_template_specializations": 4096,
+        "max_template_materialization_work": 2097152,
+    }
+    assert status["specialization"]["deferred_function_constant_count"] == 21
+    assert status["specialization"]["pruned_function_constant_ids"] == [3, 22]
+    assert status["specialization"]["mode"] == "deferred"
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 37,
+        "unsupported_specialization_count": 0,
+        "reachable_specialization_count": 42,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 2120,
+    }
+    assert status["artifact"] == {
+        "sha256": "7af6f757c7e8721bc982075ee4e9f772a09823a914bfb34ce957f8f37bfdad09",
+        "size_bytes": 83187,
+        "source_remap_mapping_count": 90,
+        "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
+        "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
+        "encoded_generic_vector_constructor_residue": False,
+        "all_overload_specialization_declarations_defined": True,
+    }
+    assert status["native_validation"]["compiler"] == "glslangValidator"
+    assert status["native_validation"]["validator"] == "spirv-val"
+    assert status["native_validation"]["status"] == "passed"
+    assert status["native_validation"]["control_barrier_count"] == 19
+    assert status["native_validation"]["group_non_uniform_instruction_count"] == 0
+    assert status["runtime_package"] == {
+        "resource_binding_count": 4,
+        "specialization_constant_count": 21,
+        "blocked_variant_count": 0,
+        "registry_status": "ready",
+        "input_layout": {
+            "physical_type": "float2",
+            "element_type": "float32",
+            "element_size_bytes": 8,
+            "element_stride_bytes": 8,
+            "alignment_bytes": 8,
+            "storage_layout": "std430",
+        },
+        "output_layout": {
+            "physical_type": "float2",
+            "element_type": "float32",
+            "element_size_bytes": 8,
+            "element_stride_bytes": 8,
+            "alignment_bytes": 8,
+            "storage_layout": "std430",
+        },
+    }
+    runtime = status["native_runtime"]
+    assert runtime["platform"] == "ubuntu-latest"
+    assert runtime["runtime"] == "mesa-llvmpipe-opengl"
+    assert runtime["specialization_mode"] == "deferred-spirv"
+    assert runtime["status"] == "required-on-ci"
+    assert runtime["test"].endswith(
+        "::test_current_mlx_fft_executes_through_opengl_native_loader"
+    )
+    assert runtime["observed_max_absolute_error"] < 1e-7
+    assert runtime["interface_status"] == "verified"
+    assert runtime["cache_status"] == "published"
+    assert status["resolved_blockers"] == [
+        "transitive-statically-dead-null-storage-pointer-specialization",
+        "encoded-metal-generic-vector-constructor",
+        "overload-specialization-body-name-deduplication",
+        "std430-vector-resource-layout-reflection",
+    ]
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["cross_target_selected_workload_numerical_parity_verified"] is True
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "current FFT source now also emits an 83,187-byte GLSL artifact" in readme
+    assert "21 deferred specialization constants" in readme
+    assert "8-byte size, stride, and alignment" in readme
+    assert "19 control barriers and no group-nonuniform instructions" in readme
+    assert "Mesa llvmpipe" in readme
+    assert "`9.264554161336758e-08`" in readme
+    assert "does not establish full FFT, MLX host-runtime, or backend parity" in readme
+
+
 def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():
     module = _load_harness()
     gaps = json.loads(

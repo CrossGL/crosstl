@@ -282,22 +282,33 @@ def test_builds_preflighted_native_runtime_request(
     ]
 
 
-def test_builds_directx_vector_resource_request(tmp_path):
-    descriptor = _write_descriptor(tmp_path)
+@pytest.mark.parametrize(
+    ("target", "storage_layout", "alignment_bytes"),
+    [
+        ("directx", "hlsl-structured-buffer", 4),
+        ("opengl", "std430", 8),
+    ],
+)
+def test_builds_vector_resource_request(
+    tmp_path, target, storage_layout, alignment_bytes
+):
+    descriptor = _write_descriptor(tmp_path, target)
     vector_layout = {
         "physicalType": "float2",
         "elementType": "float32",
         "elementSizeBytes": 8,
         "elementStrideBytes": 8,
-        "alignmentBytes": 4,
+        "alignmentBytes": alignment_bytes,
         "memberOffsetBytes": 0,
-        "storageLayout": "hlsl-structured-buffer",
+        "storageLayout": storage_layout,
         "runtimeSized": True,
         "vectorWidth": 2,
     }
     for index in range(2):
         descriptor["bindings"][index]["type"] = (
-            "StructuredBuffer<float2>" if index == 0 else "RWStructuredBuffer<float2>"
+            ("StructuredBuffer<float2>" if index == 0 else "RWStructuredBuffer<float2>")
+            if target == "directx"
+            else "vec2[]"
         )
         descriptor["bindings"][index]["scalarLayout"] = copy.deepcopy(vector_layout)
         descriptor["scalarLayout"]["bindings"][index]["layout"] = copy.deepcopy(
@@ -307,6 +318,7 @@ def test_builds_directx_vector_resource_request(tmp_path):
     values = [1.0, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0]
     request = _build(
         tmp_path,
+        target,
         descriptor=descriptor,
         input_values={
             "input_values": {

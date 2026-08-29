@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -13,17 +14,25 @@ from pathlib import Path
 import pytest
 
 from crosstl.project import (
+    NATIVE_RUNTIME_VARIANT_REGISTRY_PATH,
     DirectXComputeRuntime,
     DirectXRuntimeParityAdapter,
+    NativeDeferredCompilationRuntimeError,
+    OpenGLComputeRuntime,
+    OpenGLRuntimeParityAdapter,
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
     build_native_loader_abi_descriptor,
+    build_native_loader_abi_package,
     build_native_loader_dispatch_request,
     build_runtime_artifact_manifest,
     build_runtime_loader_manifest,
     build_runtime_package,
+    build_runtime_variant_deferred_compilation_request,
+    execute_native_deferred_compilation_request,
     load_project_config,
     translate_project,
+    validate_project_report,
 )
 
 MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -44,8 +53,13 @@ CURRENT_MLX_FFT_GENERATED_SHA256 = (
     "d93972d83156853af519886a669111a061ad311ebfee85615fd797f4e22b3041"
 )
 CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 146663
+CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256 = (
+    "7af6f757c7e8721bc982075ee4e9f772a09823a914bfb34ce957f8f37bfdad09"
+)
+CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 83187
 MLX_FFT_SIZE = 256
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER"
+REQUIRE_OPENGL_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_OPENGL_NATIVE_LOADER"
 CURRENT_MLX_ROOT_ENV = "CROSTL_MLX_CURRENT_ROOT"
 
 FFT_SPECIALIZATION_CONSTANTS = {
@@ -76,6 +90,37 @@ CURRENT_FFT_SPECIALIZATION_CONSTANTS = {
     **FFT_SPECIALIZATION_CONSTANTS,
     22: False,
 }
+CURRENT_FFT_SPECIALIZATION_NAMES = {
+    0: "inv_",
+    1: "is_power_of_2_",
+    2: "elems_per_thread_",
+    4: "radix_13_steps_",
+    5: "radix_11_steps_",
+    6: "radix_8_steps_",
+    7: "radix_7_steps_",
+    8: "radix_6_steps_",
+    9: "radix_5_steps_",
+    10: "radix_4_steps_",
+    11: "radix_3_steps_",
+    12: "radix_2_steps_",
+    13: "rader_13_steps_",
+    14: "rader_11_steps_",
+    15: "rader_8_steps_",
+    16: "rader_7_steps_",
+    17: "rader_6_steps_",
+    18: "rader_5_steps_",
+    19: "rader_4_steps_",
+    20: "rader_3_steps_",
+    21: "rader_2_steps_",
+}
+CURRENT_FFT_DEFERRED_SPECIALIZATION_VALUES = [
+    {
+        "id": constant_id,
+        "name": CURRENT_FFT_SPECIALIZATION_NAMES[constant_id],
+        "value": CURRENT_FFT_SPECIALIZATION_CONSTANTS[constant_id],
+    }
+    for constant_id in CURRENT_FFT_SPECIALIZATION_NAMES
+]
 
 
 def _toml_value(value: object) -> str:
@@ -87,18 +132,28 @@ def _toml_value(value: object) -> str:
 def _project_config(
     output_dir: str,
     *,
+    target: str = "directx",
     specialization_constants: dict[int, object] = FFT_SPECIALIZATION_CONSTANTS,
+    include_current_opengl_index_assertion: bool = False,
 ) -> str:
     constants = "\n".join(
         f'"{constant_id}" = {_toml_value(value)}'
         for constant_id, value in specialization_constants.items()
     )
+    additional_index_assertion = ""
+    if include_current_opengl_index_assertion:
+        additional_index_assertion = f"""\n[[project.index_range_assertions]]
+source = "{MLX_FFT_SOURCE}"
+expression = "batch_idx + index + r"
+minimum = 0
+maximum = 4294967295
+"""
     return f"""
 [project]
 source_roots = ["mlx/backend/metal/kernels"]
 include = ["{MLX_FFT_SOURCE}"]
 include_dirs = ["."]
-targets = ["directx"]
+targets = ["{target}"]
 output_dir = "{output_dir}"
 
 [project.sources]
@@ -127,7 +182,7 @@ source = "{MLX_FFT_SOURCE}"
 expression = "batch_idx + index + next_out"
 minimum = 0
 maximum = 4294967295
-
+{additional_index_assertion}
 [[project.workgroup_access_assertions]]
 source = "{MLX_FFT_SOURCE}"
 entry_point = "{MLX_FFT_ENTRY}"
@@ -559,3 +614,330 @@ def test_pinned_mlx_fft_executes_through_directx_native_loader():
         specialization_constants=FFT_SPECIALIZATION_CONSTANTS,
         template_specialization_count=24,
     )
+
+
+def _expected_current_opengl_layouts() -> dict[str, dict]:
+    return {
+        "in_Buffer": {
+            "physicalType": "float2",
+            "elementType": "float32",
+            "elementSizeBytes": 8,
+            "elementStrideBytes": 8,
+            "alignmentBytes": 8,
+            "memberOffsetBytes": 0,
+            "storageLayout": "std430",
+            "runtimeSized": True,
+            "vectorWidth": 2,
+            "memberName": "in_",
+        },
+        "out_Buffer": {
+            "physicalType": "float2",
+            "elementType": "float32",
+            "elementSizeBytes": 8,
+            "elementStrideBytes": 8,
+            "alignmentBytes": 8,
+            "memberOffsetBytes": 0,
+            "storageLayout": "std430",
+            "runtimeSized": True,
+            "vectorWidth": 2,
+            "memberName": "out_",
+        },
+        "fft_mem_256_float2_float2_n_Args": {
+            "physicalType": "int",
+            "elementType": "int32",
+            "elementSizeBytes": 4,
+            "elementStrideBytes": 4,
+            "alignmentBytes": 16,
+            "memberOffsetBytes": 0,
+            "storageLayout": "std140",
+            "runtimeSized": False,
+            "memberName": "n",
+            "blockSizeBytes": 16,
+        },
+        "fft_mem_256_float2_float2_batch_size_Args": {
+            "physicalType": "int",
+            "elementType": "int32",
+            "elementSizeBytes": 4,
+            "elementStrideBytes": 4,
+            "alignmentBytes": 16,
+            "memberOffsetBytes": 0,
+            "storageLayout": "std140",
+            "runtimeSized": False,
+            "memberName": "batch_size",
+            "blockSizeBytes": 16,
+        },
+    }
+
+
+def _current_opengl_tool(name: str) -> str:
+    tool = shutil.which(name)
+    if tool is not None:
+        return tool
+    message = f"{name} is required for current MLX FFT OpenGL validation"
+    if os.environ.get(REQUIRE_OPENGL_PROOF_ENV) == "1":
+        pytest.fail(message)
+    pytest.skip(message)
+
+
+def _assert_current_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
+    glslang = _current_opengl_tool("glslangValidator")
+    spirv_val = _current_opengl_tool("spirv-val")
+    spirv_dis = _current_opengl_tool("spirv-dis")
+    spirv_path = work_dir / "fft_mem_256_float2_float2.spv"
+    compiled = subprocess.run(
+        [glslang, "-V", "-S", "comp", "-o", str(spirv_path), str(generated_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    validated = subprocess.run(
+        [spirv_val, str(spirv_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert validated.returncode == 0, validated.stdout + validated.stderr
+    spirv = spirv_path.read_bytes()
+    assert len(spirv) > 0
+    assert len(spirv) % 4 == 0
+    disassembled = subprocess.run(
+        [spirv_dis, str(spirv_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert disassembled.count("OpControlBarrier") == 19
+    assert "OpGroupNonUniform" not in disassembled
+
+
+def _build_current_opengl_runtime_package(
+    mlx_root: Path, work_dir: Path
+) -> tuple[Path, dict]:
+    output_dir = work_dir / "out"
+    config_path = work_dir / "crosstl.toml"
+    config_path.write_text(
+        _project_config(
+            output_dir.relative_to(mlx_root).as_posix(),
+            target="opengl",
+            specialization_constants=CURRENT_FFT_SPECIALIZATION_CONSTANTS,
+            include_current_opengl_index_assertion=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    report = translate_project(
+        load_project_config(mlx_root, config_path),
+        targets=("opengl",),
+        output_dir=output_dir.relative_to(mlx_root).as_posix(),
+        format_output=False,
+        validate=True,
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticCounts"] == {
+        "error": 0,
+        "note": 0,
+        "warning": 0,
+    }, json.dumps(payload["diagnostics"], indent=2)
+    assert payload["project"]["indexRangeAssertionCount"] == 5
+    assert payload["project"]["workgroupAccessAssertionCount"] == 1
+    assert payload["summary"]["sourceRemapMappingCount"] == 90
+
+    artifact = payload["artifacts"][0]
+    assert artifact["source"] == MLX_FFT_SOURCE
+    assert artifact["sourceHash"] == {
+        "algorithm": "sha256",
+        "value": CURRENT_MLX_FFT_SHA256,
+    }
+    assert artifact["sourceSizeBytes"] == CURRENT_MLX_FFT_SOURCE_SIZE_BYTES
+    assert artifact["status"] == "translated"
+    assert artifact["entryPoint"] == {
+        "source": MLX_FFT_ENTRY,
+        "target": "main",
+        "stage": "compute",
+    }
+    assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 64]
+    assert artifact["generatedHash"] == {
+        "algorithm": "sha256",
+        "value": CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256,
+    }
+    assert artifact["generatedSizeBytes"] == CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES
+    assert artifact["specializationMaterialization"] == {
+        "status": "deferred",
+        "mode": "deferred",
+        "source": "shared-crossgl-specialization",
+        "constantCount": 21,
+        "requiredCount": 21,
+        "concreteCount": 21,
+        "overriddenCount": 21,
+        "targetSupportsDeferredSpecialization": True,
+    }
+    materialization = artifact["templateMaterialization"]
+    assert materialization["status"] == "materialized"
+    assert materialization["specializationCount"] == 37
+    assert materialization["unsupported"] == []
+    assert materialization["accounting"] == {
+        "reachableSpecializationCount": 42,
+        "dependencyDiscoveryWorkCount": 0,
+        "prunedCandidateCount": 2120,
+    }
+
+    generated_path = mlx_root / artifact["path"]
+    generated = generated_path.read_text(encoding="utf-8")
+    assert hashlib.sha256(generated_path.read_bytes()).hexdigest() == (
+        CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256
+    )
+    assert "layout(std430, binding = 0) readonly buffer in_Buffer" in generated
+    assert "layout(std430, binding = 1) buffer out_Buffer" in generated
+    assert "vec_u3cfloat_u2c2_u3e" not in generated
+    assert "nullptr" not in generated
+    assert "crosstl_ptr_buf_offset" in generated
+    _assert_current_opengl_spirv(generated_path, work_dir)
+
+    report_path = work_dir / "portability-report.json"
+    report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True
+    runtime_artifacts = build_runtime_artifact_manifest(report_path)
+    assert runtime_artifacts["success"] is True, json.dumps(runtime_artifacts, indent=2)
+    assert runtime_artifacts["summary"]["artifactCount"] == 1
+    assert runtime_artifacts["summary"]["resourceBindingCount"] == 4
+    assert runtime_artifacts["summary"]["specializationConstantCount"] == 21
+    reflected = runtime_artifacts["artifacts"][0]
+    assert reflected["hostInterface"]["status"] == "ready"
+    assert {
+        resource["name"]: resource["scalarLayout"]
+        for resource in reflected["hostInterface"]["resources"]
+    } == _expected_current_opengl_layouts()
+
+    runtime_artifacts_path = work_dir / "runtime-artifacts.json"
+    _write_json(runtime_artifacts_path, runtime_artifacts)
+    package_dir = work_dir / "runtime-package"
+    package = build_runtime_package(runtime_artifacts_path, package_dir)
+    assert package["success"] is True, json.dumps(package, indent=2)
+    loader = build_runtime_loader_manifest(package_dir / "runtime-package.json")
+    assert loader["success"] is True, json.dumps(loader, indent=2)
+    assert loader["summary"]["readyLoadUnitCount"] == 1
+    assert loader["summary"]["blockedLoadUnitCount"] == 0
+    loader_path = package_dir / "runtime-loader-manifest.json"
+    _write_json(loader_path, loader)
+    descriptor = build_native_loader_abi_descriptor(
+        loader,
+        load_unit_id=loader["loadUnits"][0]["id"],
+    )
+    assert descriptor["target"] == "opengl"
+    assert descriptor["entryPoint"]["name"] == "main"
+    assert descriptor["entryPoint"]["executionConfig"] == {
+        "local_size": [1, 1, 64],
+        "local_size_x": 1,
+        "local_size_y": 1,
+        "local_size_z": 64,
+    }
+    assert {
+        binding["name"]: binding["scalarLayout"] for binding in descriptor["bindings"]
+    } == _expected_current_opengl_layouts()
+    assert [
+        (item["id"], item["name"], item["value"], item["deferred"])
+        for item in descriptor["specializationConstants"]
+    ] == [
+        (item["id"], item["name"], item["value"], True)
+        for item in CURRENT_FFT_DEFERRED_SPECIALIZATION_VALUES
+    ]
+
+    abi_root = work_dir / "native-loader-abi-package"
+    abi_package = build_native_loader_abi_package(loader_path, abi_root)
+    assert abi_package["success"] is True, json.dumps(abi_package, indent=2)
+    assert abi_package["summary"]["runtimeVariantCount"] == 1
+    registry = json.loads(
+        (abi_root / NATIVE_RUNTIME_VARIANT_REGISTRY_PATH).read_text(encoding="utf-8")
+    )
+    assert registry["status"] == "ready"
+    assert registry["lookup"]["blockedKeys"] == []
+    request = build_runtime_variant_deferred_compilation_request(
+        registry,
+        registry["lookup"]["readyKeys"][0],
+        abi_root,
+    )
+    assert request["variant"]["specializationValues"] == (
+        CURRENT_FFT_DEFERRED_SPECIALIZATION_VALUES
+    )
+    assert request["variant"]["execution"] == {
+        "workgroupSize": [1, 1, 64],
+        "subgroupWidth": None,
+    }
+    return abi_root, request
+
+
+def test_current_mlx_fft_executes_through_opengl_native_loader():
+    mlx_root = _current_mlx_root()
+    with tempfile.TemporaryDirectory(
+        prefix=".crosstl-fft-current-opengl-native-loader-",
+        dir=mlx_root,
+    ) as temporary_directory:
+        work_dir = Path(temporary_directory)
+        abi_root, compilation_request = _build_current_opengl_runtime_package(
+            mlx_root, work_dir
+        )
+        input_values, expected_values = _complex_impulse()
+        try:
+            result = execute_native_deferred_compilation_request(
+                compilation_request,
+                abi_root,
+                work_dir / "deferred-cache",
+                {
+                    "in_Buffer": {
+                        "dtype": "float32",
+                        "shape": [MLX_FFT_SIZE, 2],
+                        "values": input_values,
+                    },
+                    "fft_mem_256_float2_float2_n_Args": {
+                        "dtype": "int32",
+                        "shape": [1],
+                        "values": [MLX_FFT_SIZE],
+                    },
+                    "fft_mem_256_float2_float2_batch_size_Args": {
+                        "dtype": "int32",
+                        "shape": [1],
+                        "values": [1],
+                    },
+                },
+                {
+                    "out_Buffer": {
+                        "dtype": "float32",
+                        "shape": [MLX_FFT_SIZE, 2],
+                        "values": expected_values,
+                        "tolerance": {"absolute": 2e-4, "relative": 2e-4},
+                    }
+                },
+                (1, 1, 1),
+                runtime_adapter=OpenGLRuntimeParityAdapter(
+                    runtime=OpenGLComputeRuntime(context_backends=("egl",))
+                ),
+            )
+        except NativeDeferredCompilationRuntimeError as exc:
+            if exc.code.endswith(".runtime-unavailable"):
+                if os.environ.get(REQUIRE_OPENGL_PROOF_ENV) == "1":
+                    pytest.fail(str(exc))
+                pytest.skip(str(exc))
+            raise
+
+    assert result.status == "ok"
+    assert result.outputs["out_Buffer"]["dtype"] == "float32"
+    assert result.outputs["out_Buffer"]["shape"] == [MLX_FFT_SIZE, 2]
+    assert result.outputs["out_Buffer"]["values"] == pytest.approx(
+        expected_values,
+        abs=2e-4,
+        rel=2e-4,
+    )
+    deferred_report = result.details["nativeDeferredCompilation"]
+    assert deferred_report["success"] is True
+    assert deferred_report["target"]["backend"] == "opengl"
+    assert deferred_report["variant"]["specializationValues"] == (
+        CURRENT_FFT_DEFERRED_SPECIALIZATION_VALUES
+    )
+    assert deferred_report["interface"]["status"] == "verified"
+    assert deferred_report["cache"]["status"] == "published"

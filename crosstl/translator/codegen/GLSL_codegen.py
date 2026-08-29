@@ -8157,7 +8157,7 @@ class GLSLCodeGen:
         functions.sort(key=lambda func: getattr(func, "name", ""))
         result = []
         for func in functions:
-            name = getattr(func, "name", None)
+            name = self.glsl_function_declaration_name(func)
             if name in self.emitted_glsl_resource_specialization_names:
                 continue
             self.emitted_glsl_resource_specialization_names.add(name)
@@ -9529,7 +9529,26 @@ class GLSLCodeGen:
                     return None, None
                 binding = self.glsl_storage_pointer_binding(arg, aliases)
                 if binding is None:
-                    return None, None
+                    if not self.glsl_workgroup_pointer_null_expression(arg):
+                        return None, None
+                    if self.glsl_storage_pointer_parameter_has_reachable_use(
+                        callee, param_name
+                    ):
+                        return None, None
+                    binding = {
+                        "kind": "storage-pointer-unused",
+                        "element_type": storage_element_type,
+                        "parameter_element_type": storage_element_type,
+                    }
+                    bindings[index] = (param_name, binding)
+                    key_parts.append(
+                        (
+                            index,
+                            "storage-pointer-unused",
+                            storage_element_type,
+                        )
+                    )
+                    continue
                 if binding.get("element_type") != storage_element_type:
                     return None, None
                 required_access = self.glsl_storage_pointer_parameter_required_access(
@@ -9675,6 +9694,16 @@ class GLSLCodeGen:
             args,
         )
         clone = deepcopy(source_func)
+        null_storage_pointer_parameters = {
+            parameter_name
+            for parameter_name, binding in bindings.values()
+            if binding.get("kind") == "storage-pointer-unused"
+        }
+        if null_storage_pointer_parameters:
+            self.glsl_replace_null_pointer_parameter_references(
+                getattr(clone, "body", None),
+                null_storage_pointer_parameters,
+            )
         clone.name = self.glsl_resource_specialization_name(func_name, bindings)
         clone.parameters = [
             param
@@ -9811,6 +9840,7 @@ class GLSLCodeGen:
             for param_name, binding in bindings.values()
             if binding.get("kind")
             not in {
+                "storage-pointer-unused",
                 "fixed-array-storage",
                 "storage-pointer",
                 "workgroup-pointer",
@@ -9962,7 +9992,10 @@ class GLSLCodeGen:
     def glsl_resource_specialization_name(self, func_name, bindings):
         suffix_parts = []
         for _, (param_name, binding) in sorted(bindings.items()):
-            if binding.get("kind") == "workgroup-pointer-unused":
+            if binding.get("kind") in {
+                "storage-pointer-unused",
+                "workgroup-pointer-unused",
+            }:
                 suffix_parts.append(
                     "{}_unused_{}".format(
                         sanitize_type_name(param_name),
@@ -17806,6 +17839,237 @@ class GLSLCodeGen:
 
         return references(getattr(function, "body", []))
 
+    def glsl_storage_pointer_parameter_has_reachable_use(
+        self,
+        function,
+        parameter_name,
+        active=None,
+    ):
+        active = set() if active is None else active
+        active_key = (id(function), parameter_name)
+        if active_key in active:
+            return True
+        active.add(active_key)
+
+        def contains_parameter(value, visited=None):
+            visited = set() if visited is None else visited
+            if value is None or isinstance(value, (int, float, bool)):
+                return False
+            if isinstance(value, str):
+                return value == parameter_name
+            if isinstance(value, dict):
+                return any(
+                    contains_parameter(child, visited) for child in value.values()
+                )
+            if isinstance(value, (list, tuple, set)):
+                return any(contains_parameter(child, visited) for child in value)
+
+            value_id = id(value)
+            if value_id in visited:
+                return False
+            visited.add(value_id)
+            if isinstance(value, (IdentifierNode, VariableNode)) and (
+                getattr(value, "name", None) == parameter_name
+            ):
+                return True
+            if hasattr(value, "child_nodes"):
+                return any(
+                    contains_parameter(child, visited) for child in value.child_nodes()
+                )
+            if not hasattr(value, "__dict__"):
+                return False
+            return any(
+                contains_parameter(child, visited)
+                for field, child in vars(value).items()
+                if field not in {"annotations", "parent", "source_location"}
+            )
+
+        def is_direct_forward(value):
+            if isinstance(value, str):
+                return value == parameter_name
+            if isinstance(value, (IdentifierNode, VariableNode)):
+                return getattr(value, "name", None) == parameter_name
+            if not isinstance(value, TernaryOpNode):
+                return False
+            condition = evaluate_literal_int_expression(
+                value.condition,
+                self.glsl_active_literal_int_constants(),
+            )
+            if condition is None:
+                return False
+            selected = value.true_expr if condition else value.false_expr
+            return is_direct_forward(selected)
+
+        def forwarded_call_uses_parameter(call):
+            arguments = list(
+                getattr(call, "arguments", getattr(call, "args", [])) or []
+            )
+            function_name = self.function_call_name(call)
+            if not function_name:
+                return any(contains_parameter(argument) for argument in arguments)
+            specialized_name = generic_function_call_name(
+                self,
+                function_name,
+                arguments,
+            )
+            if specialized_name is not None:
+                arguments = generic_function_value_arguments(
+                    self,
+                    function_name,
+                    arguments,
+                )
+                function_name = specialized_name
+            try:
+                callee = self.glsl_resource_function_source(
+                    function_name,
+                    arguments,
+                )
+            except (OpenGLMappedOverloadError, OpenGLTemplateTypeError):
+                callee = None
+            parameters = list(
+                getattr(callee, "parameters", getattr(callee, "params", [])) or []
+            )
+            for index, argument in enumerate(arguments):
+                if not contains_parameter(argument):
+                    continue
+                if not is_direct_forward(argument) or index >= len(parameters):
+                    return True
+                callee_parameter = parameters[index]
+                if self.glsl_storage_pointer_element_type(callee_parameter) is None:
+                    return True
+                callee_parameter_name = getattr(callee_parameter, "name", None)
+                if (
+                    not callee_parameter_name
+                    or self.glsl_storage_pointer_parameter_has_reachable_use(
+                        callee,
+                        callee_parameter_name,
+                        active,
+                    )
+                ):
+                    return True
+            return False
+
+        visited = set()
+
+        def references(value):
+            if value is None or isinstance(value, (int, float, bool)):
+                return False
+            if isinstance(value, str):
+                return value == parameter_name
+            if isinstance(value, dict):
+                return any(references(child) for child in value.values())
+            if isinstance(value, (list, tuple, set)):
+                return any(references(child) for child in value)
+
+            value_id = id(value)
+            if value_id in visited:
+                return False
+            visited.add(value_id)
+            if isinstance(value, (IdentifierNode, VariableNode)) and (
+                getattr(value, "name", None) == parameter_name
+            ):
+                return True
+            if isinstance(value, FunctionCallNode):
+                return forwarded_call_uses_parameter(value)
+            if isinstance(value, IfNode):
+                condition = getattr(
+                    value, "condition", getattr(value, "if_condition", None)
+                )
+                if references(condition):
+                    return True
+                literal_condition = evaluate_literal_int_expression(
+                    condition,
+                    self.glsl_active_literal_int_constants(),
+                )
+                if literal_condition is None:
+                    if references(value.if_body):
+                        return True
+                    return any(
+                        references(else_if_condition) or references(else_if_body)
+                        for else_if_condition, else_if_body in zip(
+                            getattr(value, "else_if_conditions", []) or [],
+                            getattr(value, "else_if_bodies", []) or [],
+                        )
+                    ) or references(getattr(value, "else_body", None))
+                if literal_condition:
+                    return references(value.if_body)
+                else_if_conditions = getattr(value, "else_if_conditions", []) or []
+                else_if_bodies = getattr(value, "else_if_bodies", []) or []
+                for branch_index, (else_if_condition, else_if_body) in enumerate(
+                    zip(else_if_conditions, else_if_bodies)
+                ):
+                    if references(else_if_condition):
+                        return True
+                    else_if_literal = evaluate_literal_int_expression(
+                        else_if_condition,
+                        self.glsl_active_literal_int_constants(),
+                    )
+                    if else_if_literal is None:
+                        if references(else_if_body):
+                            return True
+                        return any(
+                            references(later_condition) or references(later_body)
+                            for later_condition, later_body in zip(
+                                else_if_conditions[branch_index + 1 :],
+                                else_if_bodies[branch_index + 1 :],
+                            )
+                        ) or references(getattr(value, "else_body", None))
+                    if else_if_literal:
+                        return references(else_if_body)
+                return references(getattr(value, "else_body", None))
+
+            if hasattr(value, "child_nodes"):
+                return any(references(child) for child in value.child_nodes())
+            if not hasattr(value, "__dict__"):
+                return False
+            return any(
+                references(child)
+                for field, child in vars(value).items()
+                if field not in {"annotations", "parent", "source_location"}
+            )
+
+        try:
+            return references(getattr(function, "body", []))
+        finally:
+            active.remove(active_key)
+
+    @staticmethod
+    def glsl_replace_null_pointer_parameter_references(value, parameter_names):
+        visited = set()
+
+        def replace(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if isinstance(node, dict):
+                for child in node.values():
+                    replace(child)
+                return
+            if isinstance(node, (list, tuple, set)):
+                for child in node:
+                    replace(child)
+                return
+
+            node_id = id(node)
+            if node_id in visited:
+                return
+            visited.add(node_id)
+            if isinstance(node, IdentifierNode) and getattr(node, "name", None) in (
+                parameter_names
+            ):
+                node.name = "nullptr"
+                node.identifier = "nullptr"
+                return
+            if hasattr(node, "child_nodes"):
+                for child in node.child_nodes():
+                    replace(child)
+                return
+            if hasattr(node, "__dict__"):
+                for field, child in vars(node).items():
+                    if field not in {"annotations", "parent", "source_location"}:
+                        replace(child)
+
+        replace(value)
+
     def glsl_workgroup_pointer_aliases(self, aliases=None):
         return {
             **(aliases or {}),
@@ -22477,8 +22741,33 @@ complex64_t crossgl_complex64_mod_assign(
             return "float"
         return None
 
+    def glsl_materialized_generic_vector_constructor_type(self, name):
+        if not isinstance(name, str) or "_u" not in name:
+            return None
+        decoded = name
+        for encoded, character in (
+            ("_u3c", "<"),
+            ("_u2c", ","),
+            ("_u3e", ">"),
+            ("_u20", " "),
+        ):
+            decoded = decoded.replace(encoded, character)
+        if (
+            re.fullmatch(
+                r"(?:metal::)?vec\s*<\s*[^,>]+\s*,\s*[234]\s*>",
+                decoded.strip(),
+            )
+            is None
+        ):
+            return None
+        return self.map_type(decoded)
+
     def glsl_constructor_type(self, func_name):
-        constructor = self.map_type(func_name) if isinstance(func_name, str) else None
+        constructor = self.glsl_materialized_generic_vector_constructor_type(func_name)
+        if constructor is None:
+            constructor = (
+                self.map_type(func_name) if isinstance(func_name, str) else None
+            )
         if constructor in {
             "float",
             "double",

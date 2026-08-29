@@ -22,6 +22,7 @@ All notable changes to CrossTL are documented in this file.
 - Current-pinned MLX block Softmax execution for two axis-32 rows and one axis-2049 row through Direct3D 12 WARP and explicit software-subgroup OpenGL on Mesa, with exact three-resource ABIs, deterministic guarded and software artifact identities, SPIR-V structure, and stable float32 numerical references.
 - Current-pinned MLX `argmin_float32` and `argmax_float32` execution for two axis-32 rows through Direct3D 12 WARP and explicit software-subgroup OpenGL on Mesa, with exact signed/unsigned 64-bit resource ABIs, deterministic tie-breaking readback, and separate aggregate and Metal limitations.
 - Current-pinned MLX one-pass `sdpa_vector_float_64_64` execution through Direct3D 12 WARP and deferred-specialized software-subgroup OpenGL on Mesa, with a host-derived 1,024-thread dispatch, exact 19/18-resource ABIs, six false function constants, deterministic artifact identities, and 64-value numerical readback evidence.
+- Current-pinned MLX `fft_mem_256_float2_float2` OpenGL execution through deferred SPIR-V on Mesa, with deterministic GLSL identity, 21 specialization constants, exact four-resource vector ABI, validated barrier structure, and 256-complex-value impulse readback evidence.
 - Deferred-specialization ABI packages retain a ready, actionable JSON runtime variant registry while marking the unsupported generated C++ registry header unavailable with an explicit reason.
 - Deferred Native Compilation CI workflow covering a three-platform contract matrix plus native Direct3D 12 and software OpenGL compile-and-dispatch jobs with pinned DXC verification and required device readback.
 
@@ -30,6 +31,7 @@ All notable changes to CrossTL are documented in this file.
 - Explicit 32-lane OpenGL software subgroups now partition bounded workgroups of up to 1,024 invocations into independent logical subgroups and admit narrow typed-identity-masked divergent `WaveActiveSum`, `WaveActiveMin`, and `WaveActiveMax` assignments while all generated barriers remain workgroup-uniform; conditional shuffle and ambiguous control flow still fail closed.
 - Explicit OpenGL software subgroups synchronize canonical subgroup-ID-strided runtime loops across complete workgroup rounds when the bound is workgroup-uniform, the stride equals the logical subgroup count, and exactly one supported masked reduction is present; unsafe declarations, mutation, escaping control flow, and multiple collectives remain fail-closed.
 - HLSL and GLSL host reflection represents stored Boolean buffers with their portable physical uint32 ABI while preserving Boolean shader-level and specialization-constant types.
+- GLSL host reflection records exact standard scalar/vector physical widths and `std140`/`std430` alignment, including tight `vec2`/`vec4` storage and padded `vec3` array stride; native dispatch accepts supported tight vectors and rejects padded uploads rather than guessing.
 - Metal analysis performance: lexical scope lookups are indexed and repeated whole-tree traversals eliminated.
 - OpenGL resource specialization includes the storage pointer view layout in specialization identity and generated helper names, so direct and reinterpreted calls against the same root receive distinct deterministic helpers regardless of call order.
 - Explicit OpenGL software subgroups accept uniquely identified helpers only when calls are direct, unconditional, top-level, and entry-owned; resource-specialized calls may reuse only identical-base workgroup proofs whose validated intervals cover the narrower request.
@@ -45,6 +47,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- OpenGL resource specialization propagates provably dead default-null storage pointers through direct forwarding chains, decodes exact materialized Metal `vec<T,N>` constructor names, and emits every collision-safe overloaded specialization body; unresolved or observable pointer uses remain fail-closed.
 - DirectX relative wave-shuffle lowering now offers an explicit target-scoped `self` policy that selects only valid source lanes and returns the calling lane for out-of-range down/up/xor reads; the default undefined policy and unrelated artifact identities remain unchanged.
 - OpenGL bounded index narrowing now tracks scalar and vector-component ranges across declarations, branches, loops, casts, and mutation boundaries, normalizes supported 64-bit indices once, and fails closed when no narrowing proof exists.
 - OpenGL scalar conversion contexts, explicit source truthiness lowering, narrow integer initializer contracts, and `isnan`/`isinf` result-type inference.

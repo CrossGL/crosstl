@@ -215,6 +215,105 @@ def test_glsl_reflection_records_exact_mlx_scalar_block_layouts(tmp_path):
     assert by_name["arangeuint32_step_Args"]["scalarLayout"]["memberName"] == "step"
 
 
+def test_glsl_reflection_records_exact_vector_block_layouts(tmp_path):
+    artifact = tmp_path / "vectors.glsl"
+    artifact.write_text(
+        textwrap.dedent("""
+            #version 450 core
+            #extension GL_ARB_gpu_shader_int64 : require
+            layout(std430, binding = 0) readonly buffer Inputs { vec2 values[]; };
+            layout(std430, binding = 1) buffer Triples { vec3 values[]; };
+            layout(std430, binding = 2) buffer Outputs { vec4 values[]; };
+            layout(std430, binding = 3) buffer Integers { ivec2 values[]; };
+            layout(std430, binding = 4) buffer Unsigned { uvec4 values[]; };
+            layout(std430, binding = 5) buffer Flags { bvec2 values[]; };
+            layout(std430, binding = 6) buffer WideIntegers { i64vec2 values[]; };
+            layout(std430, binding = 7) buffer WideTriples { u64vec3 values[]; };
+            layout(std140, binding = 8) uniform Scale { vec2 value; };
+            layout(std430, binding = 9) buffer Unsupported { dvec2 values[]; };
+            layout(local_size_x = 1) in;
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    reflection = reflect_target_host_interface(
+        artifact, target="opengl", stage="compute"
+    )
+    by_name = {resource["name"]: resource for resource in reflection["resources"]}
+
+    assert by_name["Inputs"]["scalarLayout"] == {
+        "physicalType": "float2",
+        "elementType": "float32",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 8,
+        "memberOffsetBytes": 0,
+        "storageLayout": "std430",
+        "runtimeSized": True,
+        "vectorWidth": 2,
+        "memberName": "values",
+    }
+    assert by_name["Triples"]["scalarLayout"] == {
+        "physicalType": "float3",
+        "elementType": "float32",
+        "elementSizeBytes": 12,
+        "elementStrideBytes": 16,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "std430",
+        "runtimeSized": True,
+        "vectorWidth": 3,
+        "memberName": "values",
+    }
+    assert by_name["Outputs"]["scalarLayout"] == {
+        **by_name["Triples"]["scalarLayout"],
+        "physicalType": "float4",
+        "elementSizeBytes": 16,
+        "vectorWidth": 4,
+    }
+    assert by_name["Integers"]["scalarLayout"] == {
+        **by_name["Inputs"]["scalarLayout"],
+        "physicalType": "int2",
+        "elementType": "int32",
+    }
+    assert by_name["Unsigned"]["scalarLayout"] == {
+        **by_name["Outputs"]["scalarLayout"],
+        "physicalType": "uint4",
+        "elementType": "uint32",
+    }
+    assert by_name["Flags"]["scalarLayout"] == {
+        **by_name["Inputs"]["scalarLayout"],
+        "physicalType": "uint2",
+        "elementType": "uint32",
+    }
+    assert by_name["WideIntegers"]["scalarLayout"] == {
+        **by_name["Inputs"]["scalarLayout"],
+        "physicalType": "int64_t2",
+        "elementType": "int64",
+        "elementSizeBytes": 16,
+        "elementStrideBytes": 16,
+        "alignmentBytes": 16,
+    }
+    assert by_name["WideTriples"]["scalarLayout"] == {
+        **by_name["Triples"]["scalarLayout"],
+        "physicalType": "uint64_t3",
+        "elementType": "uint64",
+        "elementSizeBytes": 24,
+        "elementStrideBytes": 32,
+        "alignmentBytes": 32,
+    }
+    assert by_name["Scale"]["scalarLayout"] == {
+        **by_name["Inputs"]["scalarLayout"],
+        "alignmentBytes": 16,
+        "storageLayout": "std140",
+        "runtimeSized": False,
+        "memberName": "value",
+        "blockSizeBytes": 16,
+    }
+    assert "scalarLayout" not in by_name["Unsupported"]
+
+
 def test_hlsl_reflection_records_exact_vector_resource_layouts(tmp_path):
     reflection = _reflect_hlsl(
         tmp_path,
@@ -433,7 +532,7 @@ def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts(tmp_path
                 uint first;
                 uint second;
             };
-            layout(std430, binding = 1) buffer Vectors { uvec2 values[]; };
+            layout(std430, binding = 1) buffer UnsupportedVector { dvec2 values[]; };
             layout(binding = 2) buffer Implicit { uint values[]; };
             layout(local_size_x = 1) in;
             void main() {}

@@ -1427,13 +1427,20 @@ uniform buffers require a fixed ``std140`` scalar block and zero-pad the upload
 to ``blockSizeBytes``; ``std430`` scalar runtime arrays retain their logical
 payload size for storage-buffer readback.
 
-GLSL vectors, HLSL 64-bit vectors, matrices, fixed arrays, aggregates,
-unsupported narrow or floating-point scalar widths, implicit GLSL block
-layouts, arbitrary member offsets, and multi-member blocks do not receive this
-layout metadata. Those shapes remain unresolved and fail closed when a native
-loader request requires a physical layout. Native requests range-check signed
-and unsigned 64-bit values and preserve them with little-endian 8-byte packing;
-64-bit specialization constants remain intentionally unsupported.
+Standard GLSL ``vec``, ``ivec``, ``uvec``, and ``bvec`` block members now
+receive exact component widths, vector widths, and ``std140``/``std430``
+alignment metadata; ``i64vec`` and ``u64vec`` use the supported 64-bit physical
+tables. Runtime ``vec2`` and ``vec4`` storage arrays remain tightly packed,
+while ``vec3`` records its logical element size and padded array stride
+separately. The current native loader rejects padded storage vectors rather
+than uploading a falsely tight layout. GLSL ``dvec`` values, HLSL 64-bit
+vectors, matrices, fixed arrays, aggregates, unsupported narrow or
+floating-point scalar widths, implicit GLSL block layouts, arbitrary member
+offsets, and multi-member blocks do not receive usable loader metadata. Those
+shapes remain unresolved or fail closed when a native loader request requires
+a physical layout. Native requests range-check signed and unsigned 64-bit
+values and preserve them with little-endian 8-byte packing; 64-bit
+specialization constants remain intentionally unsupported.
 
 At pinned MLX commit ``4367c73b60541ddd5a266ce4644fd93d20223b6e``, the
 ``arangeuint32`` entry from ``arange.metal`` is translated to DirectX and
@@ -1443,6 +1450,29 @@ and executed in Windows Direct3D and Linux EGL CI. With ``start = 3``,
 ``[3, 5, 7, 9]``. This is an end-to-end proof for one scalar kernel contract;
 it is not a claim of vector or aggregate layout support, full MLX runtime
 integration, or MLX test-suite parity.
+
+At current pinned MLX commit
+``846d176227a0ac13d2667e58d2bb68b322109ab0``, the selected
+``fft_mem_256_float2_float2`` entry also passes an entry-scoped OpenGL proof.
+Five unsigned index assertions and one 256-element workgroup-access assertion
+bound its host contract. Translation materializes 37 specializations from 42
+reachable records, prunes 2,120 candidates, and preserves 21 reachable
+function constants for deferred specialization. The deterministic GLSL is
+83,187 bytes with SHA-256
+``7af6f757c7e8721bc982075ee4e9f772a09823a914bfb34ce957f8f37bfdad09``;
+``glslangValidator`` and ``spirv-val`` accept it, and its SPIR-V has 19 control
+barriers with no group-nonuniform instruction.
+
+The reflected ABI has two ``std430`` float32 ``vec2`` arrays at 8-byte size,
+stride, and alignment plus two 16-byte ``std140`` integer blocks. The runtime
+variant registry has no blocked keys and produces a verified deferred SPIR-V
+request for workgroup size ``[1, 1, 64]``. Linux Mesa llvmpipe executes one
+workgroup for an index-1 complex unit impulse and compares all 256 complex
+outputs with the analytical forward DFT at ``2e-4`` absolute and relative
+tolerance. The measured maximum absolute error is
+``9.264554161336758e-08``. This is one selected current-pinned workload; it does
+not redirect the MLX host runtime, cover other FFT plans or dtypes, prove a
+Metal round trip, or establish full backend parity.
 
 At current pinned MLX commit
 ``846d176227a0ac13d2667e58d2bb68b322109ab0``, a bounded arg-reduce proof
