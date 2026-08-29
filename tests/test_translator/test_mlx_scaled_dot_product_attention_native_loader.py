@@ -392,7 +392,9 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    assert payload["summary"]["diagnosticCounts"]["error"] == 0
+    assert payload["summary"]["diagnosticCounts"]["error"] == 0, json.dumps(
+        payload["diagnostics"], indent=2
+    )
 
     artifact = payload["artifacts"][0]
     expected = MLX_ATTENTION_GENERATED_ARTIFACTS[target]
@@ -707,7 +709,7 @@ def test_attention_native_loader_dispatch_contract_is_exact():
 def test_pinned_mlx_attention_translates_to_directx_native_loader_artifact():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-attention-directx-translation-",
+        prefix=".crosstl-sdpa-dx-translate-",
         dir=mlx_root,
     ) as temporary_directory:
         descriptor, package_dir, deferred = _build_runtime_package(
@@ -737,7 +739,8 @@ def test_pinned_mlx_attention_translates_to_deferred_software_opengl():
 def test_pinned_mlx_attention_executes_through_directx_native_loader():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-attention-directx-native-loader-",
+        # Keep the deeply nested dispatch artifact below legacy dxc.exe MAX_PATH.
+        prefix=".crosstl-sdpa-dx-runtime-",
         dir=mlx_root,
     ) as temporary_directory:
         descriptor, package_dir, deferred = _build_runtime_package(
