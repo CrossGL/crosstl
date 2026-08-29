@@ -2446,10 +2446,25 @@ then compiles a reflected compute entry from each generated HLSL artifact with
 DXC on Windows. Its current OpenGL proof leaves the subgroup rule unconfigured,
 checks deferred ``layout(constant_id = 20)`` emission, and validates generated
 OpenGL SPIR-V on Linux. The separate bounded LogSumExp proof exercises the
-OpenGL exact-width contract. These checks prove translation and native
-compilation only; they do not claim RMSNorm numerical runtime parity or full MLX
-test-suite support. Numerical execution also requires host dispatch values to
-match each compiled artifact's workgroup-size and subgroup-width contracts.
+OpenGL exact-width contract. These checks prove translation and native compilation only; they do not claim
+RMSNorm numerical runtime parity or full MLX test-suite support. Numerical
+execution also requires host dispatch values to match each compiled artifact's
+workgroup-size and subgroup-width contracts.
+
+A separate current-corpus proof pins ``rms_norm.metal`` at commit
+``846d176227a0ac13d2667e58d2bb68b322109ab0`` and selects the forward
+``rmsfloat32`` entry for an axis-size-32, two-row workload. Entry-scoped runtime
+reflection excludes the unreachable VJP-only function constant ``has_w`` while
+preserving constants used by selected entries. The proof packages the same six
+resources for HLSL and GLSL, requires ``WaveSize(32)`` on DirectX, and uses the
+explicit target-scoped 32-lane software subgroup on OpenGL. Windows CI executes
+the package with Direct3D 12 WARP; Linux CI validates the GLSL through
+``glslangValidator`` and ``spirv-val`` and executes it with surfaceless Mesa
+EGL. Both compare 64 float32 outputs against the independent RMSNorm formula at
+``3e-5`` absolute and relative tolerance. This evidence covers only the
+selected forward float32 workload; VJP, looped, half-precision, other axis-size,
+host-runtime redirection, and full MLX test-suite coverage remain outside its
+claim.
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Project

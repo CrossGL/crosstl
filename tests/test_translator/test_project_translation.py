@@ -40082,6 +40082,18 @@ def test_metal_entry_scope_omits_unreachable_required_function_constant(
     assert "function_constant" not in generated
     assert "constant_id = 20" not in generated
 
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    runtime_manifest = project_pipeline.build_runtime_artifact_manifest(report_path)
+    assert runtime_manifest["success"] is True
+    assert runtime_manifest["summary"]["specializationConstantCount"] == 0
+    runtime_artifact = runtime_manifest["artifacts"][0]
+    assert runtime_artifact["specializationConstants"] == []
+    assert runtime_artifact["hostInterface"]["specializationConstants"] == []
+
 
 def test_metal_directx_entry_scope_requires_reachable_function_constant(tmp_path):
     _repo, missing_payload = _translate_entry_scoped_metal_specialization(
@@ -40132,6 +40144,21 @@ def test_metal_directx_entry_scope_requires_reachable_function_constant(tmp_path
     assert "static const bool use_bias = true;" in generated
     assert "apply_bias" in generated
 
+    configured_report_path = repo / "portability-report.json"
+    configured_report_path.write_text(
+        json.dumps(configured_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    runtime_manifest = project_pipeline.build_runtime_artifact_manifest(
+        configured_report_path
+    )
+    assert runtime_manifest["success"] is True
+    assert runtime_manifest["summary"]["specializationConstantCount"] == 1
+    runtime_constant = runtime_manifest["artifacts"][0]["specializationConstants"][0]
+    assert runtime_constant["name"] == "use_bias"
+    assert runtime_constant["id"] == 20
+    assert runtime_constant["concreteValue"] is True
+
 
 def test_metal_opengl_entry_scope_retains_reachable_function_constant(tmp_path):
     repo, payload = _translate_entry_scoped_metal_specialization(
@@ -40162,6 +40189,20 @@ def test_metal_opengl_entry_scope_retains_reachable_function_constant(tmp_path):
     generated = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert "layout(constant_id = 20) const bool use_bias = false;" in generated
     assert "apply_bias" in generated
+
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    runtime_manifest = project_pipeline.build_runtime_artifact_manifest(report_path)
+    assert runtime_manifest["success"] is True
+    assert runtime_manifest["summary"]["specializationConstantCount"] == 1
+    runtime_constant = runtime_manifest["artifacts"][0]["specializationConstants"][0]
+    assert runtime_constant["name"] == "use_bias"
+    assert runtime_constant["id"] == 20
+    assert runtime_constant["required"] is True
+    assert runtime_constant["status"] == "required"
 
 
 def test_metal_opengl_workgroup_split_scopes_function_constant_metadata(tmp_path):

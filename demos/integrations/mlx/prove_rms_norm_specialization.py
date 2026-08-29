@@ -56,7 +56,7 @@ RMS_NORM_LOOPED_ENTRY_POINT_COUNT = sum(
 )
 RMS_NORM_SUBGROUP_WIDTH = 32
 RMS_NORM_DIRECTX_PROFILE = "cs_6_6"
-RMS_NORM_RUNTIME_BLOCKERS = ("https://github.com/CrossGL/crosstl/issues/1795",)
+RMS_NORM_RUNTIME_BLOCKERS: tuple[str, ...] = ()
 RMS_NORM_DIRECTX_VARIANTS = (
     {
         "name": "has_w_false_by_name_workgroup_32",

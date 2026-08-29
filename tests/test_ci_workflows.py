@@ -2454,6 +2454,17 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert '"tests/test_mlx_porting_harness.py"' in mlx_porting
     assert '"tests/test_mlx_logsumexp_dispatch_contract_fixture.py"' in mlx_porting
     assert '"tests/test_mlx_rms_norm_dispatch_contract_fixture.py"' in mlx_porting
+    assert '"tests/test_translator/test_mlx_rms_norm_native_loader.py"' in mlx_porting
+    assert "Prove pinned MLX RMSNorm Direct3D native-loader execution" in mlx_porting
+    assert "CROSTL_REQUIRE_MLX_RMS_NORM_DIRECTX_NATIVE_LOADER" in mlx_porting
+    assert (
+        "test_pinned_mlx_rms_norm_executes_through_directx_native_loader" in mlx_porting
+    )
+    assert "Prove pinned MLX RMSNorm OpenGL native-loader execution" in mlx_porting
+    assert "CROSTL_REQUIRE_MLX_RMS_NORM_OPENGL_NATIVE_LOADER" in mlx_porting
+    assert (
+        "test_pinned_mlx_rms_norm_executes_through_opengl_native_loader" in mlx_porting
+    )
     assert '"tests/test_mlx_quantized_directx_proof.py"' in mlx_porting
     assert '"tests/test_mlx_quantized_opengl_proof.py"' in mlx_porting
     assert '"tests/test_translator/test_codegen/test_SPIRV_codegen.py"' in mlx_porting
@@ -3233,6 +3244,64 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
     assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Validate pinned MLX LogSumExp OpenGL dispatch artifacts",
+        "Checkout current MLX runtime proof corpus",
+    )
+
+
+def test_mlx_project_porting_workflow_runs_pinned_rms_norm_native_loader_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_rms_norm_native_loader.py"
+
+    assert mlx_porting.count(f'"{test_path}"') == 2
+    directx_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX RMSNorm Direct3D native-loader execution",
+    )
+    assert "if: runner.os == 'Windows'" in directx_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_RMS_NORM_DIRECTX_NATIVE_LOADER: "1"' in (directx_step)
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_rms_norm_executes_through_directx_native_loader"
+        in directx_step
+    )
+    assert "-n auto" in directx_step
+    assert "-k" not in directx_step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove pinned MLX RMSNorm Direct3D native-loader execution",
+        "Checkout current MLX runtime proof corpus",
+    )
+
+    opengl_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX RMSNorm OpenGL native-loader execution",
+    )
+    assert "if: runner.os == 'Linux'" in opengl_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_RMS_NORM_OPENGL_NATIVE_LOADER: "1"' in (opengl_step)
+    assert "EGL_PLATFORM: surfaceless" in opengl_step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
+    assert "PYOPENGL_PLATFORM: egl" in opengl_step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_rms_norm_executes_through_opengl_native_loader" in opengl_step
+    )
+    assert "-n auto" in opengl_step
+    assert "-k" not in opengl_step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove pinned MLX RMSNorm OpenGL native-loader execution",
+        "Install Linux runtime dependencies",
+    )
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove pinned MLX RMSNorm OpenGL native-loader execution",
         "Checkout current MLX runtime proof corpus",
     )
 

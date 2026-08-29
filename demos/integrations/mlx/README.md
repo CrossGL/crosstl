@@ -1211,15 +1211,41 @@ does not establish the source's 32-lane simdgroup or `simd_sum` semantics. The
 bounded LogSumExp proof above exercises the exact-width OpenGL contract without
 inflating the RMSNorm claim.
 
-This is translation and native compilation evidence only. It does not execute
-RMSNorm, establish numerical or runtime parity, claim complete runtime
-coverage, or claim support for the full MLX test suite. The runtime manifest
-currently restores the VJP-only `has_w` function constant onto a forward
-entry-scoped artifact, so native request construction fails closed rather than
-inventing a value. Entry-scoped specialization ownership for that path remains
-tracked by [#1795](https://github.com/CrossGL/crosstl/issues/1795). The
-translated MLX `arange.metal` Direct3D numerical proof remains a separate
-Windows CI check.
+The 24-artifact specialization proof above remains translation and native
+compilation evidence only. A separate bounded proof selects the current-corpus
+`rmsfloat32` entry at commit
+`846d176227a0ac13d2667e58d2bb68b322109ab0` through
+[`contracts/rms_norm.native-loader.dispatch.json`](contracts/rms_norm.native-loader.dispatch.json).
+That contract fixes a `[32, 1, 1]` workgroup, subgroup width 32, two dispatch
+workgroups, and no function-constant value for the forward entry. Entry-scoped
+runtime reflection now omits the unreachable VJP-only `has_w` constant while
+preserving reachable constants, resolving
+[#1795](https://github.com/CrossGL/crosstl/issues/1795). The selected template
+materializes one `rms_single_row<float, RMS_N_READS>` specialization from four
+reachable specializations while pruning 168 unrelated candidates.
+
+The generated HLSL artifact is 3,486 bytes with SHA-256
+`83f7b6e437122b2afe3dbc5d7649f6bc882d671947bcc72579ae5aa568fb2a5b`;
+it retains `[WaveSize(32)]` and compiles as `cs_6_6` with
+`-enable-16bit-types`. The generated GLSL
+artifact is 4,393 bytes with SHA-256
+`3180aba83b64add0ae3c2d471b9297eb5bada4c4ff2bd5c91a3db3698cf0df78`.
+Its explicit target-scoped 32-lane software subgroup lowers scalar
+`WaveActiveSum`, emits six `OpControlBarrier` instructions and no
+`OpGroupNonUniform` instruction, and passes `glslangValidator` plus
+`spirv-val`. Default OpenGL generation remains on the hardware-subgroup path.
+
+The six-buffer native-loader ABI packages float32 input, weights, and output,
+plus 16-byte scalar blocks for epsilon, axis size, and weight stride. The
+numerical workload runs two deterministic float32 rows of axis size 32 with 32
+weights and compares 64 outputs against
+`x * w * rsqrt(mean(x * x) + epsilon)` at `3e-5` absolute and relative
+tolerance. CI requires the same package and readback on Direct3D 12 WARP and
+Mesa software OpenGL. This is bounded execution evidence for one forward
+float32 workload; it does not redirect the MLX host runtime, run the MLX test
+suite, or cover complete RMSNorm runtime parity. In particular, it does not
+cover VJP, looped, float16, or bfloat16 entries, other axis sizes, or the
+remaining host/device dispatch space.
 
 `fence.metal` emits no DirectX, OpenGL, or Vulkan target artifact. The harness
 requires the target-specific structured diagnostics and the exact requested

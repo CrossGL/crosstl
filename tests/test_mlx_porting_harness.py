@@ -10050,6 +10050,135 @@ def test_full_corpus_checkpoint_probe_records_verified_resume_coordinate():
     }
 
 
+def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["rms_norm_native_runtime_status"]
+    assert status == module.MLX_RMS_NORM_NATIVE_RUNTIME_EVIDENCE
+    assert status["status"] == "translated-packaged-and-native-runtime-required"
+    assert status["commit"] == module.MLX_CORPUS_COMMIT
+    assert status["source"] == module.MLX_RMS_NORM_SOURCE
+    assert status["source_sha256"] == module.MLX_CURRENT_RMS_NORM_SHA256
+    assert status["selected_entry_point"] == "rmsfloat32"
+    assert status["selected_workload"] == "forward-float32-axis-32"
+    assert status["dispatch_contract"] == {
+        "path": (
+            "demos/integrations/mlx/contracts/" "rms_norm.native-loader.dispatch.json"
+        ),
+        "content_identity": module.MLX_RMS_NORM_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY,
+        "artifact_id": (
+            "sha256:00c05fccf276cf11f3fb9b617b8fe0bb3c5f8766c0e4ca1ed990c093e700422e"
+        ),
+        "workload_count": 1,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width": 32,
+        "dispatch_workgroup_count": [2, 1, 1],
+        "function_constants": {},
+    }
+    assert status["entry_scoped_specialization_ownership"] == {
+        "constant_name": "has_w",
+        "constant_id": 20,
+        "reachable_from_selected_entry": False,
+        "artifact_specialization_constant_count": 0,
+        "runtime_manifest_specialization_constant_count": 0,
+        "reachable_vjp_constants_preserved": True,
+        "resolved_issue": "https://github.com/CrossGL/crosstl/issues/1795",
+    }
+    assert status["materialization"] == {
+        "concrete_specialization_count": 1,
+        "reachable_specialization_count": 4,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 168,
+        "selected_parameters": {"N_READS": "RMS_N_READS", "T": "float"},
+    }
+    assert status["artifacts"]["directx"]["sha256"] == (
+        "83f7b6e437122b2afe3dbc5d7649f6bc882d671947bcc72579ae5aa568fb2a5b"
+    )
+    assert status["artifacts"]["directx"]["size_bytes"] == 3486
+    assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
+        "required-on-ci"
+    )
+    assert status["artifacts"]["opengl"]["sha256"] == (
+        "3180aba83b64add0ae3c2d471b9297eb5bada4c4ff2bd5c91a3db3698cf0df78"
+    )
+    assert status["artifacts"]["opengl"]["size_bytes"] == 4393
+    assert status["artifacts"]["opengl"]["control_barrier_instruction_count"] == 6
+    assert status["artifacts"]["opengl"]["group_non_uniform_instruction_count"] == 0
+    assert status["artifacts"]["opengl"]["native_runtime"]["status"] == (
+        "required-on-ci"
+    )
+    assert status["software_subgroup"]["operations"] == ["WaveActiveSum(float)"]
+    assert status["software_subgroup"]["width"] == 32
+    assert status["runtime_package"]["resource_count"] == 6
+    assert status["runtime_package"]["ready_load_unit_count_by_target"] == {
+        "directx": 1,
+        "opengl": 1,
+    }
+    assert status["runtime_package"]["blocked_load_unit_count_by_target"] == {
+        "directx": 0,
+        "opengl": 0,
+    }
+    assert status["workload"] == {
+        "dtype": "float32",
+        "shape": [2, 32],
+        "axis_size": 32,
+        "row_count": 2,
+        "weight_shape": [32],
+        "epsilon": 0.00001,
+        "weight_stride": 1,
+        "input_values": "row0=(index-16)/8; row1=((index%9)-4)*0.3125",
+        "weight_values": "0.5+(index%5)*0.125",
+        "reference": "x*w*rsqrt(mean(x*x)+epsilon)",
+        "output_element_count": 64,
+        "absolute_tolerance": 0.00003,
+        "relative_tolerance": 0.00003,
+    }
+    assert status["remaining_scope"] == {
+        "forward_entries_other_than_rmsfloat32_included": False,
+        "vjp_entries_included": False,
+        "float16_and_bfloat16_included": False,
+        "looped_entries_included": False,
+        "other_axis_sizes_included": False,
+        "historical_compiler_dispatch_record_count": 12,
+        "mlx_host_runtime_integration_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    specialization = gaps["rms_norm_specialization_status"]
+    assert specialization["status"] == (
+        "translation-native-compilation-and-bounded-runtime-validated"
+    )
+    assert specialization["numerical_execution_included"] is True
+    assert specialization["runtime_integration_included"] is True
+    assert specialization["selected_workload_numerical_parity_verified"] is True
+    assert specialization["bounded_native_runtime_evidence"] == (
+        "rms_norm_native_runtime_status"
+    )
+    assert specialization["runtime_blocked_by"] == []
+    issue = "https://github.com/CrossGL/crosstl/issues/1795"
+    assert issue not in gaps["tracked_issues"]
+    assert issue in gaps["resolved_issues"]
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects the current-corpus `rmsfloat32` entry" in readme
+    assert "two deterministic float32 rows of axis size 32" in readme
+    assert "six-buffer native-loader ABI" in readme
+    assert "six `OpControlBarrier` instructions" in readme
+    assert "Direct3D 12 WARP and Mesa software OpenGL" in readme
+    assert "does not cover VJP, looped, float16, or bfloat16 entries" in readme
+
+
 def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -11515,13 +11644,21 @@ def test_rms_norm_contract_fixture_matches_pinned_translation_scope():
     assert status["opengl"]["constant_free_artifact_count"] == 12
     assert status["opengl"]["compiled_artifact_count"] == 24
     assert status["opengl"]["validated_artifact_count"] == 24
-    assert status["numerical_execution_included"] is False
+    assert status["numerical_execution_included"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["bounded_native_runtime_evidence"] == (
+        "rms_norm_native_runtime_status"
+    )
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
     assert status["complete_runtime_coverage_claimed"] is False
     assert status["full_mlx_test_suite_included"] is False
     assert status["runtime_blocked_by"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
-    assert set(status["runtime_blocked_by"]) <= set(expected_gaps["tracked_issues"])
+    assert status["runtime_blocked_by"] == []
+    assert "https://github.com/CrossGL/crosstl/issues/1795" in (
+        expected_gaps["resolved_issues"]
+    )
 
 
 def test_rms_norm_checkout_verifies_revision_and_source_hash(tmp_path, monkeypatch):

@@ -30423,6 +30423,21 @@ def _runtime_manifest_merge_specialization_constants(
         for constant in _record_sequence(artifact.get("specializationConstants"))
         if isinstance(constant, Mapping)
     ]
+    # Source reflection is intentionally source-wide. Entry-scoped project artifacts
+    # already carry the constants reachable from the selected entry, so do not
+    # restore unrelated declarations (for example MLX RMSNorm's VJP-only `has_w`).
+    if isinstance(artifact.get("entryPoint"), Mapping):
+        scoped_identities = {
+            identity
+            for constant in (*reflected_constants, *artifact_constants)
+            if (identity := _runtime_specialization_constant_identity(constant))
+            is not None
+        }
+        source_constants = [
+            constant
+            for constant in source_constants
+            if _runtime_specialization_constant_identity(constant) in scoped_identities
+        ]
     specialization_constants = _runtime_merge_specialization_constant_records(
         reflected_constants,
         source_constants,
