@@ -1474,6 +1474,36 @@ tolerance. The measured maximum absolute error is
 not redirect the MLX host runtime, cover other FFT plans or dtypes, prove a
 Metal round trip, or establish full backend parity.
 
+At the same current pin, a bounded GEMV proof selects
+``gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0`` for one contiguous
+float32 vector-matrix product with ``M=1``, ``N=32``, and ``K=32``. The
+host-derived contract fixes workgroup ``[32, 2, 1]``, subgroup width 32, and
+one dispatched workgroup. Entry-scoped translation materializes the selected
+GEMV and ``elem_to_loc_uint`` only. Its 7,496-byte HLSL has SHA-256
+``afd239804cf10adc9c31bb2f70cd80554729f2f1381e9312a96f4fc727db0c27``
+and passes official DXC 1.9.2602.24 under ``cs_6_6``,
+``-enable-16bit-types``, and warnings as errors.
+
+OpenGL uses two logical 32-lane software subgroups in the 64-thread workgroup.
+The fail-closed software-subgroup analysis admits the source's
+``sm >= 1; sm >>= 1`` loop as the integral-equivalent positive-to-zero form of
+``sm > 0`` while retaining rejection for wider bounds, mutation,
+nontermination, escaping control flow, and indirect or nested helper calls.
+The 7,705-byte GLSL has SHA-256
+``f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562``;
+``glslangValidator`` and ``spirv-val`` accept it, and its SPIR-V contains three
+control barriers with no group-nonuniform instruction.
+
+The reflected DirectX and OpenGL ABIs each contain 15 resources, including
+signed 64-bit batch strides and seven scalar argument blocks. A deterministic
+binary-fraction workload compares all 32 output columns at ``1e-5`` absolute
+and relative tolerance. Linux Mesa llvmpipe executes the software-subgroup
+artifact in required mode, and Windows CI requires the same workload through
+Direct3D 12 WARP. This proof covers one host-valid current-corpus entry; gather,
+wide, batched, axpby, and remaining GEMV entries, MLX host redirection, selected
+Metal compilation, and the full MLX suite remain outside the claim. It does
+not change the separate historical 224-entry aggregate compiler gates.
+
 At current pinned MLX commit
 ``846d176227a0ac13d2667e58d2bb68b322109ab0``, a bounded arg-reduce proof
 selects ``argmin_float32`` and ``argmax_float32`` for two axis-32 rows. The

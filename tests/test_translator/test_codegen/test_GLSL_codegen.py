@@ -20940,10 +20940,18 @@ def test_glsl_software_subgroup_accepts_uniform_top_level_helper_calls(tmp_path)
 
 
 @pytest.mark.parametrize(
+    "condition",
+    [
+        pytest.param("offset > 0u", id="positive"),
+        pytest.param("offset >= 1u", id="at-least-one"),
+    ],
+)
+@pytest.mark.parametrize(
     "update",
     [pytest.param("/= 2u", id="divide"), pytest.param(">>= 1u", id="shift")],
 )
 def test_glsl_software_subgroup_accepts_helper_calls_in_uniform_halving_loop(
+    condition,
     update,
     tmp_path,
 ):
@@ -20960,7 +20968,7 @@ def test_glsl_software_subgroup_accepts_helper_calls_in_uniform_halving_loop(
                 uint width = 32u;
                 for (
                     uint offset = width / 2u;
-                    offset > 0u;
+                    {condition};
                     offset {update}
                 ) {{
                     float neighbor = shuffleValue(value, offset);
@@ -20985,6 +20993,8 @@ def test_glsl_software_subgroup_accepts_helper_calls_in_uniform_halving_loop(
         generated,
         tmp_path,
         "software_subgroup_uniform_halving_helper_"
+        + ("positive" if condition.endswith("0u") else "at_least_one")
+        + "_"
         + ("divide" if update.startswith("/") else "shift"),
         validate_spirv=True,
     )
@@ -21010,13 +21020,6 @@ def test_glsl_software_subgroup_accepts_helper_calls_in_uniform_halving_loop(
         (
             "width / 2u",
             "offset > 1u",
-            "offset /= 2u",
-            "float neighbor = shuffleValue(value, offset);",
-            "potentially-divergent-control-flow",
-        ),
-        (
-            "width / 2u",
-            "offset >= 1u",
             "offset /= 2u",
             "float neighbor = shuffleValue(value, offset);",
             "potentially-divergent-control-flow",

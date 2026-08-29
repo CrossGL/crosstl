@@ -12140,6 +12140,249 @@ def test_gemv_opengl_evidence_records_all_entry_toolchain_validation():
     assert "does not establish runtime execution or numerical parity" in readme
 
 
+def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["gemv_native_runtime_status"]
+    assert status["status"] == (
+        "translated-packaged-and-cross-target-native-runtime-required"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == module.MLX_GEMV_SOURCE
+    assert status["source_sha256"] == (
+        "0bd8bde0c867a17c345a3651f9f0a6c2909e0c74e76ea2a08f373fe4dcafaeda"
+    )
+    assert status["source_size_bytes"] == 6981
+    assert status["selected_entry_point"] == (
+        "gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0"
+    )
+    assert status["selected_workload"] == (
+        "vector-matrix-float32-m1-n32-k32-contiguous"
+    )
+
+    dispatch = status["dispatch_contract"]
+    assert dispatch["path"] == (
+        "demos/integrations/mlx/contracts/gemv.native-loader.dispatch.json"
+    )
+    assert dispatch["content_identity"] == (
+        "sha256:6b3bb18d130159f13874f06668b536fe4b9270ffbb2a1f44b6d9aac257aba7e4"
+    )
+    assert dispatch["workload_count"] == 1
+    assert dispatch["host_source"] == "mlx/backend/metal/matmul.cpp"
+    assert dispatch["implementation_source"] == ("mlx/backend/metal/kernels/gemv.h")
+    assert dispatch["upstream_test"] == (
+        "python/tests/test_blas.py::TestBlas::test_matrix_vector"
+    )
+    assert dispatch["host_selection"] == {
+        "BM": 1,
+        "BN": 2,
+        "SM": 8,
+        "SN": 4,
+        "TM": 4,
+        "TN": 4,
+        "kDoNCBatch": False,
+        "kDoAxpby": False,
+    }
+    assert dispatch["subgroup_width"] == 32
+    variant = dispatch["variants"][status["selected_workload"]]
+    assert variant == {
+        "artifact_id": (
+            "sha256:34eab189b10cc699f06f4cbed04faae41a2658a2a3665a6866ed987f5946949a"
+        ),
+        "dispatch_variant_id": (
+            "sha256:acaba2ec4813a364b06d95a5136bda80351797591a4d9f0b3d195f85da287fe3"
+        ),
+        "entry_point": status["selected_entry_point"],
+        "inputs": {
+            "K": 32,
+            "M": 1,
+            "N": 32,
+            "batchSize": 1,
+            "contiguousBatch": True,
+            "doAxpby": False,
+            "dtype": "float32",
+            "transposeA": False,
+            "transposeB": False,
+        },
+        "workgroup_size": [32, 2, 1],
+        "dispatch_workgroup_count": [1, 1, 1],
+        "specialization_constants": {},
+    }
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 1, "opengl": 1},
+        "translated_count_by_target": {"directx": 1, "opengl": 1},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+        "opengl_index_range_assertion_count": 1,
+    }
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 2,
+        "unsupported_specialization_count": 0,
+        "materialized_names": [
+            status["selected_entry_point"],
+            "elem_to_loc_uint",
+        ],
+        "selected_parameters": {
+            "BM": "1",
+            "BN": "2",
+            "SM": "8",
+            "SN": "4",
+            "T": "float",
+            "TM": "4",
+            "TN": "4",
+            "kDoAxpby": "0",
+            "kDoNCBatch": "0",
+        },
+    }
+
+    assert status["artifacts"] == {
+        "directx": {
+            "target_entry_point": "CSMain",
+            "sha256": (
+                "afd239804cf10adc9c31bb2f70cd80554729f2f1381e9312a96f4fc727db0c27"
+            ),
+            "size_bytes": 7496,
+            "workgroup_size": [32, 2, 1],
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "compiler": "dxc",
+            "compiler_version": "1.9.2602.24",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types", "-WX"],
+            "compiler_validation_status": "passed",
+        },
+        "opengl": {
+            "target_entry_point": "main",
+            "sha256": (
+                "f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562"
+            ),
+            "size_bytes": 7705,
+            "workgroup_size": [32, 2, 1],
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "compiler": "glslangValidator",
+            "compiler_target": "OpenGL/SPIR-V 1.3",
+            "validator": "spirv-val",
+            "control_barrier_instruction_count": 3,
+            "group_non_uniform_instruction_count": 0,
+            "compiler_validation_status": "passed",
+        },
+    }
+    assert status["software_subgroup"] == {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "logical_subgroup_count": 2,
+        "shared_float_element_count": 64,
+        "activation": "explicit-target-scoped",
+        "selected_kernel_operations": ["WaveShuffleDown(float,uint)"],
+        "uniform_halving_loop_contract": {
+            "source_condition": "sm >= 1",
+            "source_update": "sm >>= 1",
+            "canonical_positive_bounds": ["value > 0", "value >= 1"],
+            "helper_call_form": "direct-top-level-statement",
+            "unsafe_loop_behavior": "reject-before-artifact-emission",
+        },
+        "hardware_subgroup_extensions_emitted": False,
+        "group_non_uniform_instruction_count": 0,
+    }
+    assert status["index_range_assertions"] == [
+        {
+            "source": module.MLX_GEMV_SOURCE,
+            "expression": "uint64(bm + tm) * marix_ld + out_col + tn",
+            "minimum": 0,
+            "maximum": (1 << 32) - 1,
+        }
+    ]
+    assert status["runtime_package"] == {
+        "artifact_count_per_target": 1,
+        "ready_load_unit_count_per_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count_by_target": {"directx": 15, "opengl": 15},
+        "resource_element_types": ["float32", "int32", "int64"],
+        "scalar_argument_count": 7,
+        "disabled_path_placeholders": [
+            "bias",
+            "vector_batch_stride",
+            "matrix_batch_stride",
+            "bias_batch_stride",
+        ],
+    }
+    assert status["workload"] == {
+        "matrix_shape": [32, 32],
+        "vector_shape": [32],
+        "output_shape": [32],
+        "matrix_values": "(row + 1) / 64 + (column + 1) / 64",
+        "vector_values": "(row + 1) / 32",
+        "expected_values": "5.5859375 + 0.2578125 * (column + 1)",
+        "reference": "float32-vector-matrix-product",
+        "absolute_tolerance": 1e-5,
+        "relative_tolerance": 1e-5,
+    }
+    assert status["native_runtime"] == {
+        "directx": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_gemv_native_loader.py::"
+                "test_current_mlx_gemv_executes_through_directx_native_loader"
+            ),
+        },
+        "opengl": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-headless-egl-software-opengl",
+            "status": "required-on-ci",
+            "local_linux_arm64_validation": "passed",
+            "test": (
+                "tests/test_translator/test_mlx_gemv_native_loader.py::"
+                "test_current_mlx_gemv_executes_with_opengl_software_subgroups"
+            ),
+        },
+    }
+    assert status["metal_roundtrip_boundary"] == {
+        "status": "outside-selected-native-loader-proof",
+        "aggregate_native_baseline": "separate",
+        "selected_entry_compiler_validation_included": False,
+    }
+    assert status["previous_verified_proofs"] == {
+        "directx_aggregate_status_key": "directx_gemv_compiler_frontier_status",
+        "opengl_aggregate_status_key": "opengl_gemv_toolchain_status",
+        "aggregate_commit": PINNED_MLX_COMMIT,
+    }
+    assert status["remaining_scope"] == {
+        "gather_entries_included": False,
+        "wide_entries_included": False,
+        "batched_entries_included": False,
+        "axpby_entries_included": False,
+        "remaining_host_named_entries_included": False,
+        "mlx_host_runtime_integration_included": False,
+        "full_mlx_test_suite_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "contracts/gemv.native-loader.dispatch.json" in readme
+    assert status["selected_entry_point"] in readme
+    assert status["artifacts"]["directx"]["sha256"] in readme
+    assert status["artifacts"]["opengl"]["sha256"] in readme
+    assert "canonical positive-to-zero halving loop" in readme
+    assert "does not replace the historical 224-entry aggregate gates" in readme
+
+
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):
     module = _load_harness()
     mlx_root = tmp_path / "mlx"

@@ -1,0 +1,312 @@
+{
+  "kind": "crosstl-host-dispatch-contract",
+  "schemaVersion": 1,
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "sourceReferences": {
+      "hostDispatch": "mlx/backend/metal/matmul.cpp",
+      "kernel": "mlx/backend/metal/kernels/gemv.metal",
+      "implementation": "mlx/backend/metal/kernels/gemv.h"
+    },
+    "scope": {
+      "description": "Pinned float32 contiguous one-row vector-matrix GEMV dispatch with K=32, N=32, no batching, and no axpby bias path.",
+      "generalGemvEntryIncluded": true,
+      "gatherEntriesIncluded": false,
+      "wideEntriesIncluded": false,
+      "batchedEntriesIncluded": false,
+      "axpbyEntriesIncluded": false,
+      "runtimeExecutionVerified": false,
+      "numericalParityVerified": false
+    }
+  },
+  "inputs": [
+    {
+      "name": "M",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "M"
+      }
+    },
+    {
+      "name": "N",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "N"
+      }
+    },
+    {
+      "name": "K",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "K"
+      }
+    },
+    {
+      "name": "batchSize",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "batch_size_out"
+      }
+    },
+    {
+      "name": "dtype",
+      "role": "dtype",
+      "type": "string"
+    },
+    {
+      "name": "transposeA",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostSymbol": "transpose_a"
+      }
+    },
+    {
+      "name": "transposeB",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostSymbol": "transpose_b"
+      }
+    },
+    {
+      "name": "contiguousBatch",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostExpression": "batch_shape.size() == 1"
+      }
+    },
+    {
+      "name": "doAxpby",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostSymbol": "do_axpby"
+      }
+    }
+  ],
+  "workloads": [
+    {
+      "id": "vector-matrix-float32-m1-n32-k32-contiguous",
+      "values": {
+        "M": 1,
+        "N": 32,
+        "K": 32,
+        "batchSize": 1,
+        "dtype": "float32",
+        "transposeA": false,
+        "transposeB": false,
+        "contiguousBatch": true,
+        "doAxpby": false
+      },
+      "provenance": {
+        "hostFunction": "gemv_axbpy",
+        "branch": "transpose-matrix-general-gemv",
+        "testSource": "python/tests/test_blas.py::TestBlas::test_matrix_vector",
+        "vectorShape": [
+          1,
+          32
+        ],
+        "matrixShape": [
+          32,
+          32
+        ],
+        "outputShape": [
+          1,
+          32
+        ]
+      }
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "simdWidth",
+      "type": "integer",
+      "provenance": {
+        "kernelExpression": "SM * SN"
+      }
+    }
+  ],
+  "devices": [
+    {
+      "id": "wave32",
+      "values": {
+        "simdWidth": 32
+      },
+      "provenance": {
+        "scope": "bounded wave32 device record"
+      }
+    }
+  ],
+  "contracts": [
+    {
+      "id": "mlx-gemv-native-loader",
+      "source": "mlx/backend/metal/kernels/gemv.metal",
+      "provenance": {
+        "hostSource": "mlx/backend/metal/matmul.cpp",
+        "kernelSource": "mlx/backend/metal/kernels/gemv.metal",
+        "implementationSource": "mlx/backend/metal/kernels/gemv.h",
+        "hostSelection": {
+          "isBMatrix": true,
+          "transposeMatrixExpression": "!transposeB",
+          "BM": 1,
+          "BN": 2,
+          "SM": 8,
+          "SN": 4,
+          "TM": 4,
+          "TN": 4,
+          "kDoNCBatch": false,
+          "kDoAxpby": false
+        },
+        "hostWorkgroup": [
+          32,
+          2,
+          1
+        ],
+        "hostDispatchFormula": [
+          "ceilDiv(N, BN * SN * TN)",
+          1,
+          "batchSize"
+        ]
+      },
+      "branches": [
+        {
+          "id": "vector-matrix-float32-m1-n32-k32-contiguous",
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "M"
+                  },
+                  1
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "N"
+                  },
+                  32
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "K"
+                  },
+                  32
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "batchSize"
+                  },
+                  1
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "dtype"
+                  },
+                  "float32"
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "transposeA"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "transposeB"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "contiguousBatch"
+                  },
+                  true
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "doAxpby"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "capability": "simdWidth"
+                  },
+                  32
+                ]
+              }
+            ]
+          },
+          "entryPoint": "gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0",
+          "workgroupSize": [
+            32,
+            2,
+            1
+          ],
+          "subgroupWidth": {
+            "capability": "simdWidth"
+          },
+          "dispatch": {
+            "workgroupCount": [
+              {
+                "op": "ceilDiv",
+                "args": [
+                  {
+                    "input": "N"
+                  },
+                  32
+                ]
+              },
+              1,
+              {
+                "input": "batchSize"
+              }
+            ]
+          },
+          "provenance": {
+            "hostFunction": "gemv_axbpy",
+            "branch": "transpose-matrix-general-gemv",
+            "mainLoopIterations": 1,
+            "tailElements": 0
+          }
+        }
+      ]
+    }
+  ]
+}

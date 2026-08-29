@@ -120,7 +120,7 @@ The current harness verifies:
   The three pending aggregate sources cover 76 compute entries. Those historical
   aggregate runs do not consume the later entry-scoped bounded contracts and
   remain asserted as failed artifacts; no placeholder workgroup size is
-  restored. Separate bounded arg-reduce, Softmax, and scaled-attention
+  restored. Separate bounded GEMV, arg-reduce, Softmax, and scaled-attention
   translation, package, and native-runtime proofs are documented below.
   `fence.metal` is
   excluded because its DirectX translation intentionally fails under
@@ -157,8 +157,9 @@ The current harness verifies:
   one real binary operator entry and does not claim coverage of the other
   materialized binary variants or the upstream MLX host runtime;
 - the `arangeuint32` and `ss_Addfloat32` native-loader checks above, together
-  with the scalar copy, float32 dot-product, bounded Softmax, bounded
-  scaled-attention, and unary Square and ArcCos checks described below, use the
+  with the scalar copy, float32 dot-product, bounded GEMV, bounded Softmax,
+  bounded scaled-attention, and unary Square and ArcCos checks described below,
+  use the
   current corpus at commit
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The broader 40-unit frontier and
   its remaining proofs retain their recorded historical revision until each
@@ -207,8 +208,9 @@ The current harness verifies:
   artifacts emitted, exact workgroup and subgroup execution records, and the
   five explicit host index-range preconditions used for 64-bit source indices.
   Linux CI compiles every artifact with `glslangValidator` and validates every
-  resulting SPIR-V 1.3 module with `spirv-val`. This does not establish runtime
-  execution or numerical parity;
+  resulting SPIR-V 1.3 module with `spirv-val`. This historical aggregate gate
+  does not establish runtime execution or numerical parity; a distinct bounded
+  current-pinned native-runtime proof is documented below;
 - on Linux CI, full project materialization and translation of `gemv.metal` to
   Vulkan produces 226 specializations and 224 `GLCompute` entry points. The
   generated artifact passes both `spirv-as` and `spirv-val` for `vulkan1.1`
@@ -857,6 +859,64 @@ semantics-preserving fallback for devices without the required native subgroup
 width. The gate proves complete translation and compiler acceptance under the
 recorded project contracts; it does not establish runtime execution, host
 integration, or numerical parity.
+
+The checked
+[`contracts/gemv.native-loader.dispatch.json`](contracts/gemv.native-loader.dispatch.json)
+contract selects current-pinned
+`gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0` from the newer 6,981-byte
+`gemv.metal` source with SHA-256
+`0bd8bde0c867a17c345a3651f9f0a6c2909e0c74e76ea2a08f373fe4dcafaeda`.
+The host-derived `gemv_axbpy` branch covers one contiguous float32 vector-matrix
+product with `M=1`, `N=32`, `K=32`, no gathered or non-contiguous batch, and no
+axpby bias path, matching
+`python/tests/test_blas.py::TestBlas::test_matrix_vector`. It fixes parameters
+`BM=1`, `BN=2`, `SM=8`, `SN=4`, `TM=4`, and `TN=4`, workgroup
+`[32, 2, 1]`, subgroup width 32, and dispatch `[1, 1, 1]`. The normalized
+contract identity is
+`sha256:6b3bb18d130159f13874f06668b536fe4b9270ffbb2a1f44b6d9aac257aba7e4`;
+its single variant and artifact identities are
+`sha256:acaba2ec4813a364b06d95a5136bda80351797591a4d9f0b3d195f85da287fe3`
+and
+`sha256:34eab189b10cc699f06f4cbed04faae41a2658a2a3665a6866ed987f5946949a`.
+
+Entry-scoped translation materializes only the selected GEMV and
+`elem_to_loc_uint`, with no unsupported record or project diagnostic. The
+7,496-byte HLSL has SHA-256
+`afd239804cf10adc9c31bb2f70cd80554729f2f1381e9312a96f4fc727db0c27`,
+retains `[numthreads(32, 2, 1)]` and `[WaveSize(32)]`, and passes official DXC
+1.9.2602.24 under `cs_6_6`, `-enable-16bit-types`, and warnings as errors. The
+OpenGL target needs only the selected matrix-index assertion
+`uint64(bm + tm) * marix_ld + out_col + tn` in the unsigned 32-bit range. Its
+7,705-byte GLSL has SHA-256
+`f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562`
+and partitions the 64-thread workgroup into two logical 32-lane subgroups with
+a 64-float shared shuffle scratch array.
+
+The generic software-subgroup proof now recognizes either `value > 0` or the
+integral-equivalent `value >= 1` as a canonical positive-to-zero halving loop
+when paired with `/= 2` or `>>= 1`. That admits the source's
+`sm >= 1; sm >>= 1` segmented shuffle reduction while wider bounds, mutation,
+nontermination, escaping control flow, indirect calls, and nested helper calls
+continue to fail closed. `glslangValidator` and `spirv-val` accept the emitted
+module; SPIR-V contains three control barriers and no group-nonuniform
+instruction or hardware-subgroup extension.
+
+Both runtime packages expose the same 15 logical resources: matrix, vector,
+bias placeholder, writable output, batch shape, three signed 64-bit batch
+strides, and seven scalar argument blocks. A deterministic binary-fraction
+workload uses `vector[row] = (row + 1) / 32` and
+`matrix[row,column] = (row + column + 2) / 64`; output column `c` must equal
+`5.5859375 + 0.2578125 * (c + 1)` for all 32 columns at `1e-5` absolute and
+relative tolerance. Linux arm64 Mesa llvmpipe executes and reads back this
+software-subgroup workload in required mode, and Windows CI requires the same
+request through Direct3D 12 WARP.
+
+This bounded proof does not replace the historical 224-entry aggregate gates:
+it adds numerical execution for one host-valid entry from the materially newer
+current corpus. Gather, wide, batched, axpby, and the remaining host-named GEMV
+entries, MLX host redirection, the full MLX test suite, and selected-entry Metal
+compiler validation remain outside the claim. The separate native Metal
+aggregate baseline continues to cover the existing round-trip boundary.
 
 Owner-dependent `constexpr` helper calls in quantized struct static members now
 resolve for the selected pinned replay, completing CrossGL/crosstl#1672.

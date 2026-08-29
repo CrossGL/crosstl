@@ -4640,9 +4640,17 @@ class GLSLCodeGen:
         )
         if halving_update:
             # Integer division or right shift is only a termination proof for
-            # the canonical positive-to-zero reduction loop. Wider bounds can
-            # converge to a fixed point that still satisfies the condition.
-            if normalized_operator != ">" or literal_bound != 0:
+            # canonical positive-to-zero reduction loops.  Integral
+            # ``value > 0`` and ``value >= 1`` are equivalent; admitting both
+            # preserves source spellings such as Metal's
+            # ``for (ushort off = ...; off >= 1; off >>= 1)`` without opening
+            # wider bounds that can skip required reduction rounds.  Other
+            # bounds can converge to a fixed point that still satisfies the
+            # condition.
+            canonical_positive_bound = (
+                normalized_operator == ">" and literal_bound == 0
+            ) or (normalized_operator == ">=" and literal_bound == 1)
+            if not canonical_positive_bound:
                 return False
         elif increasing != (normalized_operator in {"<", "<="}):
             return False
