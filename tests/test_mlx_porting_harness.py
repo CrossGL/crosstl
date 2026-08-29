@@ -9411,12 +9411,12 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         source: evidence["specializationCount"]
         for source, evidence in module.MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE.items()
     } == {
-        module.MLX_ARG_REDUCE_SOURCE: 51,
+        module.MLX_ARG_REDUCE_SOURCE: 39,
         module.MLX_LAYER_NORM_SOURCE: 16,
         module.MLX_LOGSUMEXP_SOURCE: 7,
         module.MLX_RMS_NORM_SOURCE: 12,
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
-        module.MLX_SOFTMAX_SOURCE: 17,
+        module.MLX_SOFTMAX_SOURCE: 14,
     }
     directx_status = gaps["directx_toolchain_status"]
     assert directx_status["specialization_constants"] == (

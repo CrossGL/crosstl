@@ -683,7 +683,7 @@ MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE = (
 )
 MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
     MLX_ARG_REDUCE_SOURCE: {
-        "specializationCount": 51,
+        "specializationCount": 39,
         "hostSource": "mlx/backend/metal/primitives.cpp",
         "hostLines": "117-132",
         "dispatchFormulas": [
@@ -773,7 +773,7 @@ MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
         "materializationParameters": ["D", "T", "V"],
     },
     MLX_SOFTMAX_SOURCE: {
-        "specializationCount": 17,
+        "specializationCount": 14,
         "hostSource": "mlx/backend/metal/softmax.cpp",
         "hostLines": "46-83",
         "dispatchFormulas": [

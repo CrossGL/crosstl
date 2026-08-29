@@ -2714,7 +2714,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in harness
     assert "MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE" in harness
     assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in harness
-    assert '"specializationCount": 51' in harness
+    assert '"specializationCount": 39' in harness
     assert '"sourceEntryPointIdentityStatus"' in harness
     assert "MLX_BLOCKED_REDUCED_FRONTIER_SOURCES" in harness
     assert "_check_atomic_fence_contract" in harness

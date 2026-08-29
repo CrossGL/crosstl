@@ -126,7 +126,7 @@
     "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
     "host_dispatch_import_resolved_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "template_materialization_status": "materialized",
-    "specialization_count": 51,
+    "specialization_count": 39,
     "unsupported_specialization_count": 0,
     "native_validation": {
       "directx": "blocked-before-emission",
@@ -4871,7 +4871,7 @@
     "host_dispatch_import_resolved_by": "https://github.com/CrossGL/crosstl/issues/1793",
     "dispatch_evidence": {
       "mlx/backend/metal/kernels/arg_reduce.metal": {
-        "specializationCount": 51,
+        "specializationCount": 39,
         "hostSource": "mlx/backend/metal/primitives.cpp",
         "hostLines": "117-132",
         "dispatchFormulas": [
@@ -4920,7 +4920,7 @@
         ]
       },
       "mlx/backend/metal/kernels/softmax.metal": {
-        "specializationCount": 17,
+        "specializationCount": 14,
         "hostSource": "mlx/backend/metal/softmax.cpp",
         "hostLines": "46-83",
         "dispatchFormulas": [
