@@ -636,89 +636,91 @@ def _runtime_request(
     return request, names["output"], expected
 
 
-@pytest.mark.parametrize("workload_id", list(MLX_ARG_REDUCE_VARIANTS))
-def test_pinned_mlx_arg_reduce_executes_through_directx_native_loader(workload_id):
+# CI invokes these selectors with pytest-xdist. Keep both workloads in one test
+# item per target so native WARP/EGL dispatches cannot overlap across workers.
+def test_pinned_mlx_arg_reduce_executes_through_directx_native_loader():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-arg-reduce-directx-{workload_id}-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        descriptor, package_dir = _build_runtime_package(
-            mlx_root,
-            Path(temporary_directory),
-            target="directx",
-            workload_id=workload_id,
-        )
-        request, output_name, expected = _runtime_request(
-            descriptor,
-            package_dir,
-            target="directx",
-            workload_id=workload_id,
-        )
-        executor = RuntimeParityExecutor(
-            RuntimeTestAdapterSpec(
-                adapter_id=f"mlx-arg-reduce-directx-{workload_id}",
+    for workload_id in MLX_ARG_REDUCE_VARIANTS:
+        with tempfile.TemporaryDirectory(
+            prefix=f".crosstl-arg-reduce-directx-{workload_id}-",
+            dir=mlx_root,
+        ) as temporary_directory:
+            descriptor, package_dir = _build_runtime_package(
+                mlx_root,
+                Path(temporary_directory),
                 target="directx",
-                executor="directx",
-                adapter_kind="directx-native-runtime",
-            ),
-            runtime_adapter=DirectXRuntimeParityAdapter(
-                runtime=DirectXComputeRuntime()
-            ),
-        )
-        availability = executor.is_available(request)
-        if not availability.available:
-            _skip_or_fail(
-                availability.reason or "The native DirectX runtime is unavailable",
-                REQUIRE_DIRECTX_RUNTIME_ENV,
+                workload_id=workload_id,
             )
-        result = executor.run(request)
+            request, output_name, expected = _runtime_request(
+                descriptor,
+                package_dir,
+                target="directx",
+                workload_id=workload_id,
+            )
+            executor = RuntimeParityExecutor(
+                RuntimeTestAdapterSpec(
+                    adapter_id=f"mlx-arg-reduce-directx-{workload_id}",
+                    target="directx",
+                    executor="directx",
+                    adapter_kind="directx-native-runtime",
+                ),
+                runtime_adapter=DirectXRuntimeParityAdapter(
+                    runtime=DirectXComputeRuntime()
+                ),
+            )
+            availability = executor.is_available(request)
+            if not availability.available:
+                _skip_or_fail(
+                    availability.reason or "The native DirectX runtime is unavailable",
+                    REQUIRE_DIRECTX_RUNTIME_ENV,
+                )
+            result = executor.run(request)
 
-    assert result.status == "ok"
-    assert result.outputs[output_name]["dtype"] == "uint32"
-    assert result.outputs[output_name]["shape"] == [2]
-    assert result.outputs[output_name]["values"] == expected
+        assert result.status == "ok"
+        assert result.outputs[output_name]["dtype"] == "uint32"
+        assert result.outputs[output_name]["shape"] == [2]
+        assert result.outputs[output_name]["values"] == expected
 
 
-@pytest.mark.parametrize("workload_id", list(MLX_ARG_REDUCE_VARIANTS))
-def test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader(workload_id):
+def test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader():
     mlx_root = _pinned_mlx_root()
-    with tempfile.TemporaryDirectory(
-        prefix=f".crosstl-arg-reduce-opengl-{workload_id}-",
-        dir=mlx_root,
-    ) as temporary_directory:
-        descriptor, package_dir = _build_runtime_package(
-            mlx_root,
-            Path(temporary_directory),
-            target="opengl",
-            workload_id=workload_id,
-        )
-        request, output_name, expected = _runtime_request(
-            descriptor,
-            package_dir,
-            target="opengl",
-            workload_id=workload_id,
-        )
-        executor = RuntimeParityExecutor(
-            RuntimeTestAdapterSpec(
-                adapter_id=f"mlx-arg-reduce-opengl-{workload_id}",
+    for workload_id in MLX_ARG_REDUCE_VARIANTS:
+        with tempfile.TemporaryDirectory(
+            prefix=f".crosstl-arg-reduce-opengl-{workload_id}-",
+            dir=mlx_root,
+        ) as temporary_directory:
+            descriptor, package_dir = _build_runtime_package(
+                mlx_root,
+                Path(temporary_directory),
                 target="opengl",
-                executor="opengl",
-                adapter_kind="opengl-native-runtime",
-            ),
-            runtime_adapter=OpenGLRuntimeParityAdapter(
-                runtime=OpenGLComputeRuntime(context_backends=("egl",))
-            ),
-        )
-        availability = executor.is_available(request)
-        if not availability.available:
-            _skip_or_fail(
-                availability.reason or "The native OpenGL runtime is unavailable",
-                REQUIRE_OPENGL_RUNTIME_ENV,
+                workload_id=workload_id,
             )
-        result = executor.run(request)
+            request, output_name, expected = _runtime_request(
+                descriptor,
+                package_dir,
+                target="opengl",
+                workload_id=workload_id,
+            )
+            executor = RuntimeParityExecutor(
+                RuntimeTestAdapterSpec(
+                    adapter_id=f"mlx-arg-reduce-opengl-{workload_id}",
+                    target="opengl",
+                    executor="opengl",
+                    adapter_kind="opengl-native-runtime",
+                ),
+                runtime_adapter=OpenGLRuntimeParityAdapter(
+                    runtime=OpenGLComputeRuntime(context_backends=("egl",))
+                ),
+            )
+            availability = executor.is_available(request)
+            if not availability.available:
+                _skip_or_fail(
+                    availability.reason or "The native OpenGL runtime is unavailable",
+                    REQUIRE_OPENGL_RUNTIME_ENV,
+                )
+            result = executor.run(request)
 
-    assert result.status == "ok"
-    assert result.outputs[output_name]["dtype"] == "uint32"
-    assert result.outputs[output_name]["shape"] == [2]
-    assert result.outputs[output_name]["values"] == expected
+        assert result.status == "ok"
+        assert result.outputs[output_name]["dtype"] == "uint32"
+        assert result.outputs[output_name]["shape"] == [2]
+        assert result.outputs[output_name]["values"] == expected
