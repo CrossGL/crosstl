@@ -117,9 +117,12 @@ The current harness verifies:
   metadata remains tracked by
   [#1542](https://github.com/CrossGL/crosstl/issues/1542). Host dispatch contract
   import was completed under [#1793](https://github.com/CrossGL/crosstl/issues/1793).
-  The three pending aggregate sources cover 76 compute entries and are asserted
-  as failed artifacts until bounded dispatch manifests are supplied;
-  no placeholder workgroup size is restored. `fence.metal` is
+  The three pending aggregate sources cover 76 compute entries. Those historical
+  aggregate runs do not consume the later entry-scoped bounded contracts and
+  remain asserted as failed artifacts; no placeholder workgroup size is
+  restored. Separate bounded arg-reduce, Softmax, and scaled-attention
+  translation, package, and native-runtime proofs are documented below.
+  `fence.metal` is
   excluded because its DirectX translation intentionally fails under
   [#1537](https://github.com/CrossGL/crosstl/issues/1537) before DXC. This gate
   establishes compiler acceptance only; it does not dispatch these kernels or
@@ -154,8 +157,9 @@ The current harness verifies:
   one real binary operator entry and does not claim coverage of the other
   materialized binary variants or the upstream MLX host runtime;
 - the `arangeuint32` and `ss_Addfloat32` native-loader checks above, together
-  with the scalar copy, float32 dot-product, bounded Softmax, and unary Square
-  and ArcCos checks described below, use the current corpus at commit
+  with the scalar copy, float32 dot-product, bounded Softmax, bounded
+  scaled-attention, and unary Square and ArcCos checks described below, use the
+  current corpus at commit
   `846d176227a0ac13d2667e58d2bb68b322109ab0`. The broader 40-unit frontier and
   its remaining proofs retain their recorded historical revision until each
   source contract is remeasured;
@@ -905,6 +909,61 @@ Metal round trip. Project dispatch import was completed under
 [#1793](https://github.com/CrossGL/crosstl/issues/1793), and remaining broad
 entry packaging stays tracked in
 [#1523](https://github.com/CrossGL/crosstl/issues/1523).
+
+The checked
+[`contracts/scaled_dot_product_attention.native-loader.dispatch.json`](contracts/scaled_dot_product_attention.native-loader.dispatch.json)
+contract now selects current-pinned `sdpa_vector_float_64_64` for the bounded
+one-pass vector path: batch 1, one query and KV head, query length 1, key length
+4, query/value dimensions 64, scale 0.125, and no mask, causal mode, or sinks.
+The host-derived contract fixes workgroup `[1024, 1, 1]`, subgroup width 32,
+and one dispatched workgroup. Function constant IDs 20 through 25
+(`has_mask`, `query_transposed`, `do_causal`, `bool_mask`, `float_mask`, and
+`has_sinks`) are all false; ID 26 belongs to the two-pass path and is
+intentionally absent. The dispatch content identity is
+`97e5ebb69af8da3a0082776015787456f23b8bfdb0cff757f5364db2cfef8d2c`,
+with variant ID
+`sha256:8b2abb9f7179e051530697fb8d1956d0ff03a324e7acaa5fcdf4f4dd9f1befbb`
+and artifact ID
+`sha256:dd0138695bd82e1f8ea49bd667052b484420ee96cb2849c6eed20ba5eae39a89`.
+
+The 8,151-byte HLSL artifact has SHA-256
+`1aee3a25b49c0fa6efb8ea6ae0b29d77c09a496cb4119d3a295901c9dedd2fc9`.
+Official DXC 1.9.2602.24 accepts `CSMain` under `cs_6_6`,
+`-enable-16bit-types`, and warnings as errors, producing 8,728 bytes of DXIL.
+The 12,089-byte explicit software-subgroup GLSL artifact has SHA-256
+`9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b`.
+It partitions 1,024 invocations into 32 logical subgroups and synchronizes the
+source subgroup-ID-strided runtime loop across every workgroup round. Inactive
+subgroups contribute typed collective identities, so all generated barriers
+remain uniform. `glslangValidator` and `spirv-val` accept the resulting
+OpenGL/SPIR-V 1.3 module; disassembly contains exactly nine
+`OpControlBarrier` instructions, six `OpSpecConstantFalse` declarations,
+local size `1024 1 1`, and no `OpGroupNonUniform` instruction.
+
+Both targets package complete native-loader requests. DirectX has 19 reflected
+resources including generated `CrossGLDispatchInfo`; OpenGL has 18. Optional
+`bmask`, `fmask`, mask-stride, and sinks bindings receive harmless placeholders.
+The stored Boolean mask ABI is physically uint32 in both HLSL and GLSL block
+storage. DirectX concretizes the six false constants. OpenGL retains them for a
+verified deferred GLSL-to-SPIR-V specialization request and publishes the JSON
+variant registry while explicitly omitting the unsupported native registry
+header.
+
+Windows CI requires the 64-value output to execute through Direct3D 12 WARP.
+Linux CI binds PyOpenGL to surfaceless EGL, forces llvmpipe, performs deferred
+SPIR-V specialization, dispatches through the OpenGL native loader, and compares
+all values with a stable CPU scaled-attention reference at `2e-4` absolute and
+relative tolerance. The local Mesa run had maximum absolute error
+`4.082320426146424e-08` and maximum relative error
+`4.2163276126605175e-06`. This is bounded evidence for one float32 one-pass
+workload only. Masked, causal, sinks, two-pass and full-attention paths, other
+dimensions and dtypes, the remaining host-named entries, MLX host redirection,
+and the full MLX test suite remain outside the claim. The separate native Metal
+baseline does not make this selected native-loader proof a Metal round trip.
+The historical 42-entry aggregate DirectX/OpenGL result remains fail-closed
+because it does not consume this entry-scoped contract; it no longer means that
+no bounded attention dispatch, package, or numerical runtime proof exists.
+
 The reduced reference-accessor fixture covers three non-template paths. The
 mutable scalar call returns the direct `val_frags[i * width + j]` lvalue and
 must retain storage identity through assignment and readback. The implicit const
@@ -946,9 +1005,10 @@ The eight-source OpenGL/SPIR-V gate includes `rms_norm.metal`, `rope.metal`, and
 `scaled_dot_product_attention.metal`. Their Metal function constants retain
 their numeric identifiers as native GLSL specialization constants; the gate
 compiles each generated module for OpenGL/SPIR-V 1.3 and validates the resulting
-binary. The native OpenGL runtime separately verifies typed specialization,
-dispatch, and deterministic readback with a reduced generated artifact; it does
-not claim numerical parity for those three full MLX kernels. For the pinned
+binary. Its reduced native specialization check establishes typed dispatch and
+deterministic readback only, not numerical parity for those full aggregate
+modules. The bounded `sdpa_vector_float_64_64` proof above is separate and does
+compare every selected output with a CPU attention reference. For the pinned
 DirectX rope check, project
 configuration supplies IDs 1 through 3 and CrossTL materializes a concrete HLSL
 variant before DXC.

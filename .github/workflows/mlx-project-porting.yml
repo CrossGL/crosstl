@@ -44,6 +44,7 @@ on:
       - "tests/test_translator/test_mlx_logsumexp_native_loader.py"
       - "tests/test_translator/test_mlx_softmax_native_loader.py"
       - "tests/test_translator/test_mlx_arg_reduce_native_loader.py"
+      - "tests/test_translator/test_mlx_scaled_dot_product_attention_native_loader.py"
       - "tests/test_translator/test_mlx_rms_norm_native_loader.py"
       - "tests/test_translator/test_mlx_layer_norm_native_loader.py"
       - "tests/test_translator/test_mlx_layer_norm_vjp_native_loader.py"
@@ -89,6 +90,7 @@ on:
       - "tests/test_translator/test_mlx_logsumexp_native_loader.py"
       - "tests/test_translator/test_mlx_softmax_native_loader.py"
       - "tests/test_translator/test_mlx_arg_reduce_native_loader.py"
+      - "tests/test_translator/test_mlx_scaled_dot_product_attention_native_loader.py"
       - "tests/test_translator/test_mlx_rms_norm_native_loader.py"
       - "tests/test_translator/test_mlx_layer_norm_native_loader.py"
       - "tests/test_translator/test_mlx_layer_norm_vjp_native_loader.py"
@@ -299,6 +301,15 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_arg_reduce_native_loader.py::test_pinned_mlx_arg_reduce_executes_through_directx_native_loader
+
+      - name: Prove pinned MLX scaled-attention Direct3D native-loader execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+          CROSTL_REQUIRE_MLX_ATTENTION_DIRECTX_NATIVE_LOADER: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_scaled_dot_product_attention_native_loader.py::test_pinned_mlx_attention_executes_through_directx_native_loader
 
       - name: Prove pinned MLX RMSNorm Direct3D native-loader execution
         if: runner.os == 'Windows'
@@ -788,6 +799,19 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_arg_reduce_native_loader.py::test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader
+
+      - name: Prove pinned MLX scaled-attention OpenGL native-loader execution
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+          CROSTL_REQUIRE_MLX_ATTENTION_OPENGL_NATIVE_LOADER: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
+          PYOPENGL_PLATFORM: egl
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_scaled_dot_product_attention_native_loader.py::test_pinned_mlx_attention_executes_through_opengl_native_loader
 
       - name: Prove pinned MLX RMSNorm OpenGL native-loader execution
         if: runner.os == 'Linux'

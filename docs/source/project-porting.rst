@@ -1471,6 +1471,40 @@ per-entry workgroup specialization rule fails explicitly with
 ``project.translate.workgroup-size-rule-unsupported-target``; this proof does
 not claim a Metal round trip.
 
+The same current pin now has a bounded one-pass scaled-attention proof for
+``sdpa_vector_float_64_64``. The checked host contract selects batch/head/query
+counts of one, key length 4, dimensions ``D=64`` and ``V=64``, scale ``0.125``,
+and no mask, causal mode, or sinks. It fixes ``[1024, 1, 1]`` with 32 logical
+subgroups and one dispatched workgroup. Function constants 20 through 25 are
+all false; two-pass-only ID 26 is not part of this artifact. The exact HLSL is
+8,151 bytes with SHA-256
+``1aee3a25b49c0fa6efb8ea6ae0b29d77c09a496cb4119d3a295901c9dedd2fc9``
+and passes DXC 1.9.2602.24 under ``cs_6_6``, ``-enable-16bit-types``, and
+warnings as errors.
+
+OpenGL uses an explicit 32-lane software artifact across the full 1,024-thread
+workgroup. The subgroup-ID-strided runtime loop is synchronized round by round;
+inactive subgroups supply typed reduction identities so all barriers remain
+uniform. Its 12,089-byte GLSL has SHA-256
+``9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b``.
+The validated SPIR-V has nine control barriers, six false specialization
+constants, local size ``1024 1 1``, and no group-nonuniform instruction.
+
+The native-loader ABIs contain 19 DirectX and 18 OpenGL resources. Deferred
+optional resources receive placeholders, including uint32 physical storage for
+``bmask``. DirectX concretizes the six constants and executes through WARP;
+OpenGL builds a verified deferred compilation request, specializes the six
+constants, and executes through Mesa surfaceless EGL. Both compare all 64
+outputs with a stable CPU reference at ``2e-4`` absolute and relative
+tolerance. The local Mesa proof measured maximum absolute error
+``4.082320426146424e-08`` and maximum relative error
+``4.2163276126605175e-06``. Masked, causal, sinks, two-pass and full-attention
+paths, other dimensions and dtypes, MLX host redirection, selected Metal
+round-trip validation, and the full MLX suite remain outside this bounded
+claim. The historical 42-entry aggregate DirectX/OpenGL run remains fail-closed
+because it does not consume this entry-scoped contract; it is not evidence that
+a bounded attention runtime proof is absent.
+
 At current pinned MLX commit
 ``846d176227a0ac13d2667e58d2bb68b322109ab0``, a bounded LayerNorm VJP proof
 selects ``vjp_layer_normfloat32`` for one axis-32 row with function constant

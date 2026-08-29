@@ -20348,6 +20348,148 @@ def test_glsl_software_subgroup_lowers_masked_min_max_collectives(
     )
 
 
+def test_glsl_software_subgroup_lowers_subgroup_strided_masked_reduction_rounds(
+    tmp_path,
+):
+    code = """
+    shader GLSLSoftwareSubgroupStridedReduction {
+        cbuffer Params {
+            int N;
+        }
+
+        compute {
+            layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+            void main(uint group @ gl_SubgroupID) {
+                const int groupCount = 32;
+                float accumulator = 0.0;
+                for (int i = int(group); i < N; i += groupCount) {
+                    float payload = 0.0;
+                    payload += float(i);
+                    if (i < N) {
+                        float score = payload + 1.0;
+                        score = WaveActiveSum(score);
+                        payload = score;
+                    }
+                    accumulator += payload;
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "shared float crossglSoftwareSubgroupScratchFloat[1024];" in generated
+    assert "for (int crossglSoftwareSubgroupBase = 0;" in generated
+    assert "crossglSoftwareSubgroupBase += 32" in generated
+    assert "int i = (crossglSoftwareSubgroupBase + int(" in generated
+    assert "bool crossglSoftwareSubgroupLoopActive = (i < N);" in generated
+    assert "if (crossglSoftwareSubgroupLoopActive)" in generated
+    assert (
+        "bool crossglSoftwareSubgroupActive = "
+        "(crossglSoftwareSubgroupLoopActive && ((i < N)));"
+    ) in generated
+    assert "float score = (payload + 1.0);" in generated
+    assert "crossglSoftwareSubgroupSumFloat(crossglSoftwareSubgroupInput)" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert "gl_Subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_strided_masked_reduction",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("initializer", "stride", "prefix", "tail"),
+    [
+        ("int(group)", "31", "float payload = 0.0;", ""),
+        ("int(lane)", "32", "float payload = 0.0;", ""),
+        ("int(group)", "32", "float payload = float(i);", ""),
+        ("int(group)", "32", "float payload = 0.0; i += 1;", ""),
+        ("int(group)", "32", "float payload = 0.0; N = 0;", ""),
+        (
+            "int(group)",
+            "32",
+            "float payload = 0.0;",
+            "payload = WaveActiveSum(payload);",
+        ),
+    ],
+)
+def test_glsl_software_subgroup_rejects_unproven_subgroup_strided_loops(
+    initializer,
+    stride,
+    prefix,
+    tail,
+):
+    code = f"""
+    shader GLSLSoftwareSubgroupStridedInvalid {{
+        cbuffer Params {{
+            int N;
+        }}
+
+        compute {{
+            layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+            void main(
+                uint group @ gl_SubgroupID,
+                uint lane @ gl_SubgroupInvocationID) {{
+                for (int i = {initializer}; i < N; i += {stride}) {{
+                    {prefix}
+                    if (i < N) {{
+                        float score = payload + 1.0;
+                        score = WaveActiveSum(score);
+                        payload = score;
+                        {tail}
+                    }}
+                }}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveSum"
+
+
+def test_glsl_software_subgroup_rejects_strided_masked_resource_declaration_hoist():
+    code = """
+    shader GLSLSoftwareSubgroupStridedUnsafeResourceRead {
+        cbuffer Params {
+            int N;
+        }
+        StructuredBuffer<float> values;
+
+        compute {
+            layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+            void main(uint group @ gl_SubgroupID) {
+                for (int i = int(group); i < N; i += 32) {
+                    if (i < N) {
+                        float score = values[i];
+                        score = WaveActiveSum(score);
+                    }
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveSum"
+
+
 def test_glsl_software_subgroup_rejects_masked_shuffle():
     code = """
     shader GLSLSoftwareMaskedShuffle {

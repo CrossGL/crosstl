@@ -3570,6 +3570,68 @@ def test_mlx_project_porting_workflow_runs_pinned_arg_reduce_native_loader_proof
     )
 
 
+def test_mlx_project_porting_workflow_runs_pinned_attention_native_loader_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = (
+        "tests/test_translator/"
+        "test_mlx_scaled_dot_product_attention_native_loader.py"
+    )
+
+    assert mlx_porting.count(f'"{test_path}"') == 2
+    directx_step_name = (
+        "Prove pinned MLX scaled-attention Direct3D native-loader execution"
+    )
+    directx_step = ci_coverage.workflow_step_section(mlx_porting, directx_step_name)
+    assert "if: runner.os == 'Windows'" in directx_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_ATTENTION_DIRECTX_NATIVE_LOADER: "1"' in directx_step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_attention_executes_through_directx_native_loader"
+        in directx_step
+    )
+    assert "-n auto" in directx_step
+    assert "-k" not in directx_step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        directx_step_name,
+        "Checkout current MLX runtime proof corpus",
+    )
+
+    opengl_step_name = (
+        "Prove pinned MLX scaled-attention OpenGL native-loader execution"
+    )
+    opengl_step = ci_coverage.workflow_step_section(mlx_porting, opengl_step_name)
+    assert "if: runner.os == 'Linux'" in opengl_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_ATTENTION_OPENGL_NATIVE_LOADER: "1"' in opengl_step
+    assert "EGL_PLATFORM: surfaceless" in opengl_step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_step
+    assert "MESA_LOADER_DRIVER_OVERRIDE: llvmpipe" in opengl_step
+    assert "PYOPENGL_PLATFORM: egl" in opengl_step
+    assert (
+        f"{test_path}::"
+        "test_pinned_mlx_attention_executes_through_opengl_native_loader" in opengl_step
+    )
+    assert "-n auto" in opengl_step
+    assert "-k" not in opengl_step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        opengl_step_name,
+        "Install Linux runtime dependencies",
+    )
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        opengl_step_name,
+        "Checkout current MLX runtime proof corpus",
+    )
+
+
 def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()

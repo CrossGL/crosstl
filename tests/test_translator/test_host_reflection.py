@@ -267,6 +267,58 @@ def test_hlsl_reflection_records_exact_vector_resource_layouts(tmp_path):
     }
 
 
+def test_source_reflection_records_stored_bool_as_uint32_abi(tmp_path):
+    hlsl = _reflect_hlsl(
+        tmp_path,
+        """
+        StructuredBuffer<bool> inputFlags : register(t0);
+        RWStructuredBuffer<bool> outputFlags : register(u1);
+        [numthreads(1, 1, 1)] void CSMain() {}
+        """,
+    )
+    hlsl_by_name = {resource["name"]: resource for resource in hlsl["resources"]}
+    hlsl_layout = {
+        "physicalType": "uint",
+        "elementType": "uint32",
+        "elementSizeBytes": 4,
+        "elementStrideBytes": 4,
+        "alignmentBytes": 4,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer",
+        "runtimeSized": True,
+    }
+    assert hlsl_by_name["inputFlags"]["scalarLayout"] == hlsl_layout
+    assert hlsl_by_name["outputFlags"]["scalarLayout"] == hlsl_layout
+
+    artifact = tmp_path / "bool.comp"
+    artifact.write_text(
+        textwrap.dedent("""
+            #version 450 core
+            layout(std430, binding = 0) readonly buffer InputFlags {
+                bool inputFlags[];
+            };
+            layout(std430, binding = 1) buffer OutputFlags {
+                bool outputFlags[];
+            };
+            layout(local_size_x = 1) in;
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    glsl = reflect_target_host_interface(artifact, target="opengl", stage="compute")
+    glsl_by_name = {resource["name"]: resource for resource in glsl["resources"]}
+    assert glsl_by_name["InputFlags"]["scalarLayout"] == {
+        **hlsl_layout,
+        "storageLayout": "std430",
+        "memberName": "inputFlags",
+    }
+    assert glsl_by_name["OutputFlags"]["scalarLayout"] == {
+        **hlsl_layout,
+        "storageLayout": "std430",
+        "memberName": "outputFlags",
+    }
+
+
 def test_source_reflection_records_exact_64_bit_scalar_layouts(tmp_path):
     hlsl = _reflect_hlsl(
         tmp_path,

@@ -1655,6 +1655,237 @@ MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE = {
     "numerical_parity_claimed": False,
     "runtime_parity_claimed": False,
 }
+MLX_CURRENT_SCALED_DOT_PRODUCT_ATTENTION_SHA256 = (
+    "f6fefad1d91b01f05c12095e69f248e255f880d65b5ae9e9d8bc2714da56fb41"
+)
+MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:97e5ebb69af8da3a0082776015787456f23b8bfdb0cff757f5364db2cfef8d2c"
+)
+MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_VARIANTS = {
+    "vector-float32-b1-h1-q1-k4-d64-v64-nomask": {
+        "artifact_id": (
+            "sha256:dd0138695bd82e1f8ea49bd667052b484420ee96cb2849c6eed20ba5eae39a89"
+        ),
+        "dispatch_variant_id": (
+            "sha256:8b2abb9f7179e051530697fb8d1956d0ff03a324e7acaa5fcdf4f4dd9f1befbb"
+        ),
+        "entry_point": "sdpa_vector_float_64_64",
+        "inputs": {
+            "batchSize": 1,
+            "boolMask": False,
+            "doCausal": False,
+            "dtype": "float32",
+            "floatMask": False,
+            "hasMask": False,
+            "hasSinks": False,
+            "keyLength": 4,
+            "kvHeads": 1,
+            "queryDimension": 64,
+            "queryHeads": 1,
+            "queryLength": 1,
+            "queryTransposed": False,
+            "valueDimension": 64,
+        },
+        "workgroup_size": [1024, 1, 1],
+        "dispatch_workgroup_count": [1, 1, 1],
+        "specialization_constants": {
+            "20": False,
+            "21": False,
+            "22": False,
+            "23": False,
+            "24": False,
+            "25": False,
+        },
+    }
+}
+MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_RUNTIME_EVIDENCE = {
+    "status": "translated-packaged-and-cross-target-native-runtime-required",
+    "commit": MLX_CORPUS_COMMIT,
+    "source": MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+    "source_sha256": MLX_CURRENT_SCALED_DOT_PRODUCT_ATTENTION_SHA256,
+    "selected_entry_point": "sdpa_vector_float_64_64",
+    "selected_workload": "vector-float32-b1-h1-q1-k4-d64-v64-nomask",
+    "dispatch_contract": {
+        "path": (
+            "demos/integrations/mlx/contracts/"
+            "scaled_dot_product_attention.native-loader.dispatch.json"
+        ),
+        "content_identity": (
+            MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY
+        ),
+        "workload_count": len(
+            MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_VARIANTS
+        ),
+        "host_selection": "one-pass-vector",
+        "host_source": "mlx/backend/metal/scaled_dot_product_attention.cpp",
+        "implementation_source": "mlx/backend/metal/kernels/sdpa_vector.h",
+        "subgroup_width": 32,
+        "variants": MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_VARIANTS,
+    },
+    "project_translation": {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 1, "opengl": 1},
+        "translated_count_by_target": {"directx": 1, "opengl": 1},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+    },
+    "materialization": {
+        "concrete_specialization_count": 1,
+        "reachable_specialization_count": 4,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 753,
+        "selected_parameters": {"D": "64", "T": "float", "V": "64"},
+    },
+    "specialization_constants": {
+        "20": {"name": "has_mask", "value": False},
+        "21": {"name": "query_transposed", "value": False},
+        "22": {"name": "do_causal", "value": False},
+        "23": {"name": "bool_mask", "value": False},
+        "24": {"name": "float_mask", "value": False},
+        "25": {"name": "has_sinks", "value": False},
+    },
+    "artifacts": {
+        "directx": {
+            "target_entry_point": "CSMain",
+            "sha256": (
+                "1aee3a25b49c0fa6efb8ea6ae0b29d77c09a496cb4119d3a295901c9dedd2fc9"
+            ),
+            "size_bytes": 8151,
+            "workgroup_size": [1024, 1, 1],
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "compiler": "dxc",
+            "compiler_version": "1.9.2602.24",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types", "-WX"],
+            "compiled_dxil_size_bytes": 8728,
+            "compiler_validation_status": "passed",
+            "specialization_materialization": "concrete",
+        },
+        "opengl": {
+            "target_entry_point": "main",
+            "sha256": (
+                "9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b"
+            ),
+            "size_bytes": 12089,
+            "workgroup_size": [1024, 1, 1],
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "compiler": "glslangValidator",
+            "compiler_target": "OpenGL/SPIR-V 1.3",
+            "validator": "spirv-val",
+            "control_barrier_instruction_count": 9,
+            "group_non_uniform_instruction_count": 0,
+            "specialization_constant_false_count": 6,
+            "compiler_validation_status": "passed",
+            "specialization_materialization": "deferred",
+        },
+    },
+    "software_subgroup": {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "logical_subgroup_count": 32,
+        "activation": "explicit-target-scoped",
+        "selected_kernel_operations": [
+            "WaveActiveMax(float)",
+            "WaveActiveSum(float)",
+        ],
+        "synchronized_subgroup_strided_loop_contract": {
+            "initializer": "subgroup-id-semantic",
+            "bound": "workgroup-uniform-runtime-value",
+            "stride": 32,
+            "collective_count_per_loop": 1,
+            "inactive_lane_behavior": "typed-collective-identity",
+            "unsafe_loop_behavior": "reject-before-artifact-emission",
+        },
+        "hardware_subgroup_extensions_emitted": False,
+        "group_non_uniform_instruction_count": 0,
+    },
+    "runtime_package": {
+        "artifact_count_per_target": 1,
+        "ready_load_unit_count_per_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count_by_target": {"directx": 19, "opengl": 18},
+        "specialization_constant_count": 6,
+        "resource_element_types": ["float32", "int32", "uint32", "uint64"],
+        "stored_bool_physical_type": "uint32",
+        "optional_placeholder_resources": ["bmask", "fmask", "sinks"],
+        "directx_generated_dispatch_binding": "CrossGLDispatchInfo",
+        "opengl_deferred_variant_registry": "ready",
+        "opengl_native_registry_header": {
+            "available": False,
+            "reason": "specialization-requires-deferred-compilation",
+        },
+    },
+    "workload": {
+        "batch_size": 1,
+        "query_heads": 1,
+        "kv_heads": 1,
+        "query_length": 1,
+        "key_length": 4,
+        "query_dimension": 64,
+        "value_dimension": 64,
+        "scale": 0.125,
+        "mask": "none",
+        "causal": False,
+        "sinks": False,
+        "output_element_count": 64,
+        "reference": "stable-float32-scaled-dot-product-attention",
+        "absolute_tolerance": 0.0002,
+        "relative_tolerance": 0.0002,
+    },
+    "native_runtime": {
+        "directx": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/"
+                "test_mlx_scaled_dot_product_attention_native_loader.py::"
+                "test_pinned_mlx_attention_executes_through_directx_native_loader"
+            ),
+        },
+        "opengl": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-headless-egl-software-opengl",
+            "status": "required-on-ci",
+            "local_linux_mesa_validation": "passed",
+            "local_max_absolute_error": 4.082320426146424e-08,
+            "local_max_relative_error": 4.2163276126605175e-06,
+            "test": (
+                "tests/test_translator/"
+                "test_mlx_scaled_dot_product_attention_native_loader.py::"
+                "test_pinned_mlx_attention_executes_through_opengl_native_loader"
+            ),
+        },
+    },
+    "metal_roundtrip_boundary": {
+        "status": "outside-selected-native-loader-proof",
+        "aggregate_native_baseline": "separate",
+        "selected_entry_compiler_validation_included": False,
+    },
+    "remaining_scope": {
+        "masked_attention_included": False,
+        "causal_attention_included": False,
+        "sinks_included": False,
+        "two_pass_attention_included": False,
+        "full_attention_path_included": False,
+        "other_dimensions_included": False,
+        "other_dtypes_included": False,
+        "remaining_host_named_entries_included": False,
+        "aggregate_directx_opengl_translation_unblocked": False,
+        "mlx_host_runtime_integration_included": False,
+        "full_mlx_test_suite_included": False,
+    },
+    "runtime_execution_attempted": True,
+    "runtime_integration_included": True,
+    "selected_workload_numerical_parity_verified": True,
+    "complete_runtime_coverage_claimed": False,
+    "full_mlx_test_suite_included": False,
+    "numerical_parity_claimed": False,
+    "runtime_parity_claimed": False,
+}
 MLX_CURRENT_SOFTMAX_SHA256 = (
     "d19231c66973edc3944f12529d1cc393029e7f7262b914907c710ef9dbcb39e2"
 )

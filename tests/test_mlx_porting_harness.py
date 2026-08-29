@@ -4223,12 +4223,17 @@ def test_empty_initializer_issue_is_resolved_for_pinned_quantized_nax():
     )
 
 
-def test_scaled_dot_product_attention_is_vulkan_only_until_runtime_dispatch_maps():
+def test_scaled_dot_product_attention_aggregate_stays_fail_closed_with_bounded_proof():
     module = _load_harness()
     source = module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1535"
     static_constant_issue = "https://github.com/CrossGL/crosstl/issues/1491"
     function_constant_issue = "https://github.com/CrossGL/crosstl/issues/1538"
+    expected_gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
 
     assert source in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     assert source not in (
@@ -4248,6 +4253,19 @@ def test_scaled_dot_product_attention_is_vulkan_only_until_runtime_dispatch_maps
     )
     assert static_constant_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert function_constant_issue in module.FULL_CORPUS_TRACKED_ISSUES
+
+    evidence = expected_gaps["scaled_dot_product_attention_native_runtime_status"]
+    assert evidence == module.MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_RUNTIME_EVIDENCE
+    assert evidence["selected_entry_point"] == "sdpa_vector_float_64_64"
+    assert evidence["dispatch_contract"]["host_selection"] == "one-pass-vector"
+    assert (
+        evidence["remaining_scope"]["aggregate_directx_opengl_translation_unblocked"]
+        is False
+    )
+    assert (
+        "separate bounded dispatch manifest"
+        in expected_gaps["directx_toolchain_status"]["directx_toolchain_gaps"][source]
+    )
 
 
 def test_scaled_attention_local_alias_evidence_requires_complete_entries(tmp_path):
@@ -10167,6 +10185,142 @@ def test_arg_reduce_native_runtime_evidence_records_bounded_cross_target_proof()
     assert status["full_mlx_test_suite_included"] is False
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
+
+
+def test_scaled_attention_native_runtime_evidence_records_bounded_cross_target_proof():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["scaled_dot_product_attention_native_runtime_status"]
+    assert status == module.MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_RUNTIME_EVIDENCE
+    assert status["status"] == (
+        "translated-packaged-and-cross-target-native-runtime-required"
+    )
+    assert status["commit"] == module.MLX_CORPUS_COMMIT
+    assert status["source"] == module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
+    assert status["source_sha256"] == (
+        module.MLX_CURRENT_SCALED_DOT_PRODUCT_ATTENTION_SHA256
+    )
+    assert status["selected_entry_point"] == "sdpa_vector_float_64_64"
+
+    contract = status["dispatch_contract"]
+    assert contract["path"] == (
+        "demos/integrations/mlx/contracts/"
+        "scaled_dot_product_attention.native-loader.dispatch.json"
+    )
+    assert contract["content_identity"] == (
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY
+    )
+    assert contract["workload_count"] == 1
+    assert contract["host_selection"] == "one-pass-vector"
+    assert contract["subgroup_width"] == 32
+    assert contract["variants"] == (
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_VARIANTS
+    )
+    variant = contract["variants"]["vector-float32-b1-h1-q1-k4-d64-v64-nomask"]
+    assert variant["artifact_id"] == (
+        "sha256:dd0138695bd82e1f8ea49bd667052b484420ee96cb2849c6eed20ba5eae39a89"
+    )
+    assert variant["dispatch_variant_id"] == (
+        "sha256:8b2abb9f7179e051530697fb8d1956d0ff03a324e7acaa5fcdf4f4dd9f1befbb"
+    )
+    assert variant["workgroup_size"] == [1024, 1, 1]
+    assert variant["dispatch_workgroup_count"] == [1, 1, 1]
+    assert variant["specialization_constants"] == {
+        str(constant_id): False for constant_id in range(20, 26)
+    }
+
+    assert status["materialization"] == {
+        "concrete_specialization_count": 1,
+        "reachable_specialization_count": 4,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 753,
+        "selected_parameters": {"D": "64", "T": "float", "V": "64"},
+    }
+    assert set(status["specialization_constants"]) == {
+        str(constant_id) for constant_id in range(20, 26)
+    }
+    assert "26" not in status["specialization_constants"]
+    assert all(
+        constant["value"] is False
+        for constant in status["specialization_constants"].values()
+    )
+
+    directx = status["artifacts"]["directx"]
+    assert directx["sha256"] == (
+        "1aee3a25b49c0fa6efb8ea6ae0b29d77c09a496cb4119d3a295901c9dedd2fc9"
+    )
+    assert directx["size_bytes"] == 8151
+    assert directx["compiler_version"] == "1.9.2602.24"
+    assert directx["compiler_profile"] == "cs_6_6"
+    assert directx["compiler_arguments"] == ["-enable-16bit-types", "-WX"]
+    assert directx["compiled_dxil_size_bytes"] == 8728
+    assert directx["compiler_validation_status"] == "passed"
+
+    opengl = status["artifacts"]["opengl"]
+    assert opengl["sha256"] == (
+        "9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b"
+    )
+    assert opengl["size_bytes"] == 12089
+    assert opengl["control_barrier_instruction_count"] == 9
+    assert opengl["group_non_uniform_instruction_count"] == 0
+    assert opengl["specialization_constant_false_count"] == 6
+    assert opengl["specialization_materialization"] == "deferred"
+
+    package = status["runtime_package"]
+    assert package["resource_count_by_target"] == {"directx": 19, "opengl": 18}
+    assert package["specialization_constant_count"] == 6
+    assert package["stored_bool_physical_type"] == "uint32"
+    assert package["optional_placeholder_resources"] == [
+        "bmask",
+        "fmask",
+        "sinks",
+    ]
+    assert package["opengl_native_registry_header"] == {
+        "available": False,
+        "reason": "specialization-requires-deferred-compilation",
+    }
+
+    assert status["workload"]["key_length"] == 4
+    assert status["workload"]["query_dimension"] == 64
+    assert status["workload"]["value_dimension"] == 64
+    assert status["workload"]["mask"] == "none"
+    assert status["native_runtime"]["directx"]["status"] == "required-on-ci"
+    assert status["native_runtime"]["opengl"]["status"] == "required-on-ci"
+    assert status["native_runtime"]["opengl"]["local_linux_mesa_validation"] == (
+        "passed"
+    )
+    assert status["native_runtime"]["opengl"]["local_max_absolute_error"] < 5e-8
+    assert status["native_runtime"]["opengl"]["local_max_relative_error"] < 5e-6
+    assert all(value is False for value in status["remaining_scope"].values())
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects current-pinned `sdpa_vector_float_64_64`" in readme
+    assert "partitions 1,024 invocations into 32 logical subgroups" in readme
+    assert "six `OpSpecConstantFalse` declarations" in readme
+    assert "no bounded attention dispatch, package, or numerical runtime proof" in (
+        readme
+    )
+
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "bounded one-pass scaled-attention proof" in guide
+    assert "inactive subgroups supply typed reduction identities" in guide
+    assert "it is not evidence that a bounded attention runtime proof is absent" in (
+        guide
+    )
 
 
 def test_softmax_native_runtime_evidence_records_bounded_cross_target_proof():

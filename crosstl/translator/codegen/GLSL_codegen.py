@@ -2188,6 +2188,8 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_workgroup_invocation_count = None
         self.glsl_software_subgroup_count = None
         self.glsl_software_subgroup_masked_if_plans = {}
+        self.glsl_software_subgroup_strided_for_plans = {}
+        self.glsl_software_subgroup_id_parameter_names = set()
         self.glsl_cooperative_matrix_fragment_contracts = {}
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
         self.required_glsl_cooperative_matrix_helpers = set()
@@ -3789,6 +3791,26 @@ class GLSLCodeGen:
             return None
         return operation, arguments, expression
 
+    def glsl_software_subgroup_speculatively_safe_expression(self, expression):
+        if not self.glsl_side_effect_free_expression(expression):
+            return False
+        for child in self.walk_ast(expression):
+            if isinstance(child, ArrayAccessNode):
+                return False
+            if (
+                isinstance(child, UnaryOpNode)
+                and self.map_operator(
+                    getattr(child, "op", getattr(child, "operator", None))
+                )
+                == "*"
+            ):
+                return False
+            if isinstance(child, BinaryOpNode) and self.map_operator(
+                getattr(child, "op", getattr(child, "operator", None))
+            ) in {"/", "%", "<<", ">>"}:
+                return False
+        return True
+
     def glsl_software_subgroup_masked_if_plan(self, node):
         if (
             getattr(node, "else_if_conditions", None)
@@ -3828,27 +3850,202 @@ class GLSLCodeGen:
             ):
                 continue
             target = getattr(candidate, "target", getattr(candidate, "left", None))
-            if not self.expression_name(
-                target
-            ) or not self.glsl_side_effect_free_expression(target):
+            target_name = self.expression_name(target)
+            if not target_name or not self.glsl_side_effect_free_expression(target):
                 return None
             prefix = statements[:index]
-            if any(
-                isinstance(
-                    child,
-                    (VariableNode, ArrayNode, BreakNode, ContinueNode, ReturnNode),
-                )
-                for item in prefix
-                for child in self.walk_ast(item)
-            ):
-                return None
+            hoisted_target_declaration_index = None
+            for prefix_index, prefix_statement in enumerate(prefix):
+                if isinstance(prefix_statement, ArrayNode):
+                    return None
+                if isinstance(prefix_statement, VariableNode):
+                    if (
+                        prefix_statement.name != target_name
+                        or hoisted_target_declaration_index is not None
+                        or getattr(prefix_statement, "initial_value", None) is None
+                        or not self.glsl_software_subgroup_speculatively_safe_expression(
+                            prefix_statement.initial_value
+                        )
+                    ):
+                        return None
+                    hoisted_target_declaration_index = prefix_index
+                if self.glsl_software_subgroup_operation_records(prefix_statement):
+                    return None
+                if any(
+                    isinstance(child, (BreakNode, ContinueNode, ReturnNode))
+                    for child in self.walk_ast(prefix_statement)
+                ):
+                    return None
             if any(
                 isinstance(child, (BreakNode, ContinueNode, ReturnNode))
                 for child in self.walk_ast(node.if_body)
             ):
                 return None
-            return {"statementIndex": index}
+            return {
+                "statementIndex": index,
+                "hoistedTargetDeclarationIndex": hoisted_target_declaration_index,
+            }
         return None
+
+    def glsl_software_subgroup_subgroup_id_expression(self, expression):
+        current = expression
+        while True:
+            if isinstance(current, CastNode):
+                current = current.expression
+                continue
+            if isinstance(current, ConstructorNode):
+                arguments = list(getattr(current, "arguments", None) or [])
+                if len(arguments) != 1:
+                    return False
+                current = arguments[0]
+                continue
+            if isinstance(current, FunctionCallNode):
+                arguments = list(
+                    getattr(current, "arguments", getattr(current, "args", [])) or []
+                )
+                if len(arguments) != 1 or self.function_call_name(current) not in {
+                    "int",
+                    "uint",
+                    "int32_t",
+                    "uint32_t",
+                }:
+                    return False
+                current = arguments[0]
+                continue
+            break
+        if not isinstance(current, IdentifierNode):
+            return False
+        semantic = self.semantic_from_node(current)
+        mapped_semantic = self.map_semantic(semantic) if semantic else None
+        return (
+            mapped_semantic == "gl_SubgroupID"
+            or current.name == "gl_SubgroupID"
+            or current.name
+            in getattr(self, "glsl_software_subgroup_id_parameter_names", set())
+        )
+
+    def glsl_software_subgroup_strided_for_plan(
+        self,
+        node,
+        uniform_names,
+        constants,
+    ):
+        initializer = getattr(node, "init", None)
+        if not isinstance(initializer, VariableNode):
+            return None
+        loop_name = getattr(initializer, "name", None)
+        loop_type = self.map_type(getattr(initializer, "var_type", None))
+        initial_value = getattr(initializer, "initial_value", None)
+        if (
+            not loop_name
+            or loop_type not in {"int", "uint"}
+            or not self.glsl_software_subgroup_subgroup_id_expression(initial_value)
+        ):
+            return None
+
+        condition = getattr(node, "condition", None)
+        if (
+            not isinstance(condition, BinaryOpNode)
+            or self.map_operator(
+                getattr(condition, "op", getattr(condition, "operator", None))
+            )
+            != "<"
+            or self.expression_name(condition.left) != loop_name
+            or self.expression_name(condition.right) == loop_name
+            or not self.glsl_software_subgroup_uniform_expression(
+                condition.right, uniform_names
+            )
+        ):
+            return None
+
+        update = getattr(node, "update", None)
+        if (
+            not isinstance(update, AssignmentNode)
+            or self.map_operator(
+                getattr(update, "op", getattr(update, "operator", None))
+            )
+            != "+="
+            or self.glsl_software_subgroup_assignment_target_name(update) != loop_name
+        ):
+            return None
+        step_expression = getattr(update, "value", getattr(update, "right", None))
+        step = evaluate_literal_int_expression(step_expression, constants)
+        if step != self.glsl_software_subgroup_count:
+            return None
+
+        body_statements = self.glsl_software_subgroup_statement_list(
+            getattr(node, "body", None)
+        )
+        records = self.glsl_software_subgroup_operation_records(node.body)
+        if len(records) != 1 or records[0][0] not in {
+            "WaveActiveSum",
+            "WaveActiveMin",
+            "WaveActiveMax",
+        }:
+            return None
+        operation_if_indices = [
+            index
+            for index, statement in enumerate(body_statements)
+            if isinstance(statement, IfNode)
+            and self.glsl_software_subgroup_operation_records(statement)
+        ]
+        if len(operation_if_indices) != 1:
+            return None
+        operation_if_index = operation_if_indices[0]
+        operation_if = body_statements[operation_if_index]
+        masked_if_plan = self.glsl_software_subgroup_masked_if_plan(operation_if)
+        if masked_if_plan is None:
+            return None
+
+        if any(
+            isinstance(child, (BreakNode, ContinueNode, ReturnNode))
+            for child in self.walk_ast(node.body)
+        ):
+            return None
+        bound_names = self.glsl_software_subgroup_expression_identifier_names(
+            condition.right
+        )
+        for child in self.walk_ast(node.body):
+            if isinstance(child, AssignmentNode):
+                target_name = self.glsl_software_subgroup_assignment_target_name(child)
+                if target_name == loop_name or target_name in bound_names:
+                    return None
+            elif isinstance(child, UnaryOpNode) and self.map_operator(
+                getattr(child, "op", getattr(child, "operator", None))
+            ) in {"++", "--"}:
+                target_name = self.expression_name(getattr(child, "operand", None))
+                if target_name == loop_name or target_name in bound_names:
+                    return None
+            elif isinstance(child, FunctionCallNode):
+                observed = self.glsl_software_subgroup_expression_identifier_names(
+                    child
+                )
+                if observed & bound_names:
+                    return None
+
+        prefix = body_statements[:operation_if_index]
+        hoisted_prefix_declaration_indices = []
+        for index, statement in enumerate(prefix):
+            if isinstance(statement, ArrayNode):
+                return None
+            if not isinstance(statement, VariableNode):
+                continue
+            initial = getattr(statement, "initial_value", None)
+            if initial is None or not self.glsl_software_subgroup_uniform_expression(
+                initial, uniform_names
+            ):
+                return None
+            hoisted_prefix_declaration_indices.append(index)
+
+        return {
+            "operationIfIndex": operation_if_index,
+            "maskedIfPlan": masked_if_plan,
+            "hoistedPrefixDeclarationIndices": tuple(
+                hoisted_prefix_declaration_indices
+            ),
+            "loopType": loop_type,
+            "step": step,
+        }
 
     def prepare_glsl_software_subgroup_masked_if_plans(self, entry_function):
         self.glsl_software_subgroup_masked_if_plans = {}
@@ -3863,6 +4060,47 @@ class GLSLCodeGen:
             if plan is not None:
                 self.glsl_software_subgroup_masked_if_plans[id(statement)] = plan
 
+    def prepare_glsl_software_subgroup_strided_for_plans(
+        self,
+        entry_function,
+        uniform_names,
+    ):
+        self.glsl_software_subgroup_strided_for_plans = {}
+        constants = self.initial_literal_int_constants(entry_function)
+        for statement in self.glsl_software_subgroup_statement_list(
+            getattr(entry_function, "body", None)
+        ):
+            if isinstance(statement, VariableNode):
+                name = getattr(statement, "name", None)
+                if name:
+                    constants.pop(name, None)
+                    if "const" in (getattr(statement, "qualifiers", []) or []):
+                        value = evaluate_literal_int_expression(
+                            getattr(statement, "initial_value", None),
+                            constants,
+                        )
+                        if value is not None:
+                            constants[name] = value
+                continue
+            if not isinstance(statement, ForNode):
+                continue
+            if not self.glsl_software_subgroup_operation_records(statement):
+                continue
+            plan = self.glsl_software_subgroup_strided_for_plan(
+                statement,
+                uniform_names,
+                constants,
+            )
+            if plan is None:
+                continue
+            self.glsl_software_subgroup_strided_for_plans[id(statement)] = plan
+            operation_if = self.glsl_software_subgroup_statement_list(statement.body)[
+                plan["operationIfIndex"]
+            ]
+            self.glsl_software_subgroup_masked_if_plans[id(operation_if)] = plan[
+                "maskedIfPlan"
+            ]
+
     def validate_glsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_entry_function_id = None
@@ -3874,6 +4112,8 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_workgroup_invocation_count = None
         self.glsl_software_subgroup_count = None
         self.glsl_software_subgroup_masked_if_plans = {}
+        self.glsl_software_subgroup_strided_for_plans = {}
+        self.glsl_software_subgroup_id_parameter_names = set()
         if self.software_subgroup_width is None:
             return
 
@@ -3889,6 +4129,12 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_entry_function_name = getattr(
             entry_function, "name", None
         )
+        self.glsl_software_subgroup_id_parameter_names = {
+            parameter.name
+            for parameter in getattr(entry_function, "parameters", []) or []
+            if getattr(parameter, "name", None)
+            and self.map_semantic(self.semantic_from_node(parameter)) == "gl_SubgroupID"
+        }
 
         raw_workgroup_size = tuple(compute_local_size(execution_config))
         concrete_workgroup_size = []
@@ -4007,6 +4253,10 @@ class GLSLCodeGen:
             ast,
             entry_function,
             target_stage,
+        )
+        self.prepare_glsl_software_subgroup_strided_for_plans(
+            entry_function,
+            uniform_names,
         )
         self.glsl_software_subgroup_analyze_uniform_statements(
             getattr(entry_function, "body", None),
@@ -5437,6 +5687,8 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_workgroup_invocation_count = None
         self.glsl_software_subgroup_count = None
         self.glsl_software_subgroup_masked_if_plans = {}
+        self.glsl_software_subgroup_strided_for_plans = {}
+        self.glsl_software_subgroup_id_parameter_names = set()
         self.current_glsl_disabled_extensions = set()
         self.glsl_cooperative_matrix_fragment_contracts = {}
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
@@ -23906,12 +24158,77 @@ complex64_t crossgl_complex64_mod_assign(
                 return True, body
         return True, getattr(node, "else_body", None)
 
+    def generate_glsl_software_subgroup_strided_for(self, node, indent, plan):
+        initializer = node.init
+        self.generate_for_initializer(initializer)
+        loop_name = self.glsl_local_identifier_name(initializer.name)
+        loop_type = plan["loopType"]
+        base_name = self.glsl_synthetic_local_identifier("crossglSoftwareSubgroupBase")
+        active_name = self.glsl_synthetic_local_identifier(
+            "crossglSoftwareSubgroupLoopActive"
+        )
+        initial_value = self.generate_expression_with_expected(
+            initializer.initial_value,
+            getattr(initializer, "var_type", None),
+        )
+        bound = self.generate_expression_with_expected(
+            node.condition.right,
+            getattr(initializer, "var_type", None),
+        )
+        step = plan["step"]
+        zero = "0u" if loop_type == "uint" else "0"
+        step_literal = f"{step}u" if loop_type == "uint" else str(step)
+        indent_str = "    " * indent
+        body_indent = "    " * (indent + 1)
+        code = (
+            f"{indent_str}for ({loop_type} {base_name} = {zero}; "
+            f"({base_name} < {bound}); {base_name} += {step_literal}) {{\n"
+            f"{body_indent}{loop_type} {loop_name} = "
+            f"({base_name} + {initial_value});\n"
+        )
+
+        statements = self.glsl_software_subgroup_statement_list(node.body)
+        operation_if_index = plan["operationIfIndex"]
+        prefix = list(statements[:operation_if_index])
+        suffix = list(statements[operation_if_index + 1 :])
+        hoisted = set(plan["hoistedPrefixDeclarationIndices"])
+        for index in sorted(hoisted):
+            code += self.generate_statement(prefix[index], indent + 1)
+        guarded_prefix = [
+            statement for index, statement in enumerate(prefix) if index not in hoisted
+        ]
+
+        condition = self.generate_glsl_boolean_context(node.condition)
+        code += f"{body_indent}bool {active_name} = {condition};\n"
+        if guarded_prefix:
+            code += f"{body_indent}if ({active_name}) {{\n"
+            code += self.generate_scoped_statement_body(guarded_prefix, indent + 2)
+            code += f"{body_indent}}}\n"
+
+        operation_if = statements[operation_if_index]
+        code += self.generate_glsl_software_subgroup_masked_if(
+            operation_if,
+            indent + 1,
+            additional_condition=active_name,
+        )
+        if suffix:
+            code += f"{body_indent}if ({active_name}) {{\n"
+            code += self.generate_scoped_statement_body(suffix, indent + 2)
+            code += f"{body_indent}}}\n"
+        code += f"{indent_str}}}\n"
+        return code
+
     def generate_for(self, node, indent, is_main=False):
         indent_str = "    " * indent
-        if id(
-            node
-        ) not in self.glsl_software_subgroup_uniform_for_node_ids and not self.glsl_software_subgroup_uniform_for(
-            node
+        strided_plan = getattr(
+            self,
+            "glsl_software_subgroup_strided_for_plans",
+            {},
+        ).get(id(node))
+        if (
+            strided_plan is None
+            and id(node) not in self.glsl_software_subgroup_uniform_for_node_ids
+            and not self.glsl_software_subgroup_uniform_for(node)
         ):
             self.reject_glsl_software_subgroup_control_flow(node)
         initializer_node = getattr(node, "init", None)
@@ -23933,6 +24250,12 @@ complex64_t crossgl_complex64_mod_assign(
         post_initializer_storage_aliases = None
 
         try:
+            if strided_plan is not None:
+                return self.generate_glsl_software_subgroup_strided_for(
+                    node,
+                    indent,
+                    strided_plan,
+                )
             init = self.generate_for_initializer(getattr(node, "init", None))
             post_initializer_workgroup_aliases = dict(
                 self.current_glsl_workgroup_pointer_aliases
@@ -26186,7 +26509,13 @@ complex64_t crossgl_complex64_mod_assign(
                 )
         return code
 
-    def generate_glsl_software_subgroup_masked_if(self, node, indent):
+    def generate_glsl_software_subgroup_masked_if(
+        self,
+        node,
+        indent,
+        *,
+        additional_condition=None,
+    ):
         plan = self.glsl_software_subgroup_masked_if_plans[id(node)]
         statements = self.glsl_software_subgroup_statement_list(node.if_body)
         operation_index = plan["statementIndex"]
@@ -26197,11 +26526,25 @@ complex64_t crossgl_complex64_mod_assign(
         operation, arguments, operation_node = (
             self.glsl_software_subgroup_direct_operation(value)
         )
+        target = getattr(assignment, "target", getattr(assignment, "left", None))
+
+        indent_str = "    " * indent
+        inner_indent = "    " * (indent + 1)
+        code = ""
+        hoisted_index = plan.get("hoistedTargetDeclarationIndex")
+        prefix = list(statements[:operation_index])
+        if hoisted_index is not None:
+            code += self.generate_statement(prefix[hoisted_index], indent)
+            prefix = [
+                statement
+                for index, statement in enumerate(prefix)
+                if index != hoisted_index
+            ]
+
         value_type = self.glsl_source_expression_type(arguments[0])
         mapped_value_type = (
             self.map_type(value_type) if value_type is not None else None
         )
-        target = getattr(assignment, "target", getattr(assignment, "left", None))
         target_type = self.glsl_source_expression_type(target)
         mapped_target_type = (
             self.map_type(target_type) if target_type is not None else None
@@ -26230,6 +26573,8 @@ complex64_t crossgl_complex64_mod_assign(
         condition = self.generate_glsl_boolean_context(
             getattr(node, "condition", getattr(node, "if_condition", None))
         )
+        if additional_condition is not None:
+            condition = f"({additional_condition} && ({condition}))"
         identity = {
             "WaveActiveSum": {"float": "0.0", "int": "0", "uint": "0u"},
             "WaveActiveMin": {
@@ -26243,14 +26588,10 @@ complex64_t crossgl_complex64_mod_assign(
                 "uint": "0u",
             },
         }[operation][mapped_value_type]
-        indent_str = "    " * indent
-        inner_indent = "    " * (indent + 1)
-        code = f"{indent_str}bool {active_name} = {condition};\n"
+        code += f"{indent_str}bool {active_name} = {condition};\n"
         code += f"{indent_str}{mapped_value_type} {input_name} = {identity};\n"
         code += f"{indent_str}if ({active_name}) {{\n"
-        code += self.generate_scoped_statement_body(
-            statements[:operation_index], indent + 1
-        )
+        code += self.generate_scoped_statement_body(prefix, indent + 1)
         payload = self.generate_expression_with_expected(
             arguments[0], mapped_value_type
         )

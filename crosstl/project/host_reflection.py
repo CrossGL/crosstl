@@ -419,13 +419,13 @@ HLSL_CONSTANT_RE = re.compile(
     re.IGNORECASE,
 )
 HLSL_VALUE_BLOCK_MEMBER_RE = re.compile(
-    r"\A\s*(?P<type>(?P<base>int64_t|uint64_t|float|int|uint)(?P<width>[1-4])?)\s+"
+    r"\A\s*(?P<type>(?P<base>int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s+"
     r"(?P<name>[A-Za-z_]\w*)\s*;\s*\Z",
     re.IGNORECASE,
 )
 HLSL_STRUCTURED_VALUE_RE = re.compile(
     r"\A(?:RW)?StructuredBuffer\s*<\s*"
-    r"(?P<type>(?P<base>int64_t|uint64_t|float|int|uint)(?P<width>[1-4])?)\s*>\Z",
+    r"(?P<type>(?P<base>int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s*>\Z",
     re.IGNORECASE,
 )
 HLSL_DISPATCH_INFO_BUFFER_RE = re.compile(r"\ACrossGLDispatchInfo_*\Z")
@@ -896,7 +896,7 @@ GLSL_BLOCK_RESOURCE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 GLSL_SCALAR_BLOCK_MEMBER_RE = re.compile(
-    r"\A\s*(?P<type>int64_t|uint64_t|float|int|uint)\s+"
+    r"\A\s*(?P<type>int64_t|uint64_t|float|int|uint|bool)\s+"
     r"(?P<name>[A-Za-z_]\w*)"
     r"(?P<runtime_array>\s*\[\s*\])?\s*;\s*\Z",
     re.IGNORECASE,
@@ -1130,6 +1130,11 @@ def _physical_value_layout(
     block_size_bytes: int | None = None,
 ) -> dict[str, Any]:
     normalized_type = physical_type.lower()
+    # HLSL and GLSL block-storage booleans occupy one 32-bit scalar slot.
+    # Expose that physical representation to host loaders rather than a
+    # language-level bool, which has no portable in-memory width.
+    if normalized_type == "bool":
+        normalized_type = "uint"
     component_size_bytes = SCALAR_PHYSICAL_SIZES[normalized_type]
     element_size_bytes = component_size_bytes * vector_width
     layout: dict[str, Any] = {
