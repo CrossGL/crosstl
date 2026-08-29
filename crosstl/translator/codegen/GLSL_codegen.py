@@ -657,6 +657,58 @@ class OpenGLCopySignError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLSignBitError(ValueError):
+    """Raised when ``signbit`` has no exact 32-bit GLSL lowering."""
+
+    project_diagnostic_code = "project.translate.opengl-signbit-unrepresentable"
+    missing_capabilities = ("opengl.signbit-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation="signbit",
+        operand_type=None,
+        result_type=None,
+        target_profile="glsl-460",
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_type = operand_type
+        self.result_type = result_type
+        self.target_profile = target_profile
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLIsFiniteError(ValueError):
+    """Raised when ``isfinite`` has no exact 32-bit GLSL lowering."""
+
+    project_diagnostic_code = "project.translate.opengl-isfinite-unrepresentable"
+    missing_capabilities = ("opengl.isfinite-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation="isfinite",
+        operand_type=None,
+        result_type=None,
+        target_profile="glsl-460",
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_type = operand_type
+        self.result_type = result_type
+        self.target_profile = target_profile
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLCompoundAssignmentError(ValueError):
     """Raised when a source compound assignment has no faithful GLSL form."""
 
@@ -1621,6 +1673,16 @@ class GLSLCodeGen:
         "metal::copysign",
         "metal_u3a_u3acopysign",
     }
+    GLSL_ISFINITE_NAMES = {
+        "isfinite",
+        "metal::isfinite",
+        "metal_u3a_u3aisfinite",
+    }
+    GLSL_SIGNBIT_NAMES = {
+        "signbit",
+        "metal::signbit",
+        "metal_u3a_u3asignbit",
+    }
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
         "floatBitsToInt",
@@ -1661,7 +1723,7 @@ class GLSLCodeGen:
         "tanh",
         "trunc",
     }
-    GLSL_COMPONENTWISE_BOOLEAN_FUNCTIONS = {"isinf", "isnan"}
+    GLSL_COMPONENTWISE_BOOLEAN_FUNCTIONS = {"isfinite", "isinf", "isnan"}
     GLSL_BOOLEAN_REDUCTION_FUNCTIONS = {"all", "any"}
     GLSL_INT64_EXTENSION = "GL_ARB_gpu_shader_int64"
     GLSL_INT64_EXTENSION_LINE = "#extension GL_ARB_gpu_shader_int64 : require"
@@ -2497,6 +2559,7 @@ class GLSLCodeGen:
             "atomic<int>": "int",
             "atomic<uint>": "uint",
             "float16": "float",
+            "float16_t": "float",
             "f16": "float",
             "f32": "float",
             "f64": "double",
@@ -2854,6 +2917,9 @@ class GLSLCodeGen:
             "sinh": "sinh",
             "cosh": "cosh",
             "tanh": "tanh",
+            "isfinite": "isfinite",
+            "metal::isfinite": "isfinite",
+            "metal_u3a_u3aisfinite": "isfinite",
         }
 
     def set_software_subgroup_width(self, width):
@@ -23072,6 +23138,19 @@ complex64_t crossgl_complex64_mod_assign(
                     )
                 if args:
                     return self.expression_result_type(args[0])
+            if func_name in self.GLSL_SIGNBIT_NAMES:
+                resolved_signbit = self.resolve_glsl_function_overload(
+                    func_name,
+                    args,
+                    call_node=expr,
+                )
+                if resolved_signbit is not None:
+                    return self.type_name_string(
+                        getattr(resolved_signbit, "return_type", None)
+                    )
+                signbit_result_type = self.glsl_signbit_result_type(func_name, args)
+                if signbit_result_type is not None:
+                    return signbit_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
             if (
@@ -23112,6 +23191,9 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if trailing_zero_result_type is not None:
                 return trailing_zero_result_type
+            isfinite_result_type = self.glsl_isfinite_result_type(func_name, args)
+            if isfinite_result_type is not None:
+                return isfinite_result_type
             componentwise_boolean_type = self.glsl_componentwise_boolean_result_type(
                 func_name, args
             )
@@ -25342,6 +25424,11 @@ complex64_t crossgl_complex64_mod_assign(
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
             if op == "*":
+                aggregate = self.generate_glsl_private_scalar_struct_reinterpret_read(
+                    expr
+                )
+                if aggregate is not None:
+                    return aggregate
                 pointee = self.generate_glsl_private_pointer_view_access(
                     expr.operand, access_expression=expr
                 )
@@ -25560,6 +25647,22 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if boolean_order_call is not None:
                 return boolean_order_call
+
+            isfinite_call = self.generate_glsl_isfinite_call(
+                original_func_name,
+                expr.args,
+                call_node=expr,
+            )
+            if isfinite_call is not None:
+                return isfinite_call
+
+            signbit_call = self.generate_glsl_signbit_call(
+                original_func_name,
+                expr.args,
+                call_node=expr,
+            )
+            if signbit_call is not None:
+                return signbit_call
 
             copysign_call = self.generate_glsl_copysign_call(
                 original_func_name,
@@ -26167,6 +26270,88 @@ complex64_t crossgl_complex64_mod_assign(
         zero, one = self.saturate_bound_literals(args[0])
         return f"clamp({value}, {zero}, {one})"
 
+    def glsl_isfinite_result_type(self, func_name, args, *, source_type=False):
+        if func_name not in self.GLSL_ISFINITE_NAMES or len(args) != 1:
+            return None
+        argument_type = (
+            self.glsl_source_expression_type(args[0])
+            if source_type
+            else self.expression_result_type(args[0])
+        )
+        info = self.glsl_value_type_info(argument_type)
+        if info is None:
+            return "bool"
+        return "bool" if info["width"] == 1 else f"bvec{info['width']}"
+
+    def glsl_isfinite_error(
+        self,
+        message,
+        *,
+        operand_type=None,
+        result_type=None,
+        reason,
+        source_location=None,
+    ):
+        return OpenGLIsFiniteError(
+            message,
+            operand_type=operand_type,
+            result_type=result_type,
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_glsl_isfinite_call(self, func_name, args, *, call_node=None):
+        if func_name not in self.GLSL_ISFINITE_NAMES:
+            return None
+
+        resolved_overload = self.resolve_glsl_function_overload(
+            func_name,
+            args,
+            call_node=call_node,
+        )
+        if resolved_overload is not None:
+            return None
+
+        source_location = getattr(call_node, "source_location", None)
+        if len(args) != 1:
+            raise self.glsl_isfinite_error(
+                "OpenGL isfinite requires exactly one operand",
+                reason="invalid-arity",
+                source_location=source_location,
+            )
+
+        source_type = self.glsl_source_expression_type(args[0])
+        display_type = (
+            self.type_name_string(source_type) if source_type is not None else None
+        )
+        if source_type is None:
+            raise self.glsl_isfinite_error(
+                "OpenGL isfinite requires a statically known operand type",
+                operand_type=display_type,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        info = self.glsl_signbit_type_info(source_type)
+        if info is None:
+            raise self.glsl_isfinite_error(
+                "OpenGL isfinite supports only 32-bit float scalar and vector "
+                f"operands, got {display_type}",
+                operand_type=display_type,
+                reason="unsupported-operand-type",
+                source_location=source_location,
+            )
+
+        value = self.generate_expression_with_expected(args[0], info["type"])
+        exponent_mask = "0x7f800000u"
+        if info["lanes"] == 1:
+            return (
+                f"((floatBitsToUint({value}) & {exponent_mask}) " f"!= {exponent_mask})"
+            )
+        mask_type = f"uvec{info['lanes']}"
+        bits = f"(floatBitsToUint({value}) & " f"{mask_type}({exponent_mask}))"
+        return f"notEqual({bits}, {mask_type}({exponent_mask}))"
+
     def generate_reciprocal_call(self, func_name, args):
         if func_name != "rcp" or func_name in self.function_return_types:
             return None
@@ -26185,6 +26370,100 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             return f"(1.0 / {value})"
         return None
+
+    def glsl_signbit_type_info(self, type_name):
+        if type_name is None:
+            return None
+        mapped_type = self.map_type(type_name)
+        if mapped_type == "float":
+            return {"type": mapped_type, "lanes": 1, "result_type": "bool"}
+        match = re.fullmatch(r"vec([234])", mapped_type or "")
+        if match is None:
+            return None
+        lanes = int(match.group(1))
+        return {
+            "type": mapped_type,
+            "lanes": lanes,
+            "result_type": f"bvec{lanes}",
+        }
+
+    def glsl_signbit_result_type(self, func_name, args, *, source_type=False):
+        if func_name not in self.GLSL_SIGNBIT_NAMES or len(args) != 1:
+            return None
+        argument_type = (
+            self.glsl_source_expression_type(args[0])
+            if source_type
+            else self.expression_result_type(args[0])
+        )
+        info = self.glsl_signbit_type_info(argument_type)
+        return info["result_type"] if info is not None else None
+
+    def glsl_signbit_error(
+        self,
+        message,
+        *,
+        operand_type=None,
+        result_type=None,
+        reason,
+        source_location=None,
+    ):
+        return OpenGLSignBitError(
+            message,
+            operand_type=operand_type,
+            result_type=result_type,
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_glsl_signbit_call(self, func_name, args, *, call_node=None):
+        if func_name not in self.GLSL_SIGNBIT_NAMES:
+            return None
+
+        resolved_overload = self.resolve_glsl_function_overload(
+            func_name,
+            args,
+            call_node=call_node,
+        )
+        if resolved_overload is not None:
+            return None
+
+        source_location = getattr(call_node, "source_location", None)
+        if len(args) != 1:
+            raise self.glsl_signbit_error(
+                "OpenGL signbit requires exactly one operand",
+                reason="invalid-arity",
+                source_location=source_location,
+            )
+
+        source_type = self.glsl_source_expression_type(args[0])
+        display_type = (
+            self.type_name_string(source_type) if source_type is not None else None
+        )
+        if source_type is None:
+            raise self.glsl_signbit_error(
+                "OpenGL signbit requires a statically known operand type",
+                operand_type=display_type,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        info = self.glsl_signbit_type_info(source_type)
+        if info is None:
+            raise self.glsl_signbit_error(
+                "OpenGL signbit supports only 32-bit float scalar and vector "
+                f"operands, got {display_type}",
+                operand_type=display_type,
+                reason="unsupported-operand-type",
+                source_location=source_location,
+            )
+
+        value = self.generate_expression_with_expected(args[0], info["type"])
+        bits = f"(floatBitsToUint({value}) & 0x80000000u)"
+        if info["lanes"] == 1:
+            return f"({bits} != 0u)"
+        mask_type = f"uvec{info['lanes']}"
+        bits = f"(floatBitsToUint({value}) & {mask_type}(0x80000000u))"
+        return f"notEqual({bits}, {mask_type}(0u))"
 
     def glsl_copysign_type_info(self, type_name):
         if type_name is None:
@@ -28778,6 +29057,20 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if componentwise_type is not None:
                 return componentwise_type
+            signbit_result_type = self.glsl_signbit_result_type(
+                function_name,
+                expression.arguments,
+                source_type=True,
+            )
+            if signbit_result_type is not None:
+                return signbit_result_type
+            isfinite_result_type = self.glsl_isfinite_result_type(
+                function_name,
+                expression.arguments,
+                source_type=True,
+            )
+            if isfinite_result_type is not None:
+                return isfinite_result_type
             componentwise_boolean_type = self.glsl_componentwise_boolean_result_type(
                 function_name,
                 expression.arguments,
@@ -31125,6 +31418,7 @@ complex64_t crossgl_complex64_mod_assign(
         raw_var_type = var_type
         var_type = self.type_name_string(var_type)
         scalar_integer_types = {
+            "bool",
             "int",
             "uint",
             "int8",
@@ -32914,6 +33208,209 @@ complex64_t crossgl_complex64_mod_assign(
             reason=reason,
             source_location=getattr(expression, "source_location", None),
         )
+
+    def glsl_private_scalar_struct_reinterpret_node(self, expression):
+        if not (
+            isinstance(expression, UnaryOpNode)
+            and self.map_operator(expression.op) == "*"
+            and isinstance(expression.operand, PointerReinterpretNode)
+        ):
+            return None
+        reinterpretation = expression.operand
+        pointer_type = getattr(reinterpretation, "target_type", None)
+        target_type_node = getattr(pointer_type, "pointee_type", None)
+        target_type = self.glsl_normalized_source_type(target_type_node)
+        if not target_type or scalar_storage_layout(target_type) is not None:
+            return None
+        return (
+            reinterpretation
+            if self.glsl_struct_node(self.map_type(target_type)) is not None
+            else None
+        )
+
+    def glsl_private_scalar_struct_reinterpret_error(
+        self,
+        expression,
+        *,
+        source_type,
+        target_type,
+        reason,
+        detail,
+        alignment=None,
+        access="read",
+    ):
+        raise PointerReinterpretationError(
+            "OpenGL cannot preserve a private scalar-to-struct view from "
+            f"'{source_type or 'unknown'}' to '{target_type or 'unknown'}': {detail}",
+            source_type=source_type,
+            target_type=target_type,
+            address_space=(
+                getattr(getattr(expression, "target_type", None), "address_space", None)
+                or "thread"
+            ),
+            alignment=alignment,
+            access=access,
+            target_backend="opengl",
+            reason=reason,
+            source_location=getattr(expression, "source_location", None),
+        )
+
+    def glsl_private_scalar_struct_reinterpret_contract(
+        self,
+        expression,
+        destination_type=None,
+    ):
+        reinterpretation = self.glsl_private_scalar_struct_reinterpret_node(expression)
+        if reinterpretation is None:
+            return None
+
+        pointer_type = getattr(reinterpretation, "target_type", None)
+        target_type_node = getattr(pointer_type, "pointee_type", None)
+        target_type = self.glsl_normalized_source_type(target_type_node)
+        mapped_target_type = self.map_type(target_type)
+        struct = self.glsl_struct_node(mapped_target_type)
+
+        def reject(reason, detail, *, source_type=None, alignment=None, access="read"):
+            self.glsl_private_scalar_struct_reinterpret_error(
+                reinterpretation,
+                source_type=source_type,
+                target_type=target_type,
+                reason=reason,
+                detail=detail,
+                alignment=alignment,
+                access=access,
+            )
+
+        address_space = str(getattr(pointer_type, "address_space", None) or "thread")
+        if address_space.lower() not in {"thread", "private", "function"}:
+            reject(
+                "unsupported-private-scalar-struct-address-space",
+                f"address space '{address_space}' is not private storage",
+            )
+
+        source_address = getattr(reinterpretation, "expression", None)
+        source_value = getattr(source_address, "operand", None)
+        source_name = getattr(source_value, "name", None)
+        if (
+            not isinstance(source_address, UnaryOpNode)
+            or self.map_operator(source_address.op) != "&"
+            or not isinstance(source_value, (IdentifierNode, VariableNode))
+            or not source_name
+        ):
+            reject(
+                "private-scalar-struct-backing-unresolved",
+                "the source is not the stable address of one scalar identifier",
+            )
+
+        source_type_node = (
+            self.local_variable_source_types.get(source_name)
+            or self.local_variable_types.get(source_name)
+            or getattr(source_value, "var_type", getattr(source_value, "vtype", None))
+        )
+        source_type = self.glsl_normalized_source_type(source_type_node)
+        source_layout = scalar_storage_layout(source_type)
+        if source_layout is None:
+            reject(
+                "unsupported-private-scalar-struct-source-layout",
+                "the addressed value is not a scalar with a known storage layout",
+                source_type=source_type,
+            )
+
+        members = [
+            member
+            for member in getattr(struct, "members", []) or []
+            if not self.glsl_static_struct_member(member)
+        ]
+        if (
+            len(members) != 1
+            or getattr(struct, "generic_params", None)
+            or getattr(struct, "inheritance", None)
+            or getattr(struct, "attributes", None)
+            or getattr(struct, "is_union", False)
+        ):
+            reject(
+                "unsupported-private-scalar-struct-layout",
+                "the destination must be a canonical attribute-free struct with "
+                "exactly one instance member",
+                source_type=source_type,
+                alignment=source_layout.byte_width,
+            )
+
+        member = members[0]
+        member_type_node = getattr(
+            member,
+            "member_type",
+            getattr(member, "vtype", getattr(member, "element_type", None)),
+        )
+        if (
+            isinstance(member, ArrayNode)
+            or isinstance(member_type_node, (ArrayType, PointerType, ReferenceType))
+            or getattr(member, "attributes", None)
+            or getattr(member, "resource_qualifiers", None)
+        ):
+            reject(
+                "unsupported-private-scalar-struct-layout",
+                "the sole destination member is not an unqualified scalar value",
+                source_type=source_type,
+                alignment=source_layout.byte_width,
+            )
+
+        member_type = self.glsl_normalized_source_type(member_type_node)
+        member_layout = scalar_storage_layout(member_type)
+        if (
+            member_layout is None
+            or source_layout != member_layout
+            or source_layout.bit_width not in {8, 16, 32}
+        ):
+            reject(
+                "private-scalar-struct-layout-mismatch",
+                "the source scalar and sole destination member do not have the "
+                "same supported logical storage layout",
+                source_type=source_type,
+                alignment=member_layout.byte_width if member_layout else None,
+            )
+
+        normalized_destination = self.glsl_normalized_source_type(destination_type)
+        if (
+            normalized_destination is not None
+            and self.map_type(normalized_destination) != mapped_target_type
+        ):
+            reject(
+                "private-scalar-struct-destination-mismatch",
+                f"the destination type '{normalized_destination}' does not match "
+                f"'{target_type}'",
+                source_type=source_type,
+                alignment=member_layout.byte_width,
+            )
+
+        rendered_value = self.generate_expression_with_expected(
+            source_value,
+            member_type_node,
+        )
+        if (
+            member_layout.kind == "integer"
+            and not member_layout.signed
+            and member_layout.bit_width < 32
+        ):
+            mask = (1 << member_layout.bit_width) - 1
+            rendered_value = f"({rendered_value} & 0x{mask:x}u)"
+
+        return {
+            "reinterpretation": reinterpretation,
+            "target_type": target_type,
+            "mapped_target_type": mapped_target_type,
+            "member": member,
+            "member_type": member_type_node,
+            "member_layout": member_layout,
+            "source_type": source_type,
+            "rendered_value": rendered_value,
+        }
+
+    def generate_glsl_private_scalar_struct_reinterpret_read(self, expression):
+        contract = self.glsl_private_scalar_struct_reinterpret_contract(expression)
+        if contract is None:
+            return None
+        return f"{contract['mapped_target_type']}({contract['rendered_value']})"
 
     def glsl_private_pointer_struct_word_array_layout(
         self,
@@ -36069,6 +36566,17 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
     def validate_glsl_private_pointer_byte_view_mutation(self, expression):
+        scalar_struct = self.glsl_private_scalar_struct_reinterpret_contract(expression)
+        if scalar_struct is not None:
+            self.glsl_private_scalar_struct_reinterpret_error(
+                scalar_struct["reinterpretation"],
+                source_type=scalar_struct["source_type"],
+                target_type=scalar_struct["target_type"],
+                reason="private-scalar-struct-view-write-unsupported",
+                detail="the scalar-to-struct reinterpretation is read-only",
+                alignment=scalar_struct["member_layout"].byte_width,
+                access="write",
+            )
         if isinstance(expression, ArrayAccessNode):
             binding = self.glsl_private_pointer_view_binding(expression.array)
         elif (

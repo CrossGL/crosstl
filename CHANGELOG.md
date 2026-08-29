@@ -24,11 +24,13 @@ All notable changes to CrossTL are documented in this file.
 - Current-pinned MLX one-pass `sdpa_vector_float_64_64` execution through Direct3D 12 WARP and deferred-specialized software-subgroup OpenGL on Mesa, with a host-derived 1,024-thread dispatch, exact 19/18-resource ABIs, six false function constants, deterministic artifact identities, and 64-value numerical readback evidence.
 - Current-pinned MLX `fft_mem_256_float2_float2` OpenGL execution through deferred SPIR-V on Mesa, with deterministic GLSL identity, 21 specialization constants, exact four-resource vector ABI, validated barrier structure, and 256-complex-value impulse readback evidence.
 - Current-pinned MLX `gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0` execution for a 32x32 float32 vector-matrix workload through Direct3D 12 WARP and two-subgroup software OpenGL on Mesa, with exact 15-resource ABIs, deterministic HLSL/GLSL identities, validated SPIR-V structure, and 32-value numerical readback evidence.
+- Current-pinned MLX `mxfp4_quantize_dequantize_float_gs_32_b_4_hgs_false` execution for 32 exact FP4 E2M1 values through Direct3D 12 WARP and one-subgroup software OpenGL on Mesa, with a host-derived dispatch contract, exact reflected resources, deterministic HLSL/GLSL identities, validated SPIR-V structure, and zero-tolerance numerical readback.
 - Deferred-specialization ABI packages retain a ready, actionable JSON runtime variant registry while marking the unsupported generated C++ registry header unavailable with an explicit reason.
 - Deferred Native Compilation CI workflow covering a three-platform contract matrix plus native Direct3D 12 and software OpenGL compile-and-dispatch jobs with pinned DXC verification and required device readback.
 
 ### Improved
 
+- HLSL host-reflection collision checks now distinguish CBV, SRV, UAV, and sampler register namespaces, allowing legal coordinates such as `b0` and `t0` while continuing to reject duplicate bindings within one namespace.
 - Explicit 32-lane OpenGL software subgroups now partition bounded workgroups of up to 1,024 invocations into independent logical subgroups and admit narrow typed-identity-masked divergent `WaveActiveSum`, `WaveActiveMin`, and `WaveActiveMax` assignments while all generated barriers remain workgroup-uniform; conditional shuffle and ambiguous control flow still fail closed.
 - Explicit OpenGL software subgroups synchronize canonical subgroup-ID-strided runtime loops across complete workgroup rounds when the bound is workgroup-uniform, the stride equals the logical subgroup count, and exactly one supported masked reduction is present; unsafe declarations, mutation, escaping control flow, and multiple collectives remain fail-closed.
 - HLSL and GLSL host reflection represents stored Boolean buffers with their portable physical uint32 ABI while preserving Boolean shader-level and specialization-constant types.
@@ -48,6 +50,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Metal conversion analysis treats parenthesized returns as control syntax, resolves proven local conditional aliases to concrete constructor factories without guessing unresolved branches, and recognizes qualified `round`; OpenGL emits exact single-evaluation float32 `isfinite` and `signbit` bit tests while preserving user overloads and structured fail-closed diagnostics.
 - OpenGL resource specialization propagates provably dead default-null storage pointers through direct forwarding chains, decodes exact materialized Metal `vec<T,N>` constructor names, and emits every collision-safe overloaded specialization body; unresolved or observable pointer uses remain fail-closed.
 - DirectX relative wave-shuffle lowering now offers an explicit target-scoped `self` policy that selects only valid source lanes and returns the calling lane for out-of-range down/up/xor reads; the default undefined policy and unrelated artifact identities remain unchanged.
 - OpenGL bounded index narrowing now tracks scalar and vector-component ranges across declarations, branches, loops, casts, and mutation boundaries, normalizes supported 64-bit indices once, and fails closed when no narrowing proof exists.

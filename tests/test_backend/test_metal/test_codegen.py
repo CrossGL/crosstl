@@ -2042,8 +2042,11 @@ def test_codegen_msl_relational_namespace_intrinsics_import_to_crossgl():
         bool nanValue = metal::isnan(value);
         bool infValue = metal::isinf(value);
         bool finiteValue = metal::isfinite(value);
+        float roundedValue = metal::round(value);
         bool3 nanMask = metal::isnan(values);
-        return (nanValue || infValue || !finiteValue || any(nanMask)) ? 1.0 : 0.0;
+        return (nanValue || infValue || !finiteValue || any(nanMask))
+            ? roundedValue
+            : 0.0;
     }
     """
     crossgl = convert(code)
@@ -2051,6 +2054,7 @@ def test_codegen_msl_relational_namespace_intrinsics_import_to_crossgl():
     assert "bool nanValue = isnan(value);" in crossgl
     assert "bool infValue = isinf(value);" in crossgl
     assert "bool finiteValue = isfinite(value);" in crossgl
+    assert "float roundedValue = round(value);" in crossgl
     assert "bvec3 nanMask = isnan(values);" in crossgl
     assert "metal_u3a_u3a" not in crossgl
     assert parse_crossgl(crossgl) is not None
@@ -11596,6 +11600,35 @@ def test_codegen_resolves_local_conditional_t_alias_to_integer_pack_type():
     assert parse_crossgl(result) is not None
 
 
+@pytest.mark.parametrize(
+    ("operator", "expected_type"),
+    [("==", "int"), ("!=", "uint")],
+)
+def test_codegen_resolves_local_constexpr_conditional_t_exact_branch(
+    operator,
+    expected_type,
+):
+    code = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void select_type(
+        device uint* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {{
+        constexpr bool select_signed = 32 {operator} 32;
+        using OutType = metal::conditional_t<select_signed, int, uint>;
+        OutType value = 7;
+        out[gid] = value;
+    }}
+    """
+
+    result = convert(code)
+
+    assert f"{expected_type} value = 7;" in result
+    assert "OutType" not in result
+    assert parse_crossgl(result) is not None
+
+
 def test_codegen_declares_bitwise_value_template_parameter_as_int():
     # Reduced from mlx quantized: the `bits` non-type template parameter drives
     # the power-of-two idiom `bits & (bits - 1)`. In an uninstantiated generic
@@ -13962,3 +13995,45 @@ def test_codegen_resolves_decltype_arithmetic_type_and_constructors():
     assert "float(M_PI_F)" in crossgl
     assert "float(p)" in crossgl
     assert "decltype" not in crossgl
+
+
+def test_codegen_requires_proven_conditional_branch_for_constructor_selection():
+    converter = MetalToCrossGLConverter()
+    conditional = "conditional_t<unknown_selector, ChosenScale, OtherScale>"
+
+    assert (
+        converter.resolve_conditional_type(conditional, require_concrete=True) is None
+    )
+    assert converter.resolve_conditional_type(conditional) == "OtherScale"
+
+
+def test_codegen_resolves_conditional_alias_before_constructor_selection():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Scale {
+        Scale(float input) thread {
+            bits = static_cast<uint8_t>(input + 127.0f);
+        }
+        uint8_t bits;
+    };
+
+    kernel void encode(
+        device const float* input [[buffer(0)]],
+        device uint8_t* output [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        constexpr bool use_scale = 32 == 32;
+        using ScaleType = metal::conditional_t<use_scale, Scale, uint8_t>;
+        ScaleType scale = ScaleType(input[gid]);
+        output[gid] = scale.bits;
+    }
+    """
+
+    result = convert(code)
+
+    assert "Scale crosstl_ctor_Scale_1(float input)" in result
+    assert "crosstl_ctor_value.bits = (uint8)(input + 127.0f);" in result
+    assert "Scale scale = crosstl_ctor_Scale_1(buffer_load(input, gid));" in result
+    assert "ScaleType" not in result
+    assert parse_crossgl(result) is not None

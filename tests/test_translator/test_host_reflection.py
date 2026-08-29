@@ -590,3 +590,45 @@ def test_hlsl_function_scan_has_bounded_work_on_failed_declarations(monkeypatch)
     assert declarations == [("CSMain", "[numthreads(8, 1, 1)]")]
     assert parsed_segments == 2
     assert parsed_characters <= len(source)
+
+
+def test_hlsl_reflection_distinguishes_register_namespaces(tmp_path):
+    reflection = _reflect_hlsl(
+        tmp_path,
+        """
+        cbuffer CrossGLDispatchInfo : register(b0) {
+            uint3 crossglNumWorkGroups;
+        };
+        StructuredBuffer<float> inputValues : register(t0);
+        RWStructuredBuffer<float> outputValues : register(u0);
+        SamplerState linearSampler : register(s0);
+        [numthreads(32, 1, 1)] void CSMain() {}
+        """,
+    )
+
+    assert reflection["status"] == "ready"
+    assert reflection["diagnostics"] == []
+
+
+def test_hlsl_reflection_rejects_duplicate_binding_within_register_namespace(tmp_path):
+    reflection = _reflect_hlsl(
+        tmp_path,
+        """
+        StructuredBuffer<float> firstInput : register(t0);
+        StructuredBuffer<float> secondInput : register(t0);
+        [numthreads(1, 1, 1)] void CSMain() {}
+        """,
+    )
+
+    assert reflection["status"] == "ambiguous"
+    assert reflection["diagnostics"] == [
+        "project.runtime-package-inspection."
+        "host-interface-reflection-ambiguous-binding"
+    ]
+    assert reflection["diagnosticRecords"][0]["details"] == {
+        "resource": "secondInput",
+        "conflictingResource": "firstInput",
+        "set": 0,
+        "binding": 0,
+        "bindingNamespace": "srv",
+    }

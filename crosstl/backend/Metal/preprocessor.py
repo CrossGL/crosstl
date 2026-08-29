@@ -520,6 +520,7 @@ class _MetalStructMethod:
     parameter_names: List[str]
     body: str
     span: Tuple[int, int]
+    is_conversion_operator: bool = False
     is_const: bool = False
     is_volatile: bool = False
     ref_qualifier: str = ""
@@ -2787,6 +2788,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             method.name,
             method.is_static,
             method.is_operator_call,
+            method.is_conversion_operator,
             self._normalize_template_argument_text(method.return_type),
             parameters,
             self._method_receiver_contract_key(method),
@@ -5597,7 +5599,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         # the actual parameter list is the paren group that FOLLOWS the empty
         # `operator()` token rather than the first top-level `(`.
         operator_match = re.search(r"\boperator\s*\(\s*\)", header)
+        conversion_match = re.search(
+            r"\boperator\s+" r"(?P<type>[A-Za-z_][A-Za-z0-9_:]*(?:\s*<[^()]+>)?)\s*\(",
+            header,
+        )
         is_operator_call = False
+        is_conversion_operator = False
         if operator_match is not None:
             paren_start = self._function_parameter_start(header[operator_match.end() :])
             if paren_start is None:
@@ -5610,6 +5617,22 @@ class MetalPreprocessor(HLSLPreprocessor):
             method_name = "operator()"
             signature_prefix = header[: operator_match.start()].rstrip()
             parameters = header[paren_start + 1 : paren_end]
+        elif conversion_match is not None:
+            paren_start = conversion_match.end() - 1
+            paren_end = self._find_matching_delimiter(header, paren_start, "(", ")")
+            if paren_end is None:
+                return None
+            parameters = header[paren_start + 1 : paren_end]
+            if parameters.strip():
+                return None
+            conversion_type = self._normalize_template_argument_text(
+                conversion_match.group("type")
+            )
+            if not conversion_type:
+                return None
+            is_conversion_operator = True
+            method_name = f"operator {conversion_type}"
+            signature_prefix = conversion_type
         else:
             paren_start = self._function_parameter_start(header)
             if paren_start is None:
@@ -5683,6 +5706,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             free_name=free_name,
             is_static=is_static,
             is_operator_call=is_operator_call,
+            is_conversion_operator=is_conversion_operator,
             return_type=return_type,
             parameters=parameters.strip(),
             parameter_names=parameter_names,
@@ -5747,6 +5771,10 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> str:
         if is_operator_call:
             return f"{struct_name}__operator_call"
+        if method_name.startswith("operator "):
+            conversion_type = method_name[len("operator ") :].strip()
+            suffix = re.sub(r"[^A-Za-z0-9_]+", "_", conversion_type).strip("_")
+            return f"{struct_name}__operator_{suffix or 'conversion'}"
         return f"{struct_name}__{method_name}"
 
     def _assign_receiver_overload_free_names(
@@ -6010,6 +6038,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         specialized_body = self._specialize_concrete_method_body(
             struct, method, method.body, structs_by_name
         )
+        specialized_body = self._rewrite_explicit_conversion_operator_calls(
+            struct,
+            specialized_body,
+        )
         rewritten_body = self._rewrite_method_body(
             struct, replace(method, body=specialized_body)
         )
@@ -6047,8 +6079,126 @@ class MetalPreprocessor(HLSLPreprocessor):
                 new_params = self_param
         return f"{return_type} {method.free_name}({new_params}) {{{rewritten_body}}}"
 
-    @staticmethod
+    def _rewrite_explicit_conversion_operator_calls(
+        self,
+        struct: _MetalStructDefinition,
+        body: str,
+    ) -> str:
+        rewritten = body
+        for candidate in struct.methods:
+            if not candidate.is_conversion_operator:
+                continue
+            conversion_type = self._normalize_template_argument_text(
+                candidate.return_type
+            )
+            type_pattern = re.escape(conversion_type).replace(r"\ ", r"\s+")
+            pattern = (
+                r"\b(?:this\s*(?:->|\.)|self\s*\.)\s*operator\s+"
+                + type_pattern
+                + r"\s*\(\s*\)"
+            )
+            rewritten = re.sub(pattern, f"{candidate.free_name}(self)", rewritten)
+        return rewritten
+
+    def _conversion_operator_receiver_is_readonly(
+        self,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        active: Optional[Set[int]] = None,
+    ) -> bool:
+        if method.is_const:
+            return True
+        if not method.is_conversion_operator:
+            return False
+        active = set(active or ())
+        if id(method) in active:
+            return False
+        active.add(id(method))
+
+        body = self._mask_comments_and_literals(method.body)
+        explicit_conversion_pattern = re.compile(
+            r"\bthis\s*(?:->|\.)\s*operator\s+"
+            r"(?P<type>[A-Za-z_][A-Za-z0-9_:]*(?:\s*<[^()]+>)?)"
+            r"\s*\(\s*\)"
+        )
+        for conversion_call in explicit_conversion_pattern.finditer(body):
+            conversion_type = self._normalize_inferred_type(
+                conversion_call.group("type")
+            )
+            candidates = [
+                candidate
+                for candidate in struct.methods
+                if candidate.is_conversion_operator
+                and self._normalize_inferred_type(candidate.return_type)
+                == conversion_type
+            ]
+            if len(
+                candidates
+            ) != 1 or not self._conversion_operator_receiver_is_readonly(
+                struct, candidates[0], active
+            ):
+                return False
+
+        member_names = sorted(struct.data_member_names, key=len, reverse=True)
+        for member in member_names:
+            access = rf"(?:\bthis\s*(?:->|\.)\s*)?\b{re.escape(member)}\b"
+            for match in re.finditer(access, body):
+                prefix = body[max(0, match.start() - 8) : match.start()]
+                suffix = body[match.end() : match.end() + 8]
+                if re.search(r"(?:\+\+|--|&)\s*$", prefix):
+                    return False
+                if re.match(
+                    r"\s*(?:\+\+|--|(?:<<|>>|[+\-*/%&|^])=|=(?!=))",
+                    suffix,
+                ):
+                    return False
+                statement_start = body.rfind(";", 0, match.start()) + 1
+                statement_prefix = body[statement_start : match.start()]
+                if re.search(
+                    r"&\s*[A-Za-z_]\w*\s*=\s*$",
+                    statement_prefix,
+                ):
+                    return False
+
+        call_scan = explicit_conversion_pattern.sub("conversion_result", body)
+        safe_calls = set(self._METAL_SCALAR_VECTOR_TYPES)
+        safe_calls.update({"alignof", "as_type", "sizeof", "static_cast"})
+        call_pattern = re.compile(
+            r"(?P<callee>(?:(?:[A-Za-z_]\w*)::)*[A-Za-z_]\w*"
+            r"(?:\s*<[^(){};]+>)?)\s*\("
+        )
+        for call in call_pattern.finditer(call_scan):
+            callee = re.sub(r"\s+", "", call.group("callee"))
+            base = callee.split("<", 1)[0].rsplit("::", 1)[-1]
+            if base in {"if", "switch", "while", "for", "return"}:
+                continue
+            open_paren = call_scan.find("(", call.start("callee"))
+            close_paren = self._find_matching_delimiter(call_scan, open_paren, "(", ")")
+            if close_paren is None:
+                return False
+            if base in safe_calls:
+                continue
+            arguments = call_scan[open_paren + 1 : close_paren]
+            observes_receiver = bool(re.search(r"\bthis\b", arguments)) or any(
+                re.search(
+                    rf"(?:\bthis\s*(?:->|\.)\s*)?\b{re.escape(member)}\b",
+                    arguments,
+                )
+                for member in member_names
+            )
+            if "::" not in callee or observes_receiver:
+                return False
+
+        allowed_this = explicit_conversion_pattern.sub("conversion_result", body)
+        allowed_this = re.sub(
+            r"\bthis\s*(?:->|\.)\s*[A-Za-z_]\w*",
+            "member_read",
+            allowed_this,
+        )
+        return re.search(r"\bthis\b", allowed_this) is None
+
     def _instance_receiver_parameter(
+        self,
         struct: _MetalStructDefinition,
         method: _MetalStructMethod,
     ) -> str:
@@ -6068,7 +6218,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 missing_capabilities=("metal.member-receiver-qualifiers",),
             )
         cv_qualifiers = []
-        if method.is_const:
+        if method.is_const or self._conversion_operator_receiver_is_readonly(
+            struct, method
+        ):
             cv_qualifiers.append("const")
         if method.is_volatile:
             cv_qualifiers.append("volatile")
@@ -9444,6 +9596,137 @@ class MetalPreprocessor(HLSLPreprocessor):
             i += 1
         return replacements
 
+    def _try_rewrite_implicit_conversion_call(
+        self,
+        code: str,
+        ident_start: int,
+        target_type: str,
+        arg_open: int,
+        buffer_element_types: _MetalPositionedBufferTypes,
+        local_variable_types: Dict[str, List[Tuple[int, str]]],
+        field_variable_types: Dict[str, List[Tuple[int, str]]],
+        field_structs_by_name: Dict[str, _MetalStructDefinition],
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        local_integral_constants: Optional[
+            Dict[str, List[_MetalIntegralConstantBinding]]
+        ] = None,
+    ) -> Optional[Tuple[int, str]]:
+        if target_type not in self._METAL_SCALAR_VECTOR_TYPES:
+            return None
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        arguments = [
+            argument.strip()
+            for argument in self._split_top_level_commas(code[arg_open + 1 : arg_close])
+            if argument.strip()
+        ]
+        if len(arguments) != 1:
+            return None
+        argument = arguments[0]
+        source_type = self._infer_argument_type(
+            argument,
+            self._flatten_types_at(buffer_element_types, arg_open),
+            self._flatten_types_at(local_variable_types, arg_open),
+            self._struct_field_types_at(
+                field_variable_types,
+                field_structs_by_name,
+                arg_open,
+            ),
+            field_structs_by_name,
+        )
+        if source_type is None and type_aliases:
+            constructor = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(", argument)
+            if constructor is not None:
+                constructor_open = argument.find("(", constructor.end("name"))
+                constructor_close = self._find_matching_delimiter(
+                    argument, constructor_open, "(", ")"
+                )
+                if constructor_close == len(argument) - 1:
+                    source_type = self._canonicalize_type_aliases_at(
+                        constructor.group("name"),
+                        type_aliases,
+                        arg_open,
+                    )
+                    conditional = str(source_type or "").strip()
+                    type_accessor = conditional.endswith("::type")
+                    if type_accessor:
+                        conditional = conditional[: -len("::type")].strip()
+                    angle_open = conditional.find("<")
+                    angle_close = (
+                        self._find_matching_angle(conditional, angle_open)
+                        if angle_open >= 0
+                        else None
+                    )
+                    conditional_name = re.sub(
+                        r"^(?:::)?(?:metal::)?", "", conditional[:angle_open]
+                    ).strip()
+                    if (
+                        angle_open > 0
+                        and angle_close == len(conditional) - 1
+                        and conditional_name in {"conditional_t", "conditional"}
+                        and (conditional_name == "conditional_t" or type_accessor)
+                    ):
+                        conditional_args = self._split_top_level_commas(
+                            conditional[angle_open + 1 : angle_close]
+                        )
+                        if len(conditional_args) == 3:
+                            visible_constants = self._local_integral_constants_at(
+                                local_integral_constants or {},
+                                arg_open,
+                                names=set(IDENTIFIER_RE.findall(conditional_args[0])),
+                            )
+                            condition = (
+                                self._substitute_template_argument_static_constants(
+                                    conditional_args[0], visible_constants
+                                )
+                            )
+                            folded, value = self._evaluate_static_integral_expression(
+                                condition
+                            )
+                            if folded and value is not None:
+                                selected = conditional_args[1 if value else 2]
+                                source_type = self._canonicalize_type_aliases_at(
+                                    selected,
+                                    type_aliases,
+                                    arg_open,
+                                )
+        source_type = self._normalize_inferred_type(source_type or "")
+        struct = field_structs_by_name.get(source_type)
+        if struct is None:
+            return None
+        normalized_target = self._normalize_inferred_type(target_type)
+        candidates = [
+            method
+            for method in struct.methods
+            if method.is_conversion_operator
+            and self._normalize_inferred_type(method.return_type) == normalized_target
+        ]
+        if len(candidates) != 1:
+            return None
+        method = candidates[0]
+        if not self._conversion_operator_receiver_is_readonly(struct, method) and (
+            IDENTIFIER_RE.fullmatch(argument) is None
+        ):
+            raise MetalStructMethodError(
+                "Cannot lower a mutating conversion operator on a temporary "
+                f"'{source_type}' value.",
+                struct_name=source_type,
+                method_name=method.name,
+                requested_signature=f"{target_type}({argument})",
+                suggested_action=(
+                    "materialize the source aggregate in a named local or make "
+                    "the conversion operator receiver read-only"
+                ),
+                source_location=self._source_location_for_offsets(
+                    code, ident_start, arg_close + 1
+                ),
+                missing_capabilities=("metal.conversion-operator-temporary",),
+                reason="conversion-temporary-receiver-mutation-unsupported",
+                receiver_type=source_type,
+            )
+        return arg_close + 1, f"{method.free_name}({argument})"
+
     def _try_rewrite_call_at(
         self,
         code: str,
@@ -9510,6 +9793,22 @@ class MetalPreprocessor(HLSLPreprocessor):
             j += 1
         if j >= len(code):
             return None
+
+        if code[j] == "(":
+            conversion = self._try_rewrite_implicit_conversion_call(
+                code,
+                ident_start,
+                ident,
+                j,
+                buffer_element_types,
+                local_variable_types,
+                field_variable_types,
+                field_structs_by_name,
+                type_aliases,
+                local_integral_constants,
+            )
+            if conversion is not None:
+                return conversion
 
         # Qualified static call: `S::m(args)` -> `S__m(args)`. A local alias may
         # name the concrete materialized struct, so bind it to the nearest alias
@@ -15998,6 +16297,27 @@ class MetalPreprocessor(HLSLPreprocessor):
                             expr[angle_start + 1 : angle_end]
                         )
 
+        # Dereference of one explicit C-style pointer cast has the cast's
+        # pointee type: `*(thread Value*)(&bits)` -> `Value`. This is deliberately
+        # narrower than general pointer-expression inference; offsets, nested
+        # casts, and side-effecting tails remain unresolved.
+        if expr.startswith("*"):
+            cast = expr[1:].lstrip()
+            if cast.startswith("("):
+                cast_close = self._find_matching_delimiter(cast, 0, "(", ")")
+                if cast_close is not None:
+                    cast_type = cast[1:cast_close].strip()
+                    value = cast[cast_close + 1 :].strip()
+                    if cast_type.endswith("*") and value:
+                        pointee = cast_type[:-1].strip()
+                        pointee = re.sub(
+                            r"^(?:(?:const|volatile|thread|private|function)\s+)+",
+                            "",
+                            pointee,
+                        ).strip()
+                        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_:]*", pointee):
+                            return self._normalize_inferred_type(pointee)
+
         # Literal types.
         literal_type = self._infer_literal_type(expr)
         if literal_type is not None:
@@ -16022,6 +16342,22 @@ class MetalPreprocessor(HLSLPreprocessor):
         construction = self._infer_braced_construction_type(expr, structs_by_name)
         if construction is not None:
             return construction
+
+        # Parenthesized construction of a tracked struct, `T(args...)`, has type
+        # T when one balanced argument group spans the whole expression.  Keep
+        # this narrower than generic function-call inference: an untracked name,
+        # qualified tail, or second call group remains unresolved.  This admits
+        # implicit scalar conversion from a temporary such as
+        # `float(fp8_e8m0(scale))` without guessing arbitrary call return types.
+        functional_construction = re.match(
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(", expr
+        )
+        if functional_construction is not None and structs_by_name is not None:
+            type_name = functional_construction.group("name")
+            paren_start = expr.find("(", functional_construction.end("name"))
+            paren_end = self._find_matching_delimiter(expr, paren_start, "(", ")")
+            if paren_end == len(expr) - 1 and type_name in structs_by_name:
+                return self._normalize_inferred_type(type_name)
 
         # Subscript access `base[expr]` -> element type of `base`. `base` may be a
         # bare buffer/array name (`buf[i]`, `totals[i]`) OR a member-access into a

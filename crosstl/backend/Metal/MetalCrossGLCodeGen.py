@@ -854,6 +854,7 @@ class MetalToCrossGLConverter:
         "pow",
         "reflect",
         "rint",
+        "round",
         "rsqrt",
         "select",
         "sign",
@@ -913,6 +914,7 @@ class MetalToCrossGLConverter:
         "pow": ("same", "floating", 2),
         "reflect": ("same", "floating_vector", 2),
         "rint": ("same", "floating", 1),
+        "round": ("same", "floating", 1),
         "rsqrt": ("same", "floating", 1),
         "select": ("same", "select", 3),
         "sign": ("same", "floating", 1),
@@ -3187,6 +3189,15 @@ class MetalToCrossGLConverter:
         resolved_alias = self.resolve_type_alias(
             self.resolve_local_type_aliases(type_name)
         )
+        conditional_alias = str(resolved_alias).strip()
+        if conditional_alias.startswith("metal::"):
+            conditional_alias = conditional_alias[len("metal::") :]
+        conditional_type = self.resolve_conditional_type(
+            conditional_alias,
+            require_concrete=True,
+        )
+        if conditional_type is not None:
+            resolved_alias = conditional_type
         if (
             self.metal_pointer_pointee_type_once(resolved_alias) is not None
             or self.reference_element_type(resolved_alias) is not None
@@ -9300,9 +9311,9 @@ class MetalToCrossGLConverter:
             declaration["name"] for declaration in self.local_aggregate_declarations
         }
         concrete_struct_alias = (
-            alias_type in self.struct_name_map
-            and mapped_alias_type in self.struct_name_map.values()
-        ) or mapped_alias_type in local_aggregate_type_names
+            mapped_alias_type in self.struct_name_map.values()
+            or mapped_alias_type in local_aggregate_type_names
+        )
         if (
             getattr(alias, "qualifiers", None)
             or getattr(alias, "array_sizes", None)
@@ -13341,19 +13352,16 @@ class MetalToCrossGLConverter:
         )
         return f"{operation}({arguments})"
 
-    def resolve_conditional_type(self, base):
-        """Resolve ``conditional_t<C, A, B>`` / ``conditional<C, A, B>::type`` to
-        a concrete branch type.
+    def resolve_conditional_type(self, base, *, require_concrete=False):
+        """Resolve ``conditional_t<C, A, B>`` / ``conditional<C, A, B>::type``.
 
-        CrossGL has no dependent-type mechanism, so a generic (uninstantiated)
-        emission cannot evaluate the compile-time condition ``C``. The quantized
-        kernels alias integer pack types this way (e.g.
-        ``conditional_t<bits == 5, uint64_t, uint32_t>``); leaving the alias
-        unresolved makes the aliased variable default to ``float`` and turns the
-        bitwise/shift packing math into invalid float operations. Resolving to
-        the else-branch (``B``) keeps the whole expression tree integer-typed,
-        matches the dominant instantiation of these kernels, and avoids selecting
-        wider 64-bit branches that would otherwise demand the Int64 capability.
+        Materialized functions and concrete kernels can make ``C`` provable from
+        template bindings or a preceding local integral ``constexpr``.  Select
+        that exact branch first.  Constructor selection passes
+        ``require_concrete=True`` so it never chooses a constructor from an
+        unresolved symbolic branch.  Other uninstantiated generic emission keeps
+        the legacy integer-safe else branch used by existing diagnostics and
+        parsing contracts.
         """
         candidate = str(base).strip()
         type_accessor = False
@@ -13373,10 +13381,30 @@ class MetalToCrossGLConverter:
         args = self.split_generic_arguments(inner[:-1])
         if len(args) != 3:
             return None
-        else_branch = args[2].strip()
-        if not else_branch:
+
+        bindings = {
+            name: value
+            for scope in self.template_value_bindings
+            for name, value in scope.items()
+            if not self.template_value_binding_is_shadowed(name)
+        }
+        bindings.update(self.current_function_materialization_bindings)
+        condition = self.substitute_template_value_text(
+            args[0].strip(),
+            bindings=bindings,
+            honor_shadowing=False,
+        )
+        condition = self.substitute_local_integral_constant_text(condition)
+        condition_value = self.evaluate_value_template_constant_expression(condition)
+        if condition_value is None and require_concrete:
             return None
-        return self.map_type(else_branch)
+        selected_branch = (
+            args[1] if condition_value is not None and condition_value else args[2]
+        )
+        selected_branch = selected_branch.strip()
+        if not selected_branch:
+            return None
+        return self.map_type(selected_branch)
 
     def map_generic_type_argument(self, argument):
         argument = str(argument).strip()

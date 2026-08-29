@@ -852,6 +852,32 @@ class DirectXCopySignError(ValueError):
         self.source_location = source_location
 
 
+class DirectXSignBitError(ValueError):
+    """Raised when ``signbit`` has no exact 32-bit HLSL lowering."""
+
+    project_diagnostic_code = "project.translate.directx-signbit-unrepresentable"
+    missing_capabilities = ("directx.signbit-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation="signbit",
+        operand_type=None,
+        result_type=None,
+        target_profile=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_type = operand_type
+        self.result_type = result_type
+        self.target_profile = target_profile
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXInverseHyperbolicError(ValueError):
     """Raised when an inverse-hyperbolic call has no faithful HLSL lowering."""
 
@@ -1451,6 +1477,9 @@ class HLSLCodeGen:
     HLSL_CANONICAL_NARROW_FLOAT_CONSTRUCTORS = frozenset({"bfloat", "bfloat16"})
     HLSL_COPYSIGN_NAMES = frozenset(
         {"copysign", "metal::copysign", "metal_u3a_u3acopysign"}
+    )
+    HLSL_SIGNBIT_NAMES = frozenset(
+        {"signbit", "metal::signbit", "metal_u3a_u3asignbit"}
     )
     HLSL_INVERSE_HYPERBOLIC_NAMES = frozenset({"acosh", "asinh", "atanh"})
     HLSL_INVERSE_HYPERBOLIC_ALIASES = {
@@ -11208,6 +11237,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if isinstance(expr, PointerReinterpretNode):
+            target_type = getattr(expr.target_type, "pointee_type", None)
+            return self.map_type(self.type_name_string(target_type))
         if isinstance(expr, VariableNode):
             return self.variable_type_by_name(getattr(expr, "name", None))
         if isinstance(expr, IdentifierNode) or (
@@ -11490,6 +11522,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     )
                 if args:
                     return self.expression_result_type(args[0])
+            if func_name in self.HLSL_SIGNBIT_NAMES:
+                resolved_signbit = self.resolve_hlsl_function_overload(
+                    func_name,
+                    args,
+                    call_node=expr,
+                )
+                if resolved_signbit is not None:
+                    return self.type_name_string(
+                        getattr(resolved_signbit, "return_type", None)
+                    )
+                signbit_result_type = self.hlsl_signbit_result_type(args)
+                if signbit_result_type is not None:
+                    return signbit_result_type
             if func_name == "inverse" and args:
                 return self.expression_result_type(args[0])
             if func_name == "transpose" and args:
@@ -11915,6 +11960,219 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             target_backend="directx",
             reason=reason,
             source_location=getattr(expression, "source_location", None),
+        )
+
+    def hlsl_private_scalar_struct_reinterpret_node(self, expression):
+        if not (
+            isinstance(expression, UnaryOpNode)
+            and not getattr(expression, "is_postfix", False)
+            and self.map_operator(expression.op) == "*"
+            and isinstance(expression.operand, PointerReinterpretNode)
+        ):
+            return None
+        reinterpretation = expression.operand
+        pointer_type = getattr(reinterpretation, "target_type", None)
+        source_address = getattr(reinterpretation, "expression", None)
+        source_value = getattr(source_address, "operand", None)
+        if (
+            not isinstance(source_address, UnaryOpNode)
+            or self.map_operator(source_address.op) != "&"
+            or not isinstance(source_value, (IdentifierNode, VariableNode))
+            or not getattr(source_value, "name", None)
+        ):
+            return None
+        address_space = str(getattr(pointer_type, "address_space", None) or "thread")
+        if address_space.lower() not in {"thread", "private", "function"}:
+            return None
+        target_type = getattr(pointer_type, "pointee_type", None)
+        target_name = self.type_name_string(target_type)
+        if not target_name or scalar_storage_layout(target_name) is not None:
+            return None
+        struct = self.structs_by_name.get(target_name)
+        if struct is None:
+            struct = self.structs_by_name.get(self.map_type(target_name))
+        return reinterpretation if struct is not None else None
+
+    def hlsl_private_scalar_struct_reinterpret_contract(
+        self,
+        expression,
+        expected_type=None,
+    ):
+        reinterpretation = self.hlsl_private_scalar_struct_reinterpret_node(expression)
+        if reinterpretation is None:
+            return None
+
+        pointer_type = getattr(reinterpretation, "target_type", None)
+        target_type_node = getattr(pointer_type, "pointee_type", None)
+        target_type = self.type_name_string(target_type_node)
+        mapped_target_type = self.map_type(target_type)
+        struct = self.structs_by_name.get(target_type)
+        if struct is None:
+            struct = self.structs_by_name.get(mapped_target_type)
+
+        def reject(reason, detail, *, source_type=None, alignment=None, access="read"):
+            self.hlsl_private_pointer_word_view_error(
+                reinterpretation,
+                source_type=source_type or "unknown",
+                target_type=target_type,
+                reason=reason,
+                detail=detail,
+                alignment=alignment,
+                access=access,
+            )
+
+        address_space = str(getattr(pointer_type, "address_space", None) or "thread")
+        if address_space.lower() not in {"thread", "private", "function"}:
+            reject(
+                "unsupported-private-scalar-struct-address-space",
+                f"address space '{address_space}' is not private storage",
+            )
+
+        source_address = getattr(reinterpretation, "expression", None)
+        source_value = getattr(source_address, "operand", None)
+        source_name = getattr(source_value, "name", None)
+        if (
+            not isinstance(source_address, UnaryOpNode)
+            or self.map_operator(source_address.op) != "&"
+            or not isinstance(source_value, (IdentifierNode, VariableNode))
+            or not source_name
+        ):
+            reject(
+                "private-scalar-struct-backing-unresolved",
+                "the source is not the stable address of one scalar identifier",
+            )
+
+        source_type_node = (
+            self.local_variable_source_types.get(source_name)
+            or self.local_variable_types.get(source_name)
+            or getattr(source_value, "var_type", getattr(source_value, "vtype", None))
+        )
+        source_type = self.type_name_string(source_type_node)
+        source_layout = scalar_storage_layout(source_type)
+        if source_layout is None:
+            reject(
+                "unsupported-private-scalar-struct-source-layout",
+                "the addressed value is not a scalar with a known storage layout",
+                source_type=source_type,
+            )
+
+        members = [
+            member
+            for member in getattr(struct, "members", []) or []
+            if not self.hlsl_static_struct_member(member)
+        ]
+        if (
+            len(members) != 1
+            or getattr(struct, "generic_params", None)
+            or getattr(struct, "inheritance", None)
+            or getattr(struct, "attributes", None)
+            or getattr(struct, "is_union", False)
+            or self.hlsl_union_layout_for_type(target_type_node) is not None
+        ):
+            reject(
+                "unsupported-private-scalar-struct-layout",
+                "the destination must be a canonical attribute-free struct with "
+                "exactly one instance member",
+                source_type=source_type,
+                alignment=source_layout.byte_width,
+            )
+
+        member = members[0]
+        member_type_node = getattr(
+            member,
+            "member_type",
+            getattr(member, "vtype", getattr(member, "element_type", None)),
+        )
+        if (
+            isinstance(member, ArrayNode)
+            or isinstance(member_type_node, (ArrayType, PointerType, ReferenceType))
+            or getattr(member, "attributes", None)
+            or getattr(member, "resource_qualifiers", None)
+        ):
+            reject(
+                "unsupported-private-scalar-struct-layout",
+                "the sole destination member is not an unqualified scalar value",
+                source_type=source_type,
+                alignment=source_layout.byte_width,
+            )
+
+        member_type = self.type_name_string(member_type_node)
+        member_layout = scalar_storage_layout(member_type)
+        if (
+            member_layout is None
+            or source_layout != member_layout
+            or source_layout.bit_width not in {8, 16, 32}
+        ):
+            reject(
+                "private-scalar-struct-layout-mismatch",
+                "the source scalar and sole destination member do not have the "
+                "same supported logical storage layout",
+                source_type=source_type,
+                alignment=member_layout.byte_width if member_layout else None,
+            )
+
+        if (
+            expected_type is not None
+            and self.map_type(expected_type) != mapped_target_type
+        ):
+            reject(
+                "private-scalar-struct-destination-mismatch",
+                f"the destination type '{self.type_name_string(expected_type)}' does "
+                f"not match '{target_type}'",
+                source_type=source_type,
+                alignment=member_layout.byte_width,
+            )
+
+        rendered_value = self.generate_expression_with_expected(
+            source_value,
+            member_type_node,
+        )
+        if (
+            member_layout.kind == "integer"
+            and not member_layout.signed
+            and member_layout.bit_width < 32
+        ):
+            mask = (1 << member_layout.bit_width) - 1
+            rendered_value = f"({rendered_value} & 0x{mask:x}u)"
+
+        return {
+            "reinterpretation": reinterpretation,
+            "target_type": target_type,
+            "mapped_target_type": mapped_target_type,
+            "member": member,
+            "member_type": member_type_node,
+            "member_layout": member_layout,
+            "source_type": source_type,
+            "rendered_value": rendered_value,
+        }
+
+    def hlsl_private_scalar_struct_reinterpret_initializer(
+        self,
+        expected_type,
+        expression,
+    ):
+        contract = self.hlsl_private_scalar_struct_reinterpret_contract(
+            expression,
+            expected_type,
+        )
+        if contract is None:
+            return None
+        member = contract["member"]
+        return (
+            contract["mapped_target_type"],
+            [(member.name, contract["member_type"])],
+            [contract["rendered_value"]],
+            [None],
+        )
+
+    def generate_hlsl_private_scalar_struct_reinterpret_read(self, expression):
+        contract = self.hlsl_private_scalar_struct_reinterpret_contract(expression)
+        if contract is None:
+            return None
+        return format_struct_constructor_expression(
+            self,
+            contract["mapped_target_type"],
+            [contract["rendered_value"]],
         )
 
     def hlsl_private_pointer_word_component_layout(self, value_type):
@@ -12487,6 +12745,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return binding
 
     def hlsl_private_pointer_word_view_write_error(self, target):
+        scalar_struct = self.hlsl_private_scalar_struct_reinterpret_contract(target)
+        if scalar_struct is not None:
+            self.hlsl_private_pointer_word_view_error(
+                scalar_struct["reinterpretation"],
+                source_type=scalar_struct["source_type"],
+                target_type=scalar_struct["target_type"],
+                reason="private-scalar-struct-view-write-unsupported",
+                detail="the scalar-to-struct reinterpretation is read-only",
+                alignment=scalar_struct["member_layout"].byte_width,
+                access="write",
+            )
         if isinstance(target, ArrayAccessNode):
             pointer_expression = target.array
         elif (
@@ -14154,6 +14423,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and isinstance(expression.operand, PointerReinterpretNode)
         ):
             return None
+        if self.hlsl_private_scalar_struct_reinterpret_node(expression) is not None:
+            return None
         reinterpret = expression.operand
         pointer_type = getattr(reinterpret, "target_type", None)
         target_type = getattr(pointer_type, "pointee_type", None)
@@ -14295,6 +14566,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return "\n".join(statements) + "\n"
 
     def hlsl_storage_struct_view_write_error(self, target):
+        if self.hlsl_private_scalar_struct_reinterpret_node(target) is not None:
+            return
         found = None
 
         def visit(expression):
@@ -16562,6 +16835,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "increment and decrement require a canonical union lvalue",
                     )
             if mapped_op == "*" and not getattr(expr, "is_postfix", False):
+                aggregate = self.generate_hlsl_private_scalar_struct_reinterpret_read(
+                    expr
+                )
+                if aggregate is not None:
+                    return aggregate
                 private_pointee = self.generate_hlsl_private_pointer_view_access(
                     expr.operand, access_expression=expr
                 )
@@ -16784,6 +17062,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             metal_as_type_call = self.generate_hlsl_metal_as_type_call(func_name, args)
             if metal_as_type_call is not None:
                 return metal_as_type_call
+
+            signbit_call = self.generate_hlsl_signbit_call(
+                func_name,
+                args,
+                call_node=expr,
+            )
+            if signbit_call is not None:
+                return signbit_call
 
             copysign_call = self.generate_hlsl_copysign_call(
                 func_name,
@@ -18063,6 +18349,91 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if expected_type == "bool":
             return f"(({expression}) != 0)"
         return expression
+
+    def hlsl_signbit_type_info(self, type_name):
+        if type_name is None:
+            return None
+        mapped_type = self.map_type(type_name)
+        match = re.fullmatch(r"float([234]?)", mapped_type or "")
+        if match is None:
+            return None
+        lanes = int(match.group(1)) if match.group(1) else 1
+        result_type = "bool" if lanes == 1 else f"bool{lanes}"
+        return {"type": mapped_type, "lanes": lanes, "result_type": result_type}
+
+    def hlsl_signbit_result_type(self, args):
+        if len(args) != 1:
+            return None
+        info = self.hlsl_signbit_type_info(self.hlsl_source_expression_type(args[0]))
+        return info["result_type"] if info is not None else None
+
+    def hlsl_signbit_error(
+        self,
+        message,
+        *,
+        operand_type=None,
+        result_type=None,
+        reason,
+        source_location=None,
+    ):
+        return DirectXSignBitError(
+            message,
+            operand_type=operand_type,
+            result_type=result_type,
+            target_profile=self.target_profile or "default",
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_hlsl_signbit_call(self, func_name, args, *, call_node=None):
+        if func_name not in self.HLSL_SIGNBIT_NAMES:
+            return None
+
+        resolved_overload = self.resolve_hlsl_function_overload(
+            func_name,
+            args,
+            call_node=call_node,
+        )
+        if resolved_overload is not None:
+            return None
+
+        source_location = getattr(call_node, "source_location", None)
+        if len(args) != 1:
+            raise self.hlsl_signbit_error(
+                "DirectX signbit requires exactly one operand",
+                reason="invalid-arity",
+                source_location=source_location,
+            )
+
+        source_type = self.hlsl_source_expression_type(args[0])
+        display_type = (
+            self.type_name_string(source_type) if source_type is not None else None
+        )
+        if source_type is None:
+            raise self.hlsl_signbit_error(
+                "DirectX signbit requires a statically known operand type",
+                operand_type=display_type,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        info = self.hlsl_signbit_type_info(source_type)
+        if info is None:
+            raise self.hlsl_signbit_error(
+                "DirectX signbit supports only 32-bit float scalar and vector "
+                f"operands, got {display_type}",
+                operand_type=display_type,
+                reason="unsupported-operand-type",
+                source_location=source_location,
+            )
+
+        value = self.generate_expression_with_expected(args[0], info["type"])
+        if info["lanes"] == 1:
+            return f"((asuint({value}) & 0x80000000u) != 0u)"
+        lanes = info["lanes"]
+        mask = f"uint{lanes}({', '.join(['0x80000000u'] * lanes)})"
+        zero = f"uint{lanes}({', '.join(['0u'] * lanes)})"
+        return f"((asuint({value}) & {mask}) != {zero})"
 
     def hlsl_copysign_type_info(self, type_name):
         if type_name is None:
@@ -36691,6 +37062,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.map_type(type_name), fields, rendered_args, field_exprs
 
     def hlsl_struct_initializer_components(self, expected_type, expr):
+        private_scalar_struct = self.hlsl_private_scalar_struct_reinterpret_initializer(
+            expected_type,
+            expr,
+        )
+        if private_scalar_struct is not None:
+            return private_scalar_struct
         expected_type = self.type_name_string(expected_type)
         if isinstance(expr, ArrayLiteralNode):
             return self.hlsl_struct_initializer_rendered_args(

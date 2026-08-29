@@ -72,6 +72,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXResourcePointerArrayError,
     DirectXResourcePointerParameterError,
     DirectXSemanticArraySizeError,
+    DirectXSignBitError,
     DirectXSpecializationConstantError,
     DirectXTextureOffsetError,
     DirectXTrailingZeroBuiltinError,
@@ -470,6 +471,109 @@ def test_hlsl_user_defined_copysign_remains_an_ordinary_call():
     assert "return copysign(value, -1.0);" in generated
     assert "0x7fffffffu" not in generated
     assert "0x80000000u" not in generated
+
+
+def test_hlsl_signbit_preserves_negative_zero_and_nan_sign_and_validates(tmp_path):
+    source = """
+    shader ExactSignBit {
+        RWStructuredBuffer<uvec4> output_bits @ binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                vec4 values = asfloat(uvec4(
+                    0u, 2147483648u, 2143363909u, 4290847557u
+                ));
+                bvec4 flags4 = metal_u3a_u3asignbit(values);
+                bvec2 flags2 = signbit(values.xy);
+                bvec3 flags3 = metal_u3a_u3asignbit(values.xyz);
+                if (metal_u3a_u3asignbit(values.x)
+                    || flags2.x || flags3.x || flags4.x) {
+                    output_bits[0] = uvec4(1u);
+                }
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert (
+        "bool4 flags4 = ((asuint(values) & uint4(0x80000000u, "
+        "0x80000000u, 0x80000000u, 0x80000000u)) != "
+        "uint4(0u, 0u, 0u, 0u));"
+    ) in generated
+    assert (
+        "bool2 flags2 = ((asuint(values.xy) & uint2(0x80000000u, "
+        "0x80000000u)) != uint2(0u, 0u));"
+    ) in generated
+    assert (
+        "bool3 flags3 = ((asuint(values.xyz) & uint3(0x80000000u, "
+        "0x80000000u, 0x80000000u)) != uint3(0u, 0u, 0u));"
+    ) in generated
+    assert "((asuint(values.x) & 0x80000000u) != 0u)" in generated
+    assert "signbit(" not in generated
+    assert "metal_u3a_u3asignbit(" not in generated
+    assert [
+        bool(bits & 0x80000000)
+        for bits in (
+            0x00000000,
+            0x80000000,
+            0x7FC12345,
+            0xFFC12345,
+        )
+    ] == [False, True, False, True]
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_signbit_rejects_non_float32_operand_with_metadata():
+    source = """
+    shader InvalidSignBit {
+        bool invalid(double value) {
+            return metal_u3a_u3asignbit(value);
+        }
+    }
+    """
+    ast = crosstl.translator.parse(source)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(DirectXSignBitError) as exc_info:
+        HLSLCodeGen(target_profile="dx12").generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-signbit-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == ("directx.signbit-lowering",)
+    assert diagnostic.operation == "signbit"
+    assert diagnostic.operand_type == "double"
+    assert diagnostic.target_profile == "dx12"
+    assert diagnostic.reason == "unsupported-operand-type"
+    assert diagnostic.source_location == source_location
+
+
+def test_hlsl_user_defined_qualified_signbit_remains_an_ordinary_call():
+    source = """
+    shader UserSignBit {
+        bool metal_u3a_u3asignbit(float value) {
+            return value > 0.0;
+        }
+
+        bool apply(float value) {
+            return metal_u3a_u3asignbit(value);
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "bool metal_u3a_u3asignbit(float value)" in generated
+    assert "return metal_u3a_u3asignbit(value);" in generated
+    assert "asuint(value)" not in generated
 
 
 @pytest.mark.parametrize(
@@ -43005,6 +43109,114 @@ def test_hlsl_private_pointer_descending_compound_step_preserves_offset_slice():
     assert "values[(values_base + (i - 3))] = 4.0;" in generated
     assert "fill16(backing, 4);" in generated
     assert "backing + 4" not in generated
+
+
+def test_hlsl_metal_private_scalar_struct_view_materializes_exact_value(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct ByteView { uint8_t bits; };
+
+    inline uint consume(ByteView value) {
+        return uint(value.bits);
+    }
+
+    kernel void private_scalar_struct_view(
+        device uint* output [[buffer(0)]]) {
+        uint8_t byte = 0xff;
+        ByteView direct = *(thread ByteView*)(&byte);
+        output[0] = uint(direct.bits);
+        output[1] = consume(*(thread ByteView*)(&byte));
+    }
+    """
+    shader_path = tmp_path / "private_scalar_struct_view.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "ByteView direct;" in generated
+    assert "direct.bits = (byte & 0xffu);" in generated
+    assert "consume(ByteView((byte & 0xffu)))" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "&byte" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("source_type", "struct_body", "statement", "reason"),
+    [
+        pytest.param(
+            "uint8_t",
+            "uint8_t bits; uint8_t extra;",
+            "View value = *(thread View*)(&source);",
+            "unsupported-private-scalar-struct-layout",
+            id="multiple-members",
+        ),
+        pytest.param(
+            "uint8_t",
+            "uint8_t bits[1];",
+            "View value = *(thread View*)(&source);",
+            "unsupported-private-scalar-struct-layout",
+            id="array-member",
+        ),
+        pytest.param(
+            "uint16_t",
+            "uint8_t bits;",
+            "View value = *(thread View*)(&source);",
+            "private-scalar-struct-layout-mismatch",
+            id="layout-mismatch",
+        ),
+        pytest.param(
+            "uint8_t",
+            "uint8_t bits;",
+            "View value; *(thread View*)(&source) = value;",
+            "private-scalar-struct-view-write-unsupported",
+            id="write",
+        ),
+    ],
+)
+def test_hlsl_metal_private_scalar_struct_view_fails_closed(
+    tmp_path,
+    source_type,
+    struct_body,
+    statement,
+    reason,
+):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct View {{ {struct_body} }};
+
+    kernel void rejected_private_scalar_struct(
+        device uint* output [[buffer(0)]]) {{
+        {source_type} source = 1;
+        {statement}
+        output[0] = uint(source);
+    }}
+    """
+    shader_path = tmp_path / f"private_scalar_struct_{reason}.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == reason
+    assert diagnostic.target_type == "View"
+    assert diagnostic.address_space == "thread"
 
 
 def test_hlsl_metal_private_struct_byte_view_reads_fixed_word_array(tmp_path):

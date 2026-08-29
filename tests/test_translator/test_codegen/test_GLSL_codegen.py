@@ -52,11 +52,13 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLForInIterableError,
     OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
+    OpenGLIsFiniteError,
     OpenGLMappedOverloadError,
     OpenGLPrivatePointerParameterError,
     OpenGLReferenceParameterError,
     OpenGLResourceMemoryQualifierError,
     OpenGLScalarConversionError,
+    OpenGLSignBitError,
     OpenGLSoftwareSubgroupError,
     OpenGLSpecializationConstantError,
     OpenGLStoragePointerError,
@@ -666,6 +668,115 @@ def test_glsl_user_defined_qualified_copysign_name_remains_an_ordinary_call():
     assert "return metal_u3a_u3acopysign(value, (-1.0));" in generated
     assert "0x7fffffffu" not in generated
     assert "0x80000000u" not in generated
+
+
+def test_glsl_signbit_preserves_negative_zero_and_nan_sign_and_validates(tmp_path):
+    source = """
+    shader ExactSignBit {
+        RWStructuredBuffer<uvec4> output_bits @ binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                vec4 values = asfloat(uvec4(
+                    0u, 2147483648u, 2143363909u, 4290847557u
+                ));
+                bvec4 flags4 = metal_u3a_u3asignbit(values);
+                bvec2 flags2 = signbit(values.xy);
+                bvec3 flags3 = metal_u3a_u3asignbit(values.xyz);
+                if (metal_u3a_u3asignbit(values.x)
+                    || flags2.x || flags3.x || flags4.x) {
+                    output_bits[0] = uvec4(1u);
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+
+    assert (
+        "bvec4 flags4 = notEqual((floatBitsToUint(values) & "
+        "uvec4(0x80000000u)), uvec4(0u));"
+    ) in generated
+    assert (
+        "bvec2 flags2 = notEqual((floatBitsToUint(values.xy) & "
+        "uvec2(0x80000000u)), uvec2(0u));"
+    ) in generated
+    assert (
+        "bvec3 flags3 = notEqual((floatBitsToUint(values.xyz) & "
+        "uvec3(0x80000000u)), uvec3(0u));"
+    ) in generated
+    assert "((floatBitsToUint(values.x) & 0x80000000u) != 0u)" in generated
+    assert "signbit(" not in generated
+    assert "metal_u3a_u3asignbit(" not in generated
+    assert [
+        bool(bits & 0x80000000)
+        for bits in (
+            0x00000000,
+            0x80000000,
+            0x7FC12345,
+            0xFFC12345,
+        )
+    ] == [False, True, False, True]
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "exact_signbit",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_signbit_rejects_non_float32_operand_with_metadata():
+    source = """
+    shader InvalidSignBit {
+        bool invalid(double value) {
+            return metal_u3a_u3asignbit(value);
+        }
+    }
+    """
+    ast = crosstl.translator.parse(source)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(OpenGLSignBitError) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-signbit-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.signbit-lowering",)
+    assert diagnostic.operation == "signbit"
+    assert diagnostic.operand_type == "double"
+    assert diagnostic.target_profile == "glsl-460"
+    assert diagnostic.reason == "unsupported-operand-type"
+    assert diagnostic.source_location == source_location
+
+
+def test_glsl_user_defined_qualified_signbit_remains_an_ordinary_call():
+    source = """
+    shader UserSignBit {
+        bool metal_u3a_u3asignbit(float value) {
+            return value > 0.0;
+        }
+
+        bool apply(float value) {
+            return metal_u3a_u3asignbit(value);
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "bool metal_u3a_u3asignbit(float value)" in generated
+    assert "return metal_u3a_u3asignbit(value);" in generated
+    assert "floatBitsToUint(value)" not in generated
 
 
 def test_glsl_reserved_identifiers_are_sanitized_consistently():
@@ -7930,6 +8041,121 @@ def test_opengl_storage_helper_specializes_direct_and_reinterpreted_views(tmp_pa
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "mixed_storage_pointer_views"
     )
+
+
+def test_glsl_metal_private_scalar_struct_view_materializes_exact_value(tmp_path):
+    metal_source = tmp_path / "private_scalar_struct_view.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct ByteView { uint8_t bits; };
+
+        inline uint consume(ByteView value) {
+            return uint(value.bits);
+        }
+
+        kernel void private_scalar_struct_view(
+            device uint* output [[buffer(0)]]) {
+            uint8_t byte = 0xff;
+            ByteView direct = *(thread ByteView*)(&byte);
+            output[0] = uint(direct.bits);
+            output[1] = consume(*(thread ByteView*)(&byte));
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "ByteView direct = ByteView((byte & 0xffu));" in generated
+    assert "consume(ByteView((byte & 0xffu)))" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "&byte" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "private_scalar_struct_view",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_type", "struct_body", "statement", "reason"),
+    [
+        pytest.param(
+            "uint8_t",
+            "uint8_t bits; uint8_t extra;",
+            "View value = *(thread View*)(&source);",
+            "unsupported-private-scalar-struct-layout",
+            id="multiple-members",
+        ),
+        pytest.param(
+            "uint8_t",
+            "uint8_t bits[1];",
+            "View value = *(thread View*)(&source);",
+            "unsupported-private-scalar-struct-layout",
+            id="array-member",
+        ),
+        pytest.param(
+            "uint16_t",
+            "uint8_t bits;",
+            "View value = *(thread View*)(&source);",
+            "private-scalar-struct-layout-mismatch",
+            id="layout-mismatch",
+        ),
+        pytest.param(
+            "uint8_t",
+            "uint8_t bits;",
+            "View value; *(thread View*)(&source) = value;",
+            "private-scalar-struct-view-write-unsupported",
+            id="write",
+        ),
+    ],
+)
+def test_glsl_metal_private_scalar_struct_view_fails_closed(
+    tmp_path,
+    source_type,
+    struct_body,
+    statement,
+    reason,
+):
+    metal_source = tmp_path / f"private_scalar_struct_{reason}.metal"
+    metal_source.write_text(
+        f"""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct View {{ {struct_body} }};
+
+        kernel void rejected_private_scalar_struct(
+            device uint* output [[buffer(0)]]) {{
+            {source_type} source = 1;
+            {statement}
+            output[0] = uint(source);
+        }}
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        crosstl.translate(
+            str(metal_source),
+            backend="opengl",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == reason
+    assert diagnostic.target_type == "View"
+    assert diagnostic.address_space == "thread"
 
 
 def test_glsl_metal_private_struct_byte_view_reads_packed_words(tmp_path):
@@ -21359,6 +21585,37 @@ def test_glsl_software_subgroup_rejects_potentially_divergent_calls(statement):
         "WaveActiveMin",
         "WaveShuffleDown",
     }
+
+
+def test_glsl_software_subgroup_accepts_local_const_bool_static_if(tmp_path):
+    code = """
+    shader GLSLSoftwareSubgroupLocalConstBool {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                const bool useScale = (32 == 32);
+                float value = float(gl_LocalInvocationID.x);
+                if (useScale) {
+                    value = WaveActiveMax(value);
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "const bool useScale = (32 == 32);" in generated
+    assert "if (useScale)" not in generated
+    assert "value = crossglSoftwareSubgroupMaxFloat(value);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_local_const_bool_static_if",
+        validate_spirv=True,
+    )
 
 
 def test_glsl_software_subgroup_accepts_static_if_and_uniform_constant_loop(
@@ -41065,3 +41322,101 @@ def test_opengl_boolean_min_max_reports_unrepresentable_operand_shapes():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_glsl_isfinite_uses_exact_exponent_mask_and_evaluates_once(tmp_path):
+    source = """
+    shader ExactIsFinite {
+        RWStructuredBuffer<uvec4> output_bits @ binding(0);
+
+        float next_value(float value) {
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                vec4 values = asfloat(uvec4(
+                    0u, 2139095040u, 2143289345u, 2147483648u
+                ));
+                bvec4 finite = metal_u3a_u3aisfinite(values);
+                bool scalar = isfinite(next_value(values.x));
+                if (scalar && finite.x && !finite.y && !finite.z && finite.w) {
+                    output_bits[0] = uvec4(1u);
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+
+    assert (
+        "bvec4 finite = notEqual((floatBitsToUint(values) & "
+        "uvec4(0x7f800000u)), uvec4(0x7f800000u));"
+    ) in generated
+    assert (
+        "bool scalar = ((floatBitsToUint(next_value(values.x)) & "
+        "0x7f800000u) != 0x7f800000u);"
+    ) in generated
+    assert generated.count("next_value(values.x)") == 1
+    assert "isfinite(" not in generated
+    assert "metal_u3a_u3aisfinite(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "exact_isfinite",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_isfinite_rejects_non_float32_operand_with_metadata():
+    source = """
+    shader InvalidIsFinite {
+        bool invalid(double value) {
+            return isfinite(value);
+        }
+    }
+    """
+    ast = crosstl.translator.parse(source)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(OpenGLIsFiniteError) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-isfinite-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.isfinite-lowering",)
+    assert diagnostic.operation == "isfinite"
+    assert diagnostic.operand_type == "double"
+    assert diagnostic.target_profile == "glsl-460"
+    assert diagnostic.reason == "unsupported-operand-type"
+    assert diagnostic.source_location == source_location
+
+
+def test_glsl_user_defined_qualified_isfinite_remains_an_ordinary_call():
+    source = """
+    shader UserIsFinite {
+        bool metal_u3a_u3aisfinite(float value) {
+            return value > 0.0;
+        }
+
+        bool apply(float value) {
+            return metal_u3a_u3aisfinite(value);
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "bool metal_u3a_u3aisfinite(float value)" in generated
+    assert "return metal_u3a_u3aisfinite(value);" in generated
+    assert "0x7f800000u" not in generated

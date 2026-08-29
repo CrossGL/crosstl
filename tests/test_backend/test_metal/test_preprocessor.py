@@ -5116,6 +5116,120 @@ def test_preprocessor_keeps_unlowered_member_local_call_operator_with_owner_type
     assert "uint Outer__ordinary(thread Outer& self)" in output
 
 
+def test_preprocessor_lowers_readonly_conversion_operator_chain():
+    code = """
+    struct ByteView {
+        operator float16_t() thread {
+            float16_t converted = float16_t(bits);
+            return (bits ? -converted : converted);
+        }
+
+        operator float() thread {
+            return static_cast<float>(this->operator float16_t());
+        }
+
+        uint8_t bits;
+    };
+
+    float decode(uint8_t x) {
+        return float(*(thread ByteView*)(&x));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "operator float" not in output
+    assert (
+        "float16_t ByteView__operator_float16_t("
+        "thread const ByteView& self)" in output
+    )
+    assert "float16_t converted = float16_t(self.bits);" in output
+    assert "return (self.bits ? -converted : converted);" in output
+    assert "float ByteView__operator_float(thread const ByteView& self)" in output
+    assert "return static_cast<float>(ByteView__operator_float16_t(self));" in output
+    assert "return ByteView__operator_float(*(thread ByteView*)(&x));" in output
+
+
+def test_preprocessor_rewrites_readonly_conditional_alias_temporary_conversion():
+    code = """
+    struct Scale {
+        operator float() thread {
+            uint32_t out = bits == 0 ? 0x400000 : (bits << 23);
+            return as_type<float>(out);
+        }
+        uint32_t bits;
+    };
+
+    float decode(float x) {
+        constexpr bool use_scale = 32 == 32;
+        using ScaleType = metal::conditional_t<use_scale, Scale, Scale>;
+        return float(ScaleType(x));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float Scale__operator_float(thread const Scale& self)" in output
+    assert "self.bits == 0" in output
+    assert "return Scale__operator_float(ScaleType(x));" in output
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "bits += 1; return float(bits);",
+        "mutate(bits); return float(bits);",
+        "touch(); return float(bits);",
+        "thread uint& alias = bits; alias += 1; return float(alias);",
+    ],
+)
+def test_preprocessor_rejects_mutating_conversion_on_temporary(body):
+    code = f"""
+    void mutate(thread uint& value);
+
+    struct Value {{
+        void touch() thread;
+        operator float() thread {{ {body} }}
+        uint bits;
+    }};
+
+    float decode(uint x) {{
+        return float(Value(x));
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as exc_info:
+        MetalPreprocessor().preprocess(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == ("conversion-temporary-receiver-mutation-unsupported")
+    assert diagnostic.missing_capabilities == ("metal.conversion-operator-temporary",)
+    assert diagnostic.struct_name == "Value"
+
+
+def test_preprocessor_preserves_mutating_conversion_on_named_receiver():
+    code = """
+    struct Value {
+        operator float() thread {
+            bits += 1;
+            return float(bits);
+        }
+        uint bits;
+    };
+
+    float decode() {
+        Value value;
+        return float(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float Value__operator_float(thread Value& self)" in output
+    assert "self.bits += 1;" in output
+    assert "return Value__operator_float(value);" in output
+
+
 def test_preprocessor_lowers_materialized_template_functor():
     # After the struct-template materializer produces a concrete `Sum_float`, the
     # member-function lowering pass lowers its `operator()` and rewrites the call.

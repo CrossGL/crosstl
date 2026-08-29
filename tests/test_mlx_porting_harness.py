@@ -12383,6 +12383,283 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
     assert "does not replace the historical 224-entry aggregate gates" in readme
 
 
+def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["fp_quantized_mxfp4_native_runtime_status"]
+    assert status["status"] == (
+        "translated-packaged-and-cross-target-native-runtime-required"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/fp_quantized.metal"
+    assert status["source_sha256"] == (
+        "ef4ba099710a63a0b5d27d3e5ce69a8528bee8f1757805aa606c8d8e43de18d4"
+    )
+    assert status["source_size_bytes"] == 9700
+    assert status["selected_entry_point"] == (
+        "mxfp4_quantize_dequantize_float_gs_32_b_4_hgs_false"
+    )
+    assert status["selected_workload"] == (
+        "mxfp4-quantize-dequantize-float32-32-no-global-scale"
+    )
+
+    dispatch = status["dispatch_contract"]
+    assert dispatch["path"] == (
+        "demos/integrations/mlx/contracts/" "fp_quantized.native-loader.dispatch.json"
+    )
+    assert dispatch["content_identity"] == (
+        "sha256:5256e32b364ac303a6873f28b5ac3e9a1a811ac5c38bc41a977bce9191a025ed"
+    )
+    assert dispatch["workload_count"] == 1
+    assert dispatch["host_source"] == "mlx/backend/metal/quantized.cpp"
+    assert dispatch["implementation_source"] == (
+        "mlx/backend/metal/kernels/fp_quantized.h"
+    )
+    assert dispatch["kernel_source"] == status["source"]
+    assert dispatch["subgroup_width"] == 32
+    variant = dispatch["variants"][status["selected_workload"]]
+    assert variant == {
+        "artifact_id": (
+            "sha256:bde1bfa31c116a52a1dc3b6e546dfa2ee43dc968719393ba04f629b4e2d95319"
+        ),
+        "dispatch_variant_id": (
+            "sha256:ebd6ab3f40f5839764f592943180ba64f11a66f10a5561b9468019032c04df8a"
+        ),
+        "entry_point": status["selected_entry_point"],
+        "inputs": {
+            "bits": 4,
+            "dtype": "float32",
+            "elementCount": 32,
+            "groupSize": 32,
+            "hasGlobalScale": False,
+            "isMxfp4": True,
+            "rowContiguous": True,
+        },
+        "workgroup_size": [32, 1, 1],
+        "dispatch_workgroup_count": [1, 1, 1],
+        "specialization_constants": {},
+    }
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 1, "opengl": 1},
+        "translated_count_by_target": {"directx": 1, "opengl": 1},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+        "opengl_index_range_assertion_count": 1,
+    }
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 1,
+        "unsupported_specialization_count": 0,
+        "reachable_specialization_count": 9,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 25492,
+        "selected_parameters": {
+            "T": "float",
+            "bits": "4",
+            "group_size": "32",
+            "has_global_scale": "false",
+        },
+    }
+    assert status["artifacts"] == {
+        "directx": {
+            "target_entry_point": "CSMain",
+            "sha256": (
+                "3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361"
+            ),
+            "size_bytes": 7809,
+            "workgroup_size": [32, 1, 1],
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "compiler": "dxc",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types", "-WX"],
+            "compiled_artifact_size_bytes": 4644,
+            "compiler_validation_status": "passed",
+        },
+        "opengl": {
+            "target_entry_point": "main",
+            "sha256": (
+                "44b4a07a94e11ffd6da4e82db285dee1b5796387c85dca3e49d6808bfd5b4c7c"
+            ),
+            "size_bytes": 9545,
+            "workgroup_size": [32, 1, 1],
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "compiler": "glslangValidator",
+            "compiler_target": "OpenGL/SPIR-V 1.3",
+            "validator": "spirv-val",
+            "compiled_artifact_size_bytes": 10408,
+            "control_barrier_instruction_count": 3,
+            "group_non_uniform_instruction_count": 0,
+            "compiler_validation_status": "passed",
+        },
+    }
+    assert status["semantic_contracts"] == {
+        "scale_constructor": "fp8_e8m0 source constructor factory",
+        "scale_conversion": "selected sibling float conversion operator",
+        "finite_test": "single-evaluation IEEE-754 float32 exponent mask",
+        "sign_test": "exact IEEE-754 float32 sign bit",
+        "private_scalar_struct_view": "read-only exact one-member layout",
+        "global_scale_read": "statically-eliminated-for-has_global_scale-false",
+    }
+    assert status["software_subgroup"] == {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "logical_subgroup_count": 1,
+        "shared_float_element_count": 32,
+        "activation": "explicit-target-scoped",
+        "selected_kernel_operations": ["WaveActiveMax(float)"],
+        "control_barrier_instruction_count": 3,
+        "hardware_subgroup_extensions_emitted": False,
+        "group_non_uniform_instruction_count": 0,
+    }
+    assert status["index_range_assertions"] == [
+        {
+            "source": status["source"],
+            "expression": "index",
+            "minimum": 0,
+            "maximum": 31,
+        }
+    ]
+    assert status["runtime_package"] == {
+        "artifact_count_per_target": 1,
+        "ready_load_unit_count_per_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count_by_target": {"directx": 4, "opengl": 3},
+        "data_resources": [
+            {
+                "binding": 0,
+                "role": "input",
+                "dtype": "float32",
+                "access": "read",
+            },
+            {
+                "binding": 1,
+                "role": "global_scale_inert_placeholder",
+                "dtype": "float32",
+                "access": "read",
+            },
+            {
+                "binding": 2,
+                "role": "output",
+                "dtype": "float32",
+                "access": "read_write",
+            },
+        ],
+        "directx_binding_namespaces": {
+            "dispatch_info": "b0",
+            "input": "t0",
+            "global_scale": "t1",
+            "output": "u2",
+        },
+        "host_global_scale_binding": "omitted-for-selected-specialization",
+        "loader_global_scale_allocation": (
+            "inert-allocation-required-by-reflected-generic-loader"
+        ),
+    }
+    values = [
+        -6.0,
+        -4.0,
+        -3.0,
+        -2.0,
+        -1.5,
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0,
+        1.5,
+        2.0,
+        3.0,
+        4.0,
+        6.0,
+        6.0,
+        4.0,
+        3.0,
+        2.0,
+        1.5,
+        1.0,
+        0.5,
+        0.0,
+        -0.5,
+        -1.0,
+        -1.5,
+        -2.0,
+        -3.0,
+        -4.0,
+        -6.0,
+        0.0,
+        0.0,
+    ]
+    assert status["workload"] == {
+        "dtype": "float32",
+        "shape": [32],
+        "input_values": values,
+        "maximum_absolute_value": 6.0,
+        "scale_divisor": 6.0,
+        "mx_scale": 1.0,
+        "reference": "exact-FP4-E2M1-representable-roundtrip",
+        "expected_output": "input_values",
+        "absolute_tolerance": 0.0,
+        "relative_tolerance": 0.0,
+    }
+    assert status["native_runtime"] == {
+        "directx": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_fp_quantized_native_loader.py::"
+                "test_current_mlx_mxfp4_executes_through_directx_native_loader"
+            ),
+        },
+        "opengl": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-headless-egl-software-opengl",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_fp_quantized_native_loader.py::"
+                "test_current_mlx_mxfp4_executes_with_opengl_software_subgroups"
+            ),
+        },
+    }
+    assert status["metal_roundtrip_boundary"] == {
+        "status": "outside-selected-native-loader-proof",
+        "aggregate_native_baseline": "separate",
+        "selected_entry_compiler_validation_included": False,
+    }
+    assert status["remaining_scope"] == {
+        "other_fp_quantized_entries_included": False,
+        "global_scale_variants_included": False,
+        "other_group_sizes_included": False,
+        "other_bit_widths_included": False,
+        "other_dtypes_included": False,
+        "mlx_host_runtime_integration_included": False,
+        "full_mlx_test_suite_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_required"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "contracts/fp_quantized.native-loader.dispatch.json" in readme
+    assert status["selected_entry_point"] in readme
+    assert status["artifacts"]["directx"]["sha256"] in readme
+    assert status["artifacts"]["opengl"]["sha256"] in readme
+    assert "exact FP4 E2M1 values" in readme
+    assert "does not cover the remaining `fp_quantized` entries" in readme
+
+
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):
     module = _load_harness()
     mlx_root = tmp_path / "mlx"

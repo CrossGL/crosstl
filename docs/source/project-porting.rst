@@ -1504,6 +1504,40 @@ wide, batched, axpby, and remaining GEMV entries, MLX host redirection, selected
 Metal compilation, and the full MLX suite remain outside the claim. It does
 not change the separate historical 224-entry aggregate compiler gates.
 
+The same current pin has a bounded MXFP4 quantize/dequantize contract for
+``mxfp4_quantize_dequantize_float_gs_32_b_4_hgs_false``. Host provenance from
+``quantized.cpp`` and ``fp_quantized.h`` fixes float32 input, group size 32,
+four payload bits, no global scale, workgroup ``[32, 1, 1]``, and one dispatched
+workgroup. Entry-scoped translation materializes only that specialization. The
+7,809-byte HLSL has SHA-256
+``3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361`` and
+passes DXC under ``cs_6_6``, ``-enable-16bit-types``, and warnings as errors.
+The 9,545-byte explicit-software-subgroup GLSL has SHA-256
+``44b4a07a94e11ffd6da4e82db285dee1b5796387c85dca3e49d6808bfd5b4c7c``;
+``glslangValidator`` and ``spirv-val`` accept its three-barrier SPIR-V, which
+contains no group-nonuniform instruction.
+
+Exact scale semantics require the source ``fp8_e8m0(float)`` constructor
+factory before conversion back to float. Qualified ``metal::round`` maps to the
+portable math intrinsic, while OpenGL ``metal::isfinite`` and ``signbit`` use
+single-evaluation IEEE-754 bit tests. Read-only private scalar-to-struct views
+are accepted only for exact one-member layouts. Unsupported predicate types,
+receiver mutation, writes, and unresolved constructor branches remain
+fail-closed.
+
+The reflected data ABI is float32 input at binding 0, an inert declared
+``global_scale`` input at binding 1, and float32 read-write output at binding 2.
+DirectX also uses ``b0`` for generated dispatch input, legally distinct from
+``t0`` in the HLSL register namespaces. The real host omits ``global_scale``
+for this specialization; the generic loader allocates it because reflection
+retains the declaration, and the selected code contains no read. A 32-element
+workload uses only exactly representable FP4 E2M1 values with maximum magnitude
+6. The scale divisor is 6 and the MX scale is exactly 1, so Windows WARP and
+Linux Mesa required-mode tests demand bit-exact float32 readback at zero
+tolerance. Other quantized entries and parameter families, MLX host redirection,
+selected-entry Metal compilation, and full-suite parity remain outside this
+bounded proof.
+
 At current pinned MLX commit
 ``846d176227a0ac13d2667e58d2bb68b322109ab0``, a bounded arg-reduce proof
 selects ``argmin_float32`` and ``argmax_float32`` for two axis-32 rows. The

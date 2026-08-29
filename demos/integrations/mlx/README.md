@@ -918,6 +918,69 @@ entries, MLX host redirection, the full MLX test suite, and selected-entry Metal
 compiler validation remain outside the claim. The separate native Metal
 aggregate baseline continues to cover the existing round-trip boundary.
 
+The checked
+[`contracts/fp_quantized.native-loader.dispatch.json`](contracts/fp_quantized.native-loader.dispatch.json)
+contract selects current-pinned
+`mxfp4_quantize_dequantize_float_gs_32_b_4_hgs_false` from the 9,700-byte
+`fp_quantized.metal` source with SHA-256
+`ef4ba099710a63a0b5d27d3e5ce69a8528bee8f1757805aa606c8d8e43de18d4`.
+It records the exact host branch from `quantized.cpp` and implementation in
+`fp_quantized.h`: float32 MXFP4, group size 32, four payload bits, row-contiguous
+layout, and no global scale. The host formula assigns one value per thread,
+selects workgroup `[32, 1, 1]`, and dispatches one workgroup. The normalized
+contract identity is
+`sha256:5256e32b364ac303a6873f28b5ac3e9a1a811ac5c38bc41a977bce9191a025ed`;
+its single variant and artifact identities are
+`sha256:ebd6ab3f40f5839764f592943180ba64f11a66f10a5561b9468019032c04df8a`
+and
+`sha256:bde1bfa31c116a52a1dc3b6e546dfa2ee43dc968719393ba04f629b4e2d95319`.
+
+Entry-scoped translation materializes only the selected specialization with
+`T=float`, `group_size=32`, `bits=4`, and `has_global_scale=false`. The
+7,809-byte HLSL has SHA-256
+`3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361`,
+retains `[numthreads(32, 1, 1)]` and `[WaveSize(32)]`, and passes DXC under
+`cs_6_6`, `-enable-16bit-types`, and warnings as errors. Its compiled DXIL is
+4,644 bytes. The 9,545-byte GLSL has SHA-256
+`44b4a07a94e11ffd6da4e82db285dee1b5796387c85dca3e49d6808bfd5b4c7c`,
+uses one explicit 32-lane software subgroup for `WaveActiveMax(float)`, and
+passes `glslangValidator` and `spirv-val`. Its 10,408-byte SPIR-V has three
+control barriers, no group-nonuniform instruction, and local size
+`[32, 1, 1]`.
+
+The scale conversion invokes the source `fp8_e8m0(float)` constructor factory
+before the selected sibling float conversion operator; aggregate field
+initialization would encode the scale incorrectly. Qualified `metal::round`
+lowers to the portable floating intrinsic. OpenGL lowers `metal::isfinite` to
+a single-evaluation IEEE-754 float32 exponent-mask test and `signbit` to the
+exact sign bit. The private `fp8_e4m3` scalar view is admitted only as a
+read-only, exact one-member-layout projection. Unresolved constructor branches,
+unsupported predicate types, writes, and receiver mutation remain fail-closed.
+
+The reflected data ABI is float32 input at binding 0, the retained but
+statically unread `global_scale` input at binding 1, and float32 read-write
+output at binding 2. DirectX additionally reflects generated dispatch input at
+`b0`; HLSL register namespaces make this legal beside input `t0`, while
+`global_scale` uses `t1` and output uses `u2`. The real no-global-scale host
+branch omits buffer 1. The generic reflected-resource loader instead supplies
+one inert allocation because it cannot omit a declared resource, and the test
+checks that the selected specialization contains no read of it.
+
+The numerical request contains 32 exact FP4 E2M1 values from -6 through 6.
+Its maximum absolute value and scale divisor are both exactly 6, so the encoded
+MX scale is exactly 1 and quantize/dequantize must return every input bit-exactly
+at zero absolute and relative tolerance. Windows CI requires that request
+through Direct3D 12 WARP; Linux CI requires the software-subgroup artifact
+through Mesa headless EGL. Both paths build the runtime artifact manifest,
+package, loader manifest, reflected ABI descriptor, and one-workgroup dispatch
+request before native execution.
+
+This is one bounded float32 MXFP4/no-global-scale workload. It does not cover
+the remaining `fp_quantized` entries, global-scale variants, other group sizes,
+bit widths or dtypes, MLX host redirection, selected-entry Metal compilation,
+or the full MLX test suite. The separate native Metal aggregate baseline remains
+the round-trip boundary.
+
 Owner-dependent `constexpr` helper calls in quantized struct static members now
 resolve for the selected pinned replay, completing CrossGL/crosstl#1672.
 CrossGL/crosstl#1491 tracks remaining qualified-static-constant materialization

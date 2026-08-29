@@ -275,7 +275,7 @@ def _finalize_reflection(
                 severity="warning",
             )
         )
-    current_diagnostics.extend(_binding_diagnostics(resources))
+    current_diagnostics.extend(_binding_diagnostics(resources, parser=parser))
     return host_interface_record(
         status=_status_for_reflection(
             entry_points,
@@ -297,9 +297,11 @@ def _finalize_reflection(
 
 def _binding_diagnostics(
     resources: Sequence[Mapping[str, Any]],
+    *,
+    parser: str,
 ) -> list[ReflectionDiagnostic]:
     diagnostics = []
-    seen: dict[tuple[Any, Any], tuple[str, tuple[str, ...]]] = {}
+    seen: dict[tuple[Any, Any, Any], tuple[str, tuple[str, ...]]] = {}
     for resource in resources:
         resource_name = str(resource.get("name") or "<unnamed>")
         binding = resource.get("binding")
@@ -313,7 +315,12 @@ def _binding_diagnostics(
                 )
             )
             continue
-        coordinate = (0 if set_number is None else set_number, binding)
+        binding_namespace = _reflection_binding_namespace(resource, parser=parser)
+        coordinate = (
+            binding_namespace,
+            0 if set_number is None else set_number,
+            binding,
+        )
         owners = _resource_entry_points(resource)
         if coordinate in seen:
             conflicting_resource, conflicting_owners = seen[coordinate]
@@ -323,21 +330,43 @@ def _binding_diagnostics(
                 and set(owners).isdisjoint(conflicting_owners)
             ):
                 continue
+            details = {
+                "resource": resource_name,
+                "conflictingResource": conflicting_resource,
+                "set": coordinate[1],
+                "binding": coordinate[2],
+            }
+            if binding_namespace is not None:
+                details["bindingNamespace"] = binding_namespace
             diagnostics.append(
                 ReflectionDiagnostic(
                     REFLECTION_AMBIGUOUS_BINDING,
                     "Multiple reflected resources use the same binding coordinate.",
-                    details={
-                        "resource": resource_name,
-                        "conflictingResource": conflicting_resource,
-                        "set": coordinate[0],
-                        "binding": coordinate[1],
-                    },
+                    details=details,
                 )
             )
         else:
             seen[coordinate] = (resource_name, owners)
     return diagnostics
+
+
+def _reflection_binding_namespace(
+    resource: Mapping[str, Any],
+    *,
+    parser: str,
+) -> str | None:
+    if parser != "directx-reflection":
+        return None
+    kind = str(resource.get("kind") or "").lower()
+    type_name = str(resource.get("type") or "").lower()
+    access = str(resource.get("access") or "").lower()
+    if kind == "constant-buffer" or type_name.startswith("constantbuffer"):
+        return "cbv"
+    if kind == "sampler" or "sampler" in type_name:
+        return "sampler"
+    if access == "read_write" or type_name.startswith("rw"):
+        return "uav"
+    return "srv"
 
 
 def _resource_entry_points(resource: Mapping[str, Any]) -> tuple[str, ...]:
