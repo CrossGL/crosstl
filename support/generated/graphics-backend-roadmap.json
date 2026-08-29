@@ -1632,9 +1632,11 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_shuffle_and_fill_up_lowers_scalar_vector_and_bool",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_match_and_multiprefix_forms_lower_to_helpers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_lowers_affine_operation_set_without_khr_subgroups",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_lowers_multiple_subgroups_and_masked_sum",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang"
           ],
-          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, shuffle-and-fill, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations, deterministic arity/type diagnostics, and glslang validation coverage.",
+          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, shuffle-and-fill, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations, deterministic arity/type diagnostics, and glslang validation coverage. Explicit width-32 software mode additionally lowers supported scalar sum, minimum, maximum, and shuffle-down operations across bounded one- or multi-subgroup workgroups with subgroup-partitioned shared scratch, uniform barriers, and a narrow additive-identity-masked divergent sum contract.",
           "status": "supported"
         }
       }

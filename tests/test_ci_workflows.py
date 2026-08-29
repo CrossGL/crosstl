@@ -3567,6 +3567,37 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
         "Checkout current MLX runtime proof corpus",
     )
 
+    software_step_name = "Prove pinned MLX dot OpenGL software-subgroup execution"
+    software_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        software_step_name,
+    )
+    assert "if: runner.os == 'Linux'" in software_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in software_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_DOT_OPENGL_NATIVE_LOADER: "1"' in software_step
+    assert "EGL_PLATFORM: surfaceless" in software_step
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in software_step
+    assert "MESA_LOADER_DRIVER_OVERRIDE: llvmpipe" in software_step
+    assert "PYOPENGL_PLATFORM: egl" in software_step
+    assert (
+        f"{test_path}::test_pinned_mlx_dot_executes_with_opengl_software_subgroups"
+        in software_step
+    )
+    assert "-n auto" in software_step
+    assert "-k" not in software_step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        software_step_name,
+        "Install Linux runtime dependencies",
+    )
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        software_step_name,
+        "Checkout current MLX runtime proof corpus",
+    )
+
 
 def test_mlx_project_porting_workflow_runs_affine_quantize_opengl_proof():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")

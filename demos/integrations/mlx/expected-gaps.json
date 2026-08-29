@@ -718,7 +718,7 @@
     "runtime_parity_claimed": false
   },
   "dot_native_runtime_status": {
-    "status": "translated-packaged-directx-executed-and-opengl-validated",
+    "status": "translated-packaged-and-cross-target-executed",
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
     "source": "mlx/backend/metal/kernels/dot.metal",
     "source_sha256": "97bcad13d09c3d5fed87482a0bb9719d6eeff9b21d364967cd6aec5b695b3462",
@@ -763,7 +763,33 @@
           "status": "required-on-ci",
           "test": "tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_translates_to_guarded_opengl_artifact"
         },
-        "native_runtime_executed": false
+        "native_runtime_executed": false,
+        "software_runtime_artifact": {
+          "target_entry_point": "main",
+          "sha256": "a3c1958daa680419ce3f38559de1a6a2319a7abdac556a049632194c88223a32",
+          "size_bytes": 6275,
+          "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+          "software_subgroup_width": 32,
+          "software_subgroup_count": 16,
+          "shared_scratch_element_count": 512,
+          "hardware_subgroup_extension_required": false,
+          "toolchain_validation": {
+            "platform": "ubuntu-latest",
+            "compiler": "glslangValidator",
+            "validator": "spirv-val",
+            "spirv_target_environment": "spv1.3",
+            "control_barrier_count": 4,
+            "group_non_uniform_instruction_count": 0,
+            "status": "required-on-ci"
+          },
+          "native_runtime": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-llvmpipe-opengl",
+            "adapter": "opengl-native-runtime",
+            "status": "required-on-ci",
+            "test": "tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_executes_with_opengl_software_subgroups"
+          }
+        }
       },
       "metal": {
         "target_entry_point": "dot_product_float32_it32_tg512_sg16",
@@ -793,6 +819,7 @@
     "runtime_integration_included": true,
     "metal_roundtrip_included": false,
     "selected_workload_numerical_parity_verified": true,
+    "cross_target_selected_workload_numerical_parity_verified": true,
     "full_mlx_test_suite_included": false,
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false

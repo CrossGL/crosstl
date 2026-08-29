@@ -1690,10 +1690,7 @@ class GLSLCodeGen:
             "gl_WorkGroupID",
             "gl_NumWorkGroups",
             "gl_WorkGroupSize",
-            # Explicit 32-lane software mode has exactly one subgroup. These
-            # values are therefore invocation-uniform after builtin lowering.
             "gl_NumSubgroups",
-            "gl_SubgroupID",
             "gl_SubgroupSize",
         }
     )
@@ -2187,6 +2184,10 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
         self.glsl_software_subgroup_uniform_for_node_ids = set()
+        self.glsl_software_subgroup_workgroup_size = None
+        self.glsl_software_subgroup_workgroup_invocation_count = None
+        self.glsl_software_subgroup_count = None
+        self.glsl_software_subgroup_masked_if_plans = {}
         self.glsl_cooperative_matrix_fragment_contracts = {}
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
         self.required_glsl_cooperative_matrix_helpers = set()
@@ -3757,12 +3758,103 @@ class GLSLCodeGen:
 
         self.glsl_software_subgroup_helper_function_names = helper_names
 
+    def glsl_software_subgroup_direct_operation(self, expression):
+        if isinstance(expression, WaveOpNode):
+            operation = expression.operation
+            arguments = list(expression.arguments or [])
+        elif isinstance(expression, FunctionCallNode):
+            operation = self.glsl_wave_operation_name(
+                self.function_call_name(expression)
+            )
+            arguments = list(
+                getattr(expression, "arguments", getattr(expression, "args", [])) or []
+            )
+        else:
+            return None
+        if operation not in self.GLSL_WAVE_INTRINSIC_ARITIES:
+            return None
+        return operation, arguments, expression
+
+    def glsl_software_subgroup_masked_if_plan(self, node):
+        if (
+            getattr(node, "else_if_conditions", None)
+            or getattr(node, "else_if_bodies", None)
+            or getattr(node, "else_body", None) is not None
+        ):
+            return None
+        condition = getattr(node, "condition", getattr(node, "if_condition", None))
+        if not self.glsl_side_effect_free_expression(condition):
+            return None
+        records = self.glsl_software_subgroup_operation_records(node)
+        if len(records) != 1 or records[0][0] != "WaveActiveSum":
+            return None
+        statements = self.glsl_software_subgroup_statement_list(node.if_body)
+        operation_node = records[0][1]
+        for index, statement in enumerate(statements):
+            candidate = statement
+            if isinstance(candidate, ExpressionStatementNode):
+                candidate = getattr(candidate, "expression", None)
+            if not isinstance(candidate, AssignmentNode):
+                continue
+            operator = self.map_operator(
+                getattr(candidate, "operator", getattr(candidate, "op", "="))
+            )
+            if operator != "=":
+                continue
+            value = getattr(candidate, "value", getattr(candidate, "right", None))
+            direct = self.glsl_software_subgroup_direct_operation(value)
+            if (
+                direct is None
+                or id(direct[2]) != id(operation_node)
+                or len(direct[1]) != 1
+            ):
+                continue
+            target = getattr(candidate, "target", getattr(candidate, "left", None))
+            if not self.expression_name(
+                target
+            ) or not self.glsl_side_effect_free_expression(target):
+                return None
+            prefix = statements[:index]
+            if any(
+                isinstance(
+                    child,
+                    (VariableNode, ArrayNode, BreakNode, ContinueNode, ReturnNode),
+                )
+                for item in prefix
+                for child in self.walk_ast(item)
+            ):
+                return None
+            if any(
+                isinstance(child, (BreakNode, ContinueNode, ReturnNode))
+                for child in self.walk_ast(node.if_body)
+            ):
+                return None
+            return {"statementIndex": index}
+        return None
+
+    def prepare_glsl_software_subgroup_masked_if_plans(self, entry_function):
+        self.glsl_software_subgroup_masked_if_plans = {}
+        for statement in self.glsl_software_subgroup_statement_list(
+            getattr(entry_function, "body", None)
+        ):
+            if not isinstance(statement, IfNode):
+                continue
+            if not self.glsl_software_subgroup_operation_records(statement):
+                continue
+            plan = self.glsl_software_subgroup_masked_if_plan(statement)
+            if plan is not None:
+                self.glsl_software_subgroup_masked_if_plans[id(statement)] = plan
+
     def validate_glsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
         self.glsl_software_subgroup_helper_function_names = set()
         self.glsl_software_subgroup_uniform_for_node_ids = set()
+        self.glsl_software_subgroup_workgroup_size = None
+        self.glsl_software_subgroup_workgroup_invocation_count = None
+        self.glsl_software_subgroup_count = None
+        self.glsl_software_subgroup_masked_if_plans = {}
         if self.software_subgroup_width is None:
             return
 
@@ -3787,15 +3879,34 @@ class GLSLCodeGen:
                 concrete_workgroup_size = []
                 break
             concrete_workgroup_size.append(int(text))
-        expected_workgroup_size = (self.software_subgroup_width, 1, 1)
-        if tuple(concrete_workgroup_size) != expected_workgroup_size:
+        concrete_workgroup_size = tuple(concrete_workgroup_size)
+        invocation_count = (
+            concrete_workgroup_size[0]
+            * concrete_workgroup_size[1]
+            * concrete_workgroup_size[2]
+            if len(concrete_workgroup_size) == 3
+            else 0
+        )
+        valid_workgroup_layout = (
+            len(concrete_workgroup_size) == 3
+            and all(value > 0 for value in concrete_workgroup_size)
+            and concrete_workgroup_size[0] % self.software_subgroup_width == 0
+            and invocation_count <= 1024
+        )
+        if not valid_workgroup_layout:
             raise self.glsl_software_subgroup_error(
-                "OpenGL software subgroup lowering requires a concrete local size "
-                f"of {expected_workgroup_size}",
+                "OpenGL software subgroup lowering requires concrete positive "
+                "local dimensions, local_size_x divisible by the software "
+                "subgroup width, and at most 1024 invocations",
                 workgroup_size=raw_workgroup_size,
                 reason="workgroup-size-mismatch",
                 source_location=getattr(entry_function, "source_location", None),
             )
+        self.glsl_software_subgroup_workgroup_size = concrete_workgroup_size
+        self.glsl_software_subgroup_workgroup_invocation_count = invocation_count
+        self.glsl_software_subgroup_count = (
+            invocation_count // self.software_subgroup_width
+        )
 
         if any(
             self.glsl_wave_size_attribute(attribute)
@@ -3829,6 +3940,7 @@ class GLSLCodeGen:
                     source_location=getattr(node, "source_location", None),
                 )
 
+        self.prepare_glsl_software_subgroup_masked_if_plans(entry_function)
         entry_records = self.glsl_software_subgroup_operation_records(
             getattr(entry_function, "body", None)
         )
@@ -3889,7 +4001,10 @@ class GLSLCodeGen:
         entry_function,
         target_stage=None,
     ):
-        names = set(self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS)
+        uniform_builtins = set(self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS)
+        if self.glsl_software_subgroup_count == 1:
+            uniform_builtins.add("gl_SubgroupID")
+        names = set(uniform_builtins)
         for node in (
             *(getattr(ast, "constants", []) or []),
             *(getattr(ast, "global_variables", []) or []),
@@ -3924,8 +4039,7 @@ class GLSLCodeGen:
             semantic = self.semantic_from_node(parameter)
             mapped_semantic = self.map_semantic(semantic) if semantic else None
             if qualifiers & {"const", "constant", "uniform"} or (
-                mapped_semantic
-                in self.GLSL_SOFTWARE_SUBGROUP_WORKGROUP_UNIFORM_BUILTINS
+                mapped_semantic in uniform_builtins
             ):
                 names.add(name)
                 if mapped_semantic:
@@ -4137,7 +4251,10 @@ class GLSLCodeGen:
         raise self.glsl_software_subgroup_error(
             "OpenGL software subgroup barriers require statically uniform "
             "control flow",
-            workgroup_size=(self.software_subgroup_width, 1, 1),
+            workgroup_size=(
+                self.glsl_software_subgroup_workgroup_size
+                or (self.software_subgroup_width, 1, 1)
+            ),
             operation=operation,
             reason="potentially-divergent-control-flow",
             source_location=getattr(node, "source_location", None),
@@ -5253,6 +5370,10 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
         self.glsl_software_subgroup_uniform_for_node_ids = set()
+        self.glsl_software_subgroup_workgroup_size = None
+        self.glsl_software_subgroup_workgroup_invocation_count = None
+        self.glsl_software_subgroup_count = None
+        self.glsl_software_subgroup_masked_if_plans = {}
         self.current_glsl_disabled_extensions = set()
         self.glsl_cooperative_matrix_fragment_contracts = {}
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
@@ -23673,6 +23794,9 @@ complex64_t crossgl_complex64_mod_assign(
             code += f"{indent_str}}}\n"
             return code
 
+        if id(node) in self.glsl_software_subgroup_masked_if_plans:
+            return self.generate_glsl_software_subgroup_masked_if(node, indent)
+
         self.reject_glsl_software_subgroup_control_flow(node)
         condition = self.generate_glsl_boolean_context(
             node.condition if hasattr(node, "condition") else node.if_condition
@@ -25891,6 +26015,10 @@ complex64_t crossgl_complex64_mod_assign(
         if not self.required_glsl_software_subgroup_helpers:
             return ""
 
+        invocation_count = (
+            self.glsl_software_subgroup_workgroup_invocation_count
+            or self.software_subgroup_width
+        )
         value_types = sorted(
             {
                 value_type
@@ -25905,7 +26033,7 @@ complex64_t crossgl_complex64_mod_assign(
         code = ""
         for value_type in value_types:
             scratch = self.glsl_software_subgroup_scratch_name(value_type)
-            code += f"shared {value_type} {scratch}[{self.software_subgroup_width}];\n"
+            code += f"shared {value_type} {scratch}[{invocation_count}];\n"
         code += "\n"
 
         operation_order = {
@@ -25923,6 +26051,27 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             helper = self.glsl_software_subgroup_helper_name(operation, value_type)
             scratch = self.glsl_software_subgroup_scratch_name(value_type)
+            if invocation_count == self.software_subgroup_width:
+                lane_setup = "    uint lane = gl_LocalInvocationIndex;\n"
+                left = f"{scratch}[lane]"
+                right = f"{scratch}[lane + stride]"
+                result_index = "0u"
+                shuffle_source = "lane + delta"
+                shuffle_limit = f"{self.software_subgroup_width}u"
+            else:
+                lane_setup = (
+                    "    uint invocation = gl_LocalInvocationIndex;\n"
+                    "    uint lane = invocation % "
+                    f"{self.GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO};\n"
+                    "    uint subgroupBase = invocation - lane;\n"
+                )
+                left = f"{scratch}[subgroupBase + lane]"
+                right = f"{scratch}[subgroupBase + lane + stride]"
+                result_index = "subgroupBase"
+                shuffle_source = "subgroupBase + lane + delta"
+                shuffle_limit = (
+                    "subgroupBase + " f"{self.GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO}"
+                )
             if operation in {
                 "WaveActiveSum",
                 "WaveActiveMin",
@@ -25933,12 +26082,15 @@ complex64_t crossgl_complex64_mod_assign(
                     "WaveActiveMin": lambda left, right: f"min({left}, {right})",
                     "WaveActiveMax": lambda left, right: f"max({left}, {right})",
                 }[operation]
-                left = f"{scratch}[lane]"
-                right = f"{scratch}[lane + stride]"
+                write_index = (
+                    "lane"
+                    if invocation_count == self.software_subgroup_width
+                    else "invocation"
+                )
                 code += (
                     f"{value_type} {helper}({value_type} value) {{\n"
-                    "    uint lane = gl_LocalInvocationIndex;\n"
-                    f"    {scratch}[lane] = value;\n"
+                    f"{lane_setup}"
+                    f"    {scratch}[{write_index}] = value;\n"
                     "    barrier();\n"
                     "    for (uint stride = 16u; stride > 0u; stride >>= 1u) {\n"
                     "        if (lane < stride) {\n"
@@ -25946,25 +26098,103 @@ complex64_t crossgl_complex64_mod_assign(
                     "        }\n"
                     "        barrier();\n"
                     "    }\n"
-                    f"    {value_type} result = {scratch}[0u];\n"
+                    f"    {value_type} result = {scratch}[{result_index}];\n"
                     "    barrier();\n"
                     "    return result;\n"
                     "}\n\n"
                 )
             else:
+                write_index = (
+                    "lane"
+                    if invocation_count == self.software_subgroup_width
+                    else "invocation"
+                )
                 code += (
                     f"{value_type} {helper}({value_type} value, uint delta) {{\n"
-                    "    uint lane = gl_LocalInvocationIndex;\n"
-                    f"    {scratch}[lane] = value;\n"
+                    f"{lane_setup}"
+                    f"    {scratch}[{write_index}] = value;\n"
                     "    barrier();\n"
-                    "    uint sourceLane = lane + delta;\n"
-                    f"    {value_type} result = sourceLane < "
-                    f"{self.software_subgroup_width}u "
+                    f"    uint sourceLane = {shuffle_source};\n"
+                    f"    {value_type} result = sourceLane < {shuffle_limit} "
                     f"? {scratch}[sourceLane] : value;\n"
                     "    barrier();\n"
                     "    return result;\n"
                     "}\n\n"
                 )
+        return code
+
+    def generate_glsl_software_subgroup_masked_if(self, node, indent):
+        plan = self.glsl_software_subgroup_masked_if_plans[id(node)]
+        statements = self.glsl_software_subgroup_statement_list(node.if_body)
+        operation_index = plan["statementIndex"]
+        assignment = statements[operation_index]
+        if isinstance(assignment, ExpressionStatementNode):
+            assignment = assignment.expression
+        value = getattr(assignment, "value", getattr(assignment, "right", None))
+        operation, arguments, operation_node = (
+            self.glsl_software_subgroup_direct_operation(value)
+        )
+        value_type = self.glsl_source_expression_type(arguments[0])
+        mapped_value_type = (
+            self.map_type(value_type) if value_type is not None else None
+        )
+        target = getattr(assignment, "target", getattr(assignment, "left", None))
+        target_type = self.glsl_source_expression_type(target)
+        mapped_target_type = (
+            self.map_type(target_type) if target_type is not None else None
+        )
+        if (
+            mapped_value_type not in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
+            or mapped_target_type != mapped_value_type
+        ):
+            raise self.glsl_software_subgroup_error(
+                "OpenGL masked software subgroup sum requires a matching 32-bit "
+                "numeric scalar payload and assignment target",
+                operation=operation,
+                reason="value-type-unsupported",
+                source_location=getattr(operation_node, "source_location", None),
+            )
+
+        active_name = self.glsl_synthetic_local_identifier(
+            "crossglSoftwareSubgroupActive"
+        )
+        input_name = self.glsl_synthetic_local_identifier(
+            "crossglSoftwareSubgroupInput"
+        )
+        result_name = self.glsl_synthetic_local_identifier(
+            "crossglSoftwareSubgroupResult"
+        )
+        condition = self.generate_glsl_boolean_context(
+            getattr(node, "condition", getattr(node, "if_condition", None))
+        )
+        identity = {"float": "0.0", "int": "0", "uint": "0u"}[mapped_value_type]
+        indent_str = "    " * indent
+        inner_indent = "    " * (indent + 1)
+        code = f"{indent_str}bool {active_name} = {condition};\n"
+        code += f"{indent_str}{mapped_value_type} {input_name} = {identity};\n"
+        code += f"{indent_str}if ({active_name}) {{\n"
+        code += self.generate_scoped_statement_body(
+            statements[:operation_index], indent + 1
+        )
+        payload = self.generate_expression_with_expected(
+            arguments[0], mapped_value_type
+        )
+        code += f"{inner_indent}{input_name} = {payload};\n"
+        code += f"{indent_str}}}\n"
+
+        self.required_glsl_software_subgroup_helpers.add((operation, mapped_value_type))
+        helper = self.glsl_software_subgroup_helper_name(operation, mapped_value_type)
+        code += (
+            f"{indent_str}{mapped_value_type} {result_name} = "
+            f"{helper}({input_name});\n"
+        )
+        target_text = self.generate_glsl_buffer_block_mutation_target(target)
+        code += f"{indent_str}if ({active_name}) {{\n"
+        code += f"{inner_indent}{target_text} = {result_name};\n"
+        code += self.generate_scoped_statement_body(
+            statements[operation_index + 1 :], indent + 1
+        )
+        code += f"{indent_str}}}\n"
         return code
 
     def generate_glsl_software_subgroup_operation(
@@ -38222,11 +38452,24 @@ complex64_t crossgl_complex64_mod_assign(
     def stage_input_builtin_alias(self, semantic, stage_name=None):
         mapped = self.map_stage_input_semantic(semantic, stage_name)
         if self.software_subgroup_width is not None:
+            subgroup_count = self.glsl_software_subgroup_count or 1
+            if subgroup_count == 1:
+                subgroup_id = "0u"
+                subgroup_lane = "gl_LocalInvocationIndex"
+            else:
+                subgroup_id = (
+                    "(gl_LocalInvocationIndex / "
+                    f"{self.GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO})"
+                )
+                subgroup_lane = (
+                    "(gl_LocalInvocationIndex % "
+                    f"{self.GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO})"
+                )
             software_alias = {
-                "gl_NumSubgroups": "1u",
-                "gl_SubgroupID": "0u",
+                "gl_NumSubgroups": f"{subgroup_count}u",
+                "gl_SubgroupID": subgroup_id,
                 "gl_SubgroupSize": self.GLSL_SOFTWARE_SUBGROUP_WIDTH_MACRO,
-                "gl_SubgroupInvocationID": "gl_LocalInvocationIndex",
+                "gl_SubgroupInvocationID": subgroup_lane,
             }.get(mapped)
             if software_alias is not None:
                 return software_alias

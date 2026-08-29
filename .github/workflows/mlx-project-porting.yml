@@ -805,6 +805,19 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_translates_to_guarded_opengl_artifact
 
+      - name: Prove pinned MLX dot OpenGL software-subgroup execution
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+          CROSTL_REQUIRE_MLX_DOT_OPENGL_NATIVE_LOADER: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
+          PYOPENGL_PLATFORM: egl
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_dot_native_loader.py::test_pinned_mlx_dot_executes_with_opengl_software_subgroups
+
       - name: Prove exact OpenGL subgroup-width execution
         if: runner.os == 'Linux'
         env:

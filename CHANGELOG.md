@@ -18,11 +18,13 @@ All notable changes to CrossTL are documented in this file.
 - Current-pinned MLX LayerNorm axis-32 native-loader packages with exact eight-resource ABIs, Direct3D 12 WARP and Mesa EGL numerical CI, deterministic HLSL/GLSL identities, and an upstream-derived dispatch contract.
 - Current-pinned MLX LayerNorm VJP axis-32, one-row, `has_w=true` native-loader execution with exact eight-resource ABI, concrete DirectX and deferred-specialized OpenGL paths, and numerical `gx`/`gw` readback on WARP and Mesa.
 - Current-pinned MLX RMSNorm VJP axis-32, one-row, `has_w=true` native-loader execution with an exact ten-resource ABI, concrete DirectX and deferred-specialized OpenGL paths, and numerical `gx`/`gw` readback on WARP and Mesa.
+- Current-pinned MLX 512-thread float32 dot-product execution through Direct3D 12 WARP and a distinct sixteen-subgroup software OpenGL artifact on Mesa, with exact four-resource ABI, SPIR-V structure, artifact identity, and numerical readback evidence.
 - Deferred-specialization ABI packages retain a ready, actionable JSON runtime variant registry while marking the unsupported generated C++ registry header unavailable with an explicit reason.
 - Deferred Native Compilation CI workflow covering a three-platform contract matrix plus native Direct3D 12 and software OpenGL compile-and-dispatch jobs with pinned DXC verification and required device readback.
 
 ### Improved
 
+- Explicit 32-lane OpenGL software subgroups now partition bounded workgroups of up to 1,024 invocations into independent logical subgroups and admit a narrow additive-identity-masked divergent `WaveActiveSum` assignment while all generated barriers remain workgroup-uniform.
 - Metal analysis performance: lexical scope lookups are indexed and repeated whole-tree traversals eliminated.
 - OpenGL resource specialization includes the storage pointer view layout in specialization identity and generated helper names, so direct and reinterpreted calls against the same root receive distinct deterministic helpers regardless of call order.
 - Explicit OpenGL software subgroups accept uniquely identified helpers only when calls are direct, unconditional, top-level, and entry-owned; resource-specialized calls may reuse only identical-base workgroup proofs whose validated intervals cover the narrower request.

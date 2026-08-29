@@ -20207,6 +20207,171 @@ def test_glsl_software_subgroup_lowers_affine_operation_set_without_khr_subgroup
     )
 
 
+def test_glsl_software_subgroup_lowers_multiple_subgroups_and_masked_sum(
+    tmp_path,
+):
+    code = """
+    shader GLSLSoftwareMultiSubgroupSum {
+        compute {
+            layout(local_size_x = 32, local_size_y = 2, local_size_z = 1) in;
+            void main(
+                uint lane @ gl_SubgroupInvocationID,
+                uint group @ gl_SubgroupID,
+                uint groupCount @ gl_NumSubgroups) {
+                float sum = WaveActiveSum(float(lane + group));
+                if (gl_LocalInvocationIndex < 16u) {
+                    sum = WaveActiveSum(sum);
+                    if (gl_LocalInvocationID.x == 0u) {
+                        uint contract = groupCount;
+                    }
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "shared float crossglSoftwareSubgroupScratchFloat[64];" in generated
+    assert "uint invocation = gl_LocalInvocationIndex;" in generated
+    assert "uint lane = invocation % CROSSTL_SOFTWARE_SUBGROUP_WIDTH;" in generated
+    assert "uint subgroupBase = invocation - lane;" in generated
+    assert (
+        "crossglSoftwareSubgroupScratchFloat[subgroupBase + lane + stride]" in generated
+    )
+    assert "gl_LocalInvocationIndex % CROSSTL_SOFTWARE_SUBGROUP_WIDTH" in generated
+    assert "(gl_LocalInvocationIndex / CROSSTL_SOFTWARE_SUBGROUP_WIDTH)" in generated
+    assert "uint contract = 2u;" in generated
+    assert (
+        "bool crossglSoftwareSubgroupActive = (gl_LocalInvocationIndex < 16u);"
+        in generated
+    )
+    assert "float crossglSoftwareSubgroupInput = 0.0;" in generated
+    assert "crossglSoftwareSubgroupSumFloat(crossglSoftwareSubgroupInput)" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert "gl_Subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_multi_subgroup_masked_sum",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_rejects_masked_non_sum_collective():
+    code = """
+    shader GLSLSoftwareMaskedMin {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = float(gl_LocalInvocationID.x);
+                if (gl_LocalInvocationID.x < 16u) {
+                    value = WaveActiveMin(value);
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveMin"
+
+
+@pytest.mark.parametrize(
+    "conditional",
+    [
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            float local = value;
+            value = WaveActiveSum(local);
+        }
+        """,
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            value += WaveActiveSum(value);
+        }
+        """,
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            float reduced = WaveActiveSum(value);
+        }
+        """,
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            value = WaveActiveSum(value);
+        } else {
+            value = 0.0;
+        }
+        """,
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            value = WaveActiveSum(value);
+            return;
+        }
+        """,
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            values[index++] = WaveActiveSum(value);
+        }
+        """,
+    ],
+)
+def test_glsl_software_subgroup_rejects_unproven_masked_sum_shapes(conditional):
+    code = f"""
+    shader GLSLSoftwareMaskedSumInvalid {{
+        compute {{
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                float value = float(gl_LocalInvocationIndex);
+                float values[64];
+                uint index = 0u;
+                {conditional}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveSum"
+
+
+def test_glsl_software_subgroup_rejects_masked_sum_target_type_mismatch():
+    code = """
+    shader GLSLSoftwareMaskedSumTypeMismatch {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = float(gl_LocalInvocationIndex);
+                int result = 0;
+                if (gl_LocalInvocationIndex < 16u) {
+                    result = WaveActiveSum(value);
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "value-type-unsupported"
+    assert raised.value.operation == "WaveActiveSum"
+
+
 def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
     code = """
     shader GLSLSoftwareSubgroupNameCollision {
@@ -20252,7 +20417,19 @@ def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
         ),
         (
             "float value = WaveActiveMin(1.0);",
-            (32, 2, 1),
+            (48, 1, 1),
+            "",
+            "workgroup-size-mismatch",
+        ),
+        (
+            "float value = WaveActiveMin(1.0);",
+            (32, 0, 1),
+            "",
+            "workgroup-size-mismatch",
+        ),
+        (
+            "float value = WaveActiveMin(1.0);",
+            (1024, 2, 1),
             "",
             "workgroup-size-mismatch",
         ),

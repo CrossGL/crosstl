@@ -10783,9 +10783,7 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     )
 
     status = gaps["dot_native_runtime_status"]
-    assert status["status"] == (
-        "translated-packaged-directx-executed-and-opengl-validated"
-    )
+    assert status["status"] == "translated-packaged-and-cross-target-executed"
     assert status["commit"] == CURRENT_MLX_COMMIT
     assert status["source"] == "mlx/backend/metal/kernels/dot.metal"
     assert status["source_sha256"] == (
@@ -10834,6 +10832,37 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
             ),
         },
         "native_runtime_executed": False,
+        "software_runtime_artifact": {
+            "target_entry_point": "main",
+            "sha256": (
+                "a3c1958daa680419ce3f38559de1a6a2319a7abdac556a049632194c88223a32"
+            ),
+            "size_bytes": 6275,
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "software_subgroup_width": 32,
+            "software_subgroup_count": 16,
+            "shared_scratch_element_count": 512,
+            "hardware_subgroup_extension_required": False,
+            "toolchain_validation": {
+                "platform": "ubuntu-latest",
+                "compiler": "glslangValidator",
+                "validator": "spirv-val",
+                "spirv_target_environment": "spv1.3",
+                "control_barrier_count": 4,
+                "group_non_uniform_instruction_count": 0,
+                "status": "required-on-ci",
+            },
+            "native_runtime": {
+                "platform": "ubuntu-latest",
+                "runtime": "mesa-llvmpipe-opengl",
+                "adapter": "opengl-native-runtime",
+                "status": "required-on-ci",
+                "test": (
+                    "tests/test_translator/test_mlx_dot_native_loader.py::"
+                    "test_pinned_mlx_dot_executes_with_opengl_software_subgroups"
+                ),
+            },
+        },
     }
     assert status["artifacts"]["metal"] == {
         "target_entry_point": "dot_product_float32_it32_tg512_sg16",
@@ -10861,6 +10890,7 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     assert status["runtime_integration_included"] is True
     assert status["metal_roundtrip_included"] is False
     assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["cross_target_selected_workload_numerical_parity_verified"] is True
     assert status["full_mlx_test_suite_included"] is False
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
@@ -10869,7 +10899,10 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     assert "selects `dot_product_float32_it32_tg512_sg16`" in readme
     assert "preserve the read-only `float4` storage views" in readme
     assert "requires a readback of `256.0`" in readme
-    assert "used for compiler validation, not numerical execution" in readme
+    assert "separate software artifact is 6,275 bytes" in readme
+    assert "sixteen independent 32-lane logical subgroups" in readme
+    assert "four control barriers and no group-nonuniform instruction" in readme
+    assert "Mesa llvmpipe executes the same workload" in readme
     assert "still fails closed at storage-backed vector pointer lowering" in readme
     assert "do not redirect MLX host dispatch" in readme
     assert "or run the MLX test suite" in readme

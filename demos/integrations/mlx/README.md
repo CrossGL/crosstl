@@ -610,10 +610,13 @@ The target-scoped Metal option
 `project.source_options.metal.target_options.opengl.software_subgroup_width = 32`
 selects a fail-closed software implementation of this entry's scalar
 `WaveActiveMin(float)`, `WaveActiveMax(float)`, and
-`WaveShuffleDown(uint, int)` operations. It is accepted only for one compute
-entry with local size `[32, 1, 1]`; unsupported operations, payload types,
-helper placement, raw subgroup builtins, or unproven lane-dependent control
-flow reject translation. The default hardware KHR subgroup path is unchanged.
+`WaveShuffleDown(uint, int)` operations. This selected proof uses one compute
+entry with local size `[32, 1, 1]`. The bounded mode can also partition a
+concrete workgroup of at most 1,024 invocations into multiple 32-lane logical
+subgroups when local size X is divisible by 32; unsupported operations, payload
+types, helper ownership, raw subgroup builtins, or unproven lane-dependent
+control flow still reject translation. The default hardware KHR subgroup path
+is unchanged.
 The software artifact uses collision-safe shared scratch storage and eight
 barriers, emits `CROSSTL_SOFTWARE_SUBGROUP_WIDTH`, and emits no KHR subgroup
 extension, `gl_Subgroup*` use, `CROSSTL_REQUIRED_SUBGROUP_WIDTH`, or hardware
@@ -1168,11 +1171,13 @@ current-corpus workload; it does not redirect the MLX runtime or run the MLX
 test suite.
 
 The axis-size-1025 record still produces a ``[288, 1, 1]`` artifact containing
-nine logical 32-lane subgroups. The explicit software mode rejects that
-workgroup mismatch rather than pretending one shared reduction is nine
-independent subgroups, so this second artifact remains dependent on compatible
-width-32 hardware. Multi-subgroup fallback, looped reductions, other dtypes and
-shapes, and full-runtime parity remain tracked by
+nine logical 32-lane subgroups. That layout is now within the bounded software
+workgroup contract, but the entry's lane-dependent ``WaveActiveMax`` path is
+not the narrow additive-identity-masked sum shape. Translation therefore still
+fails closed with ``potentially-divergent-control-flow``, and this artifact
+remains dependent on compatible width-32 hardware until its complete control
+flow and numerical semantics are proved separately. Looped reductions, other
+dtypes and shapes, and full-runtime parity remain tracked by
 [#1894](https://github.com/CrossGL/crosstl/issues/1894).
 
 Validate the LogSumExp contract schema, provenance, deterministic identities,
@@ -1196,16 +1201,32 @@ four reflected resource layouts.
 Windows CI compiles the HLSL artifact with DXC, packages its native-loader ABI,
 and dispatches one workgroup through Direct3D 12 WARP. The bounded workload
 computes the dot product of 1,024 float32 values containing `1.0` and `0.25` and
-requires a readback of `256.0`. Linux CI independently compiles the guarded GLSL
-artifact with `glslangValidator` and validates the resulting SPIR-V. The OpenGL
-artifact rejects a device subgroup width other than 32 before translated work;
-the software CI device is therefore used for compiler validation, not numerical
-execution of this entry. macOS CI records that the equivalent selected Metal
-round trip still fails closed at storage-backed vector pointer lowering under
+requires a readback of `256.0`. Linux CI independently preserves and compiles
+the guarded 5,188-byte GLSL artifact with `glslangValidator`; its SHA-256 remains
+`ef69a757339fe09897a38804c27be279a19a7db146e2e02f85f0349c59f3168d`, and it
+continues to reject a device subgroup width other than 32 before translated
+work.
+
+A separate software artifact is 6,275 bytes with SHA-256
+`a3c1958daa680419ce3f38559de1a6a2319a7abdac556a049632194c88223a32`.
+It allocates 512 shared float elements and partitions them into sixteen
+independent 32-lane logical subgroups. The first sum reduces within each
+partition. For the second sum beneath `tid < 16`, inactive lanes contribute the
+additive identity while all 512 invocations reach the helper barriers uniformly;
+only the active lanes consume the subgroup-zero result. The artifact emits no
+KHR subgroup extension, hardware `gl_Subgroup*` builtin, or group-nonuniform
+SPIR-V operation. `glslangValidator` and `spirv-val` accept its SPIR-V 1.3
+module, whose disassembly contains four control barriers and no group-nonuniform
+instruction. Mesa llvmpipe executes the same workload through surfaceless EGL
+and requires the same `256.0` readback at `1e-5` absolute and relative
+tolerance.
+
+macOS CI records that the equivalent selected Metal round trip still fails
+closed at storage-backed vector pointer lowering under
 [#1903](https://github.com/CrossGL/crosstl/issues/1903); it does not claim native
-Metal compiler acceptance. These checks establish one selected kernel workload
-and do not redirect MLX host dispatch, cover the float16 or bfloat16 dot
-entries, or run the MLX test suite.
+Metal compiler acceptance. These checks establish cross-target numerical
+execution for one selected kernel workload and do not redirect MLX host
+dispatch, cover the float16 or bfloat16 dot entries, or run the MLX test suite.
 
 The current-corpus unary proofs select `v_Squarefloat32float32` and
 `v_ArcCosfloat32float32` from the full include-expanded `unary.metal` source.

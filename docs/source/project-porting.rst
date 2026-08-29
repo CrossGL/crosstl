@@ -490,8 +490,8 @@ requirements through the corresponding dispatch and runtime contracts.
 OpenGL Software Subgroup Specialization
 ----------------------------------------
 
-Metal compute sources that require exactly one 32-lane SIMD group can opt into
-a narrow OpenGL shared-memory lowering when the deployment device does not
+Metal compute sources that require fixed 32-lane SIMD semantics can opt into
+a bounded OpenGL shared-memory lowering when the deployment device does not
 provide the KHR subgroup extensions:
 
 .. code-block:: toml
@@ -507,25 +507,47 @@ provide the KHR subgroup extensions:
 
 This option is target-scoped and explicit; it does not change Metal parsing or
 other target artifacts. The only accepted width is ``32``. The selected output
-must contain exactly one compute entry with local size ``[32, 1, 1]`` and may
-use only the supported scalar ``float``, ``int``, or ``uint`` sum, minimum,
-maximum, and shuffle-down operations. Under that exact one-subgroup contract,
-Metal entry semantics for subgroup count, subgroup index, subgroup width, and
-lane index lower respectively to ``1u``, ``0u``,
-``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``, and ``gl_LocalInvocationIndex``. Direct
-source references to raw ``gl_Subgroup*`` or ``subgroup*`` builtins still fail
-closed. CrossTL also rejects empty operation sets, calls from helper functions,
-unsupported payloads or operations, and calls beneath lane-dependent or
-otherwise unproven control flow. Constant-bound uniform loops and
-compile-time-selected branches remain valid.
+must contain exactly one compute entry with concrete positive local dimensions,
+a local X dimension divisible by 32, and no more than 1,024 total invocations.
+CrossTL partitions the linear invocation range into an exact compile-time count
+of independent 32-lane software subgroups. Subgroup count, subgroup index,
+subgroup width, and lane index lower respectively to the workgroup invocation
+count divided by 32, ``gl_LocalInvocationIndex / 32``,
+``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``, and
+``gl_LocalInvocationIndex % 32``. The one-subgroup case retains the simpler
+``1u``, ``0u``, and ``gl_LocalInvocationIndex`` forms.
 
-Successful lowering emits barriered ``shared``-memory helpers and the marker
-``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``. It deliberately emits no
-``GL_KHR_shader_subgroup*`` extension, ``gl_Subgroup*`` use,
-``CROSSTL_REQUIRED_SUBGROUP_WIDTH`` marker, or hardware ``subgroupWidth``
-execution metadata. This keeps the software execution contract distinct from
-the default hardware-subgroup path and its host preflight. When the option is
-absent, KHR subgroup generation and exact-width enforcement are unchanged.
+The bounded mode supports scalar ``float``, ``int``, or ``uint`` sum, minimum,
+maximum, and shuffle-down operations. Shared scratch spans the complete
+workgroup, while every helper derives a subgroup-local lane and base so reads
+and reductions cannot cross a 32-lane boundary. Subgroup operations normally
+must execute in workgroup-uniform control flow. They may appear directly in the
+entry or in a uniquely identified helper only when every helper call is direct,
+unconditional, top-level, and owned by that sole entry. Compile-time branches,
+canonical constant loops, and canonical runtime loops whose integer bounds are
+proven workgroup-uniform remain valid.
+
+One narrow lane-dependent form is also supported: a direct
+``WaveActiveSum`` assignment in a top-level entry-owned ``if`` with no
+``else``. The condition must be side-effect-free, the branch must contain
+exactly that one subgroup operation, declarations and escaping control flow
+cannot precede it, and the payload and target must be matching 32-bit numeric
+scalars. CrossTL evaluates the branch prefix only for active lanes, contributes
+the additive identity from inactive lanes, invokes the barriered subgroup
+helper uniformly across the workgroup, and exposes the result only to active
+lanes. Divergent minimum, maximum, shuffle, nested, multi-operation, and other
+unproven shapes continue to fail closed.
+
+Direct source references to raw ``gl_Subgroup*`` or ``subgroup*`` builtins,
+empty operation sets, unsupported payloads or operations, and unresolved helper
+ownership also fail closed. Successful lowering emits barriered ``shared``
+memory helpers and the marker ``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``. It
+deliberately emits no ``GL_KHR_shader_subgroup*`` extension,
+``gl_Subgroup*`` use, ``CROSSTL_REQUIRED_SUBGROUP_WIDTH`` marker, or hardware
+``subgroupWidth`` execution metadata. This keeps the software execution
+contract distinct from the default hardware-subgroup path and its host
+preflight. When the option is absent, KHR subgroup generation and exact-width
+enforcement are unchanged.
 
 The lowering establishes shader semantics only for this constrained contract.
 It does not infer dispatch counts, prove arbitrary divergent control flow,

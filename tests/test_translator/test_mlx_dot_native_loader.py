@@ -14,6 +14,8 @@ import pytest
 from crosstl.project import (
     DirectXComputeRuntime,
     DirectXRuntimeParityAdapter,
+    OpenGLComputeRuntime,
+    OpenGLRuntimeParityAdapter,
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
     build_native_loader_abi_descriptor,
@@ -40,13 +42,25 @@ MLX_DOT_GENERATED_ARTIFACTS = {
         "sizeBytes": 5188,
     },
 }
+MLX_DOT_SOFTWARE_OPENGL_ARTIFACT = {
+    "sha256": "a3c1958daa680419ce3f38559de1a6a2319a7abdac556a049632194c88223a32",
+    "sizeBytes": 6275,
+}
 REQUIRE_PROOF_ENVS = {
     "directx": "CROSTL_REQUIRE_MLX_DOT_DIRECTX_NATIVE_LOADER",
     "opengl": "CROSTL_REQUIRE_MLX_DOT_OPENGL_TOOLCHAIN",
 }
+REQUIRE_OPENGL_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_DOT_OPENGL_NATIVE_LOADER"
 
 
-def _project_config(target: str, output_dir: str) -> str:
+def _project_config(
+    target: str,
+    output_dir: str,
+    *,
+    software_subgroups: bool = False,
+) -> str:
+    if software_subgroups and target != "opengl":
+        raise ValueError("software_subgroups is only valid for the OpenGL target")
     sections = [textwrap.dedent(f"""
             [project]
             source_roots = ["mlx/backend/metal/kernels"]
@@ -65,7 +79,9 @@ def _project_config(target: str, output_dir: str) -> str:
         sections.append(textwrap.dedent(f"""
             [project.entry_workgroup_size_rules."{MLX_DOT_SOURCE}"]
             "{MLX_DOT_ENTRY}" = [512, 1, 1]
-
+            """).strip())
+    if target in {"directx", "opengl"} and not software_subgroups:
+        sections.append(textwrap.dedent(f"""
             [project.subgroup_width_rules]
             "{MLX_DOT_SOURCE}" = 32
             """).strip())
@@ -74,6 +90,11 @@ def _project_config(target: str, output_dir: str) -> str:
         max_template_specializations = 64
         max_template_materialization_work = 4096
         """).strip())
+    if software_subgroups:
+        sections.append(textwrap.dedent("""
+            [project.source_options.metal.target_options.opengl]
+            software_subgroup_width = 32
+            """).strip())
     return "\n\n".join(sections)
 
 
@@ -84,8 +105,13 @@ def _write_json(path: Path, payload: dict) -> None:
     )
 
 
-def _skip_or_fail(target: str, message: str) -> None:
-    if os.environ.get(REQUIRE_PROOF_ENVS[target]) == "1":
+def _skip_or_fail(
+    target: str,
+    message: str,
+    *,
+    require_env: str | None = None,
+) -> None:
+    if os.environ.get(require_env or REQUIRE_PROOF_ENVS[target]) == "1":
         pytest.fail(message)
     pytest.skip(message)
 
@@ -93,7 +119,10 @@ def _skip_or_fail(target: str, message: str) -> None:
 def _pinned_mlx_root() -> Path:
     root_value = os.environ.get("CROSTL_MLX_ROOT")
     if not root_value:
-        if any(os.environ.get(name) == "1" for name in REQUIRE_PROOF_ENVS.values()):
+        if any(
+            os.environ.get(name) == "1"
+            for name in (*REQUIRE_PROOF_ENVS.values(), REQUIRE_OPENGL_RUNTIME_ENV)
+        ):
             pytest.fail("CROSTL_MLX_ROOT is not configured")
         pytest.skip("CROSTL_MLX_ROOT is not configured")
 
@@ -120,11 +149,17 @@ def _translate_dot_artifact(
     target: str,
     *,
     run_toolchains: bool,
+    software_subgroups: bool = False,
 ):
     output_dir = work_dir / "out"
     config_path = work_dir / "crosstl.toml"
     config_path.write_text(
-        _project_config(target, output_dir.relative_to(mlx_root).as_posix()) + "\n",
+        _project_config(
+            target,
+            output_dir.relative_to(mlx_root).as_posix(),
+            software_subgroups=software_subgroups,
+        )
+        + "\n",
         encoding="utf-8",
     )
     report = translate_project(
@@ -141,7 +176,11 @@ def _translate_dot_artifact(
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     artifact = payload["artifacts"][0]
-    expected_identity = MLX_DOT_GENERATED_ARTIFACTS[target]
+    expected_identity = (
+        MLX_DOT_SOFTWARE_OPENGL_ARTIFACT
+        if software_subgroups
+        else MLX_DOT_GENERATED_ARTIFACTS[target]
+    )
     assert artifact["source"] == MLX_DOT_SOURCE
     assert artifact["sourceHash"] == {
         "algorithm": "sha256",
@@ -161,7 +200,10 @@ def _translate_dot_artifact(
     entry = artifact["execution"]["entryPoints"][0]
     assert entry["sourceEntryPoint"] == MLX_DOT_ENTRY
     assert entry["workgroupSize"] == [512, 1, 1]
-    assert entry["subgroupWidth"] == 32
+    if software_subgroups:
+        assert "subgroupWidth" not in entry
+    else:
+        assert entry["subgroupWidth"] == 32
     assert entry["parameters"] == {
         "ITEMS_PER_THREAD": "32",
         "SIMD_GROUPS": "16",
@@ -178,6 +220,18 @@ def _translate_dot_artifact(
         assert generated.count("asfloat(asuint(a[uint(") >= 4
         assert generated.count("asfloat(asuint(b[uint(") >= 4
         assert generated.count("WaveActiveSum(sum)") == 2
+    elif software_subgroups:
+        assert "layout(local_size_x = 512" in generated
+        assert "#define CROSSTL_SOFTWARE_SUBGROUP_WIDTH 32u" in generated
+        assert "GL_KHR_shader_subgroup" not in generated
+        assert "gl_Subgroup" not in generated
+        assert "subgroupAdd" not in generated
+        assert "shared float crossglSoftwareSubgroupScratchFloat[512];" in generated
+        assert "uint subgroupBase = invocation - lane;" in generated
+        assert generated.count("crossglSoftwareSubgroupSumFloat(sum)") == 1
+        assert "crossglSoftwareSubgroupSumFloat(" in generated
+        assert "float crossglSoftwareSubgroupInput = 0.0;" in generated
+        assert "if (crossglSoftwareSubgroupActive)" in generated
     else:
         assert "layout(local_size_x = 512" in generated
         assert "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 32u" in generated
@@ -206,8 +260,59 @@ def _translate_dot_artifact(
         }
     else:
         assert execution_config["local_size"] == [512, 1, 1]
-        assert execution_config["subgroupWidth"] == 32
+        if software_subgroups:
+            assert "subgroupWidth" not in execution_config
+        else:
+            assert execution_config["subgroupWidth"] == 32
     return report, runtime_artifacts
+
+
+def _assert_software_opengl_spirv(generated_path: Path, work_dir: Path) -> None:
+    tools = {
+        name: shutil.which(name)
+        for name in ("glslangValidator", "spirv-val", "spirv-dis")
+    }
+    if not all(tools.values()):
+        if os.environ.get(REQUIRE_OPENGL_RUNTIME_ENV) == "1":
+            missing = [name for name, path in tools.items() if path is None]
+            pytest.fail("The dot OpenGL runtime proof requires: " + ", ".join(missing))
+        return
+
+    spirv_path = work_dir / "dot-software.spv"
+    assembly_path = work_dir / "dot-software.spvasm"
+    subprocess.run(
+        [
+            tools["glslangValidator"],
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "-S",
+            "comp",
+            str(generated_path),
+            "-o",
+            str(spirv_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [tools["spirv-val"], "--target-env", "spv1.3", str(spirv_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [tools["spirv-dis"], str(spirv_path), "-o", str(assembly_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assembly = assembly_path.read_text(encoding="utf-8")
+    assert assembly.count("OpControlBarrier") == 4
+    assert "OpGroupNonUniform" not in assembly
+    assert "OpExecutionMode %main LocalSize 512 1 1" in assembly
 
 
 def test_pinned_mlx_dot_translates_to_guarded_opengl_artifact():
@@ -426,6 +531,147 @@ def test_pinned_mlx_dot_executes_through_directx_native_loader():
     assert result.outputs["output"]["dtype"] == "float32"
     assert result.outputs["output"]["shape"] == [1]
     assert result.outputs["output"]["values"] == pytest.approx(
+        [expected_value],
+        abs=1e-5,
+        rel=1e-5,
+    )
+
+
+def _build_opengl_software_runtime_package(
+    mlx_root: Path,
+    work_dir: Path,
+) -> tuple[dict, Path]:
+    report, runtime_artifacts = _translate_dot_artifact(
+        mlx_root,
+        work_dir,
+        "opengl",
+        run_toolchains=True,
+        software_subgroups=True,
+    )
+    toolchain_runs = report.to_json()["validation"]["toolchainRuns"]
+    if not toolchain_runs or toolchain_runs[0]["status"] != "ok":
+        _skip_or_fail(
+            "opengl",
+            "The OpenGL toolchain did not accept the software dot artifact",
+            require_env=REQUIRE_OPENGL_RUNTIME_ENV,
+        )
+    generated_path = mlx_root / report.to_json()["artifacts"][0]["path"]
+    _assert_software_opengl_spirv(generated_path, work_dir)
+
+    resources = runtime_artifacts["artifacts"][0]["hostInterface"]["resources"]
+    assert {resource["name"]: resource["binding"] for resource in resources} == {
+        "aBuffer": 0,
+        "bBuffer": 1,
+        "output_Buffer": 2,
+        f"{MLX_DOT_ENTRY}_n_Args": 3,
+    }
+    assert {resource["name"]: resource["access"] for resource in resources} == {
+        "aBuffer": "read",
+        "bBuffer": "read",
+        "output_Buffer": "read_write",
+        f"{MLX_DOT_ENTRY}_n_Args": "read",
+    }
+
+    runtime_artifacts_path = work_dir / "runtime-artifacts.json"
+    _write_json(runtime_artifacts_path, runtime_artifacts)
+    package_dir = work_dir / "runtime-package"
+    package = build_runtime_package(runtime_artifacts_path, package_dir)
+    assert package["success"] is True, json.dumps(package, indent=2)
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+    assert loader_manifest["success"] is True, json.dumps(
+        loader_manifest,
+        indent=2,
+    )
+    assert loader_manifest["summary"]["loadUnitCount"] == 1
+    assert loader_manifest["summary"]["readyLoadUnitCount"] == 1
+    assert loader_manifest["summary"]["blockedLoadUnitCount"] == 0
+    descriptor = build_native_loader_abi_descriptor(
+        loader_manifest,
+        load_unit_id=loader_manifest["loadUnits"][0]["id"],
+    )
+    assert descriptor["target"] == "opengl"
+    assert descriptor["entryPoint"]["name"] == "main"
+    assert descriptor["entryPoint"]["stage"] == "compute"
+    execution_config = descriptor["entryPoint"]["executionConfig"]
+    assert execution_config["local_size"] == [512, 1, 1]
+    assert "subgroupWidth" not in execution_config
+    return descriptor, package_dir
+
+
+def test_pinned_mlx_dot_executes_with_opengl_software_subgroups():
+    mlx_root = _pinned_mlx_root()
+    with tempfile.TemporaryDirectory(
+        prefix=".crosstl-dot-opengl-software-native-loader-",
+        dir=mlx_root,
+    ) as temporary_directory:
+        descriptor, package_dir = _build_opengl_software_runtime_package(
+            mlx_root,
+            Path(temporary_directory),
+        )
+        input_count = 1024
+        expected_value = 256.0
+        request = build_native_loader_dispatch_request(
+            descriptor,
+            package_dir,
+            {
+                "aBuffer": {
+                    "dtype": "float32",
+                    "shape": [input_count],
+                    "values": [1.0] * input_count,
+                },
+                "bBuffer": {
+                    "dtype": "float32",
+                    "shape": [input_count],
+                    "values": [0.25] * input_count,
+                },
+                f"{MLX_DOT_ENTRY}_n_Args": {
+                    "dtype": "int32",
+                    "shape": [1],
+                    "values": [input_count],
+                },
+            },
+            {
+                "output_Buffer": {
+                    "dtype": "float32",
+                    "shape": [1],
+                    "values": [expected_value],
+                    "tolerance": {"absolute": 1e-5, "relative": 1e-5},
+                }
+            },
+            (1, 1, 1),
+            expected_target="opengl",
+        )
+        assert request.execution_plan is not None
+        assert request.execution_plan.diagnostics == ()
+        assert request.execution_plan.dispatch.workgroup_size == (512, 1, 1)
+        assert request.execution_plan.dispatch.workgroup_count == (1, 1, 1)
+        assert request.execution_plan.dispatch.global_size == (512, 1, 1)
+
+        executor = RuntimeParityExecutor(
+            RuntimeTestAdapterSpec(
+                adapter_id="mlx-dot-opengl-software-native-loader",
+                target="opengl",
+                executor="opengl",
+                adapter_kind="opengl-native-runtime",
+            ),
+            runtime_adapter=OpenGLRuntimeParityAdapter(runtime=OpenGLComputeRuntime()),
+        )
+        availability = executor.is_available(request)
+        if not availability.available:
+            _skip_or_fail(
+                "opengl",
+                availability.reason or "The native OpenGL runtime is unavailable",
+                require_env=REQUIRE_OPENGL_RUNTIME_ENV,
+            )
+
+        result = executor.run(request)
+
+    assert result.status == "ok"
+    assert result.outputs["output_Buffer"]["dtype"] == "float32"
+    assert result.outputs["output_Buffer"]["shape"] == [1]
+    assert result.outputs["output_Buffer"]["values"] == pytest.approx(
         [expected_value],
         abs=1e-5,
         rel=1e-5,
