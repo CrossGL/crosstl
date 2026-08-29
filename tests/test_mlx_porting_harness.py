@@ -11813,7 +11813,7 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
         "project_diagnostic_count": 0,
         "index_range_assertion_count": 5,
         "workgroup_access_assertion_count": 1,
-        "source_remap_mapping_count": 90,
+        "source_remap_mapping_count": 84,
         "max_template_specializations": 4096,
         "max_template_materialization_work": 2097152,
     }
@@ -11829,9 +11829,9 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "7af6f757c7e8721bc982075ee4e9f772a09823a914bfb34ce957f8f37bfdad09",
-        "size_bytes": 83187,
-        "source_remap_mapping_count": 90,
+        "sha256": "a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb",
+        "size_bytes": 82045,
+        "source_remap_mapping_count": 84,
         "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
         "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
         "encoded_generic_vector_constructor_residue": False,
@@ -11890,7 +11890,7 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "current FFT source now also emits an 83,187-byte GLSL artifact" in readme
+    assert "current FFT source now also emits an 82,045-byte GLSL artifact" in readme
     assert "21 deferred specialization constants" in readme
     assert "8-byte size, stride, and alignment" in readme
     assert "19 control barriers and no group-nonuniform instructions" in readme
@@ -12252,10 +12252,11 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "5f4ad43cd3bf08f7dc4fd78756d9c6b64eb8fe2d690af00442678c79b21ead41"
+                "f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d"
             ),
-            "size_bytes": 8066,
+            "size_bytes": 8410,
             "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
+            "relative_shuffle_out_of_range": "calling-lane-value",
             "workgroup_size": [32, 2, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",

@@ -758,10 +758,10 @@ broader pointer-offset contract. The historical proof remains separately
 recorded under its own commit provenance; it is no longer being used as a
 substitute for current-corpus evidence.
 
-The current FFT source now also emits an 83,187-byte GLSL artifact with
+The current FFT source now also emits an 82,045-byte GLSL artifact with
 SHA-256
-`7af6f757c7e8721bc982075ee4e9f772a09823a914bfb34ce957f8f37bfdad09`
-and 90 source-remap mappings. OpenGL keeps the 21 reachable function constants
+`a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb`
+and 84 source-remap mappings. OpenGL keeps the 21 reachable function constants
 as 21 deferred specialization constants and uses the same `[1, 1, 64]`
 workgroup contract. A fifth current-source index assertion bounds
 `batch_idx + index + r`. Generic specialization lowering now follows a
@@ -881,8 +881,8 @@ and
 
 Entry-scoped translation materializes only the selected GEMV and
 `elem_to_loc_uint`, with no unsupported record or project diagnostic. The
-8,066-byte HLSL has SHA-256
-`5f4ad43cd3bf08f7dc4fd78756d9c6b64eb8fe2d690af00442678c79b21ead41`,
+8,410-byte HLSL has SHA-256
+`f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d`,
 retains `[numthreads(32, 2, 1)]` and `[WaveSize(32)]`, and passes official DXC
 1.9.2602.24 under `cs_6_6`, `-enable-16bit-types`, and warnings as errors.
 Direct3D does not guarantee that a multidimensional workgroup's flattened
@@ -890,6 +890,8 @@ Direct3D does not guarantee that a multidimensional workgroup's flattened
 therefore assigns one uniform, collision-safe ID per physical wave through a
 workgroup-synchronized counter instead of dividing every lane's group index by
 `WaveGetLaneCount()`; fixed one-wave entries retain the valid quotient fast path.
+GEMV also opts into the branch-free calling-lane fallback for relative shuffle
+sources outside the wave, so WARP never consumes undefined high-lane values.
 The OpenGL target needs only the selected matrix-index assertion
 `uint64(bm + tm) * marix_ld + out_col + tn` in the unsigned 32-bit range. Its
 7,705-byte GLSL has SHA-256

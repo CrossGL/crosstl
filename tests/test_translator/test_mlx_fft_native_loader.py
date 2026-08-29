@@ -54,9 +54,9 @@ CURRENT_MLX_FFT_GENERATED_SHA256 = (
 )
 CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 146663
 CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256 = (
-    "7af6f757c7e8721bc982075ee4e9f772a09823a914bfb34ce957f8f37bfdad09"
+    "a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb"
 )
-CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 83187
+CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 82045
 MLX_FFT_SIZE = 256
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER"
 REQUIRE_OPENGL_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_OPENGL_NATIVE_LOADER"
@@ -746,7 +746,7 @@ def _build_current_opengl_runtime_package(
     }, json.dumps(payload["diagnostics"], indent=2)
     assert payload["project"]["indexRangeAssertionCount"] == 5
     assert payload["project"]["workgroupAccessAssertionCount"] == 1
-    assert payload["summary"]["sourceRemapMappingCount"] == 90
+    assert payload["summary"]["sourceRemapMappingCount"] == 84
 
     artifact = payload["artifacts"][0]
     assert artifact["source"] == MLX_FFT_SOURCE

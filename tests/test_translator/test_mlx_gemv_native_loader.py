@@ -53,8 +53,8 @@ MLX_GEMV_VARIANT_ID = (
 )
 MLX_GEMV_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "5f4ad43cd3bf08f7dc4fd78756d9c6b64eb8fe2d690af00442678c79b21ead41",
-        "sizeBytes": 8066,
+        "sha256": "f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d",
+        "sizeBytes": 8410,
     },
     "opengl": {
         "sha256": "f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562",
@@ -196,7 +196,12 @@ def _project_config(target: str, *, output_dir: str) -> str:
             max_template_specializations = 64
             max_template_materialization_work = 4096
             """).strip())
-    if target == "opengl":
+    if target == "directx":
+        sections.append(textwrap.dedent("""
+                [project.source_options.metal.target_options.directx]
+                relative_wave_shuffle_out_of_range = "self"
+                """).strip())
+    elif target == "opengl":
         sections.append(textwrap.dedent("""
                 [project.source_options.metal.target_options.opengl]
                 software_subgroup_width = 32
@@ -340,7 +345,11 @@ def _build_runtime_package(
         for diagnostic in payload["diagnostics"]
         if diagnostic["severity"] == "error"
     ]
-    if target == "opengl":
+    if target == "directx":
+        assert payload["project"]["sourceOptions"]["metal"]["target_options"] == {
+            "directx": {"relative_wave_shuffle_out_of_range": "self"}
+        }
+    elif target == "opengl":
         assert payload["project"]["indexRangeAssertions"] == [INDEX_ASSERTION]
         assert payload["project"]["indexRangeAssertionCount"] == 1
 
@@ -389,7 +398,17 @@ def _build_runtime_package(
     if target == "directx":
         assert "[numthreads(32, 2, 1)]" in generated
         assert "[WaveSize(32)]" in generated
-        assert "WaveReadLaneAt(result[tn]" in generated
+        assert (
+            "float __crossgl_wave_shuffle_down_self_float(float value, uint delta)"
+            in generated
+        )
+        assert "bool valid = delta < (laneCount - lane);" in generated
+        assert "WaveReadLaneAt(value, sourceLane)" in generated
+        assert "WaveReadLaneAt(result[tn]" not in generated
+        assert (
+            "__crossgl_wave_shuffle_down_self_float(result[tn], uint((4 * int(sm))))"
+            in generated
+        )
         assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated
         assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated
         assert "uint simd_gid = crossglPhysicalSubgroupID;" in generated

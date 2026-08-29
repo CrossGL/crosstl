@@ -1458,8 +1458,8 @@ Five unsigned index assertions and one 256-element workgroup-access assertion
 bound its host contract. Translation materializes 37 specializations from 42
 reachable records, prunes 2,120 candidates, and preserves 21 reachable
 function constants for deferred specialization. The deterministic GLSL is
-83,187 bytes with SHA-256
-``7af6f757c7e8721bc982075ee4e9f772a09823a914bfb34ce957f8f37bfdad09``;
+82,045 bytes with SHA-256
+``a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb``;
 ``glslangValidator`` and ``spirv-val`` accept it, and its SPIR-V has 19 control
 barriers with no group-nonuniform instruction.
 
@@ -1479,13 +1479,16 @@ At the same current pin, a bounded GEMV proof selects
 float32 vector-matrix product with ``M=1``, ``N=32``, and ``K=32``. The
 host-derived contract fixes workgroup ``[32, 2, 1]``, subgroup width 32, and
 one dispatched workgroup. Entry-scoped translation materializes the selected
-GEMV and ``elem_to_loc_uint`` only. Its 8,066-byte HLSL has SHA-256
-``5f4ad43cd3bf08f7dc4fd78756d9c6b64eb8fe2d690af00442678c79b21ead41``
+GEMV and ``elem_to_loc_uint`` only. Its 8,410-byte HLSL has SHA-256
+``f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d``
 and passes official DXC 1.9.2602.24 under ``cs_6_6``,
 ``-enable-16bit-types``, and warnings as errors. Because physical waves need not
 contain contiguous flattened ``SV_GroupIndex`` values, generated HLSL assigns
 one uniform subgroup ID per wave through a workgroup-synchronized counter;
-proven one-wave entries retain the valid quotient fast path.
+proven one-wave entries retain the valid quotient fast path. GEMV additionally
+sets ``relative_wave_shuffle_out_of_range = "self"`` so every shuffle executes
+once with either the valid relative source lane or the calling lane, avoiding
+undefined high-lane reads on WARP.
 
 OpenGL uses two logical 32-lane software subgroups in the 64-thread workgroup.
 The fail-closed software-subgroup analysis admits the source's
