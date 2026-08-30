@@ -79,6 +79,7 @@ from crosstl.translator.codegen import (
     normalize_backend_name,
 )
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
+from crosstl.translator.codegen.entry_selection import prepare_entry_scoped_target
 from crosstl.translator.codegen.GLSL_codegen import OpenGLSoftwareSubgroupError
 from crosstl.translator.codegen.index_range_contracts import (
     IndexRangeAssertion,
@@ -1540,6 +1541,7 @@ WORKGROUP_SIZE_RULES_CONFIG_KEY = "workgroup_size_rules"
 ENTRY_WORKGROUP_SIZE_RULES_CONFIG_KEY = "entry_workgroup_size_rules"
 WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY = "execution.workgroup-size-specialization"
 WORKGROUP_SIZE_SPECIALIZATION_TARGETS = frozenset(("directx", "opengl"))
+WORKGROUP_SIZE_RULE_TARGETS = frozenset(("directx", "metal", "opengl"))
 SUBGROUP_WIDTH_RULES_CONFIG_KEY = "subgroup_width_rules"
 SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY = "execution.subgroup-width-specialization"
 DIRECTX_EXACT_SUBGROUP_WIDTHS = frozenset((4, 8, 16, 32, 64, 128))
@@ -11771,7 +11773,7 @@ def _unsupported_workgroup_size_rule_target_error(
     unit: ProjectTranslationUnit,
     target: str,
 ) -> ProjectWorkgroupSizeError | None:
-    if target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS:
+    if target in WORKGROUP_SIZE_RULE_TARGETS:
         return None
     configured = _configured_workgroup_size_rule(config, unit.relative_path)
     configured_entries = _configured_entry_workgroup_size_rules(
@@ -11790,7 +11792,7 @@ def _unsupported_workgroup_size_rule_target_error(
                 for entry_pattern, components in sorted(entry_rules.items())
             },
             "target": target,
-            "supportedTargets": sorted(WORKGROUP_SIZE_SPECIALIZATION_TARGETS),
+            "supportedTargets": sorted(WORKGROUP_SIZE_RULE_TARGETS),
         }
     elif configured is not None:
         pattern, components, provenance = configured
@@ -11799,7 +11801,7 @@ def _unsupported_workgroup_size_rule_target_error(
             "sourcePattern": pattern,
             "components": list(components),
             "target": target,
-            "supportedTargets": sorted(WORKGROUP_SIZE_SPECIALIZATION_TARGETS),
+            "supportedTargets": sorted(WORKGROUP_SIZE_RULE_TARGETS),
         }
     return ProjectWorkgroupSizeError(
         f"Per-entry workgroup-size rules are not supported for target '{target}'.",
@@ -12004,7 +12006,7 @@ def _target_entry_points_for_crossgl_stages(
             str(getattr(getattr(stage, "entry_point", None), "name", "main")): "main"
             for stage in stages
         }
-    if target != "directx":
+    if target not in {"directx", "metal"}:
         return {}
     codegen = get_codegen(target)
     stage_entry_names = {} if entry_scoped else codegen.stage_entry_names(ast)
@@ -23783,14 +23785,16 @@ def _workgroup_size_failure_details(
     }
 
 
-def _directx_entry_point_failure_details(
+def _entry_point_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
     artifact_path: str | None,
 ) -> dict[str, Any]:
-    if _translation_failure_diagnostic_code(exc) != (
-        "project.translate.directx-entry-point-unavailable"
-    ):
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-entry-point-unavailable",
+        "project.translate.metal-entry-point-unavailable",
+        "project.translate.opengl-entry-point-unavailable",
+    }:
         return {}
 
     selection = {
@@ -23860,7 +23864,7 @@ def _translation_failure_details(
         **_metal_callable_alias_failure_details(exc, unit, artifact_path),
         **_template_materialization_failure_details(exc),
         **_workgroup_size_failure_details(exc, unit, artifact_path),
-        **_directx_entry_point_failure_details(exc, unit, artifact_path),
+        **_entry_point_failure_details(exc, unit, artifact_path),
     }
 
 
@@ -26167,9 +26171,12 @@ def _generate_project_target_from_crossgl_ast(
             )
         configure_workgroup_accesses(workgroup_access_assertions)
     lower_default_arguments(ast)
-    validate_pointer_reinterpretation_target(ast, target)
-    if entry_point is None:
-        generated = codegen.generate(ast)
+    selected_ast, remaining_entry_point = prepare_entry_scoped_target(
+        codegen, ast, entry_point
+    )
+    validate_pointer_reinterpretation_target(selected_ast, target)
+    if remaining_entry_point is None:
+        generated = codegen.generate(selected_ast)
     else:
         generate_entry = getattr(codegen, "generate_entry", None)
         if not callable(generate_entry):
@@ -26177,7 +26184,7 @@ def _generate_project_target_from_crossgl_ast(
                 "Entry-scoped artifact generation is not supported for the "
                 "requested target backend"
             )
-        generated = generate_entry(ast, entry_point)
+        generated = generate_entry(selected_ast, remaining_entry_point)
     if format_output:
         try:
             from crosstl.formatter import format_shader_code
@@ -26250,6 +26257,31 @@ def _validate_project_workgroup_target_output(
             for entry in execution_entries
             if _is_non_empty_string(entry.get("targetEntryPoint"))
         }
+        if target == "metal":
+            reflected = reflect_target_host_interface(output_path, target=target)
+            reflected_names = [
+                str(entry_point["name"])
+                for entry_point in _record_sequence(reflected.get("entryPoints"))
+                if isinstance(entry_point, Mapping)
+                and entry_point.get("stage") == "compute"
+                and _is_non_empty_string(entry_point.get("name"))
+            ]
+            if len(reflected_names) != len(set(reflected_names)) or set(
+                reflected_names
+            ) != set(expected_by_target):
+                raise ProjectWorkgroupSizeError(
+                    "Generated Metal entries do not match the host-dispatch "
+                    "workgroup contract.",
+                    code=("project.translate.workgroup-size-materialization-invalid"),
+                    reason="target-entry-identity-mismatch",
+                    source_entry_points=execution.get("sourceEntryPoints", ()),
+                    materialization_details={
+                        "expectedTargetEntryPoints": sorted(expected_by_target),
+                        "reflectedTargetEntryPoints": sorted(reflected_names),
+                        "workgroupSizeOwnership": "host-dispatch",
+                    },
+                )
+            return
         reflected_entries = _project_target_workgroup_entries(output_path, target)
         reflected_by_target = dict(reflected_entries)
         reflected_names = [name for name, _size in reflected_entries]
@@ -27383,19 +27415,35 @@ def _translate_project_impl(
                         translate_kwargs["source_options"] = translation_source_options
                     generated_source = None
                     crossgl_ast = None
-                    requires_workgroup_specialization = (
-                        target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS
-                        and (
-                            unit.source_backend == "metal"
-                            or translation_source_backend in {"cgl", "crossgl"}
+                    configured_workgroup_rule = (
+                        _configured_workgroup_size_rule(config, unit.relative_path)
+                        is not None
+                        or _configured_entry_workgroup_size_rules(
+                            config, unit.relative_path
                         )
-                        and _project_input_requires_workgroup_specialization(
-                            input_path=translation_input_path,
-                            source_backend=translation_source_backend,
-                            config=config,
-                            variant=variant,
-                            project_relative_path=unit.relative_path,
-                            configured_workgroup=(translation_job.configured_workgroup),
+                        is not None
+                    )
+                    workgroup_input_supported = (
+                        unit.source_backend == "metal"
+                        or translation_source_backend in {"cgl", "crossgl"}
+                    )
+                    requires_workgroup_specialization = workgroup_input_supported and (
+                        (
+                            target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS
+                            and _project_input_requires_workgroup_specialization(
+                                input_path=translation_input_path,
+                                source_backend=translation_source_backend,
+                                config=config,
+                                variant=variant,
+                                project_relative_path=unit.relative_path,
+                                configured_workgroup=(
+                                    translation_job.configured_workgroup
+                                ),
+                            )
+                        )
+                        or (
+                            target in WORKGROUP_SIZE_RULE_TARGETS
+                            and configured_workgroup_rule
                         )
                     )
                     configured_subgroup = translation_job.configured_subgroup
@@ -30432,7 +30480,13 @@ def _runtime_manifest_reflected_host_interface(
     ):
         return None
     normalized_target = _normalized_targets([str(target)])[0]
-    if normalized_target not in {"directx", "opengl", "webgl", "vulkan"}:
+    if normalized_target not in {
+        "directx",
+        "metal",
+        "opengl",
+        "webgl",
+        "vulkan",
+    }:
         return None
     artifact_path = (root_path / str(path)).resolve()
     if not _is_relative_to(artifact_path, root_path) or not artifact_path.is_file():

@@ -34,6 +34,7 @@ MLX_UNARY_SOURCE = "mlx/backend/metal/kernels/unary.metal"
 MLX_UNARY_SHA256 = "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
 REQUIRE_PROOF_ENVS = {
     "directx": "CROSTL_REQUIRE_MLX_UNARY_DIRECTX_NATIVE_LOADER",
+    "metal": "CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP",
     "opengl": "CROSTL_REQUIRE_MLX_UNARY_OPENGL_NATIVE_LOADER",
 }
 
@@ -57,6 +58,7 @@ SQUARE_WORKLOAD = UnaryWorkload(
     operator_type="Square",
     generated_operation={
         "directx": "return (x * x);",
+        "metal": "return x * x;",
         "opengl": "return (x * x);",
     },
     generated_artifacts={
@@ -65,6 +67,12 @@ SQUARE_WORKLOAD = UnaryWorkload(
                 "64540a89c95e39914a4d616aff9bec98b939a5209fa4caef5cc1425511abb4e5"
             ),
             "sizeBytes": 2314,
+        },
+        "metal": {
+            "sha256": (
+                "244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495"
+            ),
+            "sizeBytes": 1015,
         },
         "opengl": {
             "sha256": (
@@ -212,9 +220,14 @@ def _translate_unary_artifact(
         "value": expected_identity["sha256"],
     }
     assert artifact["generatedSizeBytes"] == expected_identity["sizeBytes"]
+    expected_target_entry = {
+        "directx": "CSMain",
+        "metal": workload.entry_point,
+        "opengl": "main",
+    }[target]
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
-        "target": "CSMain" if target == "directx" else "main",
+        "target": expected_target_entry,
         "stage": "compute",
     }
     assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
@@ -258,11 +271,18 @@ def _translate_unary_artifact(
     if target == "directx":
         assert "[numthreads(1, 1, 1)]" in generated
         validator = "dxc"
-    else:
+    elif target == "opengl":
         assert (
             "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1)" in generated
         )
         validator = "glslangValidator"
+    else:
+        assert target == "metal"
+        assert f"kernel void {workload.entry_point}" in generated
+        assert "[[static]]" not in generated
+        assert "struct ArcCos" not in generated
+        assert "struct Square" in generated
+        validator = "xcrun"
     if shutil.which(validator) is not None:
         toolchain_runs = payload["validation"]["toolchainRuns"]
         assert len(toolchain_runs) == 1
@@ -289,6 +309,85 @@ def test_pinned_mlx_unary_square_translates_to_selected_target(target):
             target,
             SQUARE_WORKLOAD,
         )
+
+
+def test_pinned_mlx_unary_square_roundtrips_through_metal():
+    mlx_root = _pinned_mlx_root()
+    with tempfile.TemporaryDirectory(
+        prefix=".crosstl-unary-square-metal-roundtrip-",
+        dir=mlx_root,
+    ) as temporary_directory:
+        work_dir = Path(temporary_directory)
+        report_path = _translate_unary_artifact(
+            mlx_root,
+            work_dir,
+            "metal",
+            SQUARE_WORKLOAD,
+        )
+        report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+        artifact = report_payload["artifacts"][0]
+        generated_path = mlx_root / artifact["path"]
+
+        runtime_artifacts = build_runtime_artifact_manifest(report_path)
+        assert runtime_artifacts["success"] is True, json.dumps(
+            runtime_artifacts,
+            indent=2,
+        )
+        reflected = runtime_artifacts["artifacts"][0]["hostInterface"]
+        assert reflected["status"] == "ready"
+        assert reflected["entryPoints"] == [
+            {
+                "name": SQUARE_WORKLOAD.entry_point,
+                "stage": "compute",
+                "executionConfig": {},
+            }
+        ]
+        assert {
+            resource["name"]: (
+                resource["kind"],
+                resource["binding"],
+                resource["access"],
+                resource["metadata"]["entryPoint"],
+            )
+            for resource in reflected["resources"]
+        } == {
+            "in_": ("buffer", 0, "read", SQUARE_WORKLOAD.entry_point),
+            "out_": (
+                "buffer",
+                1,
+                "read_write",
+                SQUARE_WORKLOAD.entry_point,
+            ),
+            "size": (
+                "constant-buffer",
+                2,
+                "read",
+                SQUARE_WORKLOAD.entry_point,
+            ),
+        }
+
+        xcrun = shutil.which("xcrun")
+        if xcrun is None:
+            _skip_or_fail("metal", "xcrun is required for the MLX unary Metal proof")
+        air_path = work_dir / "v_Squarefloat32float32.air"
+        compiled = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-c",
+                str(generated_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+        assert air_path.is_file()
+        assert air_path.stat().st_size > 0
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])

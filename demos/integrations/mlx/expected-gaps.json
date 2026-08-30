@@ -668,8 +668,9 @@
       ]
     },
     "artifact": {
-      "sha256": "07f9300c2e4860077b344610fbfaa2eadb330e1f9723cb519794f91272bd2289",
-      "size_bytes": 116160,
+      "sha256": "459d779fb07557c81931cadc0bf6c4020d8f08adafc62986504b8f1faf872feb",
+      "size_bytes": 116260,
+      "promoted_native_16_shift_count": 20,
       "first_class_workgroup_pointer_residue": false
     },
     "native_validation": {
@@ -889,6 +890,23 @@
           "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_square_executes_through_directx_native_loader"
         }
       },
+      "metal": {
+        "target_entry_point": "v_Squarefloat32float32",
+        "sha256": "244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495",
+        "size_bytes": 1015,
+        "host_dispatch_workgroup_size": [
+          1,
+          1,
+          1
+        ],
+        "native_roundtrip": {
+          "platform": "macos-latest",
+          "compiler": "xcrun -sdk macosx metal",
+          "status": "required-on-ci",
+          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_square_roundtrips_through_metal"
+        },
+        "numerical_runtime_included": false
+      },
       "opengl": {
         "target_entry_point": "main",
         "sha256": "2bb46a3bb0858eb849e533bfe46eff1d59b9192436e15b2639c7998698db6a48",
@@ -923,6 +941,8 @@
     },
     "mlx_host_runtime_included": false,
     "runtime_integration_included": true,
+    "metal_roundtrip_included": true,
+    "metal_numerical_runtime_included": false,
     "selected_workload_numerical_parity_verified": true,
     "other_unary_specializations_included": false,
     "full_mlx_test_suite_included": false,
@@ -1071,8 +1091,9 @@
       "pruned_candidate_count": 2120
     },
     "artifact": {
-      "sha256": "d93972d83156853af519886a669111a061ad311ebfee85615fd797f4e22b3041",
-      "size_bytes": 146663,
+      "sha256": "dd64cfa562f4463f3ecb237d00c0273560e62839565e8638c2343a922149c6ab",
+      "size_bytes": 146763,
+      "promoted_native_16_shift_count": 20,
       "first_class_workgroup_pointer_residue": false,
       "workgroup_pointer_transport": "concrete-groupshared-root-plus-integer-offset",
       "overload_body_reachability": "all-compatible-source-overloads",

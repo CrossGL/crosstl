@@ -15,6 +15,7 @@ All notable changes to CrossTL are documented in this file.
 - Resumable project translation checkpoints with a durable contract, interruption recording, and checkpoint identity that covers configured limits.
 - Bounded, process-isolated project translation workers with deterministic report and checkpoint coordination, lazily streamed plans, transactional artifact pair publication, coordinated concurrent publication, typed worker failure coordinates, interrupted-worker termination, and per-artifact wall-clock timeouts, exposed through both the API and CLI.
 - Multiple project entry artifacts per source, a backend-neutral project source entry-point discovery contract with Metal enumeration, and opt-in discovered-entry expansion for selected sources recorded in reports, artifact matrices, and checkpoints.
+- Entry-scoped Metal compute artifacts with reachable helper/declaration/struct pruning, structured fail-closed selection diagnostics, bounded resource reflection, exact kernel identity, and host-owned workgroup-rule metadata; current-pinned MLX unary Square round-trips to a deterministic 1,015-byte artifact accepted by the native macOS Metal compiler.
 - Pinned MLX native execution evidence: a binary kernel executed on DirectX and OpenGL with exact device readback, quantized OpenGL lowering and quantized gather provenance proofs, and bounded LayerNorm host dispatch integrated into the MLX porting frontier.
 - Current-pinned MLX LayerNorm axis-32 native-loader packages with exact eight-resource ABIs, Direct3D 12 WARP and Mesa EGL numerical CI, deterministic HLSL/GLSL identities, and an upstream-derived dispatch contract.
 - Current-pinned MLX LayerNorm VJP axis-32, one-row, `has_w=true` native-loader execution with exact eight-resource ABI, concrete DirectX and deferred-specialized OpenGL paths, and numerical `gx`/`gw` readback on WARP and Mesa.
@@ -31,6 +32,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Improved
 
+- Selected-entry target capability validation now inspects only the reachable scoped AST before code generation, so unrelated declarations cannot block an otherwise valid DirectX, Metal, or OpenGL artifact while reachable unsupported operations still fail closed.
 - DirectX software subgroup admission fails closed unless one bounded compute entry has concrete width-compatible dimensions, a supported payload and operation, unambiguous helper identity, logical invocation identity, explicit out-of-range policy, and statically uniform barrier control flow; relative source indexing is guarded before unsigned addition.
 - HLSL host-reflection collision checks now distinguish CBV, SRV, UAV, and sampler register namespaces, allowing legal coordinates such as `b0` and `t0` while continuing to reject duplicate bindings within one namespace.
 - Explicit 32-lane OpenGL software subgroups now partition bounded workgroups of up to 1,024 invocations into independent logical subgroups and admit narrow typed-identity-masked divergent `WaveActiveSum`, `WaveActiveMin`, and `WaveActiveMax` assignments while all generated barriers remain workgroup-uniform; conditional shuffle and ambiguous control flow still fail closed.
@@ -52,6 +54,7 @@ All notable changes to CrossTL are documented in this file.
 
 ### Fixed
 
+- Historical and current-pinned MLX FFT HLSL evidence now reflects C++ integer promotion of all 20 native-16 shift counts, with refreshed deterministic artifact identities and an explicit structural regression.
 - Current-pinned multidimensional MLX GEMV no longer relies on WARP physical-wave lane topology: its DirectX reduction now uses deterministic logical 32-lane software subgroups, fixing the observed replacement of logical lanes 5–8 by physical lanes 21–24.
 - DirectX native 16-bit Metal `as_type` lowering uses exact `asfloat16`/`asint16`/`asuint16` reinterpretation by default; an explicit source-scoped widening mode reconstructs binary16 payloads with integer IEEE-754 masks and keeps logical `float16_t` arithmetic, sign application, returns, and consumers in float32. Scalar native `int16_t`/`uint16_t` arithmetic now also follows Metal/C++ integer promotion before shifts, preventing FP8 scale-bit construction from truncating `<< 23` to a 16-bit shift and eliminating current-pinned MXFP4’s signed-zero collapse on WARP.
 - DirectX compute `gl_SubgroupID` lowering assigns a synchronized, wave-uniform physical ID in multi-wave workgroups instead of dividing each lane's flattened `SV_GroupIndex`; proven one-wave workgroups retain the valid quotient fast path.

@@ -2,6 +2,7 @@
 
 import ast as py_ast
 import re
+from copy import deepcopy
 from hashlib import sha1
 
 from ...backend.common_ast import AssignmentNode as BackendAssignmentNode
@@ -38,6 +39,7 @@ from ..ast import (
     RayTracingOpNode,
     ReferenceType,
     ReturnNode,
+    StageMap,
     StructNode,
     SwitchNode,
     TernaryOpNode,
@@ -347,6 +349,30 @@ class UnsupportedMetalFeatureError(ValueError):
         self.missing_capabilities = tuple(missing_capabilities)
         self.operation = operation
         self.reason = reason
+        self.source_location = source_location
+
+
+class MetalEntryPointSelectionError(ValueError):
+    """Raised when a requested standalone Metal entry cannot be selected."""
+
+    project_diagnostic_code = "project.translate.metal-entry-point-unavailable"
+    missing_capabilities = ("artifact.entry-point-selection",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        entry_point=None,
+        available_entry_points=None,
+        reason=None,
+        stage=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.entry_point = entry_point
+        self.available_entry_points = tuple(available_entry_points or ())
+        self.reason = reason
+        self.stage = stage
         self.source_location = source_location
 
 
@@ -1332,6 +1358,366 @@ class MetalCodeGen:
     def generate(self, ast):
         """Generate complete Metal Shading Language source for a CrossGL AST."""
         return self.generate_program(ast)
+
+    def generate_entry(self, ast, entry_point):
+        """Generate one independently loadable Metal compute entry artifact."""
+        scoped_ast = self.entry_scoped_ast(ast, entry_point)
+        return self.generate_program(scoped_ast)
+
+    def entry_scoped_ast(self, ast, entry_point):
+        if not isinstance(entry_point, str) or not entry_point.strip():
+            raise MetalEntryPointSelectionError(
+                "Metal entry-point selection requires a non-empty source entry name",
+                entry_point=entry_point,
+                reason="invalid-name",
+            )
+        entry_point = entry_point.strip()
+        stage_entry_types = self.stage_entry_types()
+        entries = collect_stage_entry_records(ast, None, stage_entry_types)
+        available = sorted(
+            {
+                str(getattr(function, "name", ""))
+                for _entry_id, _stage_name, function in entries
+                if getattr(function, "name", None)
+            }
+        )
+        matches = [
+            (entry_id, stage_name, function)
+            for entry_id, stage_name, function in entries
+            if getattr(function, "name", None) == entry_point
+        ]
+        if not matches:
+            raise MetalEntryPointSelectionError(
+                f"Metal source entry point '{entry_point}' was not found",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="not-found",
+            )
+        if len(matches) != 1:
+            raise MetalEntryPointSelectionError(
+                f"Metal source entry point '{entry_point}' is ambiguous",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="ambiguous",
+            )
+
+        _selected_id, selected_stage_name, selected_function = matches[0]
+        selected_stage_name = normalize_stage_name(selected_stage_name)
+        if selected_stage_name != "compute":
+            raise MetalEntryPointSelectionError(
+                f"Metal standalone entry point '{entry_point}' must be a compute "
+                f"entry; found stage '{selected_stage_name}'",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="unsupported-stage",
+                stage=selected_stage_name,
+                source_location=getattr(selected_function, "source_location", None),
+            )
+        selected_stage = next(
+            (
+                (stage_type, stage)
+                for stage_type, stage in getattr(ast, "stages", {}).items()
+                if getattr(stage, "entry_point", None) is selected_function
+            ),
+            None,
+        )
+        scoped_ast = deepcopy(ast)
+        selected_copy_function = None
+        scoped_ast.functions = [
+            function
+            for function in getattr(scoped_ast, "functions", []) or []
+            if function_stage_name(function) not in stage_entry_types
+            or (
+                selected_stage is None
+                and function_stage_name(function) == selected_stage_name
+                and getattr(function, "name", None) == entry_point
+            )
+        ]
+        selected_stages = StageMap()
+        if selected_stage is not None:
+            stage_type, stage = selected_stage
+            selected_stage_copy = deepcopy(stage)
+            selected_stages.append(stage_type, selected_stage_copy)
+            selected_copy_function = selected_stage_copy.entry_point
+        else:
+            selected_copy_function = next(
+                (
+                    function
+                    for function in scoped_ast.functions
+                    if function_stage_name(function) == selected_stage_name
+                    and getattr(function, "name", None) == entry_point
+                ),
+                None,
+            )
+        scoped_ast.stages = selected_stages
+        if selected_copy_function is None:
+            raise MetalEntryPointSelectionError(
+                f"Metal source entry point '{entry_point}' could not be copied",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="copy-failed",
+            )
+
+        reachable_names = self.entry_reachable_function_names(
+            scoped_ast,
+            selected_copy_function,
+        )
+        scoped_ast.functions = [
+            function
+            for function in getattr(scoped_ast, "functions", []) or []
+            if function is selected_copy_function
+            or getattr(function, "name", None) in reachable_names
+        ]
+        for _stage_type, stage in scoped_ast.stages.items():
+            stage.local_functions = [
+                function
+                for function in getattr(stage, "local_functions", []) or []
+                if getattr(function, "name", None) in reachable_names
+            ]
+        self.prune_entry_scoped_declarations(scoped_ast, selected_copy_function)
+        self.prune_entry_scoped_structs(scoped_ast, selected_copy_function)
+        return scoped_ast
+
+    def entry_scoped_functions(self, ast, entry_function):
+        functions = list(getattr(ast, "functions", []) or [])
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            functions.extend(getattr(stage, "local_functions", []) or [])
+        functions.append(entry_function)
+        return functions
+
+    def prune_entry_scoped_declarations(self, ast, entry_function):
+        """Retain only module declarations reachable from one compute entry."""
+        functions = self.entry_scoped_functions(ast, entry_function)
+        function_names = {
+            getattr(function, "name", None)
+            for function in functions
+            if getattr(function, "name", None)
+        }
+        referenced_names = set()
+        for function in functions:
+            local_names = {
+                getattr(parameter, "name", None)
+                for parameter in (
+                    getattr(
+                        function,
+                        "parameters",
+                        getattr(function, "params", []),
+                    )
+                    or []
+                )
+                if getattr(parameter, "name", None)
+            }
+            local_names.update(
+                getattr(node, "name", None)
+                for node in self.entry_ast_nodes(getattr(function, "body", None))
+                if isinstance(node, VariableNode) and getattr(node, "name", None)
+            )
+            referenced_names.update(
+                self.entry_identifier_references(function) - local_names
+            )
+        referenced_names.difference_update(function_names)
+
+        declaration_groups = [
+            (ast, "global_variables", False),
+            (ast, "constants", False),
+            (ast, "cbuffers", True),
+        ]
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            declaration_groups.extend(
+                (
+                    (stage, "local_variables", False),
+                    (stage, "local_cbuffers", True),
+                )
+            )
+
+        declarations = []
+        for owner, attribute, include_members in declaration_groups:
+            for declaration in getattr(owner, attribute, []) or []:
+                names = self.entry_declaration_names(
+                    declaration,
+                    include_members=include_members,
+                )
+                declarations.append((declaration, names))
+
+        retained_ids = set()
+        changed = True
+        while changed:
+            changed = False
+            for declaration, names in declarations:
+                declaration_id = id(declaration)
+                if declaration_id in retained_ids or not names & referenced_names:
+                    continue
+                retained_ids.add(declaration_id)
+                referenced_names.update(
+                    self.entry_identifier_references(declaration) - names
+                )
+                changed = True
+
+        for owner, attribute, _include_members in declaration_groups:
+            setattr(
+                owner,
+                attribute,
+                [
+                    declaration
+                    for declaration in getattr(owner, attribute, []) or []
+                    if id(declaration) in retained_ids
+                ],
+            )
+
+    def prune_entry_scoped_structs(self, ast, entry_function):
+        """Retain struct families referenced by the selected entry closure."""
+        declaration_groups = [(ast, "structs")]
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            declaration_groups.append((stage, "local_structs"))
+        declarations = [
+            declaration
+            for owner, attribute in declaration_groups
+            for declaration in getattr(owner, attribute, []) or []
+        ]
+        struct_names = {
+            str(declaration.name)
+            for declaration in declarations
+            if getattr(declaration, "name", None)
+        }
+        if not struct_names:
+            return
+
+        roots = self.entry_scoped_functions(ast, entry_function)
+        roots.extend(getattr(ast, "global_variables", []) or [])
+        roots.extend(getattr(ast, "constants", []) or [])
+        roots.extend(getattr(ast, "cbuffers", []) or [])
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            roots.extend(getattr(stage, "local_variables", []) or [])
+            roots.extend(getattr(stage, "local_cbuffers", []) or [])
+
+        retained_names = set()
+        pending_names = set()
+        for root in roots:
+            pending_names.update(self.entry_struct_references(root, struct_names))
+        while pending_names:
+            name = pending_names.pop()
+            if name in retained_names:
+                continue
+            retained_names.add(name)
+            for declaration in declarations:
+                if getattr(declaration, "name", None) == name:
+                    pending_names.update(
+                        self.entry_struct_references(declaration, struct_names)
+                        - retained_names
+                    )
+
+        for owner, attribute in declaration_groups:
+            setattr(
+                owner,
+                attribute,
+                [
+                    declaration
+                    for declaration in getattr(owner, attribute, []) or []
+                    if getattr(declaration, "name", None) in retained_names
+                ],
+            )
+
+    def entry_struct_references(self, root, struct_names):
+        references = set()
+        type_attributes = (
+            "return_type",
+            "param_type",
+            "var_type",
+            "vtype",
+            "member_type",
+            "const_type",
+            "constructor_type",
+            "element_type",
+            "referenced_type",
+            "pointee_type",
+        )
+        for node in self.entry_ast_nodes(root):
+            if isinstance(node, IdentifierNode):
+                name = getattr(node, "name", None)
+                if name in struct_names:
+                    references.add(str(name))
+            for attribute in type_attributes:
+                type_value = getattr(node, attribute, None)
+                if type_value is None:
+                    continue
+                try:
+                    type_text = self.type_name_string(type_value)
+                except (AttributeError, TypeError, ValueError):
+                    type_text = str(type_value)
+                for name in struct_names:
+                    if re.search(
+                        rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])",
+                        str(type_text),
+                    ):
+                        references.add(name)
+            for inherited in getattr(node, "inheritance", []) or []:
+                inherited_text = str(inherited)
+                for name in struct_names:
+                    if re.search(
+                        rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])",
+                        inherited_text,
+                    ):
+                        references.add(name)
+        return references
+
+    def entry_ast_nodes(self, root):
+        if root is None:
+            return ()
+        walk = getattr(root, "walk", None)
+        return walk() if callable(walk) else self.iter_ast_nodes(root)
+
+    def entry_identifier_references(self, root):
+        return {
+            str(node.name)
+            for node in self.entry_ast_nodes(root)
+            if isinstance(node, IdentifierNode) and getattr(node, "name", None)
+        }
+
+    def entry_declaration_names(self, declaration, *, include_members):
+        name = getattr(
+            declaration,
+            "name",
+            getattr(declaration, "variable_name", None),
+        )
+        names = {str(name)} if name else set()
+        if include_members:
+            names.update(
+                str(member.name)
+                for member in getattr(declaration, "members", []) or []
+                if getattr(member, "name", None)
+            )
+        return names
+
+    def entry_reachable_function_names(self, ast, entry_function):
+        functions = list(getattr(ast, "functions", []) or [])
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            functions.extend(getattr(stage, "local_functions", []) or [])
+        functions_by_name = {}
+        for function in functions:
+            name = getattr(function, "name", None)
+            if name:
+                functions_by_name.setdefault(name, []).append(function)
+
+        reachable_names = set()
+        pending = [entry_function]
+        visited = set()
+        while pending:
+            function = pending.pop()
+            if id(function) in visited:
+                continue
+            visited.add(id(function))
+            for node in self.iter_ast_nodes(getattr(function, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                name = self.function_call_name(node)
+                if not name or name in reachable_names:
+                    continue
+                candidates = functions_by_name.get(name, ())
+                if not candidates:
+                    continue
+                reachable_names.add(name)
+                pending.extend(candidates)
+        return reachable_names
 
     def generate_stage(self, ast, shader_type):
         """Generate Metal source for a single requested shader stage."""

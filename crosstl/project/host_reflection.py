@@ -177,6 +177,12 @@ def reflect_target_host_interface(
                 artifact_format=artifact_format or "GLSL source",
                 stage=stage,
             )
+        if normalized_target in {"metal", "msl"}:
+            return _reflect_metal_source(
+                artifact_path,
+                artifact_format=artifact_format or "Metal source",
+                stage=stage,
+            )
         if normalized_target in {"vulkan", "spirv", "spv"}:
             return _reflect_spirv_artifact(
                 artifact_path,
@@ -355,6 +361,13 @@ def _reflection_binding_namespace(
     *,
     parser: str,
 ) -> str | None:
+    if parser == "metal-reflection":
+        kind = str(resource.get("kind") or "").lower()
+        if kind == "texture":
+            return "texture"
+        if kind == "sampler":
+            return "sampler"
+        return "buffer"
     if parser != "directx-reflection":
         return None
     kind = str(resource.get("kind") or "").lower()
@@ -419,6 +432,185 @@ def _parse_register(register_text: str | None) -> tuple[int | None, int | None]:
         return None, None
     set_number = _int_value(match.group("set"))
     return 0 if set_number is None else set_number, _int_value(match.group("binding"))
+
+
+METAL_ENTRY_HEADER_RE = re.compile(
+    r"^[ \t]*(?P<stage>kernel|vertex|fragment|mesh|object)\s+"
+    r"[^\n{};()]*?\b(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+METAL_RESOURCE_ATTRIBUTE_RE = re.compile(
+    r"\[\[\s*(?P<kind>buffer|texture|sampler)\s*\(\s*(?P<binding>\d+)\s*\)\s*\]\]"
+)
+METAL_FUNCTION_CONSTANT_RE = re.compile(
+    r"\bconstant\s+(?P<type>[A-Za-z_]\w*(?:\s*<[^;]+>)?)\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*"
+    r"\[\[\s*function_constant\s*\(\s*(?P<id>\d+)\s*\)\s*\]\]\s*;"
+)
+
+
+def _metal_matching_parenthesis(source: str, start: int) -> int | None:
+    depth = 0
+    index = start
+    while index < len(source):
+        character = source[index]
+        if character in {'"', "'"}:
+            index = _skip_hlsl_quoted_text(source, index)
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+            if depth < 0:
+                return None
+        index += 1
+    return None
+
+
+def _split_metal_parameters(parameters: str) -> list[str]:
+    parts = []
+    start = 0
+    depths = {"(": 0, "[": 0, "<": 0, "{": 0}
+    closers = {")": "(", "]": "[", ">": "<", "}": "{"}
+    index = 0
+    while index < len(parameters):
+        character = parameters[index]
+        if character in {'"', "'"}:
+            index = _skip_hlsl_quoted_text(parameters, index)
+            continue
+        if character in depths:
+            depths[character] += 1
+        elif character in closers:
+            opener = closers[character]
+            if depths[opener] > 0:
+                depths[opener] -= 1
+        elif character == "," and not any(depths.values()):
+            part = parameters[start:index].strip()
+            if part:
+                parts.append(part)
+            start = index + 1
+        index += 1
+    part = parameters[start:].strip()
+    if part:
+        parts.append(part)
+    return parts
+
+
+def _metal_resource_from_parameter(
+    parameter: str,
+    *,
+    entry_point: str,
+) -> dict[str, Any] | None:
+    attribute = METAL_RESOURCE_ATTRIBUTE_RE.search(parameter)
+    if attribute is None:
+        return None
+    declaration = parameter[: attribute.start()].strip()
+    name_match = re.search(r"(?P<name>[A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)?$", declaration)
+    if name_match is None:
+        return None
+    name = name_match.group("name")
+    type_name = " ".join(declaration[: name_match.start()].split())
+    if not type_name:
+        return None
+
+    attribute_kind = attribute.group("kind")
+    if attribute_kind == "texture":
+        kind = "texture"
+        access_match = re.search(
+            r"\baccess\s*::\s*(read|write|read_write)\b", type_name
+        )
+        access = access_match.group(1) if access_match is not None else "read"
+    elif attribute_kind == "sampler":
+        kind = "sampler"
+        access = "read"
+    else:
+        kind = "constant-buffer" if re.search(r"\bconstant\b", type_name) else "buffer"
+        access = (
+            "read"
+            if kind == "constant-buffer" or re.search(r"\bconst\b", type_name)
+            else "read_write"
+        )
+
+    return {
+        "name": name,
+        "kind": kind,
+        "type": type_name,
+        "set": 0,
+        "binding": _int_value(attribute.group("binding")),
+        "access": access,
+        "metadata": {"entryPoint": entry_point},
+    }
+
+
+def _reflect_metal_source(
+    artifact_path: Path,
+    *,
+    artifact_format: str,
+    stage: str | None,
+) -> dict[str, Any]:
+    source = _strip_comments(_read_text(artifact_path))
+    entry_points = []
+    resources = []
+    stage_names = {
+        "kernel": "compute",
+        "vertex": "vertex",
+        "fragment": "fragment",
+        "mesh": "mesh",
+        "object": "task",
+    }
+    forced_stage = _stage_name(stage)
+    for match in METAL_ENTRY_HEADER_RE.finditer(source):
+        parameter_start = match.end() - 1
+        parameter_end = _metal_matching_parenthesis(source, parameter_start)
+        if parameter_end is None:
+            continue
+        entry_name = match.group("name")
+        entry_points.append(
+            {
+                "name": entry_name,
+                "stage": forced_stage or stage_names[match.group("stage")],
+                "executionConfig": {},
+            }
+        )
+        for parameter in _split_metal_parameters(
+            source[parameter_start + 1 : parameter_end]
+        ):
+            resource = _metal_resource_from_parameter(
+                parameter,
+                entry_point=entry_name,
+            )
+            if resource is not None:
+                resources.append(resource)
+
+    specialization_constants = []
+    for match in METAL_FUNCTION_CONSTANT_RE.finditer(source):
+        source_type = " ".join(match.group("type").split())
+        specialization_constants.append(
+            {
+                "name": match.group("name"),
+                "kind": "function-constant",
+                "id": _int_value(match.group("id")),
+                "dtype": source_type,
+                "sourceType": source_type,
+                "required": True,
+                "overridden": False,
+                "overrideStatus": "not-overridden",
+                "status": "required",
+                "source": "metal.function_constant",
+            }
+        )
+
+    return _finalize_reflection(
+        parser="metal-reflection",
+        artifact_format=artifact_format,
+        entry_points=entry_points,
+        resources=resources,
+        constants=[],
+        specialization_constants=specialization_constants,
+        diagnostics=[],
+    )
 
 
 HLSL_NUMTHREADS_RE = re.compile(

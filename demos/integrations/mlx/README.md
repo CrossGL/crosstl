@@ -29,6 +29,13 @@ The current harness verifies:
   preservation remain blocked by
   [#1660](https://github.com/CrossGL/crosstl/issues/1660), so this is not yet a
   complete semantic-equivalence claim;
+- selected-entry Metal-to-CrossGL-to-Metal translation of current-pinned
+  ``unary.metal`` entry ``v_Squarefloat32float32``. Reachability pruning keeps
+  one struct family and one kernel, bounded source reflection records its three
+  buffer bindings, a host-owned ``[1, 1, 1]`` dispatch contract is preserved,
+  and macOS CI compiles the exact 1,015-byte artifact with the native Metal
+  compiler. This does not claim Metal numerical execution, ArcCos Metal
+  coverage, or the broader unary family;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains
@@ -744,9 +751,12 @@ every twiddle dereference unreachable, DirectX removes that unobserved resource
 parameter through the forwarding chain rather than inventing a backing buffer.
 A null pointer that can be observed or dereferenced still fails closed.
 
-The current source emits a 146,663-byte HLSL artifact with SHA-256
-`d93972d83156853af519886a669111a061ad311ebfee85615fd797f4e22b3041`
-and zero project diagnostics. Windows CI compiles it with DXC using `cs_6_2`,
+The current source emits a 146,763-byte HLSL artifact with SHA-256
+`dd64cfa562f4463f3ecb237d00c0273560e62839565e8638c2343a922149c6ab`
+and zero project diagnostics. All 20 native-16 ``power`` shift counts are
+explicitly promoted to ``int`` before HLSL shifting, matching Metal/C++ integer
+promotion rather than retaining minimum-precision count semantics. Windows CI
+compiles it with DXC using `cs_6_2`,
 `-enable-16bit-types`, and warnings as errors, then packages and dispatches it
 through Direct3D 12 WARP. The same index-1 complex impulse workload, reflected
 resource layouts, physical workgroup count, and `2e-4` output tolerances are
@@ -1619,6 +1629,19 @@ function return types while preserving SPIR-V `NoContraction`. The generated
 artifacts also retain a one-thread workgroup, the source and output buffers, and
 the size constant in their reflected runtime interfaces. Deterministic artifact
 hashes and the pinned upstream source hash are checked before packaging.
+
+The Square entry now also round-trips through Metal as one 1,015-byte artifact
+with SHA-256
+``244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495``.
+Entry reachability retains only ``struct Square`` and its call helpers, with no
+unrelated unary structs or illegal ``[[static]]`` members. Bounded Metal source
+reflection records the exact ``v_Squarefloat32float32`` kernel plus read-only
+buffer 0, read-write buffer 1, and read-only constant buffer 2. Its ``[1, 1,
+1]`` workgroup size is explicitly host-dispatch-owned because MSL has no fixed
+source attribute equivalent to HLSL ``numthreads``. macOS CI requires the
+selected artifact to compile with ``xcrun -sdk macosx metal -c``. This is a
+selected-entry round-trip and native compiler proof, not Metal numerical
+execution; ArcCos and the broader unary family remain outside this Metal claim.
 
 Windows CI compiles the selected HLSL entries with DXC and executes them through
 the native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entries with

@@ -453,7 +453,7 @@ source entries by adding a repository-relative selector table to
    [project]
    include = ["kernels/arange.metal"]
    include_dirs = ["."]
-   targets = ["directx", "opengl"]
+   targets = ["directx", "metal", "opengl"]
    output_dir = "crosstl-out"
 
    [project.entry_points]
@@ -472,10 +472,17 @@ and execution contract. Explicit registers and spaces remain unchanged, while
 runtime-loader metadata records the selected ``cs_6_0`` entry profile.
 
 For OpenGL compute output, the same selection produces one ``.glsl`` artifact
-per entry with target entry ``main``. For both targets, the portability report
-records every source entry, target entry, and reflected stage; embedded
-validation records carry the same identities. Runtime artifact manifests then
-reflect only the selected stage interface from each standalone output.
+per entry with target entry ``main``. For Metal compute output, it produces one
+``.metal`` artifact per entry and retains only the selected kernel, reachable
+helpers, referenced declarations, and recursively referenced struct families.
+The emitted Metal entry name is recorded exactly rather than normalized to a
+fixed ``main``. Runtime manifests reflect the standalone Metal source and keep
+``buffer``, ``texture``, and ``sampler`` index spaces independent.
+
+For all three targets, the portability report records every source entry,
+target entry, and reflected stage; embedded validation records carry the same
+identities. Runtime artifact manifests then reflect only the selected stage
+interface from each standalone output.
 
 Selection is exact after source materialization. Missing or ambiguous entries
 fail with structured diagnostics and no target file. Targets that do not yet
@@ -2643,6 +2650,15 @@ entry pattern must match at least one host-named materialization. Missing entry
 coverage and stale patterns fail closed with
 ``project.translate.workgroup-size-entry-rule-unmatched``.
 
+Metal also consumes source-wide and entry-specific workgroup-size rules, but as
+host-dispatch contracts rather than source specialization. MSL does not encode
+a fixed ``numthreads`` or ``local_size`` attribute: the generated kernel keeps
+its exact emitted entry name, ``execution.entryPoints`` records each evaluated
+size, and report validation verifies that the reflected compute-entry identities
+match the contract. DirectX and OpenGL continue to encode the same canonical
+sizes in HLSL and GLSL respectively. This distinction prevents a host dispatch
+requirement from being mistaken for Metal source metadata.
+
 For DirectX and OpenGL project translation, a consumed Metal
 ``[[threads_per_threadgroup]]`` parameter requires this concrete configuration
 or equivalent concrete source execution metadata. Translation emits
@@ -2673,11 +2689,12 @@ unmatched host records also fail closed. A multi-entry OpenGL source is still
 packaged as separate runnable artifacts even when every entry uses the same
 size, and translation fails if the artifact model cannot represent that split.
 
-Targets that do not implement per-entry workgroup specialization reject a
-matching rule before source materialization or target generation. The failed
-artifact and structured ``execution-specialization`` diagnostic retain the
-selected rule, target, and supported target set so the configuration cannot be
-silently ignored.
+Targets outside DirectX, Metal, and OpenGL reject a matching workgroup-size
+rule before source materialization or target generation. Metal accepts the rule
+as host-dispatch metadata; DirectX and OpenGL additionally specialize target
+source dimensions. A failed artifact and structured
+``execution-specialization`` diagnostic retain the selected rule, target, and
+supported target set so the configuration cannot be silently ignored.
 
 Successful artifact records include an ``execution`` object with the canonical
 ``workgroupSize``, affected ``sourceEntryPoints``, configuration or source

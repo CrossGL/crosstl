@@ -1058,6 +1058,72 @@ def test_translate_project_emits_entry_scoped_opengl_artifact_and_reflection(
     } == {0, 1, 2}
 
 
+def test_translate_project_emits_entry_scoped_metal_artifact_and_reflection(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        include_patterns=("multi.cgl",),
+        targets=("metal",),
+        output_dir="out",
+        entry_points={"multi.cgl": "second"},
+    )
+
+    report = translate_project(config, format_output=False, validate=True)
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["artifactMatrix"]["complete"] is True
+    assert artifact["path"] == "out/metal/multi/second.metal"
+    assert artifact["entryPoint"] == {
+        "source": "second",
+        "target": "kernel_second",
+        "stage": "compute",
+    }
+    assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
+    assert generated.count("kernel void") == 1
+    assert "kernel void kernel_second" in generated
+    assert "kernel void kernel_first" not in generated
+    assert "selected_helper" in generated
+    assert "unrelated_helper" not in generated
+    assert generated.count("[[buffer(") == 3
+    assert_metal_validates_if_available(generated, tmp_path)
+
+    report_path = repo / "report.json"
+    report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True
+
+    manifest = build_runtime_artifact_manifest(report_path)
+    assert manifest["success"] is True
+    runtime_artifact = manifest["artifacts"][0]
+    assert runtime_artifact["hostInterface"]["entryPoints"] == [
+        {"name": "kernel_second", "stage": "compute", "executionConfig": {}}
+    ]
+    assert {
+        resource["name"]: (
+            resource["kind"],
+            resource["binding"],
+            resource["access"],
+            resource["metadata"]["entryPoint"],
+        )
+        for resource in runtime_artifact["hostInterface"]["resources"]
+    } == {
+        "start": ("constant-buffer", 0, "read", "kernel_second"),
+        "step": ("constant-buffer", 1, "read", "kernel_second"),
+        "out_": ("buffer", 2, "read_write", "kernel_second"),
+    }
+    assert runtime_artifact["hostInterface"]["resourceCount"] == 3
+
+
 def test_translate_project_emits_each_selected_opengl_entry(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1174,6 +1240,41 @@ def test_translate_project_multiplies_variants_by_selected_entries(tmp_path):
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     assert validation["success"] is True, validation["diagnostics"]
+
+
+def test_translate_project_reports_missing_selected_metal_entry(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        include_patterns=("multi.cgl",),
+        targets=("metal",),
+        output_dir="out",
+        entry_points={"multi.cgl": "missing"},
+    )
+
+    payload = translate_project(config, format_output=False).to_json()
+    artifact = payload["artifacts"][0]
+
+    assert artifact["status"] == "failed"
+    assert artifact["entryPoint"] == {"source": "missing", "target": "missing"}
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = next(
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "project.translate.metal-entry-point-unavailable"
+    )
+    assert diagnostic["severity"] == "error"
+    assert diagnostic["missingCapabilities"] == ["artifact.entry-point-selection"]
+    assert diagnostic["details"]["entryPointSelection"] == {
+        "availableEntryPoints": ["first", "second"],
+        "entryPoint": "missing",
+        "reason": "not-found",
+    }
 
 
 @pytest.mark.parametrize(
@@ -1314,7 +1415,6 @@ def test_project_config_rejects_invalid_entry_point_lists(
     (
         "cuda",
         "hip",
-        "metal",
         "mojo",
         "rust",
         "slang",

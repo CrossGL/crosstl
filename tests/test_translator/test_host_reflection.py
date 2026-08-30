@@ -134,6 +134,72 @@ def test_hlsl_reflection_preserves_entry_points_resources_and_constants(tmp_path
     ]
 
 
+def test_metal_reflection_records_entries_resources_and_function_constants(tmp_path):
+    artifact = tmp_path / "kernel.metal"
+    artifact.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant bool enabled [[function_constant(20)]];
+
+            kernel void first(
+                const device float* input [[buffer(0)]],
+                device float* output [[buffer(1)]],
+                texture2d<float, access::read> source [[texture(0)]],
+                sampler linear_sampler [[sampler(0)]]) {
+                output[0] = enabled ? input[0] : source.read(uint2(0)).x;
+            }
+
+            kernel void second(
+                device uint* output [[buffer(0)]]) {
+                output[0] = 1u;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    reflection = reflect_target_host_interface(artifact, target="metal")
+
+    assert reflection["status"] == "ready"
+    assert reflection["parser"] == "metal-reflection"
+    assert reflection["entryPoints"] == [
+        {"name": "first", "stage": "compute", "executionConfig": {}},
+        {"name": "second", "stage": "compute", "executionConfig": {}},
+    ]
+    assert [
+        (
+            resource["name"],
+            resource["kind"],
+            resource["binding"],
+            resource["access"],
+            resource["metadata"]["entryPoint"],
+        )
+        for resource in reflection["resources"]
+    ] == [
+        ("input", "buffer", 0, "read", "first"),
+        ("output", "buffer", 1, "read_write", "first"),
+        ("source", "texture", 0, "read", "first"),
+        ("linear_sampler", "sampler", 0, "read", "first"),
+        ("output", "buffer", 0, "read_write", "second"),
+    ]
+    assert reflection["specializationConstants"] == [
+        {
+            "name": "enabled",
+            "kind": "function-constant",
+            "id": 20,
+            "dtype": "bool",
+            "sourceType": "bool",
+            "required": True,
+            "overridden": False,
+            "overrideStatus": "not-overridden",
+            "status": "required",
+            "source": "metal.function_constant",
+        }
+    ]
+    assert reflection["diagnostics"] == []
+
+
 def test_glsl_reflection_canonicalizes_c_family_specialization_ids(tmp_path):
     artifact = tmp_path / "kernel.comp"
     artifact.write_text(

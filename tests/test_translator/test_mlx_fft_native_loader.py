@@ -46,13 +46,13 @@ CURRENT_MLX_FFT_SHA256 = (
 CURRENT_MLX_FFT_SOURCE_SIZE_BYTES = 3436
 MLX_FFT_ENTRY = "fft_mem_256_float2_float2"
 MLX_FFT_GENERATED_SHA256 = (
-    "07f9300c2e4860077b344610fbfaa2eadb330e1f9723cb519794f91272bd2289"
+    "459d779fb07557c81931cadc0bf6c4020d8f08adafc62986504b8f1faf872feb"
 )
-MLX_FFT_GENERATED_SIZE_BYTES = 116160
+MLX_FFT_GENERATED_SIZE_BYTES = 116260
 CURRENT_MLX_FFT_GENERATED_SHA256 = (
-    "d93972d83156853af519886a669111a061ad311ebfee85615fd797f4e22b3041"
+    "dd64cfa562f4463f3ecb237d00c0273560e62839565e8638c2343a922149c6ab"
 )
-CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 146663
+CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 146763
 CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256 = (
     "a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb"
 )
@@ -428,6 +428,8 @@ def _build_runtime_package(
     assert "decltype(" not in generated
     assert "vec_u3cfloat_u2c2_u3e" not in generated
     assert "return float2(0);" not in generated
+    assert generated.count("<< int(power)") == 20
+    assert "<< uint16_t(power)" not in generated
     assert (
         re.search(r"\b(?:RW)?StructuredBuffer<float2>\s+twiddles\b", generated) is None
     )

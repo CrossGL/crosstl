@@ -284,6 +284,45 @@ def test_project_workgroup_rules_emit_directx_library_and_opengl_entries(tmp_pat
     assert all(artifact["execution"] is not None for artifact in runtime["artifacts"])
 
 
+def test_project_workgroup_rules_record_metal_host_dispatch_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_two_entry_fixture(repo)
+
+    report = project_api.translate_project(
+        _rule_config(repo, targets=("metal",)),
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["target"] == "metal"
+    assert artifact["execution"]["sourceEntryPoints"] == [
+        "tile_large",
+        "tile_small",
+    ]
+    assert {
+        entry["targetEntryPoint"]: entry["workgroupSize"]
+        for entry in artifact["execution"]["entryPoints"]
+    } == {
+        "tile_large": [32, 4, 2],
+        "tile_small": [32, 2, 1],
+    }
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "kernel void tile_large" in generated
+    assert "kernel void tile_small" in generated
+    assert "[[threads_per_threadgroup]]" in generated
+    assert "numthreads" not in generated
+    assert "local_size_" not in generated
+
+    report_path = repo / "metal-report.json"
+    report.write_json(report_path)
+    assert project_api.validate_project_report(report_path)["success"] is True
+
+
 def test_project_entry_workgroup_rules_override_mixed_template_families(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -697,7 +736,7 @@ def test_project_workgroup_rule_reuses_one_materialized_ast_per_target(
 
 @pytest.mark.parametrize(
     "target",
-    ("metal", "vulkan", "cuda", "hip", "mojo", "rust", "slang", "webgl", "wgsl"),
+    ("vulkan", "cuda", "hip", "mojo", "rust", "slang", "webgl", "wgsl"),
 )
 def test_project_workgroup_rule_rejects_unsupported_target(tmp_path, target):
     repo = tmp_path / "repo"
@@ -734,7 +773,7 @@ def test_project_workgroup_rule_rejects_unsupported_target(tmp_path, target):
                 "components": ["32", "BN", "BM"],
                 "path": 'project.workgroup_size_rules["shaders/tiled.metal"]',
                 "sourcePattern": "shaders/tiled.metal",
-                "supportedTargets": ["directx", "opengl"],
+                "supportedTargets": ["directx", "metal", "opengl"],
                 "target": target,
             },
             "sourceEntryPoints": [],

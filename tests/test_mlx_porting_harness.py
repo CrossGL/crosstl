@@ -11403,6 +11403,22 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
             ),
         },
     }
+    assert status["artifacts"]["metal"] == {
+        "target_entry_point": "v_Squarefloat32float32",
+        "sha256": "244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495",
+        "size_bytes": 1015,
+        "host_dispatch_workgroup_size": [1, 1, 1],
+        "native_roundtrip": {
+            "platform": "macos-latest",
+            "compiler": "xcrun -sdk macosx metal",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_square_roundtrips_through_metal"
+            ),
+        },
+        "numerical_runtime_included": False,
+    }
     assert status["artifacts"]["opengl"] == {
         "target_entry_point": "main",
         "sha256": "2bb46a3bb0858eb849e533bfe46eff1d59b9192436e15b2639c7998698db6a48",
@@ -11427,6 +11443,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
     assert status["selected_workload_numerical_parity_verified"] is True
     assert status["other_unary_specializations_included"] is False
     assert status["full_mlx_test_suite_included"] is False
@@ -11586,6 +11604,7 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     assert status["artifact"] == {
         "sha256": module.FFT_DIRECTX_GENERATED_SHA256,
         "size_bytes": module.FFT_DIRECTX_GENERATED_SIZE_BYTES,
+        "promoted_native_16_shift_count": 20,
         "first_class_workgroup_pointer_residue": False,
     }
     assert status["native_validation"] == {
@@ -11698,8 +11717,9 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "d93972d83156853af519886a669111a061ad311ebfee85615fd797f4e22b3041",
-        "size_bytes": 146663,
+        "sha256": "dd64cfa562f4463f3ecb237d00c0273560e62839565e8638c2343a922149c6ab",
+        "size_bytes": 146763,
+        "promoted_native_16_shift_count": 20,
         "first_class_workgroup_pointer_residue": False,
         "workgroup_pointer_transport": "concrete-groupshared-root-plus-integer-offset",
         "overload_body_reachability": "all-compatible-source-overloads",
@@ -11776,7 +11796,9 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
     assert (
         "null pointer that can be observed or dereferenced still fails closed" in readme
     )
-    assert "146,663-byte HLSL artifact" in readme
+    assert "146,763-byte HLSL artifact" in readme
+    assert "All 20 native-16 ``power`` shift counts" in readme
+    assert "explicitly promoted to ``int``" in readme
     assert "zero project diagnostics" in readme
     assert "packages and dispatches it through Direct3D 12 WARP" in readme
     assert (

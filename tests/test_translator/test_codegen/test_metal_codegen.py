@@ -32,6 +32,7 @@ from crosstl.translator.ast import (
 )
 from crosstl.translator.codegen.metal_codegen import (
     MetalCodeGen,
+    MetalEntryPointSelectionError,
     UnsupportedMetalFeatureError,
 )
 from crosstl.translator.lexer import Lexer
@@ -98,6 +99,127 @@ def compile_with_metal_if_available(source: str):
     if result.returncode != 0 and _missing_metal_toolchain(result):
         pytest.skip("Metal toolchain is not installed")
     assert result.returncode == 0, result.stderr
+
+
+METAL_ENTRY_SCOPED_COMPUTE_SOURCE = """
+shader MetalEntryScopedCompute {
+    struct SelectedInner {
+        uint value;
+    }
+
+    struct SelectedPayload {
+        SelectedInner inner;
+    }
+
+    struct UnrelatedPayload {
+        uint value;
+    }
+
+    uint selected_helper(SelectedPayload payload) {
+        return payload.inner.value + 1u;
+    }
+
+    uint unrelated_helper(UnrelatedPayload payload) {
+        return payload.value * 9u;
+    }
+
+    compute first {
+        void main(RWStructuredBuffer<uint> output @buffer(0)) {
+            UnrelatedPayload payload;
+            payload.value = 3u;
+            output[0] = unrelated_helper(payload);
+        }
+    }
+
+    compute second {
+        void main(RWStructuredBuffer<uint> output @buffer(0)) {
+            SelectedPayload payload;
+            payload.inner.value = 5u;
+            output[0] = selected_helper(payload);
+        }
+    }
+}
+"""
+
+
+def test_metal_entry_scoped_generation_prunes_unreachable_program(tmp_path):
+    ast = parse_code(tokenize_code(METAL_ENTRY_SCOPED_COMPUTE_SOURCE))
+
+    generated = MetalCodeGen().generate_entry(ast, "second")
+
+    assert generated.count("kernel void") == 1
+    assert "kernel void kernel_second" in generated
+    assert "kernel void kernel_first" not in generated
+    assert "selected_helper" in generated
+    assert "unrelated_helper" not in generated
+    assert "struct SelectedInner" in generated
+    assert "struct SelectedPayload" in generated
+    assert "struct UnrelatedPayload" not in generated
+    assert generated.count("[[buffer(0)]]") == 1
+    compile_with_metal_if_available(generated)
+
+
+def test_metal_entry_scoped_generation_reports_available_entries():
+    ast = parse_code(tokenize_code(METAL_ENTRY_SCOPED_COMPUTE_SOURCE))
+
+    with pytest.raises(
+        MetalEntryPointSelectionError,
+        match="source entry point 'missing' was not found",
+    ) as error:
+        MetalCodeGen().generate_entry(ast, "missing")
+
+    assert error.value.project_diagnostic_code == (
+        "project.translate.metal-entry-point-unavailable"
+    )
+    assert error.value.missing_capabilities == ("artifact.entry-point-selection",)
+    assert error.value.reason == "not-found"
+    assert error.value.entry_point == "missing"
+    assert error.value.available_entry_points == ("first", "second")
+
+
+def test_metal_entry_scoped_generation_rejects_ambiguous_entry():
+    ast = parse_code(tokenize_code("""
+            shader AmbiguousMetalEntry {
+                @compute
+                @stage_entry
+                void duplicate(RWStructuredBuffer<uint> output @buffer(0)) {
+                    output[0] = 1u;
+                }
+
+                @compute
+                @stage_entry
+                void duplicate(
+                    RWStructuredBuffer<uint> output @buffer(0),
+                    uint index @gl_GlobalInvocationID
+                ) {
+                    output[index] = 2u;
+                }
+            }
+            """))
+
+    with pytest.raises(MetalEntryPointSelectionError) as error:
+        MetalCodeGen().generate_entry(ast, "duplicate")
+
+    assert error.value.reason == "ambiguous"
+    assert error.value.available_entry_points == ("duplicate",)
+
+
+def test_metal_entry_scoped_generation_rejects_non_compute_entry():
+    ast = parse_code(tokenize_code("""
+            shader MetalVertexEntry {
+                vertex first {
+                    vec4 main() @ gl_Position {
+                        return vec4(0.0);
+                    }
+                }
+            }
+            """))
+
+    with pytest.raises(MetalEntryPointSelectionError) as error:
+        MetalCodeGen().generate_entry(ast, "first")
+
+    assert error.value.reason == "unsupported-stage"
+    assert error.value.stage == "vertex"
 
 
 def test_metal_codegen_skips_resource_array_hint_walk_without_resource_arrays():
