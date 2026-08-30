@@ -1798,10 +1798,14 @@ jobs:
           retention-days: 14
 
   mlx-unary-metal-roundtrip:
-    name: MLX complete unary Metal round-trip
+    name: MLX complete unary Metal round-trip (shard ${{ matrix.shard_index }} of 5)
     if: github.event_name != 'schedule'
     runs-on: macOS-latest
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard_index: [0, 1, 2, 3, 4]
 
     steps:
       - name: Checkout CrossTL
@@ -1843,6 +1847,8 @@ jobs:
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
           CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"
+          CROSTL_MLX_UNARY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}
+          CROSTL_MLX_UNARY_METAL_SHARD_COUNT: "5"
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_unary_native_loader.py::test_current_mlx_unary_family_roundtrips_through_metal

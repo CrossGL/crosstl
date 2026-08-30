@@ -3846,10 +3846,21 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
         mlx_porting,
         "mlx-unary-metal-roundtrip",
     )
-    assert "name: MLX complete unary Metal round-trip" in family_metal_job
+    assert (
+        "name: MLX complete unary Metal round-trip "
+        "(shard ${{ matrix.shard_index }} of 5)" in family_metal_job
+    )
     assert "if: github.event_name != 'schedule'" in family_metal_job
     assert "runs-on: macOS-latest" in family_metal_job
     assert "timeout-minutes: 75" in family_metal_job
+    assert "fail-fast: false" in family_metal_job
+    assert _matrix_values(family_metal_job, "shard_index") == {
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+    }
     assert 'python-version: "3.12"' in family_metal_job
     assert "python -m pip install -e . pytest-xdist" in family_metal_job
     assert "xcrun --sdk macosx metal --version" in family_metal_job
@@ -3866,6 +3877,11 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
         in family_metal_step
     )
     assert 'CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"' in family_metal_step
+    assert (
+        "CROSTL_MLX_UNARY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
+        in family_metal_step
+    )
+    assert 'CROSTL_MLX_UNARY_METAL_SHARD_COUNT: "5"' in family_metal_step
     assert (
         f"{test_path}::"
         "test_current_mlx_unary_family_roundtrips_through_metal" in family_metal_step

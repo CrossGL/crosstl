@@ -224,6 +224,53 @@ def _metal_roundtrip_workload(entry: dict) -> UnaryWorkload:
 UNARY_METAL_WORKLOADS = tuple(
     _metal_roundtrip_workload(entry) for entry in UNARY_METAL_ENTRIES
 )
+UNARY_METAL_SHARD_INDEX_ENV = "CROSTL_MLX_UNARY_METAL_SHARD_INDEX"
+UNARY_METAL_SHARD_COUNT_ENV = "CROSTL_MLX_UNARY_METAL_SHARD_COUNT"
+UNARY_METAL_CI_SHARD_COUNT = 5
+
+
+def _partition_unary_metal_workloads(
+    workloads: tuple[UnaryWorkload, ...], shard_index: int, shard_count: int
+) -> tuple[UnaryWorkload, ...]:
+    if shard_count <= 0:
+        raise ValueError("MLX unary Metal shard count must be positive")
+    if shard_index < 0 or shard_index >= shard_count:
+        raise ValueError(
+            "MLX unary Metal shard index must be in "
+            f"[0, {shard_count}), got {shard_index}"
+        )
+    selected = workloads[shard_index::shard_count]
+    if not selected:
+        raise ValueError(
+            f"MLX unary Metal shard {shard_index} of {shard_count} is empty"
+        )
+    return selected
+
+
+def _current_unary_metal_workloads() -> tuple[UnaryWorkload, ...]:
+    raw_index = os.environ.get(UNARY_METAL_SHARD_INDEX_ENV)
+    raw_count = os.environ.get(UNARY_METAL_SHARD_COUNT_ENV)
+    if raw_index is None and raw_count is None:
+        return UNARY_METAL_WORKLOADS
+    if raw_index is None or raw_count is None:
+        raise RuntimeError(
+            f"{UNARY_METAL_SHARD_INDEX_ENV} and {UNARY_METAL_SHARD_COUNT_ENV} "
+            "must be configured together"
+        )
+    try:
+        shard_index = int(raw_index)
+        shard_count = int(raw_count)
+    except ValueError as error:
+        raise RuntimeError("MLX unary Metal shard values must be integers") from error
+    try:
+        return _partition_unary_metal_workloads(
+            UNARY_METAL_WORKLOADS, shard_index, shard_count
+        )
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
+
+
+CURRENT_UNARY_METAL_WORKLOADS = _current_unary_metal_workloads()
 
 
 def test_current_mlx_scalar_unary_metal_contract_is_complete_and_classified():
@@ -765,6 +812,25 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         } == scalar_entry
 
 
+def test_current_mlx_unary_metal_ci_shards_are_complete_and_disjoint():
+    shards = tuple(
+        _partition_unary_metal_workloads(
+            UNARY_METAL_WORKLOADS, shard_index, UNARY_METAL_CI_SHARD_COUNT
+        )
+        for shard_index in range(UNARY_METAL_CI_SHARD_COUNT)
+    )
+
+    assert [len(shard) for shard in shards] == [176, 176, 175, 175, 175]
+    for shard_index, shard in enumerate(shards):
+        assert shard == UNARY_METAL_WORKLOADS[shard_index::UNARY_METAL_CI_SHARD_COUNT]
+    entry_points = [workload.entry_point for shard in shards for workload in shard]
+    assert len(entry_points) == 877
+    assert len(set(entry_points)) == 877
+    assert set(entry_points) == {
+        workload.entry_point for workload in UNARY_METAL_WORKLOADS
+    }
+
+
 def _unary_shape(entry_point: str) -> str:
     for prefix, shape in (
         ("gn4large_", "gn4large"),
@@ -1150,7 +1216,7 @@ def test_pinned_mlx_unary_arccos_roundtrips_through_metal():
 
 @pytest.mark.parametrize(
     "workload",
-    UNARY_METAL_WORKLOADS,
+    CURRENT_UNARY_METAL_WORKLOADS,
     ids=lambda workload: workload.entry_point,
 )
 def test_current_mlx_unary_family_roundtrips_through_metal(workload):
