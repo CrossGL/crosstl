@@ -42,6 +42,15 @@ The current harness verifies:
   ``[1, 1, 1]`` dispatch contract is preserved, and macOS CI compiles every
   deterministic artifact to non-empty AIR. This is complete discovered unary
   compiler/reflection coverage, not Metal numerical execution;
+- selected-entry Metal-to-CrossGL-to-Metal translation of all 238 current-pinned
+  scalar-scalar binary entries (the complete ``ss_`` family) from the 4,122
+  discovered entries in ``binary.metal``. The contract covers 24 operators and
+  25 concrete input/output type pairs, emits one ``binary_ss`` specialization
+  and one kernel per artifact, reflects three buffers, and preserves a
+  host-owned ``[1, 1, 1]`` dispatch. Required macOS CI compiles every artifact
+  with warnings fatal and requires a non-empty AIR output. This proves the
+  complete scalar-scalar compiler/reflection family, not the remaining 3,884
+  non-scalar binary entries or Metal numerical execution;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains
@@ -1700,6 +1709,38 @@ is fatal. This closes selected-entry translation, reflection, and native compile
 coverage for every discovered unary instantiation. It remains a compiler proof,
 not Metal numerical execution, DirectX/OpenGL whole-family coverage, MLX host
 runtime redirection, or an MLX test-suite claim.
+
+The scalar binary family gate covers all 238 current-pinned scalar-scalar binary
+entries, which is the complete ``ss_`` family discovered in ``binary.metal``.
+Those entries span 24 operators and 25 concrete input/output type pairs across
+Boolean, signed and unsigned integer, float16, float32, bfloat16, and complex64
+values. Every selected run materializes exactly one ``binary_ss`` specialization,
+emits one selected operator implementation and one kernel, prunes non-selected
+operator bodies, and rejects residual template, ``decltype``, call-operator, or
+unsupported-placeholder syntax. Bounded Metal reflection records read-only
+``a`` and ``b`` buffers plus read-write ``c`` at bindings 0, 1, and 2, with a
+host-owned ``[1, 1, 1]`` workgroup contract.
+
+Generic repository-scale repairs behind this family map concrete 64-bit vectors
+to native ``longN``/``ulongN`` types, rebind dependent free-operator calls only
+to already materialized exact helpers, and select non-explicit constructors for
+known contextual aggregate conversions while rejecting explicit-only and
+ambiguous cases. Bfloat ``min``/``max`` arguments promote to float before typed
+result reconstruction. Discarded type-constructor expressions retain argument
+evaluation through an unambiguous ``(void)(...)`` form, and scalar Boolean
+relational operands receive their C++ integral promotion explicitly. The
+focused regressions retain fail-closed behavior outside those proven forms.
+
+Every entry identity, operator, exact input/output pair, semantic family,
+SHA-256, byte count, materialization contract, and host ABI is pinned by
+[`contracts/binary.scalar-metal-roundtrip.json`](contracts/binary.scalar-metal-roundtrip.json)
+and linked by hash from ``expected-gaps.json``. Native macOS CI invokes
+``xcrun -sdk macosx metal -Werror -c`` and requires 238 non-empty AIR outputs;
+no source-warning exemption is used. This closes translation, reflection, and
+native compilation for the scalar-scalar family. It is not Metal numerical
+execution, DirectX/OpenGL whole-family coverage, MLX host-runtime redirection,
+or an MLX test-suite claim. The remaining 3,884 non-scalar binary entries stay
+explicitly outside this contract.
 
 Windows CI compiles the selected HLSL entries with DXC and executes them through
 the native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entries with

@@ -527,6 +527,33 @@ reinterpretation continue to fail closed. This complete discovered-unary
 selected-entry proof does not claim Metal numerical execution, host-runtime
 redirection, DirectX/OpenGL whole-family coverage, or the MLX test suite.
 
+The current-pinned MLX binary integration independently proves all 238
+scalar-scalar entries from ``binary.metal``. This complete ``ss_`` family spans
+24 operators and 25 concrete input/output type pairs. Each selected artifact
+contains one operator implementation, one kernel, and one of 238 exact
+``binary_ss`` materializations; it rejects residual templates, ``decltype``,
+call operators, unsupported placeholders, and non-selected operator bodies.
+The reflected interface has read-only ``a`` and ``b`` buffers, read-write ``c``,
+and a host-owned ``[1, 1, 1]`` workgroup contract.
+
+The generic path maps concrete signed and unsigned 64-bit vectors to native
+Metal vector types, rewrites dependent free operators only to already-emitted
+exact helpers, and applies known non-explicit contextual aggregate constructors
+without admitting explicit-only or ambiguous conversions. Bfloat minimum and
+maximum calls promote their arguments to float before typed reconstruction;
+discarded type constructors remain evaluated through unambiguous void casts;
+and scalar Boolean relational expressions receive explicit C++ integral
+promotion. Focused tests retain conservative rejection boundaries for each
+contextual operation.
+
+A hash-pinned contract records every identity, classification, byte count,
+materialization, and resource ABI. Required macOS CI compiles all 238 artifacts
+with ``xcrun -sdk macosx metal -Werror -c`` and requires non-empty AIR without a
+warning exemption. This is translation, reflection, and native compiler proof,
+not Metal numerical execution. The remaining 3,884 non-scalar binary entries,
+whole-family DirectX/OpenGL translation, host-runtime redirection, and MLX tests
+remain outside the claim.
+
 OpenGL Software Subgroup Specialization
 ----------------------------------------
 

@@ -2420,7 +2420,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "Install macOS Metal Toolchain" in mlx_porting
     assert "if: runner.os == 'macOS'" in mlx_porting
     assert "xcodebuild -downloadComponent MetalToolchain" in mlx_porting
-    assert mlx_porting.count("xcrun --sdk macosx metal --version") == 4
+    assert mlx_porting.count("xcrun --sdk macosx metal --version") == 6
     assert "--require-directx-toolchain" in mlx_porting
     assert "--require-directx-gemv-compiler-frontier" in mlx_porting
     assert "--require-opengl-frontier-toolchain" in mlx_porting
@@ -3967,6 +3967,56 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     )
     assert "-n auto" in arccos_opengl_step
     assert "-k" not in arccos_opengl_step
+
+
+def test_mlx_project_porting_workflow_runs_binary_scalar_metal_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_binary_metal_roundtrip.py"
+
+    binary_metal_job = _workflow_job_section(
+        mlx_porting,
+        "mlx-binary-scalar-metal-roundtrip",
+    )
+    assert (
+        "name: MLX scalar binary Metal round-trip "
+        "(shard ${{ matrix.shard_index }} of 3)" in binary_metal_job
+    )
+    assert "if: github.event_name != 'schedule'" in binary_metal_job
+    assert "runs-on: macOS-latest" in binary_metal_job
+    assert "timeout-minutes: 75" in binary_metal_job
+    assert "fail-fast: false" in binary_metal_job
+    assert _matrix_values(binary_metal_job, "shard_index") == {"0", "1", "2"}
+    assert 'python-version: "3.12"' in binary_metal_job
+    assert "python -m pip install -e . pytest-xdist" in binary_metal_job
+    assert "xcrun --sdk macosx metal --version" in binary_metal_job
+    assert "Checkout current MLX binary corpus" in binary_metal_job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in binary_metal_job
+
+    binary_metal_step = ci_coverage.workflow_step_section(
+        binary_metal_job,
+        "Prove current MLX scalar binary family Metal round-trips",
+    )
+    assert "if: runner.os" not in binary_metal_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
+        in binary_metal_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_BINARY_METAL_ROUNDTRIP: "1"' in binary_metal_step
+    assert (
+        "CROSTL_MLX_BINARY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
+        in binary_metal_step
+    )
+    assert 'CROSTL_MLX_BINARY_METAL_SHARD_COUNT: "3"' in binary_metal_step
+    assert (
+        f"{test_path}::"
+        "test_current_mlx_binary_scalar_family_roundtrips_through_metal"
+        in binary_metal_step
+    )
+    assert "-n auto" in binary_metal_step
+    assert "-k" not in binary_metal_step
+    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
+    assert "Prove current MLX scalar binary family Metal round-trips" not in matrix_job
 
 
 def test_mlx_project_porting_workflow_runs_current_fft_runtime_proofs():

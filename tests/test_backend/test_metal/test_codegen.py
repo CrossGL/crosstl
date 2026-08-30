@@ -9666,6 +9666,138 @@ def test_metal_target_promotes_bfloat_abs_and_restores_expected_result(tmp_path)
     )
 
 
+def test_metal_target_promotes_bfloat_min_max_and_restores_results(tmp_path):
+    ast = parse_crossgl("""
+        shader main {
+            bfloat16 bounds(bfloat16 left, bfloat16 right) {
+                bfloat16 lower = min(left, right);
+                bfloat16 upper = max(left, right);
+                return lower + upper;
+            }
+        }
+        """)
+
+    metal = MetalCodeGen().generate(ast)
+    assert "bfloat lower = bfloat(min(float(left), float(right)));" in metal
+    assert "bfloat upper = bfloat(max(float(left), float(right)));" in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-bfloat-min-max-promotion"
+    )
+
+
+def test_metal_target_maps_64_bit_vector_types_and_compiles(tmp_path):
+    source = """
+    kernel void copy_long_vectors(
+        device long2* signed_out [[buffer(0)]],
+        device ulong2* unsigned_out [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      long2 signed_value = long2(long(index), -1l);
+      ulong2 unsigned_value = ulong2(ulong(index), 1ul);
+      signed_out[index] = signed_value;
+      unsigned_out[index] = unsigned_value;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    assert "i64vec2 signed_value" in crossgl
+    assert "u64vec2 unsigned_value" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "long2 signed_value" in metal
+    assert "ulong2 unsigned_value" in metal
+    assert "i64vec2" not in metal
+    assert "u64vec2" not in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-64-bit-vector-roundtrip"
+    )
+
+
+def test_metal_roundtrip_contextually_constructs_aggregate_return(tmp_path):
+    source = """
+    struct Pair {
+      float real;
+      float imag;
+      Pair(float value) thread : real(value), imag(0.0f) {}
+    };
+
+    Pair make_pair() {
+      return metal::numeric_limits<float>::quiet_NaN();
+    }
+
+    kernel void construct_pair(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      Pair value = make_pair();
+      output[index] = value.real + value.imag;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    assert "return crosstl_ctor_Pair_1(asfloat(0x7fc00000u));" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "Pair crosstl_ctor_Pair_1(float value)" in metal
+    assert "return crosstl_ctor_Pair_1(as_type<float>(2143289344u));" in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-contextual-aggregate-return"
+    )
+
+
+def test_metal_contextual_aggregate_return_rejects_explicit_constructor():
+    source = """
+    struct Pair {
+      float real;
+      explicit Pair(float value) thread : real(value) {}
+    };
+
+    Pair make_pair(float value) {
+      return value;
+    }
+    """
+
+    with pytest.raises(
+        MetalConstructorContractError,
+        match="no non-explicit constructor is callable for contextual conversion",
+    ):
+        convert_without_preprocessing(source)
+
+
+def test_metal_target_promotes_bool_relational_operands_to_int(tmp_path):
+    ast = parse_crossgl("""
+        shader main {
+            bool is_negative(bool value) {
+                return value < 0;
+            }
+        }
+        """)
+
+    metal = MetalCodeGen().generate(ast)
+    assert "return int(value) < 0;" in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-bool-relational-promotion"
+    )
+
+
+def test_metal_target_disambiguates_discarded_type_construction(tmp_path):
+    ast = parse_crossgl("""
+        shader main {
+            int retain(int base) {
+                {
+                    int64(base);
+                }
+                return base;
+            }
+        }
+        """)
+
+    metal = MetalCodeGen().generate(ast)
+    assert "(void)(int64_t(base));" in metal
+    assert "\n        int64_t(base);" not in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-discarded-type-construction"
+    )
+
+
 def test_metal_target_recognizes_complete_conditional_returns():
     metal = MetalCodeGen().generate(parse_crossgl("""
             shader main {

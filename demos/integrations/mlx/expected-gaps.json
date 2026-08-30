@@ -1274,6 +1274,159 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
+  "binary_scalar_metal_roundtrip_status": {
+    "status": "selected-entry-scalar-family-native-compilation-validated",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/binary.metal",
+    "source_sha256": "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e",
+    "target": "metal",
+    "scope": {
+      "discovered_binary_instantiation_count": 4122,
+      "selected_shape": "ss",
+      "entry_count": 238,
+      "operator_count": 24,
+      "input_output_type_pair_count": 25,
+      "semantic_family_count": 25,
+      "remaining_non_scalar_entry_count": 3884,
+      "all_scalar_scalar_source_instantiations_included": true,
+      "all_discovered_binary_instantiations_included": false
+    },
+    "contract": {
+      "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
+      "schema_version": 1,
+      "sha256": "afb4d74c25d07203ded397df7f740d9721f9611b0c9bae64ee629a9043296e83",
+      "entry_identity_fields": [
+        "entryPoint",
+        "operator",
+        "inputType",
+        "outputType",
+        "family",
+        "sha256",
+        "sizeBytes"
+      ]
+    },
+    "family_counts": {
+      "bfloat16-comparison": 7,
+      "bfloat16-same-type": 10,
+      "boolean-same-type": 19,
+      "complex64-comparison": 7,
+      "complex64-same-type": 9,
+      "float16-comparison": 7,
+      "float16-same-type": 10,
+      "float32-comparison": 7,
+      "float32-same-type": 10,
+      "int16-comparison": 6,
+      "int16-same-type": 13,
+      "int32-comparison": 6,
+      "int32-same-type": 13,
+      "int64-comparison": 6,
+      "int64-same-type": 13,
+      "int8-comparison": 6,
+      "int8-same-type": 13,
+      "uint16-comparison": 6,
+      "uint16-same-type": 13,
+      "uint32-comparison": 6,
+      "uint32-same-type": 13,
+      "uint64-comparison": 6,
+      "uint64-same-type": 13,
+      "uint8-comparison": 6,
+      "uint8-same-type": 13
+    },
+    "project_translation": {
+      "selected_entry_run_count": 238,
+      "artifact_count": 238,
+      "translated_count": 238,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "provenance": "entry-scoped-translate",
+      "intermediate": "crossgl",
+      "specialization_count": 238,
+      "unsupported_specialization_count": 0,
+      "selected_operator_implementation_count_per_artifact": 1,
+      "unselected_operator_bodies_pruned": true,
+      "reachable_kernel_count_per_artifact": 1,
+      "residual_template_syntax": false,
+      "residual_decltype_syntax": false,
+      "residual_call_operator_syntax": false,
+      "unsupported_placeholder_count": 0
+    },
+    "implementation_contracts": {
+      "native_int64_vector_mapping": true,
+      "dependent_free_operator_rebinding": true,
+      "non_explicit_contextual_aggregate_construction": true,
+      "explicit_contextual_constructor_rejected": true,
+      "bfloat_min_max_float_promotion_and_reconstruction": true,
+      "discarded_type_constructor_disambiguation": true,
+      "bool_relational_integral_promotion": true
+    },
+    "host_interface": {
+      "status": "ready",
+      "resource_count_per_artifact": 3,
+      "reflected_resource_count": 714,
+      "resources": [
+        {
+          "name": "a",
+          "kind": "buffer",
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "name": "b",
+          "kind": "buffer",
+          "binding": 1,
+          "access": "read"
+        },
+        {
+          "name": "c",
+          "kind": "buffer",
+          "binding": 2,
+          "access": "read_write"
+        }
+      ],
+      "host_dispatch_workgroup_size": [
+        1,
+        1,
+        1
+      ]
+    },
+    "artifacts": {
+      "generated_size_bytes_total": 189047,
+      "generated_size_range": {
+        "minimum": {
+          "entryPoint": "ss_Addint8",
+          "sizeBytes": 668
+        },
+        "maximum": {
+          "entryPoint": "ss_LogAddExpcomplex64",
+          "sizeBytes": 3490
+        }
+      }
+    },
+    "native_validation": {
+      "platform": "macos-latest",
+      "compiler": "xcrun -sdk macosx metal -Werror -c",
+      "source_warning_exemption": null,
+      "status": "required-on-ci",
+      "compiled_artifact_count": 238,
+      "all_air_artifacts_nonempty": true,
+      "test": "tests/test_translator/test_mlx_binary_metal_roundtrip.py::test_current_mlx_binary_scalar_family_roundtrips_through_metal"
+    },
+    "host_interface_reflection_included": true,
+    "metal_roundtrip_included": true,
+    "metal_numerical_runtime_included": false,
+    "directx_and_opengl_family_translation_included": false,
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": false,
+    "full_mlx_test_suite_included": false,
+    "remaining_scope": {
+      "non_scalar_binary_entry_count": 3884,
+      "metal_numerical_execution_included": false,
+      "directx_and_opengl_whole_family_included": false,
+      "mlx_host_runtime_redirection_included": false
+    },
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "directx_fft_current_corpus_status": {
     "status": "translated-dxc-validated-direct3d-executed",
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",

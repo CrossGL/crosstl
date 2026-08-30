@@ -7400,6 +7400,64 @@ class MetalPreprocessor(HLSLPreprocessor):
             identities.append(identity or "unknown")
         return f"crosstl_metal_operator_{label}__" + "__".join(identities)
 
+    def _rewrite_materialized_free_operator_calls(
+        self,
+        body: str,
+        parameters: str,
+        parameter_types: Sequence[str],
+        emitted_names: Set[str],
+    ) -> str:
+        """Bind direct dependent operator calls to earlier concrete helpers.
+
+        MLX's complex comparison operators define ``<`` and ``<=`` in terms of
+        direct calls to ``operator>`` and ``operator>=`` with reversed
+        arguments. Once the surrounding aggregate is materialized, those calls
+        have an exact source signature. Rewrite only a permutation of the
+        current function parameters and only when the referenced concrete
+        helper has already been emitted; every other dependent call remains
+        unresolved and keeps the existing fail-closed behavior.
+        """
+
+        parameter_names = self._parameter_identifier_names(parameters)
+        if len(parameter_names) != len(parameter_types):
+            return body
+        type_by_name = dict(zip(parameter_names, parameter_types))
+        replacements: List[Tuple[int, int, str]] = []
+        pattern = re.compile(r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%<>])\s*\(")
+        for match in pattern.finditer(body):
+            open_paren = match.end() - 1
+            close_paren = self._find_matching_delimiter(body, open_paren, "(", ")")
+            if close_paren is None:
+                continue
+            arguments = [
+                argument.strip()
+                for argument in self._split_top_level_commas(
+                    body[open_paren + 1 : close_paren]
+                )
+            ]
+            if len(arguments) != len(parameter_names) or any(
+                not re.fullmatch(r"[A-Za-z_]\w*", argument)
+                or argument not in type_by_name
+                for argument in arguments
+            ):
+                continue
+            helper_name = self._free_operator_helper_name(
+                match.group("operator"),
+                tuple(type_by_name[argument] for argument in arguments),
+            )
+            if helper_name not in emitted_names:
+                continue
+            replacements.append(
+                (
+                    match.start(),
+                    close_paren + 1,
+                    f"{helper_name}({', '.join(arguments)})",
+                )
+            )
+        if not replacements:
+            return body
+        return self._apply_text_replacements(body, replacements)
+
     def _materialize_free_operator_overloads(self, code: str) -> str:
         if not self._materialized_struct_specializations or "operator" not in code:
             return code
@@ -7523,6 +7581,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 body = self._substitute_materialized_free_operator_text(
                     definition.body,
                     bindings,
+                )
+                body = self._rewrite_materialized_free_operator_calls(
+                    body,
+                    parameters,
+                    parameter_types,
+                    emitted_names,
                 )
                 if re.search(r"\boperator\s*(?:==|!=|<=|>=|[+\-*/%<>])\s*\(", body):
                     continue

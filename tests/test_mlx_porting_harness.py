@@ -11788,6 +11788,170 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert "does not claim Metal numerical execution" in guide
 
 
+def test_binary_scalar_metal_roundtrip_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["binary_scalar_metal_roundtrip_status"]
+    assert status["status"] == (
+        "selected-entry-scalar-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/binary.metal"
+    assert status["source_sha256"] == (
+        "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e"
+    )
+    assert status["target"] == "metal"
+    assert status["scope"] == {
+        "discovered_binary_instantiation_count": 4122,
+        "selected_shape": "ss",
+        "entry_count": 238,
+        "operator_count": 24,
+        "input_output_type_pair_count": 25,
+        "semantic_family_count": 25,
+        "remaining_non_scalar_entry_count": 3884,
+        "all_scalar_scalar_source_instantiations_included": True,
+        "all_discovered_binary_instantiations_included": False,
+    }
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
+        "schema_version": 1,
+        "sha256": "afb4d74c25d07203ded397df7f740d9721f9611b0c9bae64ee629a9043296e83",
+        "entry_identity_fields": [
+            "entryPoint",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert hashlib.sha256(contract_bytes).hexdigest() == status["contract"]["sha256"]
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryPrefix": "ss_",
+        "templateName": "binary_ss",
+        "shape": "scalar-scalar",
+        "entryCount": 238,
+        "discoveredBinaryEntryCount": 4122,
+        "operatorCount": 24,
+        "typePairCount": 25,
+        "familyCount": 25,
+    }
+    assert len(contract["entries"]) == 238
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 238
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["family_counts"] == contract["classifications"]["families"]
+    assert sum(status["family_counts"].values()) == 238
+    assert len(contract["classifications"]["operators"]) == 24
+    assert sum(contract["classifications"]["operators"].values()) == 238
+    assert len(contract["classifications"]["typePairs"]) == 25
+    assert sum(contract["classifications"]["typePairs"].values()) == 238
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 238,
+        "artifact_count": 238,
+        "translated_count": 238,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 238,
+        "unsupported_specialization_count": 0,
+        "selected_operator_implementation_count_per_artifact": 1,
+        "unselected_operator_bodies_pruned": True,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["implementation_contracts"] == {
+        "native_int64_vector_mapping": True,
+        "dependent_free_operator_rebinding": True,
+        "non_explicit_contextual_aggregate_construction": True,
+        "explicit_contextual_constructor_rejected": True,
+        "bfloat_min_max_float_promotion_and_reconstruction": True,
+        "discarded_type_constructor_disambiguation": True,
+        "bool_relational_integral_promotion": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "resource_count_per_artifact": 3,
+        "reflected_resource_count": 714,
+        "resources": contract["shapeContract"]["hostResources"],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": 189047,
+        "generated_size_range": {
+            "minimum": {"entryPoint": "ss_Addint8", "sizeBytes": 668},
+            "maximum": {
+                "entryPoint": "ss_LogAddExpcomplex64",
+                "sizeBytes": 3490,
+            },
+        },
+    }
+    assert status["native_validation"] == {
+        "platform": "macos-latest",
+        "compiler": "xcrun -sdk macosx metal -Werror -c",
+        "source_warning_exemption": None,
+        "status": "required-on-ci",
+        "compiled_artifact_count": 238,
+        "all_air_artifacts_nonempty": True,
+        "test": (
+            "tests/test_translator/test_mlx_binary_metal_roundtrip.py::"
+            "test_current_mlx_binary_scalar_family_roundtrips_through_metal"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
+    assert status["directx_and_opengl_family_translation_included"] is False
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "non_scalar_binary_entry_count": 3884,
+        "metal_numerical_execution_included": False,
+        "directx_and_opengl_whole_family_included": False,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "all 238 current-pinned scalar-scalar binary entries" in readme
+    assert "24 operators and 25 concrete input/output type pairs" in readme
+    assert "requires 238 non-empty AIR outputs" in readme
+    assert "remaining 3,884 non-scalar binary entries" in readme
+    assert "not Metal numerical execution" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 238 scalar-scalar entries" in guide
+    assert "238 exact ``binary_ss`` materializations" in guide
+    assert "compiles all 238 artifacts" in guide
+    assert "remaining 3,884 non-scalar binary entries" in guide
+
+
 def test_fft_directx_evidence_records_selected_native_runtime_proof():
     module = _load_harness()
     gaps = json.loads(

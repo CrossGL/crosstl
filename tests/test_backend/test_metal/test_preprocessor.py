@@ -7490,6 +7490,37 @@ def test_preprocessor_materializes_boolean_constrained_free_operator():
     assert output.count("crosstl_metal_operator_add__float__Box_float") == 1
 
 
+def test_preprocessor_materializes_dependent_free_operator_call():
+    code = """
+    template <typename T> struct Box { T real; T imag; };
+
+    template <typename T>
+    constexpr bool operator>(Box<T> a, Box<T> b) {
+      return a.real > b.real || (a.real == b.real && a.imag > b.imag);
+    }
+
+    template <typename T>
+    constexpr bool operator<(Box<T> a, Box<T> b) {
+      return operator>(b, a);
+    }
+
+    kernel void compare_boxes(device bool* out [[buffer(0)]]) {
+      Box<float> left{1.0f, 2.0f};
+      Box<float> right{2.0f, 1.0f};
+      out[0] = left < right;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    greater = "crosstl_metal_operator_greater__Box_float__Box_float"
+    less = "crosstl_metal_operator_less__Box_float__Box_float"
+    assert f"bool {greater}(Box_float a, Box_float b)" in output
+    assert f"bool {less}(Box_float a, Box_float b)" in output
+    assert f"return {greater}(b, a);" in output
+    assert "return operator>(b, a);" not in output
+
+
 def test_preprocessor_infers_materialized_aggregate_alias_for_auto_functor_call():
     code = """
     template <typename T> struct Box { T value; };

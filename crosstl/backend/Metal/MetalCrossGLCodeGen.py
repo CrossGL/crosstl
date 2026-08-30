@@ -3454,6 +3454,7 @@ class MetalToCrossGLConverter:
         arguments,
         source_location=None,
         receiver_address_space=None,
+        allow_explicit=True,
     ):
         contract = self.metal_constructor_contract(owner)
         if contract is None:
@@ -3467,8 +3468,23 @@ class MetalToCrossGLConverter:
             for constructor in all_constructors
             if self.constructor_receiver_address_space(constructor)
             == receiver_address_space
+            and (
+                allow_explicit
+                or "explicit"
+                not in {
+                    str(qualifier).lower()
+                    for qualifier in getattr(constructor, "qualifiers", []) or []
+                }
+            )
         ]
         if not constructors:
+            reason = (
+                "no non-explicit constructor is callable for contextual "
+                f"conversion in receiver address space '{receiver_address_space}'"
+                if not allow_explicit
+                else "no constructor is callable for receiver address space "
+                f"'{receiver_address_space}'"
+            )
             raise MetalConstructorContractError(
                 owner,
                 (),
@@ -3476,8 +3492,7 @@ class MetalToCrossGLConverter:
                     self.constructor_candidate_signature(constructor)
                     for constructor in all_constructors
                 ],
-                "no constructor is callable for receiver address space "
-                f"'{receiver_address_space}'",
+                reason,
                 source_location,
             )
         argument_types = [
@@ -3677,6 +3692,7 @@ class MetalToCrossGLConverter:
         is_main=False,
         source_location=None,
         receiver_address_space=None,
+        allow_explicit=True,
     ):
         if self.uses_implicit_copy_constructor(owner, arguments):
             return self.generate_expression(arguments[0], is_main)
@@ -3685,6 +3701,7 @@ class MetalToCrossGLConverter:
             arguments,
             source_location,
             receiver_address_space,
+            allow_explicit,
         )
         if selected is None:
             return None
@@ -9814,6 +9831,23 @@ class MetalToCrossGLConverter:
                         is_main,
                         getattr(expr, "source_location", None),
                         receiver_address_space,
+                    )
+            if not isinstance(expr, InitializerListNode):
+                expression_type = self.metal_source_overload_value_type(
+                    self.expression_metal_type(expr)
+                )
+                if expression_type is not None:
+                    if self.metal_source_overload_type_identity(
+                        expression_type
+                    ) == self.metal_source_overload_type_identity(expected_owner):
+                        return self.generate_expression(expr, is_main)
+                    return self.generate_explicit_constructor_call(
+                        expected_type,
+                        [expr],
+                        is_main,
+                        getattr(expr, "source_location", None),
+                        receiver_address_space,
+                        allow_explicit=False,
                     )
         if isinstance(expr, InitializerListNode):
             if constructor_contract:
@@ -16154,6 +16188,13 @@ class MetalToCrossGLConverter:
                 if len(expr.args) != 1:
                     return None
                 return self.expression_metal_type(expr.args[0])
+            numeric_limits_match = re.fullmatch(
+                r"(?:metal::)?numeric_limits<(.+)>::"
+                r"(?:max|min|lowest|infinity|quiet_NaN|signaling_NaN|epsilon|denorm_min)",
+                str(expr.name),
+            )
+            if numeric_limits_match is not None and not expr.args:
+                return self.resolve_type_alias(numeric_limits_match.group(1).strip())
             target_match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", expr.name)
             if target_match is not None:
                 return self.resolve_type_alias(target_match.group(1).strip())

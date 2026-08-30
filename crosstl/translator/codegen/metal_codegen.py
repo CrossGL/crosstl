@@ -498,7 +498,7 @@ class MetalCodeGen:
     # simultaneous half/float/integer conversions are ambiguous.  Promote only
     # the source bfloat arguments for operations with this proven native gap;
     # do not make half/float -> bfloat a general implicit conversion.
-    METAL_BFLOAT_ARGUMENT_PROMOTED_FUNCTIONS = {"abs"}
+    METAL_BFLOAT_ARGUMENT_PROMOTED_FUNCTIONS = {"abs", "max", "min"}
     METAL_STDLIB_BUILTIN_FUNCTIONS = {
         "abs",
         "acos",
@@ -1008,12 +1008,21 @@ class MetalCodeGen:
             "vec2<u32>": "uint2",
             "vec3<u32>": "uint3",
             "vec4<u32>": "uint4",
+            "vec2<i64>": "long2",
+            "vec3<i64>": "long3",
+            "vec4<i64>": "long4",
+            "vec2<u64>": "ulong2",
+            "vec3<u64>": "ulong3",
+            "vec4<u64>": "ulong4",
             "vec2<bool>": "bool2",
             "vec3<bool>": "bool3",
             "vec4<bool>": "bool4",
             "ivec2": "int2",
             "ivec3": "int3",
             "ivec4": "int4",
+            "i64vec2": "long2",
+            "i64vec3": "long3",
+            "i64vec4": "long4",
             "short2": "int2",
             "short3": "int3",
             "short4": "int4",
@@ -1047,6 +1056,9 @@ class MetalCodeGen:
             "uvec2": "uint2",
             "uvec3": "uint3",
             "uvec4": "uint4",
+            "u64vec2": "ulong2",
+            "u64vec3": "ulong3",
+            "u64vec4": "ulong4",
             "float2": "float2",
             "float3": "float3",
             "float4": "float4",
@@ -8759,15 +8771,27 @@ class MetalCodeGen:
                 "vec2<u32>",
                 "vec3<u32>",
                 "vec4<u32>",
+                "vec2<i64>",
+                "vec3<i64>",
+                "vec4<i64>",
+                "vec2<u64>",
+                "vec3<u64>",
+                "vec4<u64>",
                 "vec2<bool>",
                 "vec3<bool>",
                 "vec4<bool>",
                 "ivec2",
                 "ivec3",
                 "ivec4",
+                "i64vec2",
+                "i64vec3",
+                "i64vec4",
                 "uvec2",
                 "uvec3",
                 "uvec4",
+                "u64vec2",
+                "u64vec3",
+                "u64vec4",
                 "bvec2",
                 "bvec3",
                 "bvec4",
@@ -8937,9 +8961,21 @@ class MetalCodeGen:
             if isinstance(stmt.expression, (AssignmentNode, BackendAssignmentNode)):
                 return self.generate_assignment(stmt.expression)
             expr = self.generate_expression(stmt.expression)
+            if self.is_discarded_metal_type_constructor(stmt.expression):
+                return f"(void)({expr})"
             return expr
         else:
             return self.generate_expression(stmt)
+
+    def is_discarded_metal_type_constructor(self, expr):
+        if not isinstance(expr, FunctionCallNode):
+            return False
+        function = getattr(expr, "function", None) or getattr(expr, "name", None)
+        function_name = getattr(function, "name", function)
+        return isinstance(function_name, str) and (
+            function_name in self.type_mapping
+            or function_name in self.metal_type_aliases
+        )
 
     def generate_fragment_discard_statement(self, expr):
         """Lower CrossGL/HLSL fragment-kill expressions to Metal syntax."""
@@ -9634,6 +9670,11 @@ class MetalCodeGen:
             operator = self.map_operator(expr.op)
             left = self.generate_binary_operand(expr.left, operator)
             right = self.generate_binary_operand(expr.right, operator, True)
+            if operator in {"<", ">", "<=", ">="}:
+                if self.map_type(self.expression_result_type(expr.left)) == "bool":
+                    left = f"int({left})"
+                if self.map_type(self.expression_result_type(expr.right)) == "bool":
+                    right = f"int({right})"
             if operator in {"+", "-", "*", "/", "%"}:
                 expected_type = self.current_expression_expected_type
                 expression_width = self.vector_value_width(
@@ -10058,15 +10099,27 @@ class MetalCodeGen:
                 "vec2<u32>",
                 "vec3<u32>",
                 "vec4<u32>",
+                "vec2<i64>",
+                "vec3<i64>",
+                "vec4<i64>",
+                "vec2<u64>",
+                "vec3<u64>",
+                "vec4<u64>",
                 "vec2<bool>",
                 "vec3<bool>",
                 "vec4<bool>",
                 "ivec2",
                 "ivec3",
                 "ivec4",
+                "i64vec2",
+                "i64vec3",
+                "i64vec4",
                 "uvec2",
                 "uvec3",
                 "uvec4",
+                "u64vec2",
+                "u64vec3",
+                "u64vec4",
                 "bvec2",
                 "bvec3",
                 "bvec4",
