@@ -2420,7 +2420,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "Install macOS Metal Toolchain" in mlx_porting
     assert "if: runner.os == 'macOS'" in mlx_porting
     assert "xcodebuild -downloadComponent MetalToolchain" in mlx_porting
-    assert mlx_porting.count("xcrun --sdk macosx metal --version") == 2
+    assert mlx_porting.count("xcrun --sdk macosx metal --version") == 4
     assert "--require-directx-toolchain" in mlx_porting
     assert "--require-directx-gemv-compiler-frontier" in mlx_porting
     assert "--require-opengl-frontier-toolchain" in mlx_porting
@@ -3842,11 +3842,25 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
         "Checkout current MLX runtime proof corpus",
     )
 
-    family_metal_step = ci_coverage.workflow_step_section(
+    family_metal_job = _workflow_job_section(
         mlx_porting,
-        "Prove current MLX scalar unary family Metal round-trips",
+        "mlx-unary-metal-roundtrip",
     )
-    assert "if: runner.os == 'macOS'" in family_metal_step
+    assert "name: MLX complete unary Metal round-trip" in family_metal_job
+    assert "if: github.event_name != 'schedule'" in family_metal_job
+    assert "runs-on: macOS-latest" in family_metal_job
+    assert "timeout-minutes: 75" in family_metal_job
+    assert 'python-version: "3.12"' in family_metal_job
+    assert "python -m pip install -e . pytest-xdist" in family_metal_job
+    assert "xcrun --sdk macosx metal --version" in family_metal_job
+    assert "Checkout current MLX unary corpus" in family_metal_job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in family_metal_job
+
+    family_metal_step = ci_coverage.workflow_step_section(
+        family_metal_job,
+        "Prove current MLX complete unary family Metal round-trips",
+    )
+    assert "if: runner.os" not in family_metal_step
     assert (
         "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
         in family_metal_step
@@ -3854,16 +3868,12 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     assert 'CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"' in family_metal_step
     assert (
         f"{test_path}::"
-        "test_current_mlx_scalar_unary_family_roundtrips_through_metal"
-        in family_metal_step
+        "test_current_mlx_unary_family_roundtrips_through_metal" in family_metal_step
     )
     assert "-n auto" in family_metal_step
     assert "-k" not in family_metal_step
-    assert ci_coverage.workflow_step_after(
-        mlx_porting,
-        "Prove current MLX scalar unary family Metal round-trips",
-        "Checkout current MLX runtime proof corpus",
-    )
+    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
+    assert "Prove current MLX complete unary family Metal round-trips" not in matrix_job
 
     opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,

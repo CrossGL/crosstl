@@ -31,7 +31,7 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], constant Uniform
     float3 viewD = normalize(uniforms.viewPos - input.fragPosition);
     float3 specular = float3(0.0);
     float4 tint = uniforms.colDiffuse * input.fragColor;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 4; i++) {
         if (uniforms.lights[i].enabled == 1) {
             float3 light = float3(0.0);
             if (uniforms.lights[i].type == 0) {

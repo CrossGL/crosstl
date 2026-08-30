@@ -29,15 +29,19 @@ The current harness verifies:
   preservation remain blocked by
   [#1660](https://github.com/CrossGL/crosstl/issues/1660), so this is not yet a
   complete semantic-equivalence claim;
-- selected-entry Metal-to-CrossGL-to-Metal translation of all 183
-  current-pinned scalar ``v_`` entries (``N=1``) in ``unary.metal``. The exact
-  contract spans 37 operators and 20 input/output type pairs across bfloat16,
-  Boolean, complex64, float16, float32, signed and unsigned integers, FP8
-  encode/decode, and complex projection. Reachability pruning keeps one selected
-  operator implementation and kernel, bounded source reflection records three
-  buffer bindings, a host-owned ``[1, 1, 1]`` dispatch contract is preserved,
-  and macOS CI compiles every deterministic artifact to non-empty AIR. It does
-  not claim Metal numerical execution or coverage of non-scalar entry shapes;
+- selected-entry Metal-to-CrossGL-to-Metal translation of all 877 discovered
+  current-pinned entries in ``unary.metal``: 183 each for ``v_``, ``v2_``,
+  ``gn1_``, and ``gn4large_``, plus 145 ``vn_`` entries. The exact contract
+  spans 37 operators and 20 input/output type pairs across bfloat16, Boolean,
+  complex64, float16, float32, signed and unsigned integers, FP8 encode/decode,
+  and complex projection. Reachability pruning keeps one selected operator and
+  kernel, materializes the required gather index helper only for ``gn*``, and
+  reflects either three vector resources or five gather resources. Source
+  ``constant`` shape/stride provenance, a read-only ``device`` dimension
+  reference, and postfix output indexing survive the round trip. A host-owned
+  ``[1, 1, 1]`` dispatch contract is preserved, and macOS CI compiles every
+  deterministic artifact to non-empty AIR. This is complete discovered unary
+  compiler/reflection coverage, not Metal numerical execution;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains
@@ -1648,16 +1652,26 @@ Their ``[1, 1, 1]`` workgroup sizes are explicitly host-dispatch-owned because
 MSL has no fixed source attribute equivalent to HLSL ``numthreads``. Both exact
 artifacts compile with ``xcrun -sdk macosx metal -c`` on macOS CI.
 
-The same required gate now covers all 183 current-pinned scalar `v_` entries
-(``N=1``), adding 153 entries beyond the earlier 30-entry float32 family. The
-checked contract classifies 37 operators and 20 concrete input/output type pairs:
-30 bfloat16, 30 float16, 30 float32, 22 complex64, seven Boolean, 28 signed-
-integer, and 28 unsigned-integer same-type entries, plus three FP8 decodes,
-three FP8 encodes, and two complex-to-float projections. Each run traverses
-Metal to CrossGL to Metal, emits one exact specialization and selected operator
-implementation, prunes non-selected operator bodies, retains only required empty
-helper tags, emits one kernel, and reflects the same three-resource host
-interface with zero diagnostics.
+The required family gate now covers all 877 discovered current-pinned unary
+entries, adding the complete 694-entry non-scalar frontier to the earlier 183
+scalar ``v_`` entries. The shape split is exact: 183 ``v_`` kernels instantiate
+``unary_v`` with explicit ``N=1``; 183 ``v2_`` kernels instantiate ``unary_v2``
+with the source default ``N=WorkPerThread<T>::n``; 145 ``vn_`` kernels use that
+same default on ``unary_v``; 183 ``gn1_`` kernels instantiate ``unary_g`` with
+``N=1`` and ``IdxT=int``; and 183 ``gn4large_`` kernels instantiate
+``unary_g`` with ``N=4`` and the source-default ``IdxT=int64_t``. Together they
+classify 37 operators, 20 concrete input/output type pairs, and 16 semantic
+families.
+
+Every selected run traverses Metal to CrossGL to Metal with zero project
+diagnostics, emits one exact operator implementation and kernel, prunes
+non-selected operator bodies, and retains only reachable empty helper tags.
+The three vector shapes materialize one kernel specialization. Each gather
+shape additionally materializes exactly one call-site ``elem_to_loc``
+specialization, for 1,243 specializations across 877 artifacts. ``v_``, ``v2_``,
+and ``vn_`` reflect input, output, and size resources; ``gn1_`` and
+``gn4large_`` reflect those data buffers plus constant shape/stride buffers and
+the read-only device ``ndim`` binding.
 
 The generic round-trip support resolves and elides chained source typedefs,
 maps native bfloat types and result reconstruction, materializes constrained
@@ -1666,19 +1680,26 @@ aggregate aliases, recognizes branch-complete returns, and preserves narrow
 ``as_type`` storage. FP8 decode admits only the proven read-only immediate
 thread-local view of a scalar parameter as a matching single-field aggregate;
 local storage, multiple or mismatched fields, escaped pointers, and every other
-unimplemented pointer reinterpretation remain fail-closed.
+unimplemented pointer reinterpretation remain fail-closed. The non-scalar
+increment additionally preserves ``constant`` pointer provenance after portable
+``StructuredBuffer`` lowering, keeps ``const device`` references read-only, and
+retains postfix ``out_idx++`` semantics. Retained source union layout metadata
+is reconstructed as a native MSL ``union`` rather than an ignored attribute,
+and additive shift operands retain explicit grouping for warning-fatal native
+compilation.
 
-Every entry, operator, exact ``T``/``U`` pair, semantic family, SHA-256, and byte
-count is pinned by
-[`contracts/unary.scalar-metal-roundtrip.json`](contracts/unary.scalar-metal-roundtrip.json)
-and linked by hash from ``expected-gaps.json``. Artifacts range from the
-972-byte ``v_Absint8int8`` kernel through the 3,910-byte
-``v_ArcTancomplex64complex64`` kernel. Native macOS CI invokes
-``xcrun -sdk macosx metal -c`` for every entry and requires 183 non-empty AIR
-outputs. This closes native compiler coverage for every discovered scalar
-``v_`` instantiation. It remains a selected-entry compiler and reflection proof,
-not Metal numerical execution, and does not include non-scalar `v2_`, `gn*`, or
-`vn_` entry shapes.
+Every source entry, shape, template, operator, exact ``T``/``U`` pair, semantic
+family, SHA-256, byte count, template-default provenance, materialization count,
+and host resource contract is pinned by
+[`contracts/unary.metal-roundtrip.json`](contracts/unary.metal-roundtrip.json)
+and linked by hash from ``expected-gaps.json``. Native macOS CI invokes
+``xcrun -sdk macosx metal -Werror -Wno-tautological-constant-compare -c`` for
+every entry and requires 877 non-empty AIR outputs. The narrow warning exemption
+covers MLX's source-level ``Sign<bool>`` comparison; every other compiler warning
+is fatal. This closes selected-entry translation, reflection, and native compiler
+coverage for every discovered unary instantiation. It remains a compiler proof,
+not Metal numerical execution, DirectX/OpenGL whole-family coverage, MLX host
+runtime redirection, or an MLX test-suite claim.
 
 Windows CI compiles the selected HLSL entries with DXC and executes them through
 the native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entries with

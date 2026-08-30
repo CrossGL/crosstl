@@ -751,8 +751,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "25fc91def52118f7f314394bb4cd4c21425dcffe6ab84fed3d36fc99c281afbf",
-      "sizeBytes": 3665
+      "sha256": "1bb1ef21ff9ffb62843a26bdab4acba67fa554dfab6ae03eef416af5967fda54",
+      "sizeBytes": 3622
     },
     {
       "entryPoint": "v_Expfloat16float16",

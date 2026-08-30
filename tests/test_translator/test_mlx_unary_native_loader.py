@@ -48,7 +48,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "a110a1f39fd658a027d691a6737c6c15ed31971ddc98d8a8407570b68ad6a58f"
+    "3385bafa20d3d14b195fe0ce80d0dcacc56ce7fdadd32eb8ca7fe39aefd16a16"
+)
+UNARY_METAL_CONTRACT_PATH = (
+    ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
+)
+UNARY_METAL_CONTRACT_SHA256 = (
+    "315890720b94701cfe1049a7aaad9bfd513c4933eeca5b0a504cb88572819d94"
 )
 
 
@@ -151,18 +157,18 @@ ARCCOS_WORKLOAD = UnaryWorkload(
 )
 
 
-def _load_scalar_unary_metal_contract() -> dict:
-    contract_bytes = SCALAR_UNARY_METAL_CONTRACT_PATH.read_bytes()
+def _load_unary_metal_contract(path: Path, expected_sha256: str) -> dict:
+    contract_bytes = path.read_bytes()
     contract_sha256 = hashlib.sha256(contract_bytes).hexdigest()
-    assert contract_sha256 == SCALAR_UNARY_METAL_CONTRACT_SHA256
+    assert contract_sha256 == expected_sha256
     return json.loads(contract_bytes)
 
 
-SCALAR_UNARY_METAL_CONTRACT = _load_scalar_unary_metal_contract()
-SCALAR_UNARY_METAL_ENTRIES = tuple(SCALAR_UNARY_METAL_CONTRACT["entries"])
-SCALAR_UNARY_METAL_OPERATOR_TYPES = frozenset(
-    entry["operator"] for entry in SCALAR_UNARY_METAL_ENTRIES
+SCALAR_UNARY_METAL_CONTRACT = _load_unary_metal_contract(
+    SCALAR_UNARY_METAL_CONTRACT_PATH,
+    SCALAR_UNARY_METAL_CONTRACT_SHA256,
 )
+SCALAR_UNARY_METAL_ENTRIES = tuple(SCALAR_UNARY_METAL_CONTRACT["entries"])
 SCALAR_UNARY_METAL_ARTIFACT_IDENTITIES = {
     entry["entryPoint"]: {
         "operator": entry["operator"],
@@ -173,6 +179,18 @@ SCALAR_UNARY_METAL_ARTIFACT_IDENTITIES = {
         "sizeBytes": entry["sizeBytes"],
     }
     for entry in SCALAR_UNARY_METAL_ENTRIES
+}
+
+UNARY_METAL_CONTRACT = _load_unary_metal_contract(
+    UNARY_METAL_CONTRACT_PATH,
+    UNARY_METAL_CONTRACT_SHA256,
+)
+UNARY_METAL_ENTRIES = tuple(UNARY_METAL_CONTRACT["entries"])
+UNARY_METAL_OPERATOR_TYPES = frozenset(
+    entry["operator"] for entry in UNARY_METAL_ENTRIES
+)
+UNARY_METAL_ARTIFACT_IDENTITIES = {
+    entry["entryPoint"]: entry for entry in UNARY_METAL_ENTRIES
 }
 
 
@@ -203,8 +221,8 @@ def _metal_roundtrip_workload(entry: dict) -> UnaryWorkload:
     )
 
 
-SCALAR_UNARY_METAL_WORKLOADS = tuple(
-    _metal_roundtrip_workload(entry) for entry in SCALAR_UNARY_METAL_ENTRIES
+UNARY_METAL_WORKLOADS = tuple(
+    _metal_roundtrip_workload(entry) for entry in UNARY_METAL_ENTRIES
 )
 
 
@@ -366,6 +384,466 @@ def test_current_mlx_scalar_unary_metal_contract_is_complete_and_classified():
     }
 
 
+def test_current_mlx_unary_metal_contract_is_complete_and_classified():
+    contract = UNARY_METAL_CONTRACT
+    assert contract["schemaVersion"] == 2
+    assert contract["commit"] == MLX_COMMIT
+    assert contract["source"] == MLX_UNARY_SOURCE
+    assert contract["sourceSha256"] == MLX_UNARY_SHA256
+    assert contract["target"] == "metal"
+    assert contract["selection"] == {
+        "entryCount": 877,
+        "shapeCount": 5,
+        "templateCount": 3,
+        "operatorCount": 37,
+        "typePairCount": 20,
+        "familyCount": 16,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    expected_classifications = {
+        "shapes": {"gn1": 183, "gn4large": 183, "v": 183, "v2": 183, "vn": 145},
+        "templates": {"unary_g": 366, "unary_v": 328, "unary_v2": 183},
+        "operators": {
+            "Abs": 62,
+            "ArcCos": 19,
+            "ArcCosh": 15,
+            "ArcSin": 19,
+            "ArcSinh": 15,
+            "ArcTan": 19,
+            "ArcTanh": 15,
+            "BitwiseInvert": 38,
+            "Ceil": 58,
+            "Conjugate": 4,
+            "Cos": 19,
+            "Cosh": 19,
+            "Erf": 15,
+            "ErfInv": 15,
+            "Exp": 19,
+            "Expm1": 15,
+            "Floor": 58,
+            "FromFP8": 15,
+            "Imag": 4,
+            "Log": 19,
+            "Log10": 19,
+            "Log1p": 19,
+            "Log2": 19,
+            "LogicalNot": 5,
+            "Negative": 62,
+            "Real": 4,
+            "Round": 19,
+            "Rsqrt": 19,
+            "Sigmoid": 15,
+            "Sign": 62,
+            "Sin": 19,
+            "Sinh": 19,
+            "Sqrt": 19,
+            "Square": 62,
+            "Tan": 19,
+            "Tanh": 19,
+            "ToFP8": 15,
+        },
+        "typePairs": {
+            "bfloat16_t->bfloat16_t": 150,
+            "bfloat16_t->uint8_t": 5,
+            "bool->bool": 35,
+            "complex64_t->complex64_t": 88,
+            "complex64_t->float": 8,
+            "float->float": 150,
+            "float->uint8_t": 5,
+            "float16_t->uint8_t": 5,
+            "half->half": 150,
+            "int16_t->int16_t": 35,
+            "int32_t->int32_t": 35,
+            "int64_t->int64_t": 28,
+            "int8_t->int8_t": 35,
+            "uint16_t->uint16_t": 35,
+            "uint32_t->uint32_t": 35,
+            "uint64_t->uint64_t": 28,
+            "uint8_t->bfloat16_t": 5,
+            "uint8_t->float": 5,
+            "uint8_t->float16_t": 5,
+            "uint8_t->uint8_t": 35,
+        },
+        "families": {
+            "bfloat16-same-type": 150,
+            "boolean-same-type": 35,
+            "complex64-projection": 8,
+            "complex64-same-type": 88,
+            "float16-same-type": 150,
+            "float32-same-type": 150,
+            "fp8-decode": 15,
+            "fp8-encode": 15,
+            "int16-same-type": 35,
+            "int32-same-type": 35,
+            "int64-same-type": 28,
+            "int8-same-type": 35,
+            "uint16-same-type": 35,
+            "uint32-same-type": 35,
+            "uint64-same-type": 28,
+            "uint8-same-type": 35,
+        },
+    }
+    expected_shape_contracts = {
+        "v": {
+            "entryPrefix": "v_",
+            "entryCount": 183,
+            "templateName": "unary_v",
+            "sourceTemplateArgumentCount": 4,
+            "templateParameters": {
+                "T": {"value": "entry.inputType", "source": "source-instantiation"},
+                "U": {"value": "entry.outputType", "source": "source-instantiation"},
+                "Op": {"value": "entry.operator", "source": "source-instantiation"},
+                "N": {"value": "1", "source": "source-instantiation"},
+            },
+            "specializationCountPerArtifact": 1,
+            "reachableSpecializations": ["unary_v"],
+            "hostResourceCountPerArtifact": 3,
+            "hostResources": [
+                {"name": "in_", "kind": "buffer", "binding": 0, "access": "read"},
+                {
+                    "name": "out_",
+                    "kind": "buffer",
+                    "binding": 1,
+                    "access": "read_write",
+                },
+                {
+                    "name": "size",
+                    "kind": "constant-buffer",
+                    "binding": 2,
+                    "access": "read",
+                },
+            ],
+        },
+        "v2": {
+            "entryPrefix": "v2_",
+            "entryCount": 183,
+            "templateName": "unary_v2",
+            "sourceTemplateArgumentCount": 3,
+            "templateParameters": {
+                "T": {"value": "entry.inputType", "source": "source-instantiation"},
+                "U": {"value": "entry.outputType", "source": "source-instantiation"},
+                "Op": {"value": "entry.operator", "source": "source-instantiation"},
+                "N": {"value": "WorkPerThread<T>::n", "source": "source-default"},
+            },
+            "specializationCountPerArtifact": 1,
+            "reachableSpecializations": ["unary_v2"],
+            "hostResourceCountPerArtifact": 3,
+            "hostResources": [
+                {"name": "in_", "kind": "buffer", "binding": 0, "access": "read"},
+                {
+                    "name": "out_",
+                    "kind": "buffer",
+                    "binding": 1,
+                    "access": "read_write",
+                },
+                {
+                    "name": "size",
+                    "kind": "constant-buffer",
+                    "binding": 2,
+                    "access": "read",
+                },
+            ],
+        },
+        "vn": {
+            "entryPrefix": "vn_",
+            "entryCount": 145,
+            "templateName": "unary_v",
+            "sourceTemplateArgumentCount": 3,
+            "templateParameters": {
+                "T": {"value": "entry.inputType", "source": "source-instantiation"},
+                "U": {"value": "entry.outputType", "source": "source-instantiation"},
+                "Op": {"value": "entry.operator", "source": "source-instantiation"},
+                "N": {"value": "WorkPerThread<T>::n", "source": "source-default"},
+            },
+            "specializationCountPerArtifact": 1,
+            "reachableSpecializations": ["unary_v"],
+            "hostResourceCountPerArtifact": 3,
+            "hostResources": [
+                {"name": "in_", "kind": "buffer", "binding": 0, "access": "read"},
+                {
+                    "name": "out_",
+                    "kind": "buffer",
+                    "binding": 1,
+                    "access": "read_write",
+                },
+                {
+                    "name": "size",
+                    "kind": "constant-buffer",
+                    "binding": 2,
+                    "access": "read",
+                },
+            ],
+        },
+        "gn1": {
+            "entryPrefix": "gn1_",
+            "entryCount": 183,
+            "templateName": "unary_g",
+            "sourceTemplateArgumentCount": 5,
+            "templateParameters": {
+                "T": {"value": "entry.inputType", "source": "source-instantiation"},
+                "U": {"value": "entry.outputType", "source": "source-instantiation"},
+                "Op": {"value": "entry.operator", "source": "source-instantiation"},
+                "N": {"value": "1", "source": "source-instantiation"},
+                "IdxT": {"value": "int", "source": "source-instantiation"},
+            },
+            "specializationCountPerArtifact": 2,
+            "reachableSpecializations": ["unary_g", "elem_to_loc<int>"],
+            "hostResourceCountPerArtifact": 5,
+            "hostResources": [
+                {"name": "in_", "kind": "buffer", "binding": 0, "access": "read"},
+                {
+                    "name": "out_",
+                    "kind": "buffer",
+                    "binding": 1,
+                    "access": "read_write",
+                },
+                {
+                    "name": "in_shape",
+                    "kind": "constant-buffer",
+                    "binding": 2,
+                    "access": "read",
+                },
+                {
+                    "name": "in_strides",
+                    "kind": "constant-buffer",
+                    "binding": 3,
+                    "access": "read",
+                },
+                {"name": "ndim", "kind": "buffer", "binding": 4, "access": "read"},
+            ],
+        },
+        "gn4large": {
+            "entryPrefix": "gn4large_",
+            "entryCount": 183,
+            "templateName": "unary_g",
+            "sourceTemplateArgumentCount": 4,
+            "templateParameters": {
+                "T": {"value": "entry.inputType", "source": "source-instantiation"},
+                "U": {"value": "entry.outputType", "source": "source-instantiation"},
+                "Op": {"value": "entry.operator", "source": "source-instantiation"},
+                "N": {"value": "4", "source": "source-instantiation"},
+                "IdxT": {"value": "int64_t", "source": "source-default"},
+            },
+            "specializationCountPerArtifact": 2,
+            "reachableSpecializations": ["unary_g", "elem_to_loc<int64_t>"],
+            "hostResourceCountPerArtifact": 5,
+            "hostResources": [
+                {"name": "in_", "kind": "buffer", "binding": 0, "access": "read"},
+                {
+                    "name": "out_",
+                    "kind": "buffer",
+                    "binding": 1,
+                    "access": "read_write",
+                },
+                {
+                    "name": "in_shape",
+                    "kind": "constant-buffer",
+                    "binding": 2,
+                    "access": "read",
+                },
+                {
+                    "name": "in_strides",
+                    "kind": "constant-buffer",
+                    "binding": 3,
+                    "access": "read",
+                },
+                {"name": "ndim", "kind": "buffer", "binding": 4, "access": "read"},
+            ],
+        },
+    }
+    expected_artifact_contract = {
+        "artifactCount": 877,
+        "artifactCountPerEntry": 1,
+        "specializationCount": 1243,
+        "specializationCountsByShape": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 366,
+            "gn4large": 366,
+        },
+        "unsupportedSpecializationCount": 0,
+        "selectedOperatorImplementationCountPerArtifact": 1,
+        "unselectedOperatorBodiesPruned": True,
+        "reachableKernelCountPerArtifact": 1,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "hostInterfaceStatus": "ready",
+        "hostDispatchWorkgroupSize": [1, 1, 1],
+        "generatedSizeBytesTotal": 1321446,
+        "generatedSizeRange": {
+            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 972},
+            "maximum": {
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 4468,
+            },
+        },
+        "nativeCompiler": (
+            "xcrun -sdk macosx metal -Werror -Wno-tautological-constant-compare " "-c"
+        ),
+        "requiresNonemptyAirArtifact": True,
+    }
+    assert contract["classifications"] == expected_classifications
+    assert contract["shapeContracts"] == expected_shape_contracts
+    assert contract["artifactContract"] == expected_artifact_contract
+
+    entries = UNARY_METAL_ENTRIES
+    assert len(entries) == 877
+    assert len({entry["entryPoint"] for entry in entries}) == 877
+    assert [entry["entryPoint"] for entry in entries] == sorted(
+        entry["entryPoint"] for entry in entries
+    )
+    assert Counter(entry["shape"] for entry in entries) == {
+        "v": 183,
+        "v2": 183,
+        "vn": 145,
+        "gn1": 183,
+        "gn4large": 183,
+    }
+    assert Counter(entry["templateName"] for entry in entries) == {
+        "unary_v": 328,
+        "unary_v2": 183,
+        "unary_g": 366,
+    }
+    assert (
+        Counter(entry["operator"] for entry in entries)
+        == expected_classifications["operators"]
+    )
+    assert (
+        Counter(f'{entry["inputType"]}->{entry["outputType"]}' for entry in entries)
+        == expected_classifications["typePairs"]
+    )
+    assert (
+        Counter(entry["family"] for entry in entries)
+        == expected_classifications["families"]
+    )
+    prefixes = {
+        "v": "v_",
+        "v2": "v2_",
+        "vn": "vn_",
+        "gn1": "gn1_",
+        "gn4large": "gn4large_",
+    }
+    for entry in entries:
+        assert list(entry) == [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ]
+        assert entry["entryPoint"].startswith(prefixes[entry["shape"]])
+        assert (
+            entry["templateName"]
+            == expected_shape_contracts[entry["shape"]]["templateName"]
+        )
+        assert len(entry["sha256"]) == 64
+        int(entry["sha256"], 16)
+        assert entry["sizeBytes"] > 0
+
+    scalar_entries = {
+        entry["entryPoint"]: entry for entry in entries if entry["shape"] == "v"
+    }
+    assert len(scalar_entries) == 183
+    for scalar_entry in SCALAR_UNARY_METAL_ENTRIES:
+        complete_entry = scalar_entries[scalar_entry["entryPoint"]]
+        assert {
+            key: complete_entry[key]
+            for key in (
+                "entryPoint",
+                "operator",
+                "inputType",
+                "outputType",
+                "family",
+                "sha256",
+                "sizeBytes",
+            )
+        } == scalar_entry
+
+
+def _unary_shape(entry_point: str) -> str:
+    for prefix, shape in (
+        ("gn4large_", "gn4large"),
+        ("gn1_", "gn1"),
+        ("v2_", "v2"),
+        ("vn_", "vn"),
+        ("v_", "v"),
+    ):
+        if entry_point.startswith(prefix):
+            return shape
+    raise AssertionError(f"Unknown unary entry shape: {entry_point}")
+
+
+def _expected_unary_materializations(workload: UnaryWorkload) -> list[dict]:
+    shape = _unary_shape(workload.entry_point)
+    if shape == "v":
+        template_name = "unary_v"
+        n_value = "1"
+        n_source = "source-instantiation"
+    elif shape == "v2":
+        template_name = "unary_v2"
+        n_value = f"WorkPerThread<{workload.input_type}>::n"
+        n_source = "source-default"
+    elif shape == "vn":
+        template_name = "unary_v"
+        n_value = f"WorkPerThread<{workload.input_type}>::n"
+        n_source = "source-default"
+    elif shape == "gn1":
+        template_name = "unary_g"
+        n_value = "1"
+        n_source = "source-instantiation"
+    else:
+        assert shape == "gn4large"
+        template_name = "unary_g"
+        n_value = "4"
+        n_source = "source-instantiation"
+
+    parameters = {
+        "N": n_value,
+        "Op": workload.operator_type,
+        "T": workload.input_type,
+        "U": workload.output_type,
+    }
+    parameter_sources = {
+        "N": n_source,
+        "Op": "source-instantiation",
+        "T": "source-instantiation",
+        "U": "source-instantiation",
+    }
+    if shape.startswith("gn"):
+        index_type = "int" if shape == "gn1" else "int64_t"
+        parameters["IdxT"] = index_type
+        parameter_sources["IdxT"] = (
+            "source-instantiation" if shape == "gn1" else "source-default"
+        )
+
+    records = [
+        {
+            "name": template_name,
+            "materializedName": workload.entry_point,
+            "parameters": parameters,
+            "parameterSources": parameter_sources,
+            "source": "source-instantiation",
+            "hostName": workload.entry_point,
+        }
+    ]
+    if shape.startswith("gn"):
+        records.append(
+            {
+                "name": "elem_to_loc",
+                "materializedName": f"elem_to_loc_{index_type}",
+                "parameters": {"IdxT": index_type},
+                "parameterSources": {"IdxT": "call-site"},
+                "source": "call-site",
+            }
+        )
+    return records
+
+
 def _project_config(target: str, workload: UnaryWorkload) -> str:
     return textwrap.dedent(f"""
         [project]
@@ -445,7 +923,7 @@ def _translate_unary_artifact(
         output_dir=output_dir.relative_to(mlx_root).as_posix(),
         format_output=False,
         validate=True,
-        run_toolchains=True,
+        run_toolchains=target != "metal",
     )
     payload = report.to_json()
 
@@ -453,7 +931,11 @@ def _translate_unary_artifact(
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     artifact = payload["artifacts"][0]
-    expected_identity = workload.generated_artifacts[target]
+    expected_identity = (
+        UNARY_METAL_ARTIFACT_IDENTITIES[workload.entry_point]
+        if target == "metal"
+        else workload.generated_artifacts[target]
+    )
     assert artifact["source"] == MLX_UNARY_SOURCE
     assert artifact["sourceHash"] == {
         "algorithm": "sha256",
@@ -478,27 +960,9 @@ def _translate_unary_artifact(
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 1]
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
-    assert materialization["specializationCount"] == 1
-    assert materialization["specializations"] == [
-        {
-            "name": "unary_v",
-            "materializedName": workload.entry_point,
-            "parameters": {
-                "N": "1",
-                "Op": workload.operator_type,
-                "T": workload.input_type,
-                "U": workload.output_type,
-            },
-            "parameterSources": {
-                "N": "source-instantiation",
-                "Op": "source-instantiation",
-                "T": "source-instantiation",
-                "U": "source-instantiation",
-            },
-            "source": "source-instantiation",
-            "hostName": workload.entry_point,
-        }
-    ]
+    expected_materializations = _expected_unary_materializations(workload)
+    assert materialization["specializationCount"] == len(expected_materializations)
+    assert materialization["specializations"] == expected_materializations
     assert materialization["unsupported"] == []
 
     generated_path = mlx_root / artifact["path"]
@@ -523,6 +987,9 @@ def _translate_unary_artifact(
     assert "template <" not in generated
     assert "decltype(" not in generated
     assert "operator()" not in generated
+    assert "union_member_layout" not in generated
+    assert "unsupported Metal" not in generated
+    assert "fallback for unmatched generated control flow" not in generated
     if target == "directx":
         assert "[numthreads(1, 1, 1)]" in generated
         validator = "dxc"
@@ -538,9 +1005,7 @@ def _translate_unary_artifact(
         assert "[[static]]" not in generated
         assert f"struct {workload.operator_type} {{" in generated
         assert generated.count(f"struct {workload.operator_type} {{") == 1
-        for pruned_operator in SCALAR_UNARY_METAL_OPERATOR_TYPES - {
-            workload.operator_type
-        }:
+        for pruned_operator in UNARY_METAL_OPERATOR_TYPES - {workload.operator_type}:
             marker = f"struct {pruned_operator} {{"
             cursor = 0
             while (start := generated.find(marker, cursor)) != -1:
@@ -549,7 +1014,9 @@ def _translate_unary_artifact(
                 assert generated[start + len(marker) : end].strip() == ""
                 cursor = end + 2
         validator = "xcrun"
-    if shutil.which(validator) is not None:
+    if target == "metal":
+        assert payload["validation"].get("toolchainRuns", []) == []
+    elif shutil.which(validator) is not None:
         toolchain_runs = payload["validation"]["toolchainRuns"]
         assert len(toolchain_runs) == 1
         assert toolchain_runs[0]["status"] == "ok"
@@ -608,6 +1075,35 @@ def _roundtrip_pinned_mlx_unary_through_metal(workload: UnaryWorkload) -> None:
                 "executionConfig": {},
             }
         ]
+        expected_resources = {
+            "in_": ("buffer", 0, "read", workload.entry_point),
+            "out_": ("buffer", 1, "read_write", workload.entry_point),
+        }
+        if _unary_shape(workload.entry_point).startswith("gn"):
+            expected_resources.update(
+                {
+                    "in_shape": (
+                        "constant-buffer",
+                        2,
+                        "read",
+                        workload.entry_point,
+                    ),
+                    "in_strides": (
+                        "constant-buffer",
+                        3,
+                        "read",
+                        workload.entry_point,
+                    ),
+                    "ndim": ("buffer", 4, "read", workload.entry_point),
+                }
+            )
+        else:
+            expected_resources["size"] = (
+                "constant-buffer",
+                2,
+                "read",
+                workload.entry_point,
+            )
         assert {
             resource["name"]: (
                 resource["kind"],
@@ -616,21 +1112,7 @@ def _roundtrip_pinned_mlx_unary_through_metal(workload: UnaryWorkload) -> None:
                 resource["metadata"]["entryPoint"],
             )
             for resource in reflected["resources"]
-        } == {
-            "in_": ("buffer", 0, "read", workload.entry_point),
-            "out_": (
-                "buffer",
-                1,
-                "read_write",
-                workload.entry_point,
-            ),
-            "size": (
-                "constant-buffer",
-                2,
-                "read",
-                workload.entry_point,
-            ),
-        }
+        } == expected_resources
 
         xcrun = shutil.which("xcrun")
         if xcrun is None:
@@ -642,6 +1124,8 @@ def _roundtrip_pinned_mlx_unary_through_metal(workload: UnaryWorkload) -> None:
                 "-sdk",
                 "macosx",
                 "metal",
+                "-Werror",
+                "-Wno-tautological-constant-compare",
                 "-c",
                 str(generated_path),
                 "-o",
@@ -666,10 +1150,10 @@ def test_pinned_mlx_unary_arccos_roundtrips_through_metal():
 
 @pytest.mark.parametrize(
     "workload",
-    SCALAR_UNARY_METAL_WORKLOADS,
+    UNARY_METAL_WORKLOADS,
     ids=lambda workload: workload.entry_point,
 )
-def test_current_mlx_scalar_unary_family_roundtrips_through_metal(workload):
+def test_current_mlx_unary_family_roundtrips_through_metal(workload):
     _roundtrip_pinned_mlx_unary_through_metal(workload)
 
 

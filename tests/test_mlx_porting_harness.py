@@ -11580,20 +11580,20 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
         .read_text(encoding="utf-8")
         .split()
     )
-    assert "The current-pinned MLX integration exercises this path for all 183" in guide
-    assert "2,742-byte ``v_ArcCosfloat32float32`` artifact" in guide
+    assert "all 877 discovered entries" in guide
+    assert "877 artifacts contain 1,243 exact materializations" in guide
     assert "does not claim Metal numerical execution" in guide
 
 
-def test_unary_scalar_metal_roundtrip_evidence_records_complete_family():
+def test_unary_metal_roundtrip_evidence_records_complete_family():
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
             encoding="utf-8"
         )
     )
-    status = gaps["unary_scalar_metal_roundtrip_status"]
+    status = gaps["unary_metal_roundtrip_status"]
     assert status["status"] == (
-        "selected-entry-scalar-family-native-compilation-validated"
+        "selected-entry-complete-family-native-compilation-validated"
     )
     assert status["commit"] == CURRENT_MLX_COMMIT
     assert status["source"] == "mlx/backend/metal/kernels/unary.metal"
@@ -11602,26 +11602,31 @@ def test_unary_scalar_metal_roundtrip_evidence_records_complete_family():
     )
     assert status["target"] == "metal"
     assert status["scope"] == {
-        "entry_prefix": "v_",
-        "template": "unary_v",
-        "template_element_count": 1,
-        "shape": "scalar",
         "discovered_unary_instantiation_count": 877,
-        "discovered_scalar_v_entry_count": 183,
-        "entry_count": 183,
+        "entry_count": 877,
+        "shape_counts": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 183,
+            "gn4large": 183,
+        },
+        "template_counts": {"unary_v": 328, "unary_v2": 183, "unary_g": 366},
         "operator_count": 37,
         "input_output_type_pair_count": 20,
         "semantic_family_count": 16,
-        "previously_proven_float32_entry_count": 30,
-        "newly_proven_entry_count": 153,
-        "all_discovered_scalar_v_entries_included": True,
+        "previously_proven_scalar_entry_count": 183,
+        "newly_proven_non_scalar_entry_count": 694,
+        "all_discovered_unary_instantiations_included": True,
     }
     assert status["contract"] == {
-        "path": "demos/integrations/mlx/contracts/unary.scalar-metal-roundtrip.json",
-        "schema_version": 1,
-        "sha256": "a110a1f39fd658a027d691a6737c6c15ed31971ddc98d8a8407570b68ad6a58f",
+        "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
+        "schema_version": 2,
+        "sha256": "315890720b94701cfe1049a7aaad9bfd513c4933eeca5b0a504cb88572819d94",
         "entry_identity_fields": [
             "entryPoint",
+            "shape",
+            "templateName",
             "operator",
             "inputType",
             "outputType",
@@ -11640,17 +11645,16 @@ def test_unary_scalar_metal_roundtrip_evidence_records_complete_family():
     assert contract["sourceSha256"] == status["source_sha256"]
     assert contract["target"] == status["target"]
     assert contract["selection"] == {
-        "entryPrefix": "v_",
-        "templateName": "unary_v",
-        "elementCount": 1,
-        "shape": "scalar",
-        "entryCount": 183,
+        "entryCount": 877,
+        "shapeCount": 5,
+        "templateCount": 3,
         "operatorCount": 37,
         "typePairCount": 20,
         "familyCount": 16,
+        "allDiscoveredSourceInstantiationsIncluded": True,
     }
-    assert len(contract["entries"]) == 183
-    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 183
+    assert len(contract["entries"]) == 877
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 877
     assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
         entry["entryPoint"] for entry in contract["entries"]
     )
@@ -11658,21 +11662,32 @@ def test_unary_scalar_metal_roundtrip_evidence_records_complete_family():
         list(entry) == status["contract"]["entry_identity_fields"]
         for entry in contract["entries"]
     )
+    assert contract["classifications"]["shapes"] == status["scope"]["shape_counts"]
+    assert (
+        contract["classifications"]["templates"] == status["scope"]["template_counts"]
+    )
     assert status["family_counts"] == contract["classifications"]["families"]
-    assert sum(status["family_counts"].values()) == 183
+    assert sum(status["family_counts"].values()) == 877
     assert len(contract["classifications"]["operators"]) == 37
-    assert sum(contract["classifications"]["operators"].values()) == 183
+    assert sum(contract["classifications"]["operators"].values()) == 877
     assert len(contract["classifications"]["typePairs"]) == 20
-    assert sum(contract["classifications"]["typePairs"].values()) == 183
+    assert sum(contract["classifications"]["typePairs"].values()) == 877
     assert status["project_translation"] == {
-        "selected_entry_run_count": 183,
-        "artifact_count": 183,
-        "translated_count": 183,
+        "selected_entry_run_count": 877,
+        "artifact_count": 877,
+        "translated_count": 877,
         "failed_count": 0,
         "project_diagnostic_count": 0,
         "provenance": "entry-scoped-translate",
         "intermediate": "crossgl",
-        "specialization_count_per_artifact": 1,
+        "specialization_count": 1243,
+        "specialization_counts_by_shape": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 366,
+            "gn4large": 366,
+        },
         "unsupported_specialization_count": 0,
         "selected_operator_implementation_count_per_artifact": 1,
         "unselected_operator_bodies_pruned": True,
@@ -11681,6 +11696,7 @@ def test_unary_scalar_metal_roundtrip_evidence_records_complete_family():
         "residual_template_syntax": False,
         "residual_decltype_syntax": False,
         "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
     }
     assert status["implementation_contracts"] == {
         "typedef_aliases_and_native_bfloat_mapping": True,
@@ -11691,36 +11707,51 @@ def test_unary_scalar_metal_roundtrip_evidence_records_complete_family():
         "narrow_as_type_storage": True,
         "read_only_thread_local_single_field_parameter_reinterpret": True,
         "other_pointer_reinterpretation_fail_closed": True,
+        "constant_resource_address_space_provenance": True,
+        "const_device_reference_preservation": True,
+        "postfix_update_position_preservation": True,
+        "native_metal_union_reconstruction": True,
+        "malformed_union_layout_fail_closed": True,
+        "warning_safe_shift_grouping": True,
+        "conflicting_resource_address_spaces_fail_closed": True,
+        "writable_constant_resources_fail_closed": True,
     }
     assert status["host_interface"] == {
         "status": "ready",
-        "resource_count_per_artifact": 3,
-        "resources": [
-            {"name": "in_", "kind": "buffer", "binding": 0, "access": "read"},
-            {
-                "name": "out_",
-                "kind": "buffer",
-                "binding": 1,
-                "access": "read_write",
-            },
-            {
-                "name": "size",
-                "kind": "constant-buffer",
-                "binding": 2,
-                "access": "read",
-            },
-        ],
+        "resource_counts_by_shape": {
+            "v": 3,
+            "v2": 3,
+            "vn": 3,
+            "gn1": 5,
+            "gn4large": 5,
+        },
+        "reflected_resource_count": 3363,
+        "vector_resources": contract["shapeContracts"]["v"]["hostResources"],
+        "gather_resources": contract["shapeContracts"]["gn1"]["hostResources"],
         "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": 1321446,
+        "generated_size_range": {
+            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 972},
+            "maximum": {
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 4468,
+            },
+        },
     }
     assert status["native_validation"] == {
         "platform": "macos-latest",
-        "compiler": "xcrun -sdk macosx metal -c",
+        "compiler": (
+            "xcrun -sdk macosx metal -Werror " "-Wno-tautological-constant-compare -c"
+        ),
+        "source_warning_exemption": "Sign<bool> tautological constant comparison",
         "status": "required-on-ci",
-        "compiled_artifact_count": 183,
+        "compiled_artifact_count": 877,
         "all_air_artifacts_nonempty": True,
         "test": (
             "tests/test_translator/test_mlx_unary_native_loader.py::"
-            "test_current_mlx_scalar_unary_family_roundtrips_through_metal"
+            "test_current_mlx_unary_family_roundtrips_through_metal"
         ),
     }
     assert status["host_interface_reflection_included"] is True
@@ -11731,27 +11762,29 @@ def test_unary_scalar_metal_roundtrip_evidence_records_complete_family():
     assert status["runtime_integration_included"] is False
     assert status["full_mlx_test_suite_included"] is False
     assert status["remaining_scope"] == {
-        "non_scalar_unary_instantiations_included": False,
-        "v2_gather_and_work_per_thread_entries_included": False,
-        "gn_and_vn_entry_shapes_included": False,
+        "all_discovered_unary_instantiations_included": True,
+        "metal_numerical_execution_included": False,
+        "directx_and_opengl_whole_family_included": False,
+        "mlx_host_runtime_redirection_included": False,
     }
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "all 183 current-pinned scalar `v_` entries" in readme
-    assert "37 operators and 20 concrete input/output type pairs" in readme
-    assert "30 bfloat16, 30 float16, 30 float32, 22 complex64" in readme
-    assert "requires 183 non-empty AIR outputs" in readme
-    assert "does not include non-scalar `v2_`, `gn*`, or `vn_` entry shapes" in readme
+    assert "all 877 discovered current-pinned unary entries" in readme
+    assert "adding the complete 694-entry non-scalar frontier" in readme
+    assert "1,243 specializations across 877 artifacts" in readme
+    assert "requires 877 non-empty AIR outputs" in readme
+    assert "every discovered unary instantiation" in readme
+    assert "not Metal numerical execution" in readme
     guide = " ".join(
         (ROOT / "docs" / "source" / "project-porting.rst")
         .read_text(encoding="utf-8")
         .split()
     )
-    assert "all 183 scalar ``v_`` entries" in guide
-    assert "37 operators and 20 concrete input/output type pairs" in guide
-    assert "compiles all 183 exact artifacts" in guide
+    assert "all 877 discovered entries" in guide
+    assert "877 artifacts contain 1,243 exact materializations" in guide
+    assert "compiles all 877 exact artifacts" in guide
     assert "does not claim Metal numerical execution" in guide
 
 

@@ -7719,6 +7719,28 @@ class MetalToCrossGLConverter:
             annotations.append("@uniform_value")
         return " ".join(annotations)
 
+    def resource_address_space_qualifier_annotations(self, var):
+        """Retain source-only address-space identity after pointer resource lowering.
+
+        Stage pointer parameters become portable StructuredBuffer declarations in
+        CrossGL.  That abstraction preserves read/write access, but it otherwise
+        cannot distinguish Metal's read-only ``constant`` address space from a
+        ``const device`` pointer.  Keep the narrower source contract as metadata so
+        a Metal round trip can pass the resource to a constant-pointer helper
+        without silently substituting device storage.  Other targets treat this as
+        Metal declaration metadata and continue to use the portable resource type.
+        """
+        if self.structured_buffer_pointer_type(var) is None:
+            return ""
+        qualifiers = set(self.effective_declaration_qualifiers(var))
+        attributes = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(var, "attributes", []) or []
+        }
+        if "constant" in qualifiers and "constant" not in attributes:
+            return "@constant"
+        return ""
+
     def is_sampler_variable(self, var):
         return self.is_sampler_type(getattr(var, "vtype", None))
 
@@ -7777,15 +7799,19 @@ class MetalToCrossGLConverter:
         lowered_buffer_type = self.constant_buffer_pointer_type(
             var
         ) or self.structured_buffer_pointer_type(var)
-        const_device_pointer = bool(
+        const_device_indirection = bool(
             "const" in qualifiers
             and "device" in qualifiers
-            and self.pointer_element_type(self.effective_metal_variable_type(var))
-            is not None
+            and (
+                self.pointer_element_type(self.effective_metal_variable_type(var))
+                is not None
+                or self.reference_element_type(self.effective_metal_variable_type(var))
+                is not None
+            )
         )
         const_str = (
             "const "
-            if (getattr(var, "is_const", False) or const_device_pointer)
+            if (getattr(var, "is_const", False) or const_device_indirection)
             and lowered_buffer_type is None
             and address_space.strip() != "constant"
             else ""
@@ -7798,8 +7824,17 @@ class MetalToCrossGLConverter:
             else ""
         )
         address_space_annotations = self.address_space_qualifier_annotations(var)
+        resource_address_space_annotations = (
+            self.resource_address_space_qualifier_annotations(var)
+        )
         semantic = " ".join(
-            part for part in [address_space_annotations, semantic] if part
+            part
+            for part in [
+                address_space_annotations,
+                semantic,
+                resource_address_space_annotations,
+            ]
+            if part
         )
         access = self.storage_texture_access_attribute(var)
         storage_format = self.storage_texture_format_attributes(var)

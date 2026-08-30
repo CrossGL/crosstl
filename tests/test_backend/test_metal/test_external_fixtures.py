@@ -738,7 +738,7 @@ EXTERNAL_FIXTURES = [
         "roundtrip": True,
         "contains": [
             "void main_(inout coherent device Data coherent_buf @user(fake0), "
-            "device Data& plain_buf @user(fake0))",
+            "const device Data& plain_buf @user(fake0))",
             "coherent_buf.values[0] = value;",
         ],
         "not_contains": ["device Data coherent coherent_buf"],

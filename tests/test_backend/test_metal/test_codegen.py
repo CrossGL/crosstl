@@ -2548,7 +2548,9 @@ def test_codegen_range_for_loop_from_mlx_random():
     assert "value += r;" in crossgl
 
 
-def test_codegen_using_union_alias_from_mlx_cexpf_header_retains_layout_contract():
+def test_codegen_using_union_alias_from_mlx_cexpf_header_retains_layout_contract(
+    tmp_path,
+):
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
     # Commit: b155224b9963cd9476363b464a559232a0868000
@@ -2576,7 +2578,15 @@ def test_codegen_using_union_alias_from_mlx_cexpf_header_retains_layout_contract
     assert "@union_member_layout(0, 4, 4) float value;" in crossgl
     assert "@union_member_layout(0, 4, 4) uint word;" in crossgl
     assert "using ieee_float_shape_type = union" not in crossgl
-    assert parse_crossgl(crossgl) is not None
+    parsed = parse_crossgl(crossgl)
+    assert parsed is not None
+
+    metal = MetalCodeGen().generate(parsed)
+    assert "union ieee_float_shape_type {" in metal
+    assert "float value;" in metal
+    assert "uint word;" in metal
+    assert "union_member_layout" not in metal
+    assert_metal_compute_validates_if_available(metal, tmp_path, "mlx-cexpf-union")
 
 
 def test_codegen_mlx_random_union_retains_member_array_layout_contract():
@@ -2937,9 +2947,70 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
 
     metal = MetalCodeGen().generate(ast)
     assert "kernel void compute_main(device float* data" in metal
-    assert "const device float* input" in metal
+    assert "constant float* input" in metal
     assert "float value = input[tid.x];" in metal
     assert "data[tid.x] = value * 2.0;" in metal
+
+
+def test_codegen_preserves_constant_stage_buffer_metadata_for_metal_roundtrip(
+    tmp_path,
+):
+    code = """
+    int read_shape(constant const int* shape, int index) {
+        return shape[index];
+    }
+
+    kernel void gather(
+        constant const int* shape [[buffer(0)]],
+        device int* output [[buffer(1)]],
+        device const int& ndim [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]) {
+        uint output_index = gid;
+        output[output_index++] = read_shape(shape, ndim);
+    }
+    """
+
+    crossgl = convert(code)
+    assert "StructuredBuffer<int> shape @buffer(0) @constant" in crossgl
+    assert "const device int& ndim @buffer(2)" in crossgl
+    assert "buffer_store(output, output_index++, read_shape(shape, ndim));" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "int read_shape(constant int* shape, int index)" in metal
+    assert "constant int* shape [[buffer(0)]]" in metal
+    assert "const device int& ndim [[buffer(2)]]" in metal
+    assert "output[output_index++] = read_shape(shape, ndim);" in metal
+    assert "unsupported Metal address-space call" not in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "constant-stage-buffer-roundtrip"
+    )
+
+    portable_crossgl = """
+    shader PortableConstantResourceMetadata {
+        compute {
+            void main(
+                StructuredBuffer<int> shape @buffer(0) @constant,
+                RWStructuredBuffer<int> output @buffer(1),
+                uint gid @gl_GlobalInvocationID
+            ) {
+                output[gid] = shape[0];
+            }
+        }
+    }
+    """
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(portable_crossgl))
+    assert "StructuredBuffer<int> shape : register(t0);" in hlsl
+    assert "RWStructuredBuffer<int> output : register(u1);" in hlsl
+    assert "@constant" not in hlsl
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(portable_crossgl))
+    assert "readonly buffer shapeBuffer { int shape[]; };" in glsl
+    assert "buffer output_Buffer { int output_[]; };" in glsl
+    assert "@constant" not in glsl
+    assert_opengl_compute_validates_if_available(
+        glsl, tmp_path, "constant-stage-buffer-portable-metadata"
+    )
 
 
 def test_codegen_stage_entry_arrays_lower_to_non_conflicting_resources(tmp_path):

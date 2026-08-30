@@ -494,31 +494,38 @@ Entry selection scopes shader or kernel translation; it does not infer host
 dispatch dimensions, runtime bindings, or backend integration. Record those
 requirements through the corresponding dispatch and runtime contracts.
 
-The current-pinned MLX integration exercises this path for all 183 scalar
-``v_`` entries (``N=1``) from the same include-expanded ``unary.metal`` source.
-The exact checked contract covers 37 operators and 20 concrete input/output type
-pairs across bfloat16, Boolean, complex64, float16, float32, signed and unsigned
-integers, FP8 encode/decode, and complex projection. Every independently
-translated artifact has one selected operator implementation, one kernel, three
-reflected buffer bindings, and a host-owned ``[1, 1, 1]`` workgroup contract;
-required empty helper tags may remain while every non-selected operator body is
-pruned. Deterministic identities range from the 972-byte
-``v_Absint8int8`` artifact to the 3,910-byte
-``v_ArcTancomplex64complex64`` artifact. The 2,742-byte
-``v_ArcCosfloat32float32`` artifact retains its portable precise range
-reduction under explicit no-contraction regions rather than falling back to the
-target ``acos`` intrinsic.
+The current-pinned MLX integration exercises entry-scoped translation for all
+877 discovered entries from the include-expanded ``unary.metal`` source. The
+finite split is 183 each for ``v_``, ``v2_``, ``gn1_``, and ``gn4large_``, plus
+145 ``vn_`` entries, spanning 37 operators, 20 concrete input/output type pairs,
+and 16 semantic families. ``v_`` uses explicit ``N=1``; ``v2_`` and ``vn_``
+retain ``N=WorkPerThread<T>::n`` from the source default; ``gn1_`` uses
+``N=1, IdxT=int``; and ``gn4large_`` uses ``N=4`` plus the source-default
+``IdxT=int64_t``.
 
-Required macOS CI compiles all 183 exact artifacts with
-``xcrun -sdk macosx metal -c`` and requires a non-empty AIR output from each.
-The generic path resolves source typedef chains and bfloat reconstruction,
+Every independently translated artifact has one selected operator implementation
+and one kernel. Vector shapes materialize one specialization and reflect input,
+output, and size resources. Gather shapes additionally materialize the reachable
+``elem_to_loc<int>`` or ``elem_to_loc<int64_t>`` helper and reflect constant
+shape/stride buffers plus a read-only device dimension binding. The resulting
+877 artifacts contain 1,243 exact materializations, preserve a host-owned
+``[1, 1, 1]`` workgroup contract, and reject residual templates, ``decltype``,
+call operators, unsupported placeholders, and non-selected operator bodies.
+
+Required macOS CI compiles all 877 exact artifacts with
+``xcrun -sdk macosx metal -Werror -Wno-tautological-constant-compare -c`` and
+requires a non-empty AIR output from each. The one disabled warning class is the
+source-level tautological comparison in ``Sign<bool>``; all other warnings are
+fatal. The generic path resolves source typedef chains and bfloat reconstruction,
 materializes source-compatible constrained free operators, infers aggregate
 aliases, recognizes branch-complete returns, preserves narrow ``as_type``
 storage, and admits only a proven read-only immediate scalar-parameter view as
-a matching thread-local single-field aggregate. Other pointer reinterpretation
-continues to fail closed. This selected-entry family proof does not claim Metal
-numerical execution, host-runtime redirection, non-scalar ``v2_``/``gn*``/``vn_``
-entry shapes, DirectX/OpenGL family coverage, or the MLX test suite.
+a matching thread-local single-field aggregate. The non-scalar path also retains
+constant-resource provenance, const-device references, postfix update position,
+and native Metal union aliasing while ambiguous address spaces and unsupported
+reinterpretation continue to fail closed. This complete discovered-unary
+selected-entry proof does not claim Metal numerical execution, host-runtime
+redirection, DirectX/OpenGL whole-family coverage, or the MLX test suite.
 
 OpenGL Software Subgroup Specialization
 ----------------------------------------

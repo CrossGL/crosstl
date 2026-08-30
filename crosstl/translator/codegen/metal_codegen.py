@@ -859,6 +859,7 @@ class MetalCodeGen:
         self.struct_member_address_spaces = {}
         self.structs_by_name = {}
         self.metal_generated_struct_names = set()
+        self.metal_union_layouts = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
         self.generic_function_definitions = {}
@@ -1899,6 +1900,11 @@ class MetalCodeGen:
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)
         }
+        self.metal_union_layouts = {}
+        for node in structs:
+            layout = self.metal_union_layout_contract(node)
+            if layout is not None:
+                self.metal_union_layouts[node.name] = layout
         self.metal_generated_struct_names = set()
         self.metal_vertex_entry_input_struct_names = (
             self.collect_metal_stage_entry_parameter_struct_names(
@@ -3161,6 +3167,153 @@ class MetalCodeGen:
     def is_metal_struct_member_abi_attribute(self, attr):
         return self.normalized_metal_abi_attribute_name(attr) == "id"
 
+    def metal_union_layout_error(self, node, reason, detail, member=None):
+        union_name = getattr(node, "name", "<anonymous>")
+        member_name = getattr(member, "name", None)
+        subject = (
+            f"member '{member_name}' of Metal union '{union_name}'"
+            if member_name
+            else f"Metal union '{union_name}'"
+        )
+        return UnsupportedMetalFeatureError(
+            "union-layout-contract",
+            f"Metal codegen cannot reconstruct {subject}: {detail}",
+            missing_capabilities=("metal.union-layout-contract",),
+            operation=union_name,
+            reason=reason,
+            source_location=getattr(member or node, "source_location", None),
+        )
+
+    def metal_union_layout_attribute(self, node, name):
+        return [
+            attr
+            for attr in getattr(node, "attributes", []) or []
+            if self.normalized_metal_abi_attribute_name(attr) == name
+        ]
+
+    def metal_union_layout_integer(self, node, attribute, index, member=None):
+        arguments = list(getattr(attribute, "arguments", []) or [])
+        if index >= len(arguments):
+            return None
+        value = self.binding_index_value(arguments[index])
+        if value is None:
+            raise self.metal_union_layout_error(
+                node,
+                "non-literal-layout",
+                "layout sizes, alignments, and offsets must be integer literals",
+                member,
+            )
+        return value
+
+    def metal_union_layout_contract(self, node):
+        if not isinstance(node, StructNode):
+            return None
+        attributes = self.metal_union_layout_attribute(node, "union_layout")
+        if not attributes:
+            return None
+        if len(attributes) != 1:
+            raise self.metal_union_layout_error(
+                node,
+                "duplicate-layout",
+                "exactly one @union_layout attribute is required",
+            )
+        attribute = attributes[0]
+        arguments = list(getattr(attribute, "arguments", []) or [])
+        if len(arguments) != 4:
+            raise self.metal_union_layout_error(
+                node,
+                "malformed-layout",
+                "@union_layout requires size, alignment, byte order, and source ABI",
+            )
+        size = self.metal_union_layout_integer(node, attribute, 0)
+        alignment = self.metal_union_layout_integer(node, attribute, 1)
+        byte_order = self.attribute_value_to_string(arguments[2]).strip().lower()
+        source_abi = self.attribute_value_to_string(arguments[3]).strip().lower()
+        if size <= 0 or alignment <= 0:
+            raise self.metal_union_layout_error(
+                node,
+                "invalid-layout-size",
+                "aggregate size and alignment must be positive",
+            )
+        if byte_order != "little_endian":
+            raise self.metal_union_layout_error(
+                node,
+                "byte-order-unsupported",
+                f"byte order '{byte_order or '<missing>'}' is not a Metal ABI contract",
+            )
+        if source_abi not in {"metal", "msl"}:
+            raise self.metal_union_layout_error(
+                node,
+                "source-abi-unsupported",
+                f"source ABI '{source_abi or '<missing>'}' cannot be reconstructed natively",
+            )
+
+        member_layouts = {}
+        for member in getattr(node, "members", []) or []:
+            member_attributes = self.metal_union_layout_attribute(
+                member, "union_member_layout"
+            )
+            if len(member_attributes) != 1:
+                raise self.metal_union_layout_error(
+                    node,
+                    "member-layout-missing",
+                    "exactly one @union_member_layout attribute is required",
+                    member,
+                )
+            member_attribute = member_attributes[0]
+            member_arguments = list(getattr(member_attribute, "arguments", []) or [])
+            if len(member_arguments) != 3:
+                raise self.metal_union_layout_error(
+                    node,
+                    "malformed-member-layout",
+                    "@union_member_layout requires offset, size, and alignment",
+                    member,
+                )
+            offset = self.metal_union_layout_integer(node, member_attribute, 0, member)
+            member_size = self.metal_union_layout_integer(
+                node, member_attribute, 1, member
+            )
+            member_alignment = self.metal_union_layout_integer(
+                node, member_attribute, 2, member
+            )
+            if offset != 0:
+                raise self.metal_union_layout_error(
+                    node,
+                    "member-offset-unsupported",
+                    f"member offset {offset!r} does not alias byte zero",
+                    member,
+                )
+            if (
+                member_size <= 0
+                or member_alignment <= 0
+                or member_size > size
+                or member_alignment > alignment
+            ):
+                raise self.metal_union_layout_error(
+                    node,
+                    "member-layout-out-of-range",
+                    "member size or alignment exceeds the aggregate layout",
+                    member,
+                )
+            member_layouts[getattr(member, "name", "")] = {
+                "offset": offset,
+                "size": member_size,
+                "alignment": member_alignment,
+            }
+        if not member_layouts:
+            raise self.metal_union_layout_error(
+                node,
+                "empty-union-unsupported",
+                "at least one instance member is required",
+            )
+        return {
+            "size": size,
+            "alignment": alignment,
+            "byte_order": byte_order,
+            "source_abi": source_abi,
+            "members": member_layouts,
+        }
+
     def is_metal_argument_buffer_global(self, node):
         attributes = getattr(node, "attributes", []) or []
         return any(
@@ -3515,8 +3668,11 @@ class MetalCodeGen:
             )
             return {"name": node.name, "dependencies": set(), "code": code}
 
-        self.validate_struct_member_semantic_types(node)
-        code = f"struct {node.name} {{\n"
+        is_union = node.name in self.metal_union_layouts
+        if not is_union:
+            self.validate_struct_member_semantic_types(node)
+        declaration_kind = "union" if is_union else "struct"
+        code = f"{declaration_kind} {node.name} {{\n"
         dependencies = set()
         default_member_semantics = self.metal_default_struct_member_semantics(node)
         for member in getattr(node, "members", []) or []:
@@ -6522,7 +6678,7 @@ class MetalCodeGen:
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_structured_buffer_parameter(
-                    buffer_type, buffer_name, array_size
+                    buffer_type, buffer_name, array_size, buffer_variable
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.structured_buffer_length_variables:
@@ -6776,7 +6932,7 @@ class MetalCodeGen:
             if buffer_name:
                 resource_params.append(
                     self.format_structured_buffer_parameter(
-                        buffer_type, buffer_name, array_size
+                        buffer_type, buffer_name, array_size, buffer_variable
                     )
                 )
                 if self.structured_buffer_requires_length(buffer_name):
@@ -9507,7 +9663,10 @@ class MetalCodeGen:
             if local_reinterpret is not None:
                 return local_reinterpret
             operand = self.generate_unary_operand(expr.operand)
-            return f"{self.map_operator(expr.op)}{operand}"
+            operator = self.map_operator(expr.op)
+            if getattr(expr, "is_postfix", False):
+                return f"{operand}{operator}"
+            return f"{operator}{operand}"
         elif isinstance(expr, CooperativeMatrixOpNode):
             return self.generate_cooperative_matrix_operation(expr)
         elif isinstance(expr, WaveOpNode):
@@ -10336,7 +10495,10 @@ class MetalCodeGen:
         if child_precedence < parent_precedence:
             return True
         if child_precedence > parent_precedence:
-            return False
+            # Clang intentionally warns on an unparenthesized additive child of a
+            # shift even though C++ precedence is unambiguous.  Retain explicit
+            # source grouping so warning-fatal native Metal builds stay portable.
+            return parent_operator in {"<<", ">>"} and child_operator in {"+", "-"}
         return is_right_child and (
             parent_operator not in self.ASSOCIATIVE_BINARY_OPS
             or child_operator != parent_operator
@@ -13137,7 +13299,23 @@ class MetalCodeGen:
         element_type = type_name.split("<", 1)[1][:-1].strip()
         return self.map_type(element_type)
 
-    def structured_buffer_address_space(self, vtype):
+    def structured_buffer_address_space(self, vtype, node=None):
+        qualifiers = self.parameter_qualifier_names(node)
+        explicit_spaces = qualifiers & {"constant", "device"}
+        if len(explicit_spaces) > 1:
+            name = getattr(node, "name", "<anonymous>")
+            raise ValueError(
+                f"Metal structured buffer '{name}' has conflicting address-space "
+                f"metadata: {', '.join(sorted(explicit_spaces))}"
+            )
+        if "constant" in explicit_spaces:
+            if self.structured_buffer_type_name(vtype) != "StructuredBuffer":
+                name = getattr(node, "name", "<anonymous>")
+                raise ValueError(
+                    f"Writable Metal structured buffer '{name}' cannot use the "
+                    "constant address space"
+                )
+            return "constant"
         if self.structured_buffer_type_name(vtype) == "StructuredBuffer":
             return "const device"
         return "device"
@@ -13146,7 +13324,7 @@ class MetalCodeGen:
         self, vtype, name, array_size=None, node=None
     ):
         element_type = self.structured_buffer_element_type(vtype)
-        address_space = self.structured_buffer_address_space(vtype)
+        address_space = self.structured_buffer_address_space(vtype, node)
         memory_qualifiers = self.resource_memory_qualifier_prefix(node, vtype)
         pointer_type = f"{memory_qualifiers}{address_space} {element_type}*"
         if array_size is not None:
@@ -14148,6 +14326,10 @@ class MetalCodeGen:
     def parameter_variable_address_space(
         self, raw_param_type, node=None, shader_type=None
     ):
+        if self.is_structured_buffer_type(raw_param_type):
+            return self.normalized_address_space(
+                self.structured_buffer_address_space(raw_param_type, node)
+            )
         if (
             self.is_array_type_node(raw_param_type)
             and self.resource_array_parameter(raw_param_type, node) is not None
@@ -14179,6 +14361,10 @@ class MetalCodeGen:
         ):
             return None
         qualifiers = self.parameter_qualifier_names(node)
+        if self.is_array_type_node(raw_param_type):
+            resource_type = self.resource_base_type(raw_param_type)
+            if self.structured_buffer_type_name(resource_type) == "StructuredBuffer":
+                return "read-only resource"
         if "const" in qualifiers:
             return "const-qualified"
         if "in" in qualifiers:
@@ -15423,6 +15609,11 @@ class MetalCodeGen:
         self, member, default_member_semantics, struct_name=None
     ):
         semantic = self.semantic_from_node(member)
+        if (
+            struct_name in self.metal_union_layouts
+            and semantic == "union_member_layout"
+        ):
+            semantic = None
         default_semantic = (default_member_semantics or {}).get(
             getattr(member, "name", None)
         )
@@ -17979,11 +18170,21 @@ class MetalCodeGen:
                     self.metal_buffer_resource_variables
                 )
             ]
+            structured_resources = [
+                (node, buffer_type)
+                for node, _, buffer_type, _ in self.structured_buffer_variables
+            ]
         else:
             resources = [
                 (node, buffer_type, address_space)
                 for node, buffer_type, _, address_space in (
                     self.required_function_metal_buffer_resources(func_name)
+                )
+            ]
+            structured_resources = [
+                (node, buffer_type)
+                for node, buffer_type, _ in self.required_function_structured_buffers(
+                    func_name
                 )
             ]
 
@@ -17997,6 +18198,20 @@ class MetalCodeGen:
                 self.current_readonly_metal_parameters.add(name)
                 self.current_readonly_metal_parameter_reasons[name] = (
                     "constant address space"
+                )
+
+        for node, buffer_type in structured_resources:
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            if not name:
+                continue
+            rendered_space = self.structured_buffer_address_space(buffer_type, node)
+            address_space = "constant" if rendered_space == "constant" else "device"
+            self.local_variable_types[name] = self.type_name_string(buffer_type)
+            self.current_address_space_variables[name] = address_space
+            if self.structured_buffer_type_name(buffer_type) == "StructuredBuffer":
+                self.current_readonly_metal_parameters.add(name)
+                self.current_readonly_metal_parameter_reasons[name] = (
+                    f"{address_space} read-only resource"
                 )
 
     def validate_global_resource_shadows(self, ast):
@@ -23961,7 +24176,10 @@ class MetalCodeGen:
             operand = self.safe_expression_to_string_with_precedence(
                 expr.operand, self.expression_precedence("unary")
             )
-            return f"{self.map_operator(expr.op)}{operand}"
+            operator = self.map_operator(expr.op)
+            if getattr(expr, "is_postfix", False):
+                return f"{operand}{operator}"
+            return f"{operator}{operand}"
         else:
             # Fallback - avoid calling generate_expression to prevent infinite recursion
             return str(expr)

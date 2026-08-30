@@ -384,6 +384,92 @@ def test_binary_expression_precedence_preserves_grouping_in_metal():
     assert "float3(t) * farPoint - nearPoint" not in generated_code
 
 
+def test_metal_reconstructs_retained_source_union_layout_and_compiles():
+    shader = """
+    shader MetalRetainedUnionLayout {
+        @union_layout(4, 4, little_endian, metal)
+        struct FloatWord {
+            @union_member_layout(0, 4, 4) float value;
+            @union_member_layout(0, 4, 4) uint word;
+        }
+
+        uint float_word(float value) {
+            FloatWord bits;
+            bits.value = value;
+            return bits.word;
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "union FloatWord {" in generated
+    assert "float value;" in generated
+    assert "uint word;" in generated
+    assert "struct FloatWord" not in generated
+    assert "union_member_layout" not in generated
+    compile_with_metal_if_available(generated)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "reason"),
+    [
+        (
+            """
+            @union_layout(4, 4, little_endian, metal)
+            struct MissingMemberLayout { float value; }
+            """,
+            "member-layout-missing",
+        ),
+        (
+            """
+            @union_layout(4, 4, little_endian, metal)
+            struct NonzeroOffset {
+                @union_member_layout(1, 4, 4) uint word;
+            }
+            """,
+            "member-offset-unsupported",
+        ),
+        (
+            """
+            @union_layout(4, 4, little_endian, directx)
+            struct ForeignAbi {
+                @union_member_layout(0, 4, 4) uint word;
+            }
+            """,
+            "source-abi-unsupported",
+        ),
+    ],
+    ids=["missing-member", "nonzero-offset", "foreign-abi"],
+)
+def test_metal_retained_union_layout_rejects_ambiguous_contracts(declaration, reason):
+    shader = f"shader InvalidMetalUnion {{ {declaration} }}"
+
+    with pytest.raises(UnsupportedMetalFeatureError) as error:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert error.value.feature == "union-layout-contract"
+    assert error.value.reason == reason
+    assert error.value.missing_capabilities == ("metal.union-layout-contract",)
+
+
+def test_metal_shift_grouping_is_explicit_for_warning_fatal_native_builds():
+    shader = """
+    shader MetalShiftGrouping {
+        uint pack(uint value, uint mask) {
+            uint shifted = (127u + value) << 23u;
+            return mask | ((127u + value) << 23u) | shifted;
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint shifted = (127u + value) << 23u;" in generated
+    assert "mask | (127u + value) << 23u | shifted" in generated
+    compile_with_metal_if_available(generated)
+
+
 def test_glsl_fragment_output_named_fragment_escapes_metal_keyword(tmp_path):
     shader = """
     #version 330
@@ -3414,6 +3500,66 @@ def test_metal_indexed_pointer_member_access_uses_element_dot_operator():
     assert "payloads[0]->value" not in generated_code
 
 
+def test_metal_structured_buffer_constant_metadata_and_postfix_updates_roundtrip():
+    shader = """
+    shader MetalConstantStructuredBuffer {
+        int readShape(constant int* shape, int index) {
+            return shape[index];
+        }
+
+        compute {
+            void main(
+                StructuredBuffer<int> shape @buffer(0) @constant,
+                RWStructuredBuffer<int> output @buffer(1),
+                uint gid @gl_GlobalInvocationID
+            ) {
+                uint outputIndex = gid;
+                output[outputIndex++] = readShape(shape, 0);
+                ++outputIndex;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "int readShape(constant int* shape, int index)" in generated_code
+    assert "constant int* shape [[buffer(0)]]" in generated_code
+    assert "output[outputIndex++] = readShape(shape, 0);" in generated_code
+    assert "++outputIndex;" in generated_code
+    assert "output[++outputIndex]" not in generated_code
+    assert "unsupported Metal address-space call" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("resource", "message"),
+    [
+        (
+            "StructuredBuffer<int> shape @buffer(0) @constant @device",
+            "Conflicting address space metadata",
+        ),
+        (
+            "RWStructuredBuffer<int> shape @buffer(0) @constant",
+            "cannot use the constant address space",
+        ),
+    ],
+    ids=["conflicting-address-spaces", "writable-constant"],
+)
+def test_metal_structured_buffer_address_space_metadata_fails_closed(resource, message):
+    shader = f"""
+    shader InvalidMetalStructuredBufferAddressSpace {{
+        compute {{
+            void main({resource}) {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        MetalCodeGen().generate_stage(parse_code(tokenize_code(shader)), "compute")
+
+
 def test_metal_readonly_raw_buffer_parameters_use_const_device_address_space():
     shader = """
     shader MetalReadonlyRawBuffers {
@@ -4941,6 +5087,34 @@ def test_metal_unsized_structured_buffer_arrays_infer_helper_size():
     assert "size_t" not in generated_code
 
 
+def test_metal_readonly_structured_buffer_array_rejects_mutable_helper_call():
+    shader = """
+    shader ReadonlyStructuredBufferArrayMetal {
+        StructuredBuffer<uint> values[2] @ binding(5);
+
+        void mutate(RWStructuredBuffer<uint> localValues[2], uint index) {
+            buffer_store(localValues[0], index, 1u);
+        }
+
+        void callMutate(uint index) {
+            mutate(values, index);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "array<const device uint*, 2> values" in generated_code
+    assert "void mutate(array<device uint*, 2> localValues, uint index)" in (
+        generated_code
+    )
+    assert (
+        "readonly parameter 'values' cannot be passed to mutable parameter "
+        "'localValues' of 'mutate'" in generated_code
+    )
+    assert "mutate(values, index);" not in generated_code
+
+
 def test_metal_dynamic_only_unsized_structured_buffer_arrays_keep_fallback_size():
     shader = """
     shader DynamicOnlyUnsizedStructuredBufferArrayMetal {
@@ -6438,13 +6612,13 @@ def test_for_statement_preserves_declaration_initializers():
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "const float weights[2];" in generated_code
-    assert "for (int i = 0; i < 2; ++i)" in generated_code
-    assert "for (i = 0; i < 4; ++i)" in generated_code
+    assert "for (int i = 0; i < 2; i++)" in generated_code
+    assert "for (i = 0; i < 4; i++)" in generated_code
     assert "for (const int fixed = 0; fixed < 0; )" in generated_code
     assert "for (; ; )" in generated_code
     assert "continue;" in generated_code
     assert "break;" in generated_code
-    assert "for (i; i < 2; ++i)" not in generated_code
+    assert "for (i; i < 2; i++)" not in generated_code
     assert "for (fixed; fixed < 0; )" not in generated_code
     assert "BreakNode(" not in generated_code
     assert "ContinueNode(" not in generated_code
