@@ -93,6 +93,7 @@ ARCCOS_WORKLOAD = UnaryWorkload(
     operator_type="ArcCos",
     generated_operation={
         "directx": "return __crossgl_metal_precise_acos_float(x);",
+        "metal": "return __crossgl_metal_precise_acos_float(x);",
         "opengl": "return crossgl_metal_precise_acos_float(x);",
     },
     generated_artifacts={
@@ -101,6 +102,12 @@ ARCCOS_WORKLOAD = UnaryWorkload(
                 "4562332ad4fb951478ca419180ccdf3589f74b9e0956226badc6de877d343239"
             ),
             "sizeBytes": 4175,
+        },
+        "metal": {
+            "sha256": (
+                "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b"
+            ),
+            "sizeBytes": 2742,
         },
         "opengl": {
             "sha256": (
@@ -265,8 +272,14 @@ def _translate_unary_artifact(
         if target == "opengl":
             assert "precise float crossgl_metal_precise_acos" not in generated
             assert "precise float crossglPreciseReturn" in generated
-        else:
+        elif target == "directx":
             assert "precise float __crossgl_metal_precise_acos" in generated
+        else:
+            assert target == "metal"
+            assert "float __crossgl_metal_precise_acos_ratio(float value)" in generated
+            assert "float __crossgl_metal_precise_acos_float(float value)" in generated
+            assert generated.count("#pragma clang fp contract(off)") == 2
+            assert generated.count("#pragma clang fp contract(fast)") == 2
     assert "Log{}(x + i * Sqrt{}(1.0 - x * x))" not in generated
     if target == "directx":
         assert "[numthreads(1, 1, 1)]" in generated
@@ -280,8 +293,10 @@ def _translate_unary_artifact(
         assert target == "metal"
         assert f"kernel void {workload.entry_point}" in generated
         assert "[[static]]" not in generated
-        assert "struct ArcCos" not in generated
-        assert "struct Square" in generated
+        assert f"struct {workload.operator_type}" in generated
+        assert generated.count(f"struct {workload.operator_type}") == 1
+        for pruned_operator in {"ArcCos", "Square"} - {workload.operator_type}:
+            assert f"struct {pruned_operator}" not in generated
         validator = "xcrun"
     if shutil.which(validator) is not None:
         toolchain_runs = payload["validation"]["toolchainRuns"]
@@ -311,10 +326,10 @@ def test_pinned_mlx_unary_square_translates_to_selected_target(target):
         )
 
 
-def test_pinned_mlx_unary_square_roundtrips_through_metal():
+def _roundtrip_pinned_mlx_unary_through_metal(workload: UnaryWorkload) -> None:
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-unary-square-metal-roundtrip-",
+        prefix=f".crosstl-unary-{workload.name}-metal-roundtrip-",
         dir=mlx_root,
     ) as temporary_directory:
         work_dir = Path(temporary_directory)
@@ -322,7 +337,7 @@ def test_pinned_mlx_unary_square_roundtrips_through_metal():
             mlx_root,
             work_dir,
             "metal",
-            SQUARE_WORKLOAD,
+            workload,
         )
         report_payload = json.loads(report_path.read_text(encoding="utf-8"))
         artifact = report_payload["artifacts"][0]
@@ -337,7 +352,7 @@ def test_pinned_mlx_unary_square_roundtrips_through_metal():
         assert reflected["status"] == "ready"
         assert reflected["entryPoints"] == [
             {
-                "name": SQUARE_WORKLOAD.entry_point,
+                "name": workload.entry_point,
                 "stage": "compute",
                 "executionConfig": {},
             }
@@ -351,25 +366,25 @@ def test_pinned_mlx_unary_square_roundtrips_through_metal():
             )
             for resource in reflected["resources"]
         } == {
-            "in_": ("buffer", 0, "read", SQUARE_WORKLOAD.entry_point),
+            "in_": ("buffer", 0, "read", workload.entry_point),
             "out_": (
                 "buffer",
                 1,
                 "read_write",
-                SQUARE_WORKLOAD.entry_point,
+                workload.entry_point,
             ),
             "size": (
                 "constant-buffer",
                 2,
                 "read",
-                SQUARE_WORKLOAD.entry_point,
+                workload.entry_point,
             ),
         }
 
         xcrun = shutil.which("xcrun")
         if xcrun is None:
             _skip_or_fail("metal", "xcrun is required for the MLX unary Metal proof")
-        air_path = work_dir / "v_Squarefloat32float32.air"
+        air_path = work_dir / f"{workload.entry_point}.air"
         compiled = subprocess.run(
             [
                 xcrun,
@@ -388,6 +403,14 @@ def test_pinned_mlx_unary_square_roundtrips_through_metal():
         assert compiled.returncode == 0, compiled.stdout + compiled.stderr
         assert air_path.is_file()
         assert air_path.stat().st_size > 0
+
+
+def test_pinned_mlx_unary_square_roundtrips_through_metal():
+    _roundtrip_pinned_mlx_unary_through_metal(SQUARE_WORKLOAD)
+
+
+def test_pinned_mlx_unary_arccos_roundtrips_through_metal():
+    _roundtrip_pinned_mlx_unary_through_metal(ARCCOS_WORKLOAD)
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])

@@ -30,12 +30,13 @@ The current harness verifies:
   [#1660](https://github.com/CrossGL/crosstl/issues/1660), so this is not yet a
   complete semantic-equivalence claim;
 - selected-entry Metal-to-CrossGL-to-Metal translation of current-pinned
-  ``unary.metal`` entry ``v_Squarefloat32float32``. Reachability pruning keeps
-  one struct family and one kernel, bounded source reflection records its three
-  buffer bindings, a host-owned ``[1, 1, 1]`` dispatch contract is preserved,
-  and macOS CI compiles the exact 1,015-byte artifact with the native Metal
-  compiler. This does not claim Metal numerical execution, ArcCos Metal
-  coverage, or the broader unary family;
+  ``unary.metal`` entries ``v_Squarefloat32float32`` and
+  ``v_ArcCosfloat32float32``. Reachability pruning keeps each entry's one struct
+  family and kernel, bounded source reflection records its three buffer
+  bindings, a host-owned ``[1, 1, 1]`` dispatch contract is preserved, and
+  macOS CI compiles the exact 1,015-byte Square and 2,742-byte ArcCos artifacts
+  with the native Metal compiler. This does not claim Metal numerical execution
+  or coverage of the broader unary family;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains
@@ -1630,18 +1631,23 @@ artifacts also retain a one-thread workgroup, the source and output buffers, and
 the size constant in their reflected runtime interfaces. Deterministic artifact
 hashes and the pinned upstream source hash are checked before packaging.
 
-The Square entry now also round-trips through Metal as one 1,015-byte artifact
-with SHA-256
-``244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495``.
-Entry reachability retains only ``struct Square`` and its call helpers, with no
-unrelated unary structs or illegal ``[[static]]`` members. Bounded Metal source
-reflection records the exact ``v_Squarefloat32float32`` kernel plus read-only
-buffer 0, read-write buffer 1, and read-only constant buffer 2. Its ``[1, 1,
-1]`` workgroup size is explicitly host-dispatch-owned because MSL has no fixed
-source attribute equivalent to HLSL ``numthreads``. macOS CI requires the
-selected artifact to compile with ``xcrun -sdk macosx metal -c``. This is a
-selected-entry round-trip and native compiler proof, not Metal numerical
-execution; ArcCos and the broader unary family remain outside this Metal claim.
+The Square and ArcCos entries now also round-trip through Metal. Square is one
+1,015-byte artifact with SHA-256
+``244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495``;
+ArcCos is one 2,742-byte artifact with SHA-256
+``1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b``.
+Entry reachability retains only the selected ``struct Square`` or ``struct
+ArcCos`` and its call helpers, with no unrelated unary struct, complex ArcCos
+body, or illegal ``[[static]]`` member. The ArcCos artifact retains the
+portable float32 range-reduction helper and brackets both helper regions with
+``#pragma clang fp contract(off)`` so the source precise-math contract is not
+silently weakened. Bounded Metal source reflection records each exact kernel
+plus read-only buffer 0, read-write buffer 1, and read-only constant buffer 2.
+Their ``[1, 1, 1]`` workgroup sizes are explicitly host-dispatch-owned because
+MSL has no fixed source attribute equivalent to HLSL ``numthreads``. Both exact
+artifacts compile with ``xcrun -sdk macosx metal -c`` on macOS CI. These are
+selected-entry round-trip and native compiler proofs, not Metal numerical
+execution; the broader unary family remains outside this Metal claim.
 
 Windows CI compiles the selected HLSL entries with DXC and executes them through
 the native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entries with

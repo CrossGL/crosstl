@@ -1003,6 +1003,23 @@
           "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_arccos_executes_through_directx_native_loader"
         }
       },
+      "metal": {
+        "target_entry_point": "v_ArcCosfloat32float32",
+        "sha256": "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b",
+        "size_bytes": 2742,
+        "host_dispatch_workgroup_size": [
+          1,
+          1,
+          1
+        ],
+        "native_roundtrip": {
+          "platform": "macos-latest",
+          "compiler": "xcrun -sdk macosx metal",
+          "status": "required-on-ci",
+          "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_arccos_roundtrips_through_metal"
+        },
+        "numerical_runtime_included": false
+      },
       "opengl": {
         "target_entry_point": "main",
         "sha256": "280864c39e88198cd5e660127db453877349fadb090cb37f022bcc46300660b3",
@@ -1037,6 +1054,8 @@
     },
     "mlx_host_runtime_included": false,
     "runtime_integration_included": true,
+    "metal_roundtrip_included": true,
+    "metal_numerical_runtime_included": false,
     "selected_workload_numerical_parity_verified": true,
     "other_unary_specializations_included": false,
     "full_mlx_test_suite_included": false,

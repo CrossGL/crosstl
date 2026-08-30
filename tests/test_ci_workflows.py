@@ -3820,6 +3820,28 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
         "Checkout current MLX runtime proof corpus",
     )
 
+    arccos_metal_step = ci_coverage.workflow_step_section(
+        mlx_porting,
+        "Prove pinned MLX unary ArcCos Metal round-trip",
+    )
+    assert "if: runner.os == 'macOS'" in arccos_metal_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
+        in arccos_metal_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"' in arccos_metal_step
+    assert (
+        f"{test_path}::test_pinned_mlx_unary_arccos_roundtrips_through_metal"
+        in arccos_metal_step
+    )
+    assert "-n auto" in arccos_metal_step
+    assert "-k" not in arccos_metal_step
+    assert ci_coverage.workflow_step_after(
+        mlx_porting,
+        "Prove pinned MLX unary ArcCos Metal round-trip",
+        "Checkout current MLX runtime proof corpus",
+    )
+
     opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX unary Square OpenGL native-loader execution",

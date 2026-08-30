@@ -11501,6 +11501,22 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
             ),
         },
     }
+    assert arccos["artifacts"]["metal"] == {
+        "target_entry_point": "v_ArcCosfloat32float32",
+        "sha256": "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b",
+        "size_bytes": 2742,
+        "host_dispatch_workgroup_size": [1, 1, 1],
+        "native_roundtrip": {
+            "platform": "macos-latest",
+            "compiler": "xcrun -sdk macosx metal",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_arccos_roundtrips_through_metal"
+            ),
+        },
+        "numerical_runtime_included": False,
+    }
     assert arccos["artifacts"]["opengl"] == {
         "target_entry_point": "main",
         "sha256": "280864c39e88198cd5e660127db453877349fadb090cb37f022bcc46300660b3",
@@ -11531,6 +11547,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert arccos["mlx_host_runtime_included"] is False
     assert arccos["runtime_integration_included"] is True
+    assert arccos["metal_roundtrip_included"] is True
+    assert arccos["metal_numerical_runtime_included"] is False
     assert arccos["selected_workload_numerical_parity_verified"] is True
     assert arccos["other_unary_specializations_included"] is False
     assert arccos["full_mlx_test_suite_included"] is False
@@ -11546,11 +11564,25 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     assert "collision-safe `precise` local" in readme
     assert "preserving SPIR-V `NoContraction`" in readme
     assert "target intrinsic's unspecified accuracy" in readme
+    assert "The Square and ArcCos entries now also round-trip through Metal" in readme
+    assert "2,742-byte artifact" in readme
+    assert "Both exact artifacts compile with ``xcrun -sdk macosx metal -c``" in (
+        readme
+    )
     assert "executes them through the native loader on Direct3D 12 WARP" in readme
     assert "surfaceless Mesa OpenGL context" in readme
     assert "numerical evidence for two selected unary specializations" in readme
     assert "does not cover the other unary operations or dtypes" in readme
     assert "run the MLX test suite" in readme
+
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "The current-pinned MLX integration exercises this path twice" in guide
+    assert "2,742-byte ``v_ArcCosfloat32float32`` artifact" in guide
+    assert "does not claim Metal numerical execution" in guide
 
 
 def test_fft_directx_evidence_records_selected_native_runtime_proof():
