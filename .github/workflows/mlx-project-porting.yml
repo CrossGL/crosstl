@@ -422,6 +422,15 @@ jobs:
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_unary_native_loader.py::test_pinned_mlx_unary_arccos_roundtrips_through_metal
 
+      - name: Prove current MLX float32 unary family Metal round-trips
+        if: runner.os == 'macOS'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+          CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_unary_native_loader.py::test_current_mlx_float32_unary_family_roundtrips_through_metal
+
       - name: Record pinned MLX dot Metal round-trip boundary
         if: runner.os == 'macOS'
         env:

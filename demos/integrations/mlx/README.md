@@ -29,14 +29,14 @@ The current harness verifies:
   preservation remain blocked by
   [#1660](https://github.com/CrossGL/crosstl/issues/1660), so this is not yet a
   complete semantic-equivalence claim;
-- selected-entry Metal-to-CrossGL-to-Metal translation of current-pinned
-  ``unary.metal`` entries ``v_Squarefloat32float32`` and
-  ``v_ArcCosfloat32float32``. Reachability pruning keeps each entry's one struct
-  family and kernel, bounded source reflection records its three buffer
-  bindings, a host-owned ``[1, 1, 1]`` dispatch contract is preserved, and
-  macOS CI compiles the exact 1,015-byte Square and 2,742-byte ArcCos artifacts
-  with the native Metal compiler. This does not claim Metal numerical execution
-  or coverage of the broader unary family;
+- selected-entry Metal-to-CrossGL-to-Metal translation of all 30
+  current-pinned ``v_<Op>float32float32`` entries in ``unary.metal``.
+  Reachability pruning keeps each entry's one operator struct and kernel,
+  bounded source reflection records its three buffer bindings, a host-owned
+  ``[1, 1, 1]`` dispatch contract is preserved, and macOS CI compiles every
+  deterministic artifact with the native Metal compiler. This includes the
+  exact 1,015-byte Square and 2,742-byte precise ArcCos artifacts. It does not
+  claim Metal numerical execution or coverage of other dtypes and entry shapes;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains
@@ -1645,9 +1645,21 @@ silently weakened. Bounded Metal source reflection records each exact kernel
 plus read-only buffer 0, read-write buffer 1, and read-only constant buffer 2.
 Their ``[1, 1, 1]`` workgroup sizes are explicitly host-dispatch-owned because
 MSL has no fixed source attribute equivalent to HLSL ``numthreads``. Both exact
-artifacts compile with ``xcrun -sdk macosx metal -c`` on macOS CI. These are
-selected-entry round-trip and native compiler proofs, not Metal numerical
-execution; the broader unary family remains outside this Metal claim.
+artifacts compile with ``xcrun -sdk macosx metal -c`` on macOS CI.
+
+The same required gate now covers every one of the 30 current-pinned float32
+``v_`` unary entries, adding 28 operators beyond Square and ArcCos. Each run
+traverses Metal to CrossGL to Metal, emits one specialization, one selected
+operator struct, one kernel, and the same three-resource host interface with
+zero diagnostics. Every generated identity and byte count is pinned in
+``expected-gaps.json``; the artifacts range from the 989-byte Abs, Cos, Exp,
+Log, Sin, and Tan kernels through the 2,742-byte precise ArcCos kernel. Native
+macOS CI invokes ``xcrun -sdk macosx metal -c`` for all 30 entries and requires
+30 non-empty AIR outputs. This closes native compiler coverage for every
+``v_<Op>float32float32`` instantiation. It remains a selected-entry compiler and
+reflection proof, not Metal numerical execution, and does not cover float16,
+bfloat16, integer or Boolean, complex64, FP8 conversion, or ``v2_``, ``gn*``,
+and ``vn_`` entry shapes.
 
 Windows CI compiles the selected HLSL entries with DXC and executes them through
 the native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entries with

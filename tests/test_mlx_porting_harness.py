@@ -11580,8 +11580,271 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
         .read_text(encoding="utf-8")
         .split()
     )
-    assert "The current-pinned MLX integration exercises this path twice" in guide
+    assert "The current-pinned MLX integration exercises this path for all 30" in guide
     assert "2,742-byte ``v_ArcCosfloat32float32`` artifact" in guide
+    assert "does not claim Metal numerical execution" in guide
+
+
+def test_unary_float32_metal_roundtrip_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["unary_float32_metal_roundtrip_status"]
+    expected_identities = (
+        (
+            "Abs",
+            "1c225a5efe013e30a3022926c09fcf951b34e478848b2f38559f81f0912ae967",
+            989,
+        ),
+        (
+            "ArcCos",
+            "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b",
+            2742,
+        ),
+        (
+            "ArcCosh",
+            "dfea065f445a672ac49014c81df90799e533a4435e0ca2ad6548f15236e8a86b",
+            1027,
+        ),
+        (
+            "ArcSin",
+            "16fb2dc2b32d43e79ef7ef5412a976a643af0983f1919c14fb15cd9771115c67",
+            1017,
+        ),
+        (
+            "ArcSinh",
+            "95989af274be41c1b5e8584198dcdc978eb8d9d37b05319f03d1dc79f1e16e4b",
+            1027,
+        ),
+        (
+            "ArcTan",
+            "525caa32b75facb1f267acd8bdab88146aaea9408c1099c489d8796f567d1016",
+            1017,
+        ),
+        (
+            "ArcTanh",
+            "5915c6c9998dee80281c91f4ce1831fc690963f78b6d34a94643c2bfafc1b2af",
+            1027,
+        ),
+        (
+            "Ceil",
+            "b687d1a08d534d44b6cb7e8f38e18f858239077597e1ef209224e3c5e1428d50",
+            999,
+        ),
+        (
+            "Cos",
+            "254204b39a4da7277372aa44ed7b0c7ae52f179d108d9312e10319d4eb841bfb",
+            989,
+        ),
+        (
+            "Cosh",
+            "70c16dd91be3aca1b54e88af72a150de09f34990b17bb99520b2839b613f7c58",
+            999,
+        ),
+        (
+            "Exp",
+            "ab5207445d620502e66f8a4d215b423c5d817e365c69a3a7569566076e4a96e9",
+            989,
+        ),
+        (
+            "Expm1",
+            "4cd6bc9a9bd8937eed1dc11a71ec65d00b23ad6f455f5f3e5c27a7cca890dbc8",
+            2003,
+        ),
+        (
+            "Floor",
+            "409df915fc3869066df9c2b9b127fde6ce16a35ec2bcc7ead07890e40f623188",
+            1009,
+        ),
+        (
+            "Log",
+            "770b0befc6b8970e08e205ffff7d2f8be3fe7e303cb6882ca86d32627752b42a",
+            989,
+        ),
+        (
+            "Log2",
+            "fe12519ca0749b9f4c362572faed177c87aa903f6181edf7ad5311730e6e45ad",
+            999,
+        ),
+        (
+            "Log10",
+            "e6add6cf4944a842df04d993fefa3d3b102cb8f8c05060c57aa3130fa5c8797b",
+            1009,
+        ),
+        (
+            "Log1p",
+            "23e3bf52d386fe4a78fa7db0d44ce9aee4b884da7afef88a999d0c0850554267",
+            1279,
+        ),
+        (
+            "Negative",
+            "29a647c06f40977101e3c50408e1118a440f322f38e23758f90266603686b05c",
+            1030,
+        ),
+        (
+            "Sigmoid",
+            "2300101589b447614c6deff51b9fee39bd6c44e01f22f7a7b53a0da0ded0d27b",
+            1073,
+        ),
+        (
+            "Erf",
+            "30ca7a972cf75191160decadc7c0b02abad90bc3ec9342c5daf914dd90aa4831",
+            2707,
+        ),
+        (
+            "ErfInv",
+            "9eb863c7ebf468b07780d986463d6434d925a5ec7dabf01da18721deb82fe83c",
+            1893,
+        ),
+        (
+            "Sign",
+            "f3804c200fd8f8dce96d5a63f6dbc71ccc36c8c5d39a80923105dfa83ac3ba3c",
+            1023,
+        ),
+        (
+            "Sin",
+            "556d5d04978a0ad37d3a224b30f46b039cab44d7956aa131a1a200ce2e891f75",
+            989,
+        ),
+        (
+            "Sinh",
+            "08e011639022b4ab43997f7dffa03a605e3a63df2b11e365f6dcd1aae88f7ebc",
+            999,
+        ),
+        (
+            "Square",
+            "244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495",
+            1015,
+        ),
+        (
+            "Sqrt",
+            "88a3324c88ec900652bd4816037b449d32d4abbb151f1e6d9fb6310c85b2aa94",
+            999,
+        ),
+        (
+            "Rsqrt",
+            "db5434e6844457c3e78e013bfaf139afaf63e29171a0d27ecd826a7b84948a48",
+            1009,
+        ),
+        (
+            "Tan",
+            "35f7ab6b8e0d4aec3476f0956f261be1b2f300b9c21a846fea3fb56f5968742a",
+            989,
+        ),
+        (
+            "Tanh",
+            "f82fc0eec4708ee6e8dc6315d173b91e819cfc248ce9bcf4e7a5518bc0fb8e39",
+            999,
+        ),
+        (
+            "Round",
+            "51a5152996626c057daabb9199d19f81c9a1cfe7d93a2533cee468772eee1206",
+            1008,
+        ),
+    )
+    expected_artifacts = {
+        f"v_{operator}float32float32": {
+            "operator": operator,
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+        }
+        for operator, sha256, size_bytes in expected_identities
+    }
+
+    assert status["status"] == "selected-entry-family-native-compilation-validated"
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/unary.metal"
+    assert status["source_sha256"] == (
+        "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
+    )
+    assert status["target"] == "metal"
+    assert status["dtype"] == "float32"
+    assert status["entry_pattern"] == "v_<Op>float32float32"
+    assert status["entry_count"] == 30
+    assert status["previously_proven_entry_points"] == [
+        "v_Squarefloat32float32",
+        "v_ArcCosfloat32float32",
+    ]
+    assert status["newly_proven_entry_count"] == 28
+    assert status["entry_points"] == list(expected_artifacts)
+    assert status["artifacts"] == expected_artifacts
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 30,
+        "artifact_count": 30,
+        "translated_count": 30,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count_per_artifact": 1,
+        "unsupported_specialization_count": 0,
+        "reachable_operator_struct_count_per_artifact": 1,
+        "reachable_kernel_count_per_artifact": 1,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "resource_count_per_artifact": 3,
+        "resources": [
+            {"name": "in_", "kind": "buffer", "binding": 0, "access": "read"},
+            {
+                "name": "out_",
+                "kind": "buffer",
+                "binding": 1,
+                "access": "read_write",
+            },
+            {
+                "name": "size",
+                "kind": "constant-buffer",
+                "binding": 2,
+                "access": "read",
+            },
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["native_validation"] == {
+        "platform": "macos-latest",
+        "compiler": "xcrun -sdk macosx metal -c",
+        "status": "required-on-ci",
+        "compiled_artifact_count": 30,
+        "all_air_artifacts_nonempty": True,
+        "test": (
+            "tests/test_translator/test_mlx_unary_native_loader.py::"
+            "test_current_mlx_float32_unary_family_roundtrips_through_metal"
+        ),
+    }
+    assert status["all_float32_v_entries_included"] is True
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
+    assert status["directx_and_opengl_family_translation_included"] is False
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "float16_entries_included": False,
+        "bfloat16_entries_included": False,
+        "integer_and_boolean_entries_included": False,
+        "complex64_entries_included": False,
+        "fp8_conversion_entries_included": False,
+        "v2_gather_and_work_per_thread_entries_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "every one of the 30 current-pinned float32" in readme
+    assert "adding 28 operators beyond Square and ArcCos" in readme
+    assert "requires 30 non-empty AIR outputs" in readme
+    assert "does not cover float16, bfloat16, integer or Boolean" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "for all 30 float32 ``v_<Op>float32float32`` entries" in guide
+    assert "compiles all 30 exact artifacts" in guide
     assert "does not claim Metal numerical execution" in guide
 
 

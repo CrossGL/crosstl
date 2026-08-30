@@ -494,16 +494,19 @@ Entry selection scopes shader or kernel translation; it does not infer host
 dispatch dimensions, runtime bindings, or backend integration. Record those
 requirements through the corresponding dispatch and runtime contracts.
 
-The current-pinned MLX integration exercises this path twice from the same
-include-expanded ``unary.metal`` source. It emits a 1,015-byte
-``v_Squarefloat32float32`` artifact and a 2,742-byte
-``v_ArcCosfloat32float32`` artifact, each with exactly one reachable struct,
-one kernel, and three reflected buffer bindings. ArcCos retains its portable
-precise float32 range reduction under explicit no-contraction regions rather
-than falling back to the target ``acos`` intrinsic. Required macOS CI compiles
-both exact artifacts with ``xcrun -sdk macosx metal -c``. This selected-entry
-proof does not claim Metal numerical execution, host-runtime redirection, or
-coverage of other unary operations and dtypes.
+The current-pinned MLX integration exercises this path for all 30 float32
+``v_<Op>float32float32`` entries from the same include-expanded ``unary.metal``
+source. Every independently translated artifact has exactly one reachable
+operator struct, one kernel, three reflected buffer bindings, and a host-owned
+``[1, 1, 1]`` workgroup contract. Deterministic identities range from the
+989-byte Abs, Cos, Exp, Log, Sin, and Tan artifacts to the 2,742-byte
+``v_ArcCosfloat32float32`` artifact. ArcCos retains its portable precise
+float32 range reduction under explicit no-contraction regions rather than
+falling back to the target ``acos`` intrinsic. Required macOS CI compiles all
+30 exact artifacts with ``xcrun -sdk macosx metal -c`` and requires a non-empty
+AIR output from each. This selected-entry family proof does not claim Metal
+numerical execution, host-runtime redirection, other dtypes, FP8 conversions,
+or the ``v2_``, ``gn*``, and ``vn_`` entry shapes.
 
 OpenGL Software Subgroup Specialization
 ----------------------------------------

@@ -129,6 +129,100 @@ ARCCOS_WORKLOAD = UnaryWorkload(
 )
 
 
+FLOAT32_UNARY_METAL_ARTIFACT_IDENTITIES = {
+    "Abs": ("1c225a5efe013e30a3022926c09fcf951b34e478848b2f38559f81f0912ae967", 989),
+    "ArcCos": (
+        "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b",
+        2742,
+    ),
+    "ArcCosh": (
+        "dfea065f445a672ac49014c81df90799e533a4435e0ca2ad6548f15236e8a86b",
+        1027,
+    ),
+    "ArcSin": (
+        "16fb2dc2b32d43e79ef7ef5412a976a643af0983f1919c14fb15cd9771115c67",
+        1017,
+    ),
+    "ArcSinh": (
+        "95989af274be41c1b5e8584198dcdc978eb8d9d37b05319f03d1dc79f1e16e4b",
+        1027,
+    ),
+    "ArcTan": (
+        "525caa32b75facb1f267acd8bdab88146aaea9408c1099c489d8796f567d1016",
+        1017,
+    ),
+    "ArcTanh": (
+        "5915c6c9998dee80281c91f4ce1831fc690963f78b6d34a94643c2bfafc1b2af",
+        1027,
+    ),
+    "Ceil": ("b687d1a08d534d44b6cb7e8f38e18f858239077597e1ef209224e3c5e1428d50", 999),
+    "Cos": ("254204b39a4da7277372aa44ed7b0c7ae52f179d108d9312e10319d4eb841bfb", 989),
+    "Cosh": ("70c16dd91be3aca1b54e88af72a150de09f34990b17bb99520b2839b613f7c58", 999),
+    "Exp": ("ab5207445d620502e66f8a4d215b423c5d817e365c69a3a7569566076e4a96e9", 989),
+    "Expm1": ("4cd6bc9a9bd8937eed1dc11a71ec65d00b23ad6f455f5f3e5c27a7cca890dbc8", 2003),
+    "Floor": ("409df915fc3869066df9c2b9b127fde6ce16a35ec2bcc7ead07890e40f623188", 1009),
+    "Log": ("770b0befc6b8970e08e205ffff7d2f8be3fe7e303cb6882ca86d32627752b42a", 989),
+    "Log2": ("fe12519ca0749b9f4c362572faed177c87aa903f6181edf7ad5311730e6e45ad", 999),
+    "Log10": ("e6add6cf4944a842df04d993fefa3d3b102cb8f8c05060c57aa3130fa5c8797b", 1009),
+    "Log1p": ("23e3bf52d386fe4a78fa7db0d44ce9aee4b884da7afef88a999d0c0850554267", 1279),
+    "Negative": (
+        "29a647c06f40977101e3c50408e1118a440f322f38e23758f90266603686b05c",
+        1030,
+    ),
+    "Sigmoid": (
+        "2300101589b447614c6deff51b9fee39bd6c44e01f22f7a7b53a0da0ded0d27b",
+        1073,
+    ),
+    "Erf": ("30ca7a972cf75191160decadc7c0b02abad90bc3ec9342c5daf914dd90aa4831", 2707),
+    "ErfInv": (
+        "9eb863c7ebf468b07780d986463d6434d925a5ec7dabf01da18721deb82fe83c",
+        1893,
+    ),
+    "Sign": ("f3804c200fd8f8dce96d5a63f6dbc71ccc36c8c5d39a80923105dfa83ac3ba3c", 1023),
+    "Sin": ("556d5d04978a0ad37d3a224b30f46b039cab44d7956aa131a1a200ce2e891f75", 989),
+    "Sinh": ("08e011639022b4ab43997f7dffa03a605e3a63df2b11e365f6dcd1aae88f7ebc", 999),
+    "Square": (
+        "244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495",
+        1015,
+    ),
+    "Sqrt": ("88a3324c88ec900652bd4816037b449d32d4abbb151f1e6d9fb6310c85b2aa94", 999),
+    "Rsqrt": ("db5434e6844457c3e78e013bfaf139afaf63e29171a0d27ecd826a7b84948a48", 1009),
+    "Tan": ("35f7ab6b8e0d4aec3476f0956f261be1b2f300b9c21a846fea3fb56f5968742a", 989),
+    "Tanh": ("f82fc0eec4708ee6e8dc6315d173b91e819cfc248ce9bcf4e7a5518bc0fb8e39", 999),
+    "Round": ("51a5152996626c057daabb9199d19f81c9a1cfe7d93a2533cee468772eee1206", 1008),
+}
+
+
+def _metal_roundtrip_workload(operator_type: str) -> UnaryWorkload:
+    if operator_type == SQUARE_WORKLOAD.operator_type:
+        return SQUARE_WORKLOAD
+    if operator_type == ARCCOS_WORKLOAD.operator_type:
+        return ARCCOS_WORKLOAD
+    sha256, size_bytes = FLOAT32_UNARY_METAL_ARTIFACT_IDENTITIES[operator_type]
+    return UnaryWorkload(
+        name=operator_type.lower(),
+        entry_point=f"v_{operator_type}float32float32",
+        operator_type=operator_type,
+        generated_operation={},
+        generated_artifacts={
+            "metal": {
+                "sha256": sha256,
+                "sizeBytes": size_bytes,
+            }
+        },
+        input_values=(),
+        expected_values=(),
+        absolute_tolerance=0.0,
+        relative_tolerance=0.0,
+    )
+
+
+FLOAT32_UNARY_METAL_WORKLOADS = tuple(
+    _metal_roundtrip_workload(operator_type)
+    for operator_type in FLOAT32_UNARY_METAL_ARTIFACT_IDENTITIES
+)
+
+
 def _project_config(target: str, workload: UnaryWorkload) -> str:
     return textwrap.dedent(f"""
         [project]
@@ -266,7 +360,9 @@ def _translate_unary_artifact(
 
     generated_path = mlx_root / artifact["path"]
     generated = generated_path.read_text(encoding="utf-8")
-    assert workload.generated_operation[target] in generated
+    expected_operation = workload.generated_operation.get(target)
+    if expected_operation is not None:
+        assert expected_operation in generated
     if workload is ARCCOS_WORKLOAD:
         assert "return acos(x);" not in generated
         if target == "opengl":
@@ -293,10 +389,12 @@ def _translate_unary_artifact(
         assert target == "metal"
         assert f"kernel void {workload.entry_point}" in generated
         assert "[[static]]" not in generated
-        assert f"struct {workload.operator_type}" in generated
-        assert generated.count(f"struct {workload.operator_type}") == 1
-        for pruned_operator in {"ArcCos", "Square"} - {workload.operator_type}:
-            assert f"struct {pruned_operator}" not in generated
+        assert f"struct {workload.operator_type} {{" in generated
+        assert generated.count(f"struct {workload.operator_type} {{") == 1
+        for pruned_operator in set(FLOAT32_UNARY_METAL_ARTIFACT_IDENTITIES) - {
+            workload.operator_type
+        }:
+            assert f"struct {pruned_operator} {{" not in generated
         validator = "xcrun"
     if shutil.which(validator) is not None:
         toolchain_runs = payload["validation"]["toolchainRuns"]
@@ -411,6 +509,15 @@ def test_pinned_mlx_unary_square_roundtrips_through_metal():
 
 def test_pinned_mlx_unary_arccos_roundtrips_through_metal():
     _roundtrip_pinned_mlx_unary_through_metal(ARCCOS_WORKLOAD)
+
+
+@pytest.mark.parametrize(
+    "workload",
+    FLOAT32_UNARY_METAL_WORKLOADS,
+    ids=lambda workload: workload.operator_type,
+)
+def test_current_mlx_float32_unary_family_roundtrips_through_metal(workload):
+    _roundtrip_pinned_mlx_unary_through_metal(workload)
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])
