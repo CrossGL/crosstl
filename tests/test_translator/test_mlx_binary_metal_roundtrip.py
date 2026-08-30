@@ -286,9 +286,10 @@ def test_current_mlx_binary_scalar_metal_contract_is_complete_and_classified():
     assert Counter(entry["operator"] for entry in entries) == (
         expected_classifications["operators"]
     )
-    assert Counter(
-        f'{entry["inputType"]}->{entry["outputType"]}' for entry in entries
-    ) == expected_classifications["typePairs"]
+    assert (
+        Counter(f'{entry["inputType"]}->{entry["outputType"]}' for entry in entries)
+        == expected_classifications["typePairs"]
+    )
     assert Counter(entry["family"] for entry in entries) == (
         expected_classifications["families"]
     )
@@ -320,9 +321,10 @@ def test_current_mlx_binary_scalar_metal_ci_shards_are_complete_and_disjoint():
 
     assert [len(shard) for shard in shards] == [80, 79, 79]
     for shard_index, shard in enumerate(shards):
-        assert shard == BINARY_SCALAR_METAL_WORKLOADS[
-            shard_index::BINARY_METAL_CI_SHARD_COUNT
-        ]
+        assert (
+            shard
+            == BINARY_SCALAR_METAL_WORKLOADS[shard_index::BINARY_METAL_CI_SHARD_COUNT]
+        )
     entry_points = [workload.entry_point for shard in shards for workload in shard]
     assert len(entry_points) == 238
     assert len(set(entry_points)) == 238
@@ -444,9 +446,7 @@ def _translate_binary_metal_artifact(
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
     assert materialization["specializationCount"] == 1
-    assert materialization["specializations"] == [
-        _expected_materialization(workload)
-    ]
+    assert materialization["specializations"] == [_expected_materialization(workload)]
     assert materialization["unsupported"] == []
     assert payload["validation"].get("toolchainRuns", []) == []
 
@@ -464,12 +464,15 @@ def _translate_binary_metal_artifact(
     for pruned_operator in BINARY_SCALAR_METAL_OPERATOR_TYPES - {
         workload.operator_type
     }:
-        assert re.search(
-            rf"(?m)^[A-Za-z_][A-Za-z0-9_]*\s+"
-            rf"{re.escape(pruned_operator)}__operator_call"
-            rf"(?:__[A-Za-z0-9_]+)*\(",
-            generated,
-        ) is None
+        assert (
+            re.search(
+                rf"(?m)^[A-Za-z_][A-Za-z0-9_]*\s+"
+                rf"{re.escape(pruned_operator)}__operator_call"
+                rf"(?:__[A-Za-z0-9_]+)*\(",
+                generated,
+            )
+            is None
+        )
         marker = f"struct {pruned_operator} {{"
         cursor = 0
         while (start := generated.find(marker, cursor)) != -1:

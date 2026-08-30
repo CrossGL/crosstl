@@ -513,28 +513,35 @@ shape/stride buffers plus a read-only device dimension binding. The resulting
 call operators, unsupported placeholders, and non-selected operator bodies.
 
 Required macOS CI compiles all 877 exact artifacts with
-``xcrun -sdk macosx metal -Werror -Wno-tautological-constant-compare -c`` and
-requires a non-empty AIR output from each. The one disabled warning class is the
-source-level tautological comparison in ``Sign<bool>``; all other warnings are
-fatal. The generic path resolves source typedef chains and bfloat reconstruction,
-materializes source-compatible constrained free operators, infers aggregate
-aliases, recognizes branch-complete returns, preserves narrow ``as_type``
-storage, and admits only a proven read-only immediate scalar-parameter view as
-a matching thread-local single-field aggregate. The non-scalar path also retains
+``xcrun -sdk macosx metal -Werror -c`` and requires a non-empty AIR output from
+each with no warning exemption. The generic path resolves source typedef chains
+and bfloat reconstruction, materializes source-compatible constrained free
+operators, infers aggregate aliases, recognizes branch-complete returns,
+preserves narrow ``as_type`` storage, and admits only a proven read-only
+immediate scalar-parameter view as a matching thread-local single-field
+aggregate. The non-scalar path also retains
 constant-resource provenance, const-device references, postfix update position,
 and native Metal union aliasing while ambiguous address spaces and unsupported
 reinterpretation continue to fail closed. This complete discovered-unary
 selected-entry proof does not claim Metal numerical execution, host-runtime
 redirection, DirectX/OpenGL whole-family coverage, or the MLX test suite.
 
-The current-pinned MLX binary integration independently proves all 238
-scalar-scalar entries from ``binary.metal``. This complete ``ss_`` family spans
-24 operators and 25 concrete input/output type pairs. Each selected artifact
-contains one operator implementation, one kernel, and one of 238 exact
-``binary_ss`` materializations; it rejects residual templates, ``decltype``,
-call operators, unsupported placeholders, and non-selected operator bodies.
-The reflected interface has read-only ``a`` and ``b`` buffers, read-write ``c``,
-and a host-owned ``[1, 1, 1]`` workgroup contract.
+The current-pinned MLX binary integration independently proves all 4,122
+discovered entries from ``binary.metal``. Fifteen 238-entry base shapes and
+three 184-entry work-per-thread shapes span 18 shapes, 11 concrete kernel
+templates, 24 operators, and 25 input/output type pairs. Each selected artifact
+contains one operator implementation and one kernel, rejects residual templates,
+``decltype``, call operators, unsupported placeholders, and non-selected
+operator bodies, and preserves explicit or source-default template provenance.
+
+Scalar, size-bounded vector, fixed-dimensional generalized, and rank-generic
+forms reflect exact three-, four-, five-, or seven-resource interfaces. The
+generalized forms additionally materialize only their reachable
+``elem_to_loc_1``, ``elem_to_loc_2``, ``elem_to_loc_3``, or
+``elem_to_loc_2_nd`` helper for the exact 32- or 64-bit index type. In total,
+4,122 artifacts contain 6,026 exact materializations and 19,106 reflected
+resources while preserving a host-owned ``[1, 1, 1]`` workgroup contract. The
+238-entry scalar contract remains an exact subset of the complete contract.
 
 The generic path maps concrete signed and unsigned 64-bit vectors to native
 Metal vector types, rewrites dependent free operators only to already-emitted
@@ -546,13 +553,14 @@ and scalar Boolean relational expressions receive explicit C++ integral
 promotion. Focused tests retain conservative rejection boundaries for each
 contextual operation.
 
-A hash-pinned contract records every identity, classification, byte count,
-materialization, and resource ABI. Required macOS CI compiles all 238 artifacts
-with ``xcrun -sdk macosx metal -Werror -c`` and requires non-empty AIR without a
-warning exemption. This is translation, reflection, and native compiler proof,
-not Metal numerical execution. The remaining 3,884 non-scalar binary entries,
-whole-family DirectX/OpenGL translation, host-runtime redirection, and MLX tests
-remain outside the claim.
+A schema-v2 hash-pinned contract records every identity, shape, template,
+classification, byte count, materialization, and resource ABI. Required macOS
+CI compiles all 4,122 exact artifacts in 24 disjoint shards with
+``xcrun -sdk macosx metal -Werror -c`` and requires non-empty AIR without a
+warning exemption. This closes discovered selected-entry translation,
+reflection, and native compiler coverage. It does not claim Metal numerical
+execution, whole-family DirectX/OpenGL translation, host-runtime redirection,
+or MLX test-suite parity.
 
 OpenGL Software Subgroup Specialization
 ----------------------------------------

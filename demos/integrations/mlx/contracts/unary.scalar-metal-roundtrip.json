@@ -1336,8 +1336,8 @@
       "inputType": "bool",
       "outputType": "bool",
       "family": "boolean-same-type",
-      "sha256": "c384cd6955f61a4b180f8f7b3f5b00934655a0c10c71e067e48b6353856a243c",
-      "sizeBytes": 1004
+      "sha256": "617972167bbafb6d28c0c389f1d979d850b5cad5dfd147dfbeeb58b617f314f0",
+      "sizeBytes": 1024
     },
     {
       "entryPoint": "v_Signcomplex64complex64",

@@ -410,7 +410,7 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 1321446,
+    "generatedSizeBytesTotal": 1321546,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "v_Absint8int8",
@@ -421,7 +421,7 @@
         "sizeBytes": 4468
       }
     },
-    "nativeCompiler": "xcrun -sdk macosx metal -Werror -Wno-tautological-constant-compare -c",
+    "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
     "requiresNonemptyAirArtifact": true
   },
   "entries": [
@@ -1918,8 +1918,8 @@
       "inputType": "bool",
       "outputType": "bool",
       "family": "boolean-same-type",
-      "sha256": "260530a10517e639d34de42831b3689f3dc80172e7d1ed87e1eb9596e1b36e4e",
-      "sizeBytes": 1516
+      "sha256": "18472cdaf3b25667e7a2e6f23fef801fdddfa81e1cc22af404f6340ee016932b",
+      "sizeBytes": 1536
     },
     {
       "entryPoint": "gn1_Signcomplex64complex64",
@@ -3931,8 +3931,8 @@
       "inputType": "bool",
       "outputType": "bool",
       "family": "boolean-same-type",
-      "sha256": "a0f3854df0cf6cb3bfd944c1f7cbb48dde8d7cc904ed0112bfdaa78848ae4497",
-      "sizeBytes": 1565
+      "sha256": "37aaf17d486ba1f17437d828d3b43a5b2be2ffef260071eca2e9ed661531a356",
+      "sizeBytes": 1585
     },
     {
       "entryPoint": "gn4large_Signcomplex64complex64",
@@ -5944,8 +5944,8 @@
       "inputType": "bool",
       "outputType": "bool",
       "family": "boolean-same-type",
-      "sha256": "f709958498e1edcf1635a925d06e5c6bd88a5250edef3f0a0a7609e6ecea0975",
-      "sizeBytes": 1104
+      "sha256": "b9a6b07d3d17f78dd7eeb3a0898d5d2540822605ff5ac0193406de0be8dd5aec",
+      "sizeBytes": 1124
     },
     {
       "entryPoint": "v2_Signcomplex64complex64",
@@ -7957,8 +7957,8 @@
       "inputType": "bool",
       "outputType": "bool",
       "family": "boolean-same-type",
-      "sha256": "c384cd6955f61a4b180f8f7b3f5b00934655a0c10c71e067e48b6353856a243c",
-      "sizeBytes": 1004
+      "sha256": "617972167bbafb6d28c0c389f1d979d850b5cad5dfd147dfbeeb58b617f314f0",
+      "sizeBytes": 1024
     },
     {
       "entryPoint": "v_Signcomplex64complex64",
@@ -9673,8 +9673,8 @@
       "inputType": "bool",
       "outputType": "bool",
       "family": "boolean-same-type",
-      "sha256": "a9522fe0a593fd09f6a96f37c31af50f3dca71f2e4ea7525a77d928c285bf523",
-      "sizeBytes": 1005
+      "sha256": "cce9fb8c9b64200e223b89b9258f143d6599aae85a303888897c903db81e84c6",
+      "sizeBytes": 1025
     },
     {
       "entryPoint": "vn_Signfloat16float16",

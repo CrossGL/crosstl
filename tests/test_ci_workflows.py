@@ -3969,24 +3969,26 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     assert "-k" not in arccos_opengl_step
 
 
-def test_mlx_project_porting_workflow_runs_binary_scalar_metal_proof():
+def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()
-    test_path = "tests/test_translator/test_mlx_binary_metal_roundtrip.py"
+    test_path = "tests/test_translator/test_mlx_binary_complete_metal_roundtrip.py"
 
     binary_metal_job = _workflow_job_section(
         mlx_porting,
-        "mlx-binary-scalar-metal-roundtrip",
+        "mlx-binary-complete-metal-roundtrip",
     )
     assert (
-        "name: MLX scalar binary Metal round-trip "
-        "(shard ${{ matrix.shard_index }} of 3)" in binary_metal_job
+        "name: MLX complete binary Metal round-trip "
+        "(shard ${{ matrix.shard_index }} of 24)" in binary_metal_job
     )
     assert "if: github.event_name != 'schedule'" in binary_metal_job
     assert "runs-on: macOS-latest" in binary_metal_job
-    assert "timeout-minutes: 75" in binary_metal_job
+    assert "timeout-minutes: 180" in binary_metal_job
     assert "fail-fast: false" in binary_metal_job
-    assert _matrix_values(binary_metal_job, "shard_index") == {"0", "1", "2"}
+    assert _matrix_values(binary_metal_job, "shard_index") == {
+        str(index) for index in range(24)
+    }
     assert 'python-version: "3.12"' in binary_metal_job
     assert "python -m pip install -e . pytest-xdist" in binary_metal_job
     assert "xcrun --sdk macosx metal --version" in binary_metal_job
@@ -3995,7 +3997,7 @@ def test_mlx_project_porting_workflow_runs_binary_scalar_metal_proof():
 
     binary_metal_step = ci_coverage.workflow_step_section(
         binary_metal_job,
-        "Prove current MLX scalar binary family Metal round-trips",
+        "Prove current MLX complete binary family Metal round-trips",
     )
     assert "if: runner.os" not in binary_metal_step
     assert (
@@ -4007,16 +4009,17 @@ def test_mlx_project_porting_workflow_runs_binary_scalar_metal_proof():
         "CROSTL_MLX_BINARY_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
         in binary_metal_step
     )
-    assert 'CROSTL_MLX_BINARY_METAL_SHARD_COUNT: "3"' in binary_metal_step
+    assert 'CROSTL_MLX_BINARY_METAL_SHARD_COUNT: "24"' in binary_metal_step
     assert (
-        f"{test_path}::"
-        "test_current_mlx_binary_scalar_family_roundtrips_through_metal"
+        f"{test_path}::test_current_mlx_binary_family_roundtrips_through_metal"
         in binary_metal_step
     )
     assert "-n auto" in binary_metal_step
     assert "-k" not in binary_metal_step
     matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
-    assert "Prove current MLX scalar binary family Metal round-trips" not in matrix_job
+    assert "Prove current MLX complete binary family Metal round-trips" not in (
+        matrix_job
+    )
 
 
 def test_mlx_project_porting_workflow_runs_current_fft_runtime_proofs():

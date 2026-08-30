@@ -1093,7 +1093,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "315890720b94701cfe1049a7aaad9bfd513c4933eeca5b0a504cb88572819d94",
+      "sha256": "35a7f1de77b178cc459651431336b987a336e11827ff46b2c8ac38221ab0e741",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1237,7 +1237,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 1321446,
+      "generated_size_bytes_total": 1321546,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint8int8",
@@ -1251,8 +1251,8 @@
     },
     "native_validation": {
       "platform": "macos-latest",
-      "compiler": "xcrun -sdk macosx metal -Werror -Wno-tautological-constant-compare -c",
-      "source_warning_exemption": "Sign<bool> tautological constant comparison",
+      "compiler": "xcrun -sdk macosx metal -Werror -c",
+      "source_warning_exemption": null,
       "status": "required-on-ci",
       "compiled_artifact_count": 877,
       "all_air_artifacts_nonempty": true,
@@ -1420,6 +1420,180 @@
     "full_mlx_test_suite_included": false,
     "remaining_scope": {
       "non_scalar_binary_entry_count": 3884,
+      "metal_numerical_execution_included": false,
+      "directx_and_opengl_whole_family_included": false,
+      "mlx_host_runtime_redirection_included": false
+    },
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
+  "binary_metal_roundtrip_status": {
+    "status": "selected-entry-complete-family-native-compilation-validated",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/binary.metal",
+    "source_sha256": "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e",
+    "target": "metal",
+    "scope": {
+      "discovered_binary_instantiation_count": 4122,
+      "entry_count": 4122,
+      "shape_count": 18,
+      "template_count": 11,
+      "operator_count": 24,
+      "input_output_type_pair_count": 25,
+      "semantic_family_count": 25,
+      "base_shape_entry_count": 3570,
+      "work_per_thread_shape_entry_count": 552,
+      "scalar_contract_entry_count": 238,
+      "uncovered_binary_entry_count": 0,
+      "all_scalar_scalar_source_instantiations_included": true,
+      "all_discovered_binary_instantiations_included": true
+    },
+    "contract": {
+      "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
+      "schema_version": 2,
+      "sha256": "01fb47137f7a330cad3404a5c81abd677b455ae010aceb3d88e92f01d257ca5e",
+      "entry_identity_fields": [
+        "entryPoint",
+        "shape",
+        "templateName",
+        "operator",
+        "inputType",
+        "outputType",
+        "family",
+        "sha256",
+        "sizeBytes"
+      ],
+      "scalar_subset_path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
+      "scalar_subset_sha256": "afb4d74c25d07203ded397df7f740d9721f9611b0c9bae64ee629a9043296e83"
+    },
+    "shape_counts": {
+      "g1": 238,
+      "g1large": 238,
+      "g2": 238,
+      "g2large": 238,
+      "g3": 238,
+      "g3large": 238,
+      "gn2": 238,
+      "gn4large": 238,
+      "ss": 238,
+      "sv": 238,
+      "sv2": 238,
+      "svn": 184,
+      "vs": 238,
+      "vs2": 238,
+      "vsn": 184,
+      "vv": 238,
+      "vv2": 238,
+      "vvn": 184
+    },
+    "template_counts": {
+      "binary_g": 476,
+      "binary_g_nd1": 476,
+      "binary_g_nd2": 476,
+      "binary_g_nd3": 476,
+      "binary_ss": 238,
+      "binary_sv": 422,
+      "binary_sv2": 238,
+      "binary_vs": 422,
+      "binary_vs2": 238,
+      "binary_vv": 422,
+      "binary_vv2": 238
+    },
+    "project_translation": {
+      "selected_entry_run_count": 4122,
+      "artifact_count": 4122,
+      "translated_count": 4122,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "provenance": "entry-scoped-translate",
+      "intermediate": "crossgl",
+      "specialization_count": 6026,
+      "reachable_index_helper_specialization_count": 1904,
+      "unsupported_specialization_count": 0,
+      "selected_operator_implementation_count_per_artifact": 1,
+      "unselected_operator_bodies_pruned": true,
+      "reachable_kernel_count_per_artifact": 1,
+      "residual_template_syntax": false,
+      "residual_decltype_syntax": false,
+      "residual_call_operator_syntax": false,
+      "unsupported_placeholder_count": 0
+    },
+    "implementation_contracts": {
+      "native_int64_vector_mapping": true,
+      "dependent_free_operator_rebinding": true,
+      "non_explicit_contextual_aggregate_construction": true,
+      "explicit_contextual_constructor_rejected": true,
+      "bfloat_min_max_float_promotion_and_reconstruction": true,
+      "discarded_type_constructor_disambiguation": true,
+      "bool_relational_integral_promotion": true,
+      "source_default_template_parameter_provenance": true,
+      "call_site_index_helper_materialization": true,
+      "shape_specific_resource_reflection": true
+    },
+    "host_interface": {
+      "status": "ready",
+      "minimum_resource_count_per_artifact": 3,
+      "maximum_resource_count_per_artifact": 7,
+      "reflected_resource_count": 19106,
+      "resource_counts_by_shape": {
+        "g1": 1190,
+        "g1large": 1190,
+        "g2": 1190,
+        "g2large": 1190,
+        "g3": 1190,
+        "g3large": 1190,
+        "gn2": 1666,
+        "gn4large": 1666,
+        "ss": 714,
+        "sv": 952,
+        "sv2": 952,
+        "svn": 736,
+        "vs": 952,
+        "vs2": 952,
+        "vsn": 736,
+        "vv": 952,
+        "vv2": 952,
+        "vvn": 736
+      },
+      "host_dispatch_workgroup_size": [
+        1,
+        1,
+        1
+      ]
+    },
+    "artifacts": {
+      "generated_size_bytes_total": 5140983,
+      "generated_size_range": {
+        "minimum": {
+          "entryPoint": "ss_Addint8",
+          "sizeBytes": 668
+        },
+        "maximum": {
+          "entryPoint": "gn4large_LogAddExpcomplex64",
+          "sizeBytes": 4717
+        }
+      }
+    },
+    "native_validation": {
+      "platform": "macos-latest",
+      "compiler": "xcrun -sdk macosx metal -Werror -c",
+      "source_warning_exemption": null,
+      "status": "required-on-ci",
+      "ci_shard_count": 24,
+      "compiled_artifact_count": 4122,
+      "all_air_artifacts_nonempty": true,
+      "test": "tests/test_translator/test_mlx_binary_complete_metal_roundtrip.py::test_current_mlx_binary_family_roundtrips_through_metal"
+    },
+    "scalar_contract_preserved_as_exact_subset": true,
+    "host_interface_reflection_included": true,
+    "metal_roundtrip_included": true,
+    "metal_numerical_runtime_included": false,
+    "directx_and_opengl_family_translation_included": false,
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": false,
+    "full_mlx_test_suite_included": false,
+    "remaining_scope": {
+      "uncovered_binary_entry_count": 0,
       "metal_numerical_execution_included": false,
       "directx_and_opengl_whole_family_included": false,
       "mlx_host_runtime_redirection_included": false

@@ -48,13 +48,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "3385bafa20d3d14b195fe0ce80d0dcacc56ce7fdadd32eb8ca7fe39aefd16a16"
+    "5026d01ce5cce465c31ce1228f88dedd7f196c7f7e3723b19e81020d398c09dd"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "315890720b94701cfe1049a7aaad9bfd513c4933eeca5b0a504cb88572819d94"
+    "35a7f1de77b178cc459651431336b987a336e11827ff46b2c8ac38221ab0e741"
 )
 
 
@@ -717,7 +717,7 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 1321446,
+        "generatedSizeBytesTotal": 1321546,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 972},
             "maximum": {
@@ -725,9 +725,7 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
                 "sizeBytes": 4468,
             },
         },
-        "nativeCompiler": (
-            "xcrun -sdk macosx metal -Werror -Wno-tautological-constant-compare " "-c"
-        ),
+        "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
         "requiresNonemptyAirArtifact": True,
     }
     assert contract["classifications"] == expected_classifications
@@ -1191,7 +1189,6 @@ def _roundtrip_pinned_mlx_unary_through_metal(workload: UnaryWorkload) -> None:
                 "macosx",
                 "metal",
                 "-Werror",
-                "-Wno-tautological-constant-compare",
                 "-c",
                 str(generated_path),
                 "-o",
