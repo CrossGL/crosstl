@@ -14,7 +14,6 @@ float linearToSrgb(float linear) {
     } else {
         return 1.055 * pow(linear, 1.0 / 2.4) - 0.055;
     }
-    return float(0) /* fallback for unmatched generated control flow */;
 }
 
 float3 linearToSrgb(float3 linear) {
