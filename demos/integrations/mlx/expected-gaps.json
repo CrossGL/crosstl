@@ -1062,216 +1062,86 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
-  "unary_float32_metal_roundtrip_status": {
-    "status": "selected-entry-family-native-compilation-validated",
+  "unary_scalar_metal_roundtrip_status": {
+    "status": "selected-entry-scalar-family-native-compilation-validated",
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
     "source": "mlx/backend/metal/kernels/unary.metal",
     "source_sha256": "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b",
     "target": "metal",
-    "dtype": "float32",
-    "entry_pattern": "v_<Op>float32float32",
-    "entry_count": 30,
-    "previously_proven_entry_points": [
-      "v_Squarefloat32float32",
-      "v_ArcCosfloat32float32"
-    ],
-    "newly_proven_entry_count": 28,
-    "entry_points": [
-      "v_Absfloat32float32",
-      "v_ArcCosfloat32float32",
-      "v_ArcCoshfloat32float32",
-      "v_ArcSinfloat32float32",
-      "v_ArcSinhfloat32float32",
-      "v_ArcTanfloat32float32",
-      "v_ArcTanhfloat32float32",
-      "v_Ceilfloat32float32",
-      "v_Cosfloat32float32",
-      "v_Coshfloat32float32",
-      "v_Expfloat32float32",
-      "v_Expm1float32float32",
-      "v_Floorfloat32float32",
-      "v_Logfloat32float32",
-      "v_Log2float32float32",
-      "v_Log10float32float32",
-      "v_Log1pfloat32float32",
-      "v_Negativefloat32float32",
-      "v_Sigmoidfloat32float32",
-      "v_Erffloat32float32",
-      "v_ErfInvfloat32float32",
-      "v_Signfloat32float32",
-      "v_Sinfloat32float32",
-      "v_Sinhfloat32float32",
-      "v_Squarefloat32float32",
-      "v_Sqrtfloat32float32",
-      "v_Rsqrtfloat32float32",
-      "v_Tanfloat32float32",
-      "v_Tanhfloat32float32",
-      "v_Roundfloat32float32"
-    ],
+    "scope": {
+      "entry_prefix": "v_",
+      "template": "unary_v",
+      "template_element_count": 1,
+      "shape": "scalar",
+      "discovered_unary_instantiation_count": 877,
+      "discovered_scalar_v_entry_count": 183,
+      "entry_count": 183,
+      "operator_count": 37,
+      "input_output_type_pair_count": 20,
+      "semantic_family_count": 16,
+      "previously_proven_float32_entry_count": 30,
+      "newly_proven_entry_count": 153,
+      "all_discovered_scalar_v_entries_included": true
+    },
+    "contract": {
+      "path": "demos/integrations/mlx/contracts/unary.scalar-metal-roundtrip.json",
+      "schema_version": 1,
+      "sha256": "a110a1f39fd658a027d691a6737c6c15ed31971ddc98d8a8407570b68ad6a58f",
+      "entry_identity_fields": [
+        "entryPoint",
+        "operator",
+        "inputType",
+        "outputType",
+        "family",
+        "sha256",
+        "sizeBytes"
+      ]
+    },
+    "family_counts": {
+      "bfloat16-same-type": 30,
+      "boolean-same-type": 7,
+      "complex64-projection": 2,
+      "complex64-same-type": 22,
+      "float16-same-type": 30,
+      "float32-same-type": 30,
+      "fp8-decode": 3,
+      "fp8-encode": 3,
+      "int16-same-type": 7,
+      "int32-same-type": 7,
+      "int64-same-type": 7,
+      "int8-same-type": 7,
+      "uint16-same-type": 7,
+      "uint32-same-type": 7,
+      "uint64-same-type": 7,
+      "uint8-same-type": 7
+    },
     "project_translation": {
-      "selected_entry_run_count": 30,
-      "artifact_count": 30,
-      "translated_count": 30,
+      "selected_entry_run_count": 183,
+      "artifact_count": 183,
+      "translated_count": 183,
       "failed_count": 0,
       "project_diagnostic_count": 0,
       "provenance": "entry-scoped-translate",
       "intermediate": "crossgl",
       "specialization_count_per_artifact": 1,
       "unsupported_specialization_count": 0,
-      "reachable_operator_struct_count_per_artifact": 1,
-      "reachable_kernel_count_per_artifact": 1
+      "selected_operator_implementation_count_per_artifact": 1,
+      "unselected_operator_bodies_pruned": true,
+      "reachable_empty_helper_tag_structs_allowed": true,
+      "reachable_kernel_count_per_artifact": 1,
+      "residual_template_syntax": false,
+      "residual_decltype_syntax": false,
+      "residual_call_operator_syntax": false
     },
-    "artifacts": {
-      "v_Absfloat32float32": {
-        "operator": "Abs",
-        "sha256": "1c225a5efe013e30a3022926c09fcf951b34e478848b2f38559f81f0912ae967",
-        "size_bytes": 989
-      },
-      "v_ArcCosfloat32float32": {
-        "operator": "ArcCos",
-        "sha256": "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b",
-        "size_bytes": 2742
-      },
-      "v_ArcCoshfloat32float32": {
-        "operator": "ArcCosh",
-        "sha256": "dfea065f445a672ac49014c81df90799e533a4435e0ca2ad6548f15236e8a86b",
-        "size_bytes": 1027
-      },
-      "v_ArcSinfloat32float32": {
-        "operator": "ArcSin",
-        "sha256": "16fb2dc2b32d43e79ef7ef5412a976a643af0983f1919c14fb15cd9771115c67",
-        "size_bytes": 1017
-      },
-      "v_ArcSinhfloat32float32": {
-        "operator": "ArcSinh",
-        "sha256": "95989af274be41c1b5e8584198dcdc978eb8d9d37b05319f03d1dc79f1e16e4b",
-        "size_bytes": 1027
-      },
-      "v_ArcTanfloat32float32": {
-        "operator": "ArcTan",
-        "sha256": "525caa32b75facb1f267acd8bdab88146aaea9408c1099c489d8796f567d1016",
-        "size_bytes": 1017
-      },
-      "v_ArcTanhfloat32float32": {
-        "operator": "ArcTanh",
-        "sha256": "5915c6c9998dee80281c91f4ce1831fc690963f78b6d34a94643c2bfafc1b2af",
-        "size_bytes": 1027
-      },
-      "v_Ceilfloat32float32": {
-        "operator": "Ceil",
-        "sha256": "b687d1a08d534d44b6cb7e8f38e18f858239077597e1ef209224e3c5e1428d50",
-        "size_bytes": 999
-      },
-      "v_Cosfloat32float32": {
-        "operator": "Cos",
-        "sha256": "254204b39a4da7277372aa44ed7b0c7ae52f179d108d9312e10319d4eb841bfb",
-        "size_bytes": 989
-      },
-      "v_Coshfloat32float32": {
-        "operator": "Cosh",
-        "sha256": "70c16dd91be3aca1b54e88af72a150de09f34990b17bb99520b2839b613f7c58",
-        "size_bytes": 999
-      },
-      "v_Expfloat32float32": {
-        "operator": "Exp",
-        "sha256": "ab5207445d620502e66f8a4d215b423c5d817e365c69a3a7569566076e4a96e9",
-        "size_bytes": 989
-      },
-      "v_Expm1float32float32": {
-        "operator": "Expm1",
-        "sha256": "4cd6bc9a9bd8937eed1dc11a71ec65d00b23ad6f455f5f3e5c27a7cca890dbc8",
-        "size_bytes": 2003
-      },
-      "v_Floorfloat32float32": {
-        "operator": "Floor",
-        "sha256": "409df915fc3869066df9c2b9b127fde6ce16a35ec2bcc7ead07890e40f623188",
-        "size_bytes": 1009
-      },
-      "v_Logfloat32float32": {
-        "operator": "Log",
-        "sha256": "770b0befc6b8970e08e205ffff7d2f8be3fe7e303cb6882ca86d32627752b42a",
-        "size_bytes": 989
-      },
-      "v_Log2float32float32": {
-        "operator": "Log2",
-        "sha256": "fe12519ca0749b9f4c362572faed177c87aa903f6181edf7ad5311730e6e45ad",
-        "size_bytes": 999
-      },
-      "v_Log10float32float32": {
-        "operator": "Log10",
-        "sha256": "e6add6cf4944a842df04d993fefa3d3b102cb8f8c05060c57aa3130fa5c8797b",
-        "size_bytes": 1009
-      },
-      "v_Log1pfloat32float32": {
-        "operator": "Log1p",
-        "sha256": "23e3bf52d386fe4a78fa7db0d44ce9aee4b884da7afef88a999d0c0850554267",
-        "size_bytes": 1279
-      },
-      "v_Negativefloat32float32": {
-        "operator": "Negative",
-        "sha256": "29a647c06f40977101e3c50408e1118a440f322f38e23758f90266603686b05c",
-        "size_bytes": 1030
-      },
-      "v_Sigmoidfloat32float32": {
-        "operator": "Sigmoid",
-        "sha256": "2300101589b447614c6deff51b9fee39bd6c44e01f22f7a7b53a0da0ded0d27b",
-        "size_bytes": 1073
-      },
-      "v_Erffloat32float32": {
-        "operator": "Erf",
-        "sha256": "30ca7a972cf75191160decadc7c0b02abad90bc3ec9342c5daf914dd90aa4831",
-        "size_bytes": 2707
-      },
-      "v_ErfInvfloat32float32": {
-        "operator": "ErfInv",
-        "sha256": "9eb863c7ebf468b07780d986463d6434d925a5ec7dabf01da18721deb82fe83c",
-        "size_bytes": 1893
-      },
-      "v_Signfloat32float32": {
-        "operator": "Sign",
-        "sha256": "f3804c200fd8f8dce96d5a63f6dbc71ccc36c8c5d39a80923105dfa83ac3ba3c",
-        "size_bytes": 1023
-      },
-      "v_Sinfloat32float32": {
-        "operator": "Sin",
-        "sha256": "556d5d04978a0ad37d3a224b30f46b039cab44d7956aa131a1a200ce2e891f75",
-        "size_bytes": 989
-      },
-      "v_Sinhfloat32float32": {
-        "operator": "Sinh",
-        "sha256": "08e011639022b4ab43997f7dffa03a605e3a63df2b11e365f6dcd1aae88f7ebc",
-        "size_bytes": 999
-      },
-      "v_Squarefloat32float32": {
-        "operator": "Square",
-        "sha256": "244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495",
-        "size_bytes": 1015
-      },
-      "v_Sqrtfloat32float32": {
-        "operator": "Sqrt",
-        "sha256": "88a3324c88ec900652bd4816037b449d32d4abbb151f1e6d9fb6310c85b2aa94",
-        "size_bytes": 999
-      },
-      "v_Rsqrtfloat32float32": {
-        "operator": "Rsqrt",
-        "sha256": "db5434e6844457c3e78e013bfaf139afaf63e29171a0d27ecd826a7b84948a48",
-        "size_bytes": 1009
-      },
-      "v_Tanfloat32float32": {
-        "operator": "Tan",
-        "sha256": "35f7ab6b8e0d4aec3476f0956f261be1b2f300b9c21a846fea3fb56f5968742a",
-        "size_bytes": 989
-      },
-      "v_Tanhfloat32float32": {
-        "operator": "Tanh",
-        "sha256": "f82fc0eec4708ee6e8dc6315d173b91e819cfc248ce9bcf4e7a5518bc0fb8e39",
-        "size_bytes": 999
-      },
-      "v_Roundfloat32float32": {
-        "operator": "Round",
-        "sha256": "51a5152996626c057daabb9199d19f81c9a1cfe7d93a2533cee468772eee1206",
-        "size_bytes": 1008
-      }
+    "implementation_contracts": {
+      "typedef_aliases_and_native_bfloat_mapping": true,
+      "source_compatible_free_operator_materialization": true,
+      "aggregate_alias_inference": true,
+      "branch_complete_return_analysis": true,
+      "bfloat_result_reconstruction": true,
+      "narrow_as_type_storage": true,
+      "read_only_thread_local_single_field_parameter_reinterpret": true,
+      "other_pointer_reinterpretation_fail_closed": true
     },
     "host_interface": {
       "status": "ready",
@@ -1306,11 +1176,10 @@
       "platform": "macos-latest",
       "compiler": "xcrun -sdk macosx metal -c",
       "status": "required-on-ci",
-      "compiled_artifact_count": 30,
+      "compiled_artifact_count": 183,
       "all_air_artifacts_nonempty": true,
-      "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_current_mlx_float32_unary_family_roundtrips_through_metal"
+      "test": "tests/test_translator/test_mlx_unary_native_loader.py::test_current_mlx_scalar_unary_family_roundtrips_through_metal"
     },
-    "all_float32_v_entries_included": true,
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
     "metal_numerical_runtime_included": false,
@@ -1319,16 +1188,14 @@
     "runtime_integration_included": false,
     "full_mlx_test_suite_included": false,
     "remaining_scope": {
-      "float16_entries_included": false,
-      "bfloat16_entries_included": false,
-      "integer_and_boolean_entries_included": false,
-      "complex64_entries_included": false,
-      "fp8_conversion_entries_included": false,
-      "v2_gather_and_work_per_thread_entries_included": false
+      "non_scalar_unary_instantiations_included": false,
+      "v2_gather_and_work_per_thread_entries_included": false,
+      "gn_and_vn_entry_shapes_included": false
     },
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
+
   "directx_fft_current_corpus_status": {
     "status": "translated-dxc-validated-direct3d-executed",
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",

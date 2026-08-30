@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,6 +38,18 @@ REQUIRE_PROOF_ENVS = {
     "metal": "CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP",
     "opengl": "CROSTL_REQUIRE_MLX_UNARY_OPENGL_NATIVE_LOADER",
 }
+ROOT = Path(__file__).resolve().parents[2]
+SCALAR_UNARY_METAL_CONTRACT_PATH = (
+    ROOT
+    / "demos"
+    / "integrations"
+    / "mlx"
+    / "contracts"
+    / "unary.scalar-metal-roundtrip.json"
+)
+SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
+    "a110a1f39fd658a027d691a6737c6c15ed31971ddc98d8a8407570b68ad6a58f"
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +57,9 @@ class UnaryWorkload:
     name: str
     entry_point: str
     operator_type: str
+    input_type: str
+    output_type: str
+    family: str
     generated_operation: dict[str, str]
     generated_artifacts: dict[str, dict[str, str | int]]
     input_values: tuple[float, ...]
@@ -56,6 +72,9 @@ SQUARE_WORKLOAD = UnaryWorkload(
     name="square",
     entry_point="v_Squarefloat32float32",
     operator_type="Square",
+    input_type="float",
+    output_type="float",
+    family="float32-same-type",
     generated_operation={
         "directx": "return (x * x);",
         "metal": "return x * x;",
@@ -91,6 +110,9 @@ ARCCOS_WORKLOAD = UnaryWorkload(
     name="arccos",
     entry_point="v_ArcCosfloat32float32",
     operator_type="ArcCos",
+    input_type="float",
+    output_type="float",
+    family="float32-same-type",
     generated_operation={
         "directx": "return __crossgl_metal_precise_acos_float(x);",
         "metal": "return __crossgl_metal_precise_acos_float(x);",
@@ -129,85 +151,49 @@ ARCCOS_WORKLOAD = UnaryWorkload(
 )
 
 
-FLOAT32_UNARY_METAL_ARTIFACT_IDENTITIES = {
-    "Abs": ("1c225a5efe013e30a3022926c09fcf951b34e478848b2f38559f81f0912ae967", 989),
-    "ArcCos": (
-        "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b",
-        2742,
-    ),
-    "ArcCosh": (
-        "dfea065f445a672ac49014c81df90799e533a4435e0ca2ad6548f15236e8a86b",
-        1027,
-    ),
-    "ArcSin": (
-        "16fb2dc2b32d43e79ef7ef5412a976a643af0983f1919c14fb15cd9771115c67",
-        1017,
-    ),
-    "ArcSinh": (
-        "95989af274be41c1b5e8584198dcdc978eb8d9d37b05319f03d1dc79f1e16e4b",
-        1027,
-    ),
-    "ArcTan": (
-        "525caa32b75facb1f267acd8bdab88146aaea9408c1099c489d8796f567d1016",
-        1017,
-    ),
-    "ArcTanh": (
-        "5915c6c9998dee80281c91f4ce1831fc690963f78b6d34a94643c2bfafc1b2af",
-        1027,
-    ),
-    "Ceil": ("b687d1a08d534d44b6cb7e8f38e18f858239077597e1ef209224e3c5e1428d50", 999),
-    "Cos": ("254204b39a4da7277372aa44ed7b0c7ae52f179d108d9312e10319d4eb841bfb", 989),
-    "Cosh": ("70c16dd91be3aca1b54e88af72a150de09f34990b17bb99520b2839b613f7c58", 999),
-    "Exp": ("ab5207445d620502e66f8a4d215b423c5d817e365c69a3a7569566076e4a96e9", 989),
-    "Expm1": ("4cd6bc9a9bd8937eed1dc11a71ec65d00b23ad6f455f5f3e5c27a7cca890dbc8", 2003),
-    "Floor": ("409df915fc3869066df9c2b9b127fde6ce16a35ec2bcc7ead07890e40f623188", 1009),
-    "Log": ("770b0befc6b8970e08e205ffff7d2f8be3fe7e303cb6882ca86d32627752b42a", 989),
-    "Log2": ("fe12519ca0749b9f4c362572faed177c87aa903f6181edf7ad5311730e6e45ad", 999),
-    "Log10": ("e6add6cf4944a842df04d993fefa3d3b102cb8f8c05060c57aa3130fa5c8797b", 1009),
-    "Log1p": ("23e3bf52d386fe4a78fa7db0d44ce9aee4b884da7afef88a999d0c0850554267", 1279),
-    "Negative": (
-        "29a647c06f40977101e3c50408e1118a440f322f38e23758f90266603686b05c",
-        1030,
-    ),
-    "Sigmoid": (
-        "2300101589b447614c6deff51b9fee39bd6c44e01f22f7a7b53a0da0ded0d27b",
-        1073,
-    ),
-    "Erf": ("30ca7a972cf75191160decadc7c0b02abad90bc3ec9342c5daf914dd90aa4831", 2707),
-    "ErfInv": (
-        "9eb863c7ebf468b07780d986463d6434d925a5ec7dabf01da18721deb82fe83c",
-        1893,
-    ),
-    "Sign": ("f3804c200fd8f8dce96d5a63f6dbc71ccc36c8c5d39a80923105dfa83ac3ba3c", 1023),
-    "Sin": ("556d5d04978a0ad37d3a224b30f46b039cab44d7956aa131a1a200ce2e891f75", 989),
-    "Sinh": ("08e011639022b4ab43997f7dffa03a605e3a63df2b11e365f6dcd1aae88f7ebc", 999),
-    "Square": (
-        "244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495",
-        1015,
-    ),
-    "Sqrt": ("88a3324c88ec900652bd4816037b449d32d4abbb151f1e6d9fb6310c85b2aa94", 999),
-    "Rsqrt": ("db5434e6844457c3e78e013bfaf139afaf63e29171a0d27ecd826a7b84948a48", 1009),
-    "Tan": ("35f7ab6b8e0d4aec3476f0956f261be1b2f300b9c21a846fea3fb56f5968742a", 989),
-    "Tanh": ("f82fc0eec4708ee6e8dc6315d173b91e819cfc248ce9bcf4e7a5518bc0fb8e39", 999),
-    "Round": ("51a5152996626c057daabb9199d19f81c9a1cfe7d93a2533cee468772eee1206", 1008),
+def _load_scalar_unary_metal_contract() -> dict:
+    contract_bytes = SCALAR_UNARY_METAL_CONTRACT_PATH.read_bytes()
+    contract_sha256 = hashlib.sha256(contract_bytes).hexdigest()
+    assert contract_sha256 == SCALAR_UNARY_METAL_CONTRACT_SHA256
+    return json.loads(contract_bytes)
+
+
+SCALAR_UNARY_METAL_CONTRACT = _load_scalar_unary_metal_contract()
+SCALAR_UNARY_METAL_ENTRIES = tuple(SCALAR_UNARY_METAL_CONTRACT["entries"])
+SCALAR_UNARY_METAL_OPERATOR_TYPES = frozenset(
+    entry["operator"] for entry in SCALAR_UNARY_METAL_ENTRIES
+)
+SCALAR_UNARY_METAL_ARTIFACT_IDENTITIES = {
+    entry["entryPoint"]: {
+        "operator": entry["operator"],
+        "inputType": entry["inputType"],
+        "outputType": entry["outputType"],
+        "family": entry["family"],
+        "sha256": entry["sha256"],
+        "sizeBytes": entry["sizeBytes"],
+    }
+    for entry in SCALAR_UNARY_METAL_ENTRIES
 }
 
 
-def _metal_roundtrip_workload(operator_type: str) -> UnaryWorkload:
-    if operator_type == SQUARE_WORKLOAD.operator_type:
+def _metal_roundtrip_workload(entry: dict) -> UnaryWorkload:
+    entry_point = entry["entryPoint"]
+    if entry_point == SQUARE_WORKLOAD.entry_point:
         return SQUARE_WORKLOAD
-    if operator_type == ARCCOS_WORKLOAD.operator_type:
+    if entry_point == ARCCOS_WORKLOAD.entry_point:
         return ARCCOS_WORKLOAD
-    sha256, size_bytes = FLOAT32_UNARY_METAL_ARTIFACT_IDENTITIES[operator_type]
     return UnaryWorkload(
-        name=operator_type.lower(),
-        entry_point=f"v_{operator_type}float32float32",
-        operator_type=operator_type,
+        name=entry_point.lower().replace("_", "-"),
+        entry_point=entry_point,
+        operator_type=entry["operator"],
+        input_type=entry["inputType"],
+        output_type=entry["outputType"],
+        family=entry["family"],
         generated_operation={},
         generated_artifacts={
             "metal": {
-                "sha256": sha256,
-                "sizeBytes": size_bytes,
+                "sha256": entry["sha256"],
+                "sizeBytes": entry["sizeBytes"],
             }
         },
         input_values=(),
@@ -217,10 +203,167 @@ def _metal_roundtrip_workload(operator_type: str) -> UnaryWorkload:
     )
 
 
-FLOAT32_UNARY_METAL_WORKLOADS = tuple(
-    _metal_roundtrip_workload(operator_type)
-    for operator_type in FLOAT32_UNARY_METAL_ARTIFACT_IDENTITIES
+SCALAR_UNARY_METAL_WORKLOADS = tuple(
+    _metal_roundtrip_workload(entry) for entry in SCALAR_UNARY_METAL_ENTRIES
 )
+
+
+def test_current_mlx_scalar_unary_metal_contract_is_complete_and_classified():
+    contract = SCALAR_UNARY_METAL_CONTRACT
+    assert contract["schemaVersion"] == 1
+    assert contract["commit"] == MLX_COMMIT
+    assert contract["source"] == MLX_UNARY_SOURCE
+    assert contract["sourceSha256"] == MLX_UNARY_SHA256
+    assert contract["target"] == "metal"
+    assert contract["selection"] == {
+        "entryPrefix": "v_",
+        "templateName": "unary_v",
+        "elementCount": 1,
+        "shape": "scalar",
+        "entryCount": 183,
+        "operatorCount": 37,
+        "typePairCount": 20,
+        "familyCount": 16,
+    }
+    expected_operator_counts = {
+        "Abs": 13,
+        "ArcCos": 4,
+        "ArcCosh": 3,
+        "ArcSin": 4,
+        "ArcSinh": 3,
+        "ArcTan": 4,
+        "ArcTanh": 3,
+        "BitwiseInvert": 8,
+        "Ceil": 12,
+        "Conjugate": 1,
+        "Cos": 4,
+        "Cosh": 4,
+        "Erf": 3,
+        "ErfInv": 3,
+        "Exp": 4,
+        "Expm1": 3,
+        "Floor": 12,
+        "FromFP8": 3,
+        "Imag": 1,
+        "Log": 4,
+        "Log10": 4,
+        "Log1p": 4,
+        "Log2": 4,
+        "LogicalNot": 1,
+        "Negative": 13,
+        "Real": 1,
+        "Round": 4,
+        "Rsqrt": 4,
+        "Sigmoid": 3,
+        "Sign": 13,
+        "Sin": 4,
+        "Sinh": 4,
+        "Sqrt": 4,
+        "Square": 13,
+        "Tan": 4,
+        "Tanh": 4,
+        "ToFP8": 3,
+    }
+    expected_type_pair_counts = {
+        "bfloat16_t->bfloat16_t": 30,
+        "bfloat16_t->uint8_t": 1,
+        "bool->bool": 7,
+        "complex64_t->complex64_t": 22,
+        "complex64_t->float": 2,
+        "float->float": 30,
+        "float->uint8_t": 1,
+        "float16_t->uint8_t": 1,
+        "half->half": 30,
+        "int16_t->int16_t": 7,
+        "int32_t->int32_t": 7,
+        "int64_t->int64_t": 7,
+        "int8_t->int8_t": 7,
+        "uint16_t->uint16_t": 7,
+        "uint32_t->uint32_t": 7,
+        "uint64_t->uint64_t": 7,
+        "uint8_t->bfloat16_t": 1,
+        "uint8_t->float": 1,
+        "uint8_t->float16_t": 1,
+        "uint8_t->uint8_t": 7,
+    }
+    expected_family_counts = {
+        "bfloat16-same-type": 30,
+        "boolean-same-type": 7,
+        "complex64-projection": 2,
+        "complex64-same-type": 22,
+        "float16-same-type": 30,
+        "float32-same-type": 30,
+        "fp8-decode": 3,
+        "fp8-encode": 3,
+        "int16-same-type": 7,
+        "int32-same-type": 7,
+        "int64-same-type": 7,
+        "int8-same-type": 7,
+        "uint16-same-type": 7,
+        "uint32-same-type": 7,
+        "uint64-same-type": 7,
+        "uint8-same-type": 7,
+    }
+    entries = SCALAR_UNARY_METAL_ENTRIES
+    assert len(entries) == 183
+    assert len({entry["entryPoint"] for entry in entries}) == 183
+    assert [entry["entryPoint"] for entry in entries] == sorted(
+        entry["entryPoint"] for entry in entries
+    )
+    assert Counter(entry["operator"] for entry in entries) == expected_operator_counts
+    assert (
+        Counter(f'{entry["inputType"]}->{entry["outputType"]}' for entry in entries)
+        == expected_type_pair_counts
+    )
+    assert Counter(entry["family"] for entry in entries) == expected_family_counts
+    assert contract["classifications"] == {
+        "operators": expected_operator_counts,
+        "typePairs": expected_type_pair_counts,
+        "families": expected_family_counts,
+    }
+    assert contract["artifactContract"] == {
+        "artifactCountPerEntry": 1,
+        "specializationCountPerArtifact": 1,
+        "unsupportedSpecializationCount": 0,
+        "selectedOperatorImplementationCountPerArtifact": 1,
+        "unselectedOperatorBodiesPruned": True,
+        "reachableKernelCountPerArtifact": 1,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "hostInterfaceStatus": "ready",
+        "hostResourceCountPerArtifact": 3,
+        "hostDispatchWorkgroupSize": [1, 1, 1],
+        "nativeCompiler": "xcrun -sdk macosx metal -c",
+        "requiresNonemptyAirArtifact": True,
+    }
+    for entry in entries:
+        assert set(entry) == {
+            "entryPoint",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        }
+        assert entry["entryPoint"].startswith("v_")
+        assert len(entry["sha256"]) == 64
+        int(entry["sha256"], 16)
+        assert entry["sizeBytes"] > 0
+    assert SCALAR_UNARY_METAL_ARTIFACT_IDENTITIES[SQUARE_WORKLOAD.entry_point] == {
+        "operator": SQUARE_WORKLOAD.operator_type,
+        "inputType": SQUARE_WORKLOAD.input_type,
+        "outputType": SQUARE_WORKLOAD.output_type,
+        "family": SQUARE_WORKLOAD.family,
+        **SQUARE_WORKLOAD.generated_artifacts["metal"],
+    }
+    assert SCALAR_UNARY_METAL_ARTIFACT_IDENTITIES[ARCCOS_WORKLOAD.entry_point] == {
+        "operator": ARCCOS_WORKLOAD.operator_type,
+        "inputType": ARCCOS_WORKLOAD.input_type,
+        "outputType": ARCCOS_WORKLOAD.output_type,
+        "family": ARCCOS_WORKLOAD.family,
+        **ARCCOS_WORKLOAD.generated_artifacts["metal"],
+    }
 
 
 def _project_config(target: str, workload: UnaryWorkload) -> str:
@@ -343,8 +486,8 @@ def _translate_unary_artifact(
             "parameters": {
                 "N": "1",
                 "Op": workload.operator_type,
-                "T": "float",
-                "U": "float",
+                "T": workload.input_type,
+                "U": workload.output_type,
             },
             "parameterSources": {
                 "N": "source-instantiation",
@@ -377,6 +520,9 @@ def _translate_unary_artifact(
             assert generated.count("#pragma clang fp contract(off)") == 2
             assert generated.count("#pragma clang fp contract(fast)") == 2
     assert "Log{}(x + i * Sqrt{}(1.0 - x * x))" not in generated
+    assert "template <" not in generated
+    assert "decltype(" not in generated
+    assert "operator()" not in generated
     if target == "directx":
         assert "[numthreads(1, 1, 1)]" in generated
         validator = "dxc"
@@ -388,13 +534,20 @@ def _translate_unary_artifact(
     else:
         assert target == "metal"
         assert f"kernel void {workload.entry_point}" in generated
+        assert generated.count("kernel void ") == 1
         assert "[[static]]" not in generated
         assert f"struct {workload.operator_type} {{" in generated
         assert generated.count(f"struct {workload.operator_type} {{") == 1
-        for pruned_operator in set(FLOAT32_UNARY_METAL_ARTIFACT_IDENTITIES) - {
+        for pruned_operator in SCALAR_UNARY_METAL_OPERATOR_TYPES - {
             workload.operator_type
         }:
-            assert f"struct {pruned_operator} {{" not in generated
+            marker = f"struct {pruned_operator} {{"
+            cursor = 0
+            while (start := generated.find(marker, cursor)) != -1:
+                end = generated.find("};", start + len(marker))
+                assert end != -1
+                assert generated[start + len(marker) : end].strip() == ""
+                cursor = end + 2
         validator = "xcrun"
     if shutil.which(validator) is not None:
         toolchain_runs = payload["validation"]["toolchainRuns"]
@@ -513,10 +666,10 @@ def test_pinned_mlx_unary_arccos_roundtrips_through_metal():
 
 @pytest.mark.parametrize(
     "workload",
-    FLOAT32_UNARY_METAL_WORKLOADS,
-    ids=lambda workload: workload.operator_type,
+    SCALAR_UNARY_METAL_WORKLOADS,
+    ids=lambda workload: workload.entry_point,
 )
-def test_current_mlx_float32_unary_family_roundtrips_through_metal(workload):
+def test_current_mlx_scalar_unary_family_roundtrips_through_metal(workload):
     _roundtrip_pinned_mlx_unary_through_metal(workload)
 
 

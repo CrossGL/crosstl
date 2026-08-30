@@ -307,6 +307,28 @@ class _MetalTemplateStruct:
 
 
 @dataclass(frozen=True)
+class _MetalFreeOperatorDefinition:
+    operator: str
+    template_text: str
+    template_parameters: Tuple[str, ...]
+    template_constraints: Tuple[str, ...]
+    return_type: str
+    parameters: str
+    parameter_types: Tuple[str, ...]
+    body: str
+    span: Tuple[int, int]
+
+
+@dataclass(frozen=True)
+class _MetalBooleanVariableTemplate:
+    name: str
+    template_parameters: Tuple[str, ...]
+    argument_patterns: Tuple[str, ...]
+    expression: str
+    is_partial_specialization: bool
+
+
+@dataclass(frozen=True)
 class _MLXKernelInstantiation:
     host_name: str
     function_name: str
@@ -843,6 +865,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._configure_integral_constant_contracts(processed)
         processed = self._materialize_project_template_instantiations(processed)
         processed = self._materialize_explicit_template_struct_instantiations(processed)
+        processed = self._materialize_free_operator_overloads(processed)
         processed = self._elide_stateless_compile_time_globals(processed)
         processed = self._lower_struct_member_functions(processed)
         processed = self._materialize_explicit_template_function_calls(processed)
@@ -4897,6 +4920,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     }
     _METAL_TYPE_TRAIT_ARITIES: Dict[str, int] = {
         "is_same": 2,
+        "is_convertible": 2,
         "is_integral": 1,
         "is_floating_point": 1,
         "is_signed": 1,
@@ -4907,8 +4931,9 @@ class MetalPreprocessor(HLSLPreprocessor):
     _METAL_TYPE_TRAIT_START_RE = re.compile(
         r"(?<![A-Za-z0-9_:])"
         r"(?:(?:::)?metal\s*::\s*)?"
-        r"(?P<trait>is_same_v|is_integral_v|is_floating_point_v|is_signed_v|"
-        r"is_unsigned_v|is_const_v|is_pointer_v|is_same|is_integral|"
+        r"(?P<trait>is_same_v|is_convertible_v|is_integral_v|"
+        r"is_floating_point_v|is_signed_v|is_unsigned_v|is_const_v|"
+        r"is_pointer_v|is_same|is_convertible|is_integral|"
         r"is_floating_point|is_signed|is_unsigned|is_const|is_pointer)\s*<"
     )
 
@@ -5175,6 +5200,34 @@ class MetalPreprocessor(HLSLPreprocessor):
                 resolved_operands,
                 "evaluated",
             )
+        if trait == "is_convertible":
+            source, destination = resolved_operands
+            if source == destination:
+                return True, resolved_operands, "evaluated"
+            source_scalar = self._scalar_and_width(source)
+            destination_scalar = self._scalar_and_width(destination)
+            if source_scalar is None or destination_scalar is None:
+                return False, resolved_operands, "evaluated"
+            source_base, _source_width = source_scalar
+            destination_base, _destination_width = destination_scalar
+            # Metal exposes bfloat as explicitly constructible, not as an
+            # implicit half/float destination. It may still widen to ordinary
+            # floating-point types, matching native overload selection.
+            if destination_base == "bfloat16_t":
+                return False, resolved_operands, "evaluated"
+            source_numeric = (
+                source_base in self._METAL_INTEGRAL_SCALAR_TYPES
+                or source_base in self._METAL_FLOATING_SCALAR_TYPES
+            )
+            destination_numeric = (
+                destination_base in self._METAL_INTEGRAL_SCALAR_TYPES
+                or destination_base in self._METAL_FLOATING_SCALAR_TYPES
+            )
+            return (
+                source_numeric and destination_numeric,
+                resolved_operands,
+                "evaluated",
+            )
 
         operand = resolved_operands[0]
         if trait == "is_pointer":
@@ -5405,6 +5458,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         expr = expression.strip()
         if not expr:
             raise self._UnrecognizedConstraint(expression)
+        if expr == "true":
+            return True
+        if expr == "false":
+            return False
         # Leading negation.
         if expr.startswith("!"):
             return not self._evaluate_boolean_constraint(expr[1:], bindings)
@@ -6967,6 +7024,525 @@ class MetalPreprocessor(HLSLPreprocessor):
                         )
                     )
         return results[0] if len(results) == 1 else None
+
+    _FREE_OPERATOR_LABELS = {
+        "+": "add",
+        "-": "subtract",
+        "*": "multiply",
+        "/": "divide",
+        "%": "modulo",
+        "==": "equal",
+        "!=": "not_equal",
+        "<": "less",
+        ">": "greater",
+        "<=": "less_equal",
+        ">=": "greater_equal",
+    }
+
+    def _find_boolean_variable_templates(
+        self, code: str
+    ) -> Dict[str, List[_MetalBooleanVariableTemplate]]:
+        definitions: Dict[str, List[_MetalBooleanVariableTemplate]] = {}
+        ignored = self._find_comment_and_literal_spans(code)
+        cursor = 0
+        while True:
+            match = re.search(r"\btemplate\s*<", code[cursor:])
+            if match is None:
+                break
+            template_start = cursor + match.start()
+            cursor = template_start + len("template")
+            if self._containing_span(template_start, ignored) is not None:
+                continue
+            angle_start = code.find("<", template_start, cursor + 4)
+            angle_end = self._find_matching_template_param_angle(code, angle_start)
+            if angle_end is None:
+                continue
+            header = re.match(
+                r"\s*(?:static\s+)?constexpr\s+(?:constant\s+)?bool\s+"
+                r"(?P<name>[A-Za-z_]\w*)",
+                code[angle_end + 1 :],
+            )
+            if header is None:
+                cursor = angle_end + 1
+                continue
+            name = header.group("name")
+            name_end = angle_end + 1 + header.end()
+            position = name_end
+            while position < len(code) and code[position].isspace():
+                position += 1
+            is_partial = position < len(code) and code[position] == "<"
+            if is_partial:
+                argument_end = self._find_matching_angle(code, position)
+                if argument_end is None:
+                    cursor = position + 1
+                    continue
+                argument_patterns = tuple(
+                    self._split_top_level_commas(code[position + 1 : argument_end])
+                )
+                position = argument_end + 1
+            else:
+                argument_patterns = tuple(
+                    self._template_parameter_names(code[angle_start + 1 : angle_end])
+                )
+            equals = code.find("=", position)
+            semicolon = code.find(";", position)
+            if equals == -1 or semicolon == -1 or semicolon < equals:
+                cursor = position
+                continue
+            prefix = code[position:equals]
+            if "{" in prefix or ";" in prefix:
+                cursor = position
+                continue
+            expression = code[equals + 1 : semicolon].strip()
+            parameter_names = tuple(
+                self._template_parameter_names(code[angle_start + 1 : angle_end])
+            )
+            if expression and argument_patterns:
+                definitions.setdefault(name, []).append(
+                    _MetalBooleanVariableTemplate(
+                        name=name,
+                        template_parameters=parameter_names,
+                        argument_patterns=argument_patterns,
+                        expression=expression,
+                        is_partial_specialization=is_partial,
+                    )
+                )
+            cursor = semicolon + 1
+        return definitions
+
+    def _evaluate_boolean_variable_template(
+        self,
+        name: str,
+        arguments: Sequence[str],
+        bindings: Dict[str, str],
+        definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
+        stack: Tuple[Tuple[str, Tuple[str, ...]], ...],
+    ) -> bool:
+        concrete_arguments = tuple(
+            self._normalize_template_argument_text(
+                self._replace_identifiers(argument, bindings)
+            )
+            for argument in arguments
+        )
+        key = (name, concrete_arguments)
+        if key in stack:
+            raise self._UnrecognizedConstraint(name)
+        candidates = []
+        for definition in definitions.get(name, []):
+            if len(definition.argument_patterns) != len(concrete_arguments):
+                continue
+            local_bindings: Dict[str, str] = {}
+            matched = True
+            score = 1 if definition.is_partial_specialization else 0
+            for pattern, concrete in zip(
+                definition.argument_patterns, concrete_arguments
+            ):
+                normalized_pattern = self._normalize_template_argument_text(pattern)
+                if normalized_pattern in definition.template_parameters:
+                    existing = local_bindings.get(normalized_pattern)
+                    if existing is not None and existing != concrete:
+                        matched = False
+                        break
+                    local_bindings[normalized_pattern] = concrete
+                    continue
+                self._infer_template_parameter_bindings_from_type(
+                    normalized_pattern,
+                    concrete,
+                    set(definition.template_parameters),
+                    local_bindings,
+                )
+                if not any(
+                    parameter in local_bindings
+                    for parameter in definition.template_parameters
+                    if re.search(rf"\b{re.escape(parameter)}\b", normalized_pattern)
+                ):
+                    matched = False
+                    break
+                score += 1
+            if matched and all(
+                parameter in local_bindings
+                for parameter in definition.template_parameters
+            ):
+                candidates.append((score, definition, local_bindings))
+        if not candidates:
+            raise self._UnrecognizedConstraint(name)
+        best_score = max(candidate[0] for candidate in candidates)
+        winners = [candidate for candidate in candidates if candidate[0] == best_score]
+        if len(winners) != 1:
+            raise self._UnrecognizedConstraint(name)
+        _score, definition, local_bindings = winners[0]
+        return self._evaluate_boolean_constraint_with_variable_templates(
+            definition.expression,
+            local_bindings,
+            definitions,
+            stack=(*stack, key),
+        )
+
+    def _expand_boolean_variable_templates(
+        self,
+        expression: str,
+        bindings: Dict[str, str],
+        definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
+        stack: Tuple[Tuple[str, Tuple[str, ...]], ...] = (),
+    ) -> str:
+        if not definitions:
+            return expression
+        names = sorted(definitions, key=len, reverse=True)
+        start_re = re.compile(
+            r"(?<![A-Za-z0-9_:])(?P<name>"
+            + "|".join(re.escape(name) for name in names)
+            + r")\s*<"
+        )
+        expanded = expression
+        for _ in range(64):
+            match = start_re.search(expanded)
+            if match is None:
+                return expanded
+            angle_start = expanded.find("<", match.start("name"), match.end())
+            angle_end = self._find_matching_angle(expanded, angle_start)
+            if angle_end is None:
+                raise self._UnrecognizedConstraint(expression)
+            arguments = self._split_top_level_commas(
+                expanded[angle_start + 1 : angle_end]
+            )
+            value = self._evaluate_boolean_variable_template(
+                match.group("name"),
+                arguments,
+                bindings,
+                definitions,
+                stack,
+            )
+            expanded = (
+                expanded[: match.start()]
+                + ("true" if value else "false")
+                + expanded[angle_end + 1 :]
+            )
+        raise self._UnrecognizedConstraint(expression)
+
+    def _evaluate_boolean_constraint_with_variable_templates(
+        self,
+        expression: str,
+        bindings: Dict[str, str],
+        definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
+        *,
+        stack: Tuple[Tuple[str, Tuple[str, ...]], ...] = (),
+    ) -> bool:
+        expanded = self._expand_boolean_variable_templates(
+            expression,
+            bindings,
+            definitions,
+            stack,
+        )
+        return self._evaluate_boolean_constraint(expanded, bindings)
+
+    def _free_operator_constraint_enabled(
+        self,
+        constraint: str,
+        bindings: Dict[str, str],
+        definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
+    ) -> bool:
+        text = constraint.strip()
+        enable_match = re.match(
+            r"^(?:typename\s+)?(?:metal\s*::\s*)?enable_if_t\s*<", text
+        )
+        if enable_match is not None:
+            angle_start = text.find("<", enable_match.end() - 1)
+            angle_end = self._find_matching_template_param_angle(text, angle_start)
+            if angle_end is None or text[angle_end + 1 :].strip():
+                raise self._UnrecognizedConstraint(constraint)
+            arguments = self._split_template_parameter_list(
+                text[angle_start + 1 : angle_end]
+            )
+            if not arguments:
+                raise self._UnrecognizedConstraint(constraint)
+            text = arguments[0].strip()
+        return self._evaluate_boolean_constraint_with_variable_templates(
+            text,
+            bindings,
+            definitions,
+        )
+
+    def _find_free_operator_definitions(
+        self, code: str
+    ) -> List[_MetalFreeOperatorDefinition]:
+        definitions: List[_MetalFreeOperatorDefinition] = []
+        ignored = self._find_comment_and_literal_spans(code)
+        operator_re = re.compile(
+            r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%<>])\s*\("
+        )
+        cursor = 0
+        while True:
+            template_match = re.search(r"\btemplate\s*<", code[cursor:])
+            if template_match is None:
+                break
+            template_start = cursor + template_match.start()
+            cursor = template_start + len("template")
+            if self._containing_span(template_start, ignored) is not None:
+                continue
+            angle_start = code.find("<", template_start, cursor + 4)
+            angle_end = self._find_matching_template_param_angle(code, angle_start)
+            if angle_end is None:
+                continue
+            operator_match = operator_re.search(code, angle_end + 1)
+            if operator_match is None:
+                cursor = angle_end + 1
+                continue
+            declaration_prefix = code[angle_end + 1 : operator_match.start()]
+            if any(token in declaration_prefix for token in (";", "{", "}")):
+                cursor = angle_end + 1
+                continue
+            parameter_open = code.find(
+                "(", operator_match.start(), operator_match.end()
+            )
+            parameter_close = self._find_matching_delimiter(
+                code, parameter_open, "(", ")"
+            )
+            if parameter_close is None:
+                cursor = operator_match.end()
+                continue
+            body_open = code.find("{", parameter_close + 1)
+            declaration_end = code.find(";", parameter_close + 1)
+            if body_open == -1 or (
+                declaration_end != -1 and declaration_end < body_open
+            ):
+                cursor = parameter_close + 1
+                continue
+            body_end = self._find_matching_brace(code, body_open)
+            if body_end is None:
+                cursor = body_open + 1
+                continue
+            parameters = code[parameter_open + 1 : parameter_close]
+            parameter_types = tuple(self._parameter_declared_types(parameters))
+            if len(parameter_types) not in {1, 2} or any(
+                parameter_type is None for parameter_type in parameter_types
+            ):
+                cursor = body_end
+                continue
+            template_text = code[angle_start + 1 : angle_end]
+            template_records = self._parse_template_parameter_list(template_text)
+            template_parameters = tuple(
+                record.name for record in template_records if record.name
+            )
+            constraints = tuple(
+                record.constraint_text
+                for record in template_records
+                if record.constraint_text
+            )
+            return_type = re.sub(
+                r"\b(?:constexpr|consteval|inline|static|friend)\b",
+                " ",
+                declaration_prefix,
+            )
+            return_type = self._normalize_template_argument_text(return_type)
+            if not return_type or not template_parameters:
+                cursor = body_end
+                continue
+            definitions.append(
+                _MetalFreeOperatorDefinition(
+                    operator=operator_match.group("operator"),
+                    template_text=template_text,
+                    template_parameters=template_parameters,
+                    template_constraints=constraints,
+                    return_type=return_type,
+                    parameters=parameters,
+                    parameter_types=parameter_types,
+                    body=code[body_open + 1 : body_end - 1],
+                    span=(template_start, body_end),
+                )
+            )
+            cursor = body_end
+        return definitions
+
+    def _substitute_materialized_free_operator_text(
+        self,
+        text: str,
+        bindings: Dict[str, str],
+    ) -> str:
+        result = self._replace_identifiers(text, bindings)
+        for materialized_name, (source_name, source_arguments) in sorted(
+            self._materialized_struct_specializations.items()
+        ):
+            concrete_arguments = [
+                self._normalize_template_argument_text(
+                    self._replace_identifiers(argument, bindings)
+                )
+                for argument in source_arguments
+            ]
+            argument_patterns = [
+                re.escape(argument).replace(r"\ ", r"\s*")
+                for argument in concrete_arguments
+            ]
+            pattern = (
+                rf"\b{re.escape(source_name)}\s*<\s*"
+                + r"\s*,\s*".join(argument_patterns)
+                + r"\s*>"
+            )
+            result = re.sub(pattern, materialized_name, result)
+        return result
+
+    def _free_operator_helper_name(
+        self, operator: str, parameter_types: Sequence[str]
+    ) -> str:
+        if operator == "-" and len(parameter_types) == 1:
+            label = "negate"
+        else:
+            label = self._FREE_OPERATOR_LABELS[operator]
+        identities = []
+        for parameter_type in parameter_types:
+            identity = re.sub(
+                r"\b(?:const|volatile|thread|threadgroup|device|constant|restrict)\b",
+                " ",
+                parameter_type,
+            )
+            identity = re.sub(r"[&*]+", " ", identity)
+            identity = self._normalize_template_argument_text(identity)
+            identity = re.sub(r"[^A-Za-z0-9_]+", "_", identity).strip("_")
+            identities.append(identity or "unknown")
+        return f"crosstl_metal_operator_{label}__" + "__".join(identities)
+
+    def _materialize_free_operator_overloads(self, code: str) -> str:
+        if not self._materialized_struct_specializations or "operator" not in code:
+            return code
+        operators = self._find_free_operator_definitions(code)
+        if not operators:
+            return code
+        boolean_templates = self._find_boolean_variable_templates(code)
+        replacements = []
+        emitted_names: Set[str] = set()
+        template_spans = self._find_template_declaration_spans(code)
+        concrete_functions = self._find_non_template_function_definitions(
+            code, template_spans
+        )
+        reachable_source = (
+            "\n".join(
+                code[function.span[0] : function.span[1]]
+                for function in concrete_functions
+            )
+            if concrete_functions
+            else None
+        )
+        source_aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+            skip_spans=template_spans,
+        )
+
+        def is_reachable_materialized_type(name: str) -> bool:
+            if reachable_source is None:
+                return True
+            spellings = {name}
+            for alias, bindings in source_aliases.items():
+                targets = {
+                    self._normalize_inferred_type(binding.target)
+                    for binding in bindings
+                    if binding.target
+                }
+                if targets == {name}:
+                    spellings.add(alias)
+            return any(
+                re.search(rf"\b{re.escape(spelling)}\b", reachable_source)
+                for spelling in spellings
+            )
+
+        retained_structs = {
+            name: specialization
+            for name, specialization in (
+                self._materialized_struct_specializations.items()
+            )
+            if re.search(rf"\b(?:struct|class)\s+{re.escape(name)}\b", code)
+            and is_reachable_materialized_type(name)
+        }
+        for definition in operators:
+            generated = []
+            for materialized_name, (source_name, source_arguments) in sorted(
+                retained_structs.items()
+            ):
+                if not any(
+                    re.search(rf"\b{re.escape(source_name)}\s*<", parameter_type)
+                    for parameter_type in definition.parameter_types
+                ):
+                    continue
+                bindings: Dict[str, str] = {}
+                for parameter_type in definition.parameter_types:
+                    if not re.search(
+                        rf"\b{re.escape(source_name)}\s*<", parameter_type
+                    ):
+                        continue
+                    self._infer_template_parameter_bindings_from_type(
+                        parameter_type,
+                        materialized_name,
+                        set(definition.template_parameters),
+                        bindings,
+                    )
+                    if not any(
+                        parameter in bindings
+                        for parameter in definition.template_parameters
+                        if re.search(rf"\b{re.escape(parameter)}\b", parameter_type)
+                    ):
+                        bindings = {}
+                        break
+                if not bindings:
+                    continue
+                lane_type = source_arguments[0] if len(source_arguments) == 1 else None
+                for parameter in definition.template_parameters:
+                    if parameter in bindings:
+                        continue
+                    scalar_parameter = any(
+                        self._normalize_inferred_type(parameter_type) == parameter
+                        for parameter_type in definition.parameter_types
+                    )
+                    if lane_type is None or not scalar_parameter:
+                        bindings = {}
+                        break
+                    bindings[parameter] = lane_type
+                if not bindings:
+                    continue
+                try:
+                    if not all(
+                        self._free_operator_constraint_enabled(
+                            constraint,
+                            bindings,
+                            boolean_templates,
+                        )
+                        for constraint in definition.template_constraints
+                    ):
+                        continue
+                except self._UnrecognizedConstraint:
+                    continue
+                return_type = self._substitute_materialized_free_operator_text(
+                    definition.return_type,
+                    bindings,
+                )
+                parameters = self._substitute_materialized_free_operator_text(
+                    definition.parameters,
+                    bindings,
+                )
+                parameter_types = tuple(self._parameter_declared_types(parameters))
+                if any(parameter_type is None for parameter_type in parameter_types):
+                    continue
+                body = self._substitute_materialized_free_operator_text(
+                    definition.body,
+                    bindings,
+                )
+                if re.search(r"\boperator\s*(?:==|!=|<=|>=|[+\-*/%<>])\s*\(", body):
+                    continue
+                helper_name = self._free_operator_helper_name(
+                    definition.operator,
+                    parameter_types,
+                )
+                if helper_name in emitted_names:
+                    continue
+                emitted_names.add(helper_name)
+                generated.append(
+                    f"{return_type} {helper_name}({parameters}) {{" f"{body}}}\n"
+                )
+            if generated:
+                replacements.append(
+                    (definition.span[0], definition.span[1], "\n".join(generated))
+                )
+        if not replacements:
+            return code
+        return self._apply_text_replacements(code, replacements)
 
     def _static_constexpr_binary_operators(
         self,
@@ -16356,8 +16932,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             type_name = functional_construction.group("name")
             paren_start = expr.find("(", functional_construction.end("name"))
             paren_end = self._find_matching_delimiter(expr, paren_start, "(", ")")
-            if paren_end == len(expr) - 1 and type_name in structs_by_name:
-                return self._normalize_inferred_type(type_name)
+            resolved_type = self._inferred_aggregate_type(type_name, structs_by_name)
+            if paren_end == len(expr) - 1 and resolved_type is not None:
+                return resolved_type
 
         # Subscript access `base[expr]` -> element type of `base`. `base` may be a
         # bare buffer/array name (`buf[i]`, `totals[i]`) OR a member-access into a
@@ -16598,6 +17175,37 @@ class MetalPreprocessor(HLSLPreprocessor):
             left_expr, buffer_element_types
         ) or self._contains_bare_pointer_operand(right_expr, buffer_element_types)
 
+    def _inferred_aggregate_type(
+        self,
+        type_name: str,
+        structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],
+    ) -> Optional[str]:
+        """Resolve one aggregate spelling without guessing across alias scopes.
+
+        Selected-entry preprocessing materializes aliases such as MLX's
+        ``complex64_t = complex_t<float>`` to a concrete struct name before
+        member-call rewriting. An ``auto`` initializer can still retain the
+        source alias spelling, however. Admit that spelling only when every
+        collected binding resolves to the same concrete retained struct; local
+        shadowing with different targets therefore remains fail-closed.
+        """
+
+        if not structs_by_name:
+            return None
+        normalized = self._normalize_inferred_type(type_name)
+        if normalized in structs_by_name:
+            return normalized
+        bindings = getattr(self, "_source_type_alias_bindings", {}).get(normalized, ())
+        targets = {
+            self._normalize_inferred_type(binding.target)
+            for binding in bindings
+            if getattr(binding, "target", None)
+        }
+        if len(targets) != 1:
+            return None
+        target = next(iter(targets))
+        return target if target in structs_by_name else None
+
     def _infer_braced_construction_type(
         self,
         expr: str,
@@ -16632,10 +17240,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         if is_template_id:
             return type_name
-        if type_name in self._METAL_SCALAR_VECTOR_TYPES or (
-            structs_by_name is not None and type_name in structs_by_name
-        ):
+        if type_name in self._METAL_SCALAR_VECTOR_TYPES:
             return self._normalize_inferred_type(type_name)
+        aggregate_type = self._inferred_aggregate_type(type_name, structs_by_name)
+        if aggregate_type is not None:
+            return aggregate_type
         return None
 
     def _infer_functor_construction_call_type(

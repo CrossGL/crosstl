@@ -1,0 +1,1766 @@
+{
+  "schemaVersion": 1,
+  "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+  "source": "mlx/backend/metal/kernels/unary.metal",
+  "sourceSha256": "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b",
+  "target": "metal",
+  "selection": {
+    "entryPrefix": "v_",
+    "templateName": "unary_v",
+    "elementCount": 1,
+    "shape": "scalar",
+    "entryCount": 183,
+    "operatorCount": 37,
+    "typePairCount": 20,
+    "familyCount": 16
+  },
+  "classifications": {
+    "operators": {
+      "Abs": 13,
+      "ArcCos": 4,
+      "ArcCosh": 3,
+      "ArcSin": 4,
+      "ArcSinh": 3,
+      "ArcTan": 4,
+      "ArcTanh": 3,
+      "BitwiseInvert": 8,
+      "Ceil": 12,
+      "Conjugate": 1,
+      "Cos": 4,
+      "Cosh": 4,
+      "Erf": 3,
+      "ErfInv": 3,
+      "Exp": 4,
+      "Expm1": 3,
+      "Floor": 12,
+      "FromFP8": 3,
+      "Imag": 1,
+      "Log": 4,
+      "Log10": 4,
+      "Log1p": 4,
+      "Log2": 4,
+      "LogicalNot": 1,
+      "Negative": 13,
+      "Real": 1,
+      "Round": 4,
+      "Rsqrt": 4,
+      "Sigmoid": 3,
+      "Sign": 13,
+      "Sin": 4,
+      "Sinh": 4,
+      "Sqrt": 4,
+      "Square": 13,
+      "Tan": 4,
+      "Tanh": 4,
+      "ToFP8": 3
+    },
+    "typePairs": {
+      "bfloat16_t->bfloat16_t": 30,
+      "bfloat16_t->uint8_t": 1,
+      "bool->bool": 7,
+      "complex64_t->complex64_t": 22,
+      "complex64_t->float": 2,
+      "float->float": 30,
+      "float->uint8_t": 1,
+      "float16_t->uint8_t": 1,
+      "half->half": 30,
+      "int16_t->int16_t": 7,
+      "int32_t->int32_t": 7,
+      "int64_t->int64_t": 7,
+      "int8_t->int8_t": 7,
+      "uint16_t->uint16_t": 7,
+      "uint32_t->uint32_t": 7,
+      "uint64_t->uint64_t": 7,
+      "uint8_t->bfloat16_t": 1,
+      "uint8_t->float": 1,
+      "uint8_t->float16_t": 1,
+      "uint8_t->uint8_t": 7
+    },
+    "families": {
+      "bfloat16-same-type": 30,
+      "boolean-same-type": 7,
+      "complex64-projection": 2,
+      "complex64-same-type": 22,
+      "float16-same-type": 30,
+      "float32-same-type": 30,
+      "fp8-decode": 3,
+      "fp8-encode": 3,
+      "int16-same-type": 7,
+      "int32-same-type": 7,
+      "int64-same-type": 7,
+      "int8-same-type": 7,
+      "uint16-same-type": 7,
+      "uint32-same-type": 7,
+      "uint64-same-type": 7,
+      "uint8-same-type": 7
+    }
+  },
+  "artifactContract": {
+    "artifactCountPerEntry": 1,
+    "specializationCountPerArtifact": 1,
+    "unsupportedSpecializationCount": 0,
+    "selectedOperatorImplementationCountPerArtifact": 1,
+    "unselectedOperatorBodiesPruned": true,
+    "reachableKernelCountPerArtifact": 1,
+    "provenance": "entry-scoped-translate",
+    "intermediate": "crossgl",
+    "hostInterfaceStatus": "ready",
+    "hostResourceCountPerArtifact": 3,
+    "hostDispatchWorkgroupSize": [
+      1,
+      1,
+      1
+    ],
+    "nativeCompiler": "xcrun -sdk macosx metal -c",
+    "requiresNonemptyAirArtifact": true
+  },
+  "entries": [
+    {
+      "entryPoint": "v_Absbfloat16bfloat16",
+      "operator": "Abs",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "53136f2784bb88fe7ab2f086507dfb91017e32b29b3ae95d3332e1b8406ae988",
+      "sizeBytes": 1047
+    },
+    {
+      "entryPoint": "v_Absbool_bool_",
+      "operator": "Abs",
+      "inputType": "bool",
+      "outputType": "bool",
+      "family": "boolean-same-type",
+      "sha256": "5b3c33cdb95d59093bb3a4c8196d28bf8deebff9a518cefc730e4948d5b3f135",
+      "sizeBytes": 1027
+    },
+    {
+      "entryPoint": "v_Abscomplex64complex64",
+      "operator": "Abs",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "cc8baeab216d272bd21e5f0a6b79aee9c60f1bc7682da291e062fb4f7a54bdb7",
+      "sizeBytes": 1455
+    },
+    {
+      "entryPoint": "v_Absfloat16float16",
+      "operator": "Abs",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "02821b00e132de2dd9df2dec445e92e529d5e43103db51e829a91e3ec0250abf",
+      "sizeBytes": 976
+    },
+    {
+      "entryPoint": "v_Absfloat32float32",
+      "operator": "Abs",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "1c225a5efe013e30a3022926c09fcf951b34e478848b2f38559f81f0912ae967",
+      "sizeBytes": 989
+    },
+    {
+      "entryPoint": "v_Absint16int16",
+      "operator": "Abs",
+      "inputType": "int16_t",
+      "outputType": "int16_t",
+      "family": "int16-same-type",
+      "sha256": "42e782e63981cb993c0b9ee0920b6b17cd9d9295614def5038c90503cf722d8e",
+      "sizeBytes": 979
+    },
+    {
+      "entryPoint": "v_Absint32int32",
+      "operator": "Abs",
+      "inputType": "int32_t",
+      "outputType": "int32_t",
+      "family": "int32-same-type",
+      "sha256": "cf72fd49afa3a38297bb8406b3ab41e4772eb678eec2c99f2dc75cf4a04fb5b4",
+      "sizeBytes": 979
+    },
+    {
+      "entryPoint": "v_Absint64int64",
+      "operator": "Abs",
+      "inputType": "int64_t",
+      "outputType": "int64_t",
+      "family": "int64-same-type",
+      "sha256": "c41b5f2862434c016cd51dc3f55985ceeeebbc79625b9722fb1483504db9f4c1",
+      "sizeBytes": 1011
+    },
+    {
+      "entryPoint": "v_Absint8int8",
+      "operator": "Abs",
+      "inputType": "int8_t",
+      "outputType": "int8_t",
+      "family": "int8-same-type",
+      "sha256": "145da7d3aa103ee2f74db11bb6051b49b91c098d33e11e4f93e3bf16f0ed65e9",
+      "sizeBytes": 972
+    },
+    {
+      "entryPoint": "v_Absuint16uint16",
+      "operator": "Abs",
+      "inputType": "uint16_t",
+      "outputType": "uint16_t",
+      "family": "uint16-same-type",
+      "sha256": "dd647a8d10add2df7640961b70f68d35c5213919c73eec1c4619b8b7f2a0e501",
+      "sizeBytes": 1029
+    },
+    {
+      "entryPoint": "v_Absuint32uint32",
+      "operator": "Abs",
+      "inputType": "uint32_t",
+      "outputType": "uint32_t",
+      "family": "uint32-same-type",
+      "sha256": "7dd737eaa4cabac865d1ec748462347d80756ea94cb23095ceb24a68e066be08",
+      "sizeBytes": 1029
+    },
+    {
+      "entryPoint": "v_Absuint64uint64",
+      "operator": "Abs",
+      "inputType": "uint64_t",
+      "outputType": "uint64_t",
+      "family": "uint64-same-type",
+      "sha256": "fb42a7a566947bd9df38a039cdb9f26b37a6c12201f1efd31bb621bd123968d5",
+      "sizeBytes": 1061
+    },
+    {
+      "entryPoint": "v_Absuint8uint8",
+      "operator": "Abs",
+      "inputType": "uint8_t",
+      "outputType": "uint8_t",
+      "family": "uint8-same-type",
+      "sha256": "26504db448b311fd23569f3ae25240bd1c6effaae05725409e506c226a7a1d0e",
+      "sizeBytes": 1027
+    },
+    {
+      "entryPoint": "v_ArcCosbfloat16bfloat16",
+      "operator": "ArcCos",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "c1482497f72e5968e113b5ffd0a2e591a6c4f6212cb073a3ecb8aeb199574503",
+      "sizeBytes": 2793
+    },
+    {
+      "entryPoint": "v_ArcCoscomplex64complex64",
+      "operator": "ArcCos",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "9e4e60ba96ae5742b5c4214f1e85c808011d3cdb729edb09e0f5e7015d179d9d",
+      "sizeBytes": 3772
+    },
+    {
+      "entryPoint": "v_ArcCosfloat16float16",
+      "operator": "ArcCos",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "935a8e3c8dbda07038d0ee9bacf28bf100d363c218181746b6f080c5d3169163",
+      "sizeBytes": 2729
+    },
+    {
+      "entryPoint": "v_ArcCosfloat32float32",
+      "operator": "ArcCos",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b",
+      "sizeBytes": 2742
+    },
+    {
+      "entryPoint": "v_ArcCoshbfloat16bfloat16",
+      "operator": "ArcCosh",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "49578f870188313486f69dadb87115e38e79e90e6720cb4f9d3457ece80c96e4",
+      "sizeBytes": 1078
+    },
+    {
+      "entryPoint": "v_ArcCoshfloat16float16",
+      "operator": "ArcCosh",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "166e326c54a02862ef2a515db0eab7b84285c083f7cfd2938069df8deace1506",
+      "sizeBytes": 1014
+    },
+    {
+      "entryPoint": "v_ArcCoshfloat32float32",
+      "operator": "ArcCosh",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "dfea065f445a672ac49014c81df90799e533a4435e0ca2ad6548f15236e8a86b",
+      "sizeBytes": 1027
+    },
+    {
+      "entryPoint": "v_ArcSinbfloat16bfloat16",
+      "operator": "ArcSin",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "190098cb3887c797325b93c099e6d571f615870e971ce3f09d03cb91e35f2e49",
+      "sizeBytes": 1068
+    },
+    {
+      "entryPoint": "v_ArcSincomplex64complex64",
+      "operator": "ArcSin",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "0ce5aa77e4cfe5f5c87e58ffe04ce3cf76f5ada1c2b5c129352b55070438e30c",
+      "sizeBytes": 3772
+    },
+    {
+      "entryPoint": "v_ArcSinfloat16float16",
+      "operator": "ArcSin",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "a54fec34189e360e26c8c972fef37a9d25d1560e4b6181eaf2308950c392b0b5",
+      "sizeBytes": 1004
+    },
+    {
+      "entryPoint": "v_ArcSinfloat32float32",
+      "operator": "ArcSin",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "16fb2dc2b32d43e79ef7ef5412a976a643af0983f1919c14fb15cd9771115c67",
+      "sizeBytes": 1017
+    },
+    {
+      "entryPoint": "v_ArcSinhbfloat16bfloat16",
+      "operator": "ArcSinh",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "daa0360cf9aa155b5302a0d0c971ea3657fa2f8135d3ba6ef3a2dc24b12b0b4d",
+      "sizeBytes": 1078
+    },
+    {
+      "entryPoint": "v_ArcSinhfloat16float16",
+      "operator": "ArcSinh",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "ff89ec6aed97361b622838cc0e6ed9f662c4b01a9a6ae410fe69e272e5757f50",
+      "sizeBytes": 1014
+    },
+    {
+      "entryPoint": "v_ArcSinhfloat32float32",
+      "operator": "ArcSinh",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "95989af274be41c1b5e8584198dcdc978eb8d9d37b05319f03d1dc79f1e16e4b",
+      "sizeBytes": 1027
+    },
+    {
+      "entryPoint": "v_ArcTanbfloat16bfloat16",
+      "operator": "ArcTan",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "3e39a6356a7190666335ae34a9bdc00981e2dacf62064118416a20141e9aa262",
+      "sizeBytes": 1068
+    },
+    {
+      "entryPoint": "v_ArcTancomplex64complex64",
+      "operator": "ArcTan",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "3338f78247b23b8916100554286975424848aca9791f0bab275cf9a6af5ef5a4",
+      "sizeBytes": 3910
+    },
+    {
+      "entryPoint": "v_ArcTanfloat16float16",
+      "operator": "ArcTan",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "2f43f2f6091f6b68ef649de87ea6de2e3ba62b43f0540e9db37831cf44724a0d",
+      "sizeBytes": 1004
+    },
+    {
+      "entryPoint": "v_ArcTanfloat32float32",
+      "operator": "ArcTan",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "525caa32b75facb1f267acd8bdab88146aaea9408c1099c489d8796f567d1016",
+      "sizeBytes": 1017
+    },
+    {
+      "entryPoint": "v_ArcTanhbfloat16bfloat16",
+      "operator": "ArcTanh",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "58e9fe21f49566fe25398761f46cd51b078570c247d2c14ff5625c5355b4e598",
+      "sizeBytes": 1078
+    },
+    {
+      "entryPoint": "v_ArcTanhfloat16float16",
+      "operator": "ArcTanh",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "bce4b2edb7201de6b2f58b740f8a5ebc623ef1fc55009a7b33a9670326865ca0",
+      "sizeBytes": 1014
+    },
+    {
+      "entryPoint": "v_ArcTanhfloat32float32",
+      "operator": "ArcTanh",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "5915c6c9998dee80281c91f4ce1831fc690963f78b6d34a94643c2bfafc1b2af",
+      "sizeBytes": 1027
+    },
+    {
+      "entryPoint": "v_BitwiseInvertint16int16",
+      "operator": "BitwiseInvert",
+      "inputType": "int16_t",
+      "outputType": "int16_t",
+      "family": "int16-same-type",
+      "sha256": "235b836215def4e23d0fc1925ddcfd5ea7401e8c6ba701ed4fd438f8dc08b3a6",
+      "sizeBytes": 1065
+    },
+    {
+      "entryPoint": "v_BitwiseInvertint32int32",
+      "operator": "BitwiseInvert",
+      "inputType": "int32_t",
+      "outputType": "int32_t",
+      "family": "int32-same-type",
+      "sha256": "cd5f465c417086feaf00b182cf21601315199aefbaaa32918a924c847132fe14",
+      "sizeBytes": 1065
+    },
+    {
+      "entryPoint": "v_BitwiseInvertint64int64",
+      "operator": "BitwiseInvert",
+      "inputType": "int64_t",
+      "outputType": "int64_t",
+      "family": "int64-same-type",
+      "sha256": "6ebd2d8e691281a108521bae0d8b2e78c5478693fac5b85eeca7cf801b220023",
+      "sizeBytes": 1097
+    },
+    {
+      "entryPoint": "v_BitwiseInvertint8int8",
+      "operator": "BitwiseInvert",
+      "inputType": "int8_t",
+      "outputType": "int8_t",
+      "family": "int8-same-type",
+      "sha256": "6d3f941fb5f96badf4c57b80648f503f914a0e2e8e0b7b1d44527aa6667bc159",
+      "sizeBytes": 1058
+    },
+    {
+      "entryPoint": "v_BitwiseInvertuint16uint16",
+      "operator": "BitwiseInvert",
+      "inputType": "uint16_t",
+      "outputType": "uint16_t",
+      "family": "uint16-same-type",
+      "sha256": "e5e1e6f1d208eab029739cd8e705e5cedc5f0e1fb8cb40e0096b045a8fe17b83",
+      "sizeBytes": 1080
+    },
+    {
+      "entryPoint": "v_BitwiseInvertuint32uint32",
+      "operator": "BitwiseInvert",
+      "inputType": "uint32_t",
+      "outputType": "uint32_t",
+      "family": "uint32-same-type",
+      "sha256": "9ae6e78e1adc04c209fe7d6c3cde0b7948e8956aaa65110e934f4d572938ecdd",
+      "sizeBytes": 1080
+    },
+    {
+      "entryPoint": "v_BitwiseInvertuint64uint64",
+      "operator": "BitwiseInvert",
+      "inputType": "uint64_t",
+      "outputType": "uint64_t",
+      "family": "uint64-same-type",
+      "sha256": "beecbd278580241db25d32e9cbc948fc3e1a3dde51e4268346d3af9a02e0cccd",
+      "sizeBytes": 1112
+    },
+    {
+      "entryPoint": "v_BitwiseInvertuint8uint8",
+      "operator": "BitwiseInvert",
+      "inputType": "uint8_t",
+      "outputType": "uint8_t",
+      "family": "uint8-same-type",
+      "sha256": "778ce920edce963f91ecdf649444cc8ad54c515481c6dad246cdf5d7175be1b8",
+      "sizeBytes": 1073
+    },
+    {
+      "entryPoint": "v_Ceilbfloat16bfloat16",
+      "operator": "Ceil",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "74b9efb4f7a9caa45a6e077b6aa170db10ec88f2120f18406de3fec6c01f37a7",
+      "sizeBytes": 1050
+    },
+    {
+      "entryPoint": "v_Ceilbool_bool_",
+      "operator": "Ceil",
+      "inputType": "bool",
+      "outputType": "bool",
+      "family": "boolean-same-type",
+      "sha256": "6e5c4df8548d4ea287fc64a6d6a2e43655ca0ec222197be85f3c265cef810a35",
+      "sizeBytes": 1036
+    },
+    {
+      "entryPoint": "v_Ceilfloat16float16",
+      "operator": "Ceil",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "66380754ab105c6843bd900932229eb8722d218dda283c4a45d6586cce286976",
+      "sizeBytes": 986
+    },
+    {
+      "entryPoint": "v_Ceilfloat32float32",
+      "operator": "Ceil",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "b687d1a08d534d44b6cb7e8f38e18f858239077597e1ef209224e3c5e1428d50",
+      "sizeBytes": 999
+    },
+    {
+      "entryPoint": "v_Ceilint16int16",
+      "operator": "Ceil",
+      "inputType": "int16_t",
+      "outputType": "int16_t",
+      "family": "int16-same-type",
+      "sha256": "c8eb2b00abc83f0d7ba903f2a197cfd74a55903955fd0d8896457874fa24ad44",
+      "sizeBytes": 1028
+    },
+    {
+      "entryPoint": "v_Ceilint32int32",
+      "operator": "Ceil",
+      "inputType": "int32_t",
+      "outputType": "int32_t",
+      "family": "int32-same-type",
+      "sha256": "87b46e5e41de354e6a78064480427e5f8220ef82f49c5d34a8f0b68c0db5b383",
+      "sizeBytes": 1028
+    },
+    {
+      "entryPoint": "v_Ceilint64int64",
+      "operator": "Ceil",
+      "inputType": "int64_t",
+      "outputType": "int64_t",
+      "family": "int64-same-type",
+      "sha256": "071124eee8bc2d07b486d737f1db9b007cb39b259bf1b492fc776031e699abe7",
+      "sizeBytes": 1060
+    },
+    {
+      "entryPoint": "v_Ceilint8int8",
+      "operator": "Ceil",
+      "inputType": "int8_t",
+      "outputType": "int8_t",
+      "family": "int8-same-type",
+      "sha256": "fd442950151412967bc7bb612989a24d0f1e08e9a015b0df00af344cb3e774f5",
+      "sizeBytes": 1026
+    },
+    {
+      "entryPoint": "v_Ceiluint16uint16",
+      "operator": "Ceil",
+      "inputType": "uint16_t",
+      "outputType": "uint16_t",
+      "family": "uint16-same-type",
+      "sha256": "ec9491b9f72a7d0fa1a7fb902dcaa06fefc878380969583aa1ec28910da0d24e",
+      "sizeBytes": 1038
+    },
+    {
+      "entryPoint": "v_Ceiluint32uint32",
+      "operator": "Ceil",
+      "inputType": "uint32_t",
+      "outputType": "uint32_t",
+      "family": "uint32-same-type",
+      "sha256": "27752af8ddefe7ff59cad255809fe8cc8cca7f214a2caae8acc09be1d00f5539",
+      "sizeBytes": 1038
+    },
+    {
+      "entryPoint": "v_Ceiluint64uint64",
+      "operator": "Ceil",
+      "inputType": "uint64_t",
+      "outputType": "uint64_t",
+      "family": "uint64-same-type",
+      "sha256": "7a22e67a64747378b60111d88f85d5491591d266d7811407d309c6c7e0e36c8d",
+      "sizeBytes": 1070
+    },
+    {
+      "entryPoint": "v_Ceiluint8uint8",
+      "operator": "Ceil",
+      "inputType": "uint8_t",
+      "outputType": "uint8_t",
+      "family": "uint8-same-type",
+      "sha256": "35646c7a4601c751a67584dc63468f19abda042ebb9c67a64353bdc392b0d467",
+      "sizeBytes": 1036
+    },
+    {
+      "entryPoint": "v_Conjugatecomplex64complex64",
+      "operator": "Conjugate",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "400215f288352f092076f7d82c64e23b09226145aa234a8061cc2bd84859e2c8",
+      "sizeBytes": 1392
+    },
+    {
+      "entryPoint": "v_Cosbfloat16bfloat16",
+      "operator": "Cos",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "3521f4f5f0c7d5b4b8ef0f345f66a8b3c8004d0b4f8233c116a4e80f7d0870c9",
+      "sizeBytes": 1040
+    },
+    {
+      "entryPoint": "v_Coscomplex64complex64",
+      "operator": "Cos",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "30398938d34901be2cf1d353c1d5b89e117b13c34e563f6dabb35bf482aded2b",
+      "sizeBytes": 1378
+    },
+    {
+      "entryPoint": "v_Cosfloat16float16",
+      "operator": "Cos",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "3997eafd847254da0eb8e4535acf1b0bc692462f924cd03d21142d56461d1abd",
+      "sizeBytes": 976
+    },
+    {
+      "entryPoint": "v_Cosfloat32float32",
+      "operator": "Cos",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "254204b39a4da7277372aa44ed7b0c7ae52f179d108d9312e10319d4eb841bfb",
+      "sizeBytes": 989
+    },
+    {
+      "entryPoint": "v_Coshbfloat16bfloat16",
+      "operator": "Cosh",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "448d8b9db7a6fe3883af79576eda01194687cdafd3077b132234a4a159b3abaa",
+      "sizeBytes": 1050
+    },
+    {
+      "entryPoint": "v_Coshcomplex64complex64",
+      "operator": "Cosh",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "660c5e901b6e27718e74660ffe3ffa72b33b0693e588afa83a1327d45673bac2",
+      "sizeBytes": 1386
+    },
+    {
+      "entryPoint": "v_Coshfloat16float16",
+      "operator": "Cosh",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "0aeba5e8b1b3c53a8d9bd080c19b46a617987d57d8c91ab268f9a88c4d4a010f",
+      "sizeBytes": 986
+    },
+    {
+      "entryPoint": "v_Coshfloat32float32",
+      "operator": "Cosh",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "70c16dd91be3aca1b54e88af72a150de09f34990b17bb99520b2839b613f7c58",
+      "sizeBytes": 999
+    },
+    {
+      "entryPoint": "v_ErfInvbfloat16bfloat16",
+      "operator": "ErfInv",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "118001d7dcbd9b71748c6f94bf58e99705689499f54465f9ed41937117e23df1",
+      "sizeBytes": 1937
+    },
+    {
+      "entryPoint": "v_ErfInvfloat16float16",
+      "operator": "ErfInv",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "875634fd61b358daa4f23620b220a91975f736547c5c3b7f92c988259c35b9c2",
+      "sizeBytes": 1879
+    },
+    {
+      "entryPoint": "v_ErfInvfloat32float32",
+      "operator": "ErfInv",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "9eb863c7ebf468b07780d986463d6434d925a5ec7dabf01da18721deb82fe83c",
+      "sizeBytes": 1893
+    },
+    {
+      "entryPoint": "v_Erfbfloat16bfloat16",
+      "operator": "Erf",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "a1458e02931755e82f704f8d63489d4033a8aef7e9a1bf1cd9ce4686b18f871c",
+      "sizeBytes": 2751
+    },
+    {
+      "entryPoint": "v_Erffloat16float16",
+      "operator": "Erf",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "8dffc61baa71b6ca86294c44fa7e70efb89996ca7cab3edcd748257bfe78c702",
+      "sizeBytes": 2693
+    },
+    {
+      "entryPoint": "v_Erffloat32float32",
+      "operator": "Erf",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "30ca7a972cf75191160decadc7c0b02abad90bc3ec9342c5daf914dd90aa4831",
+      "sizeBytes": 2707
+    },
+    {
+      "entryPoint": "v_Expbfloat16bfloat16",
+      "operator": "Exp",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "51db54dcfd424272139e12ae3617538323041a47fa3d73cda5164cc432b76fb1",
+      "sizeBytes": 1040
+    },
+    {
+      "entryPoint": "v_Expcomplex64complex64",
+      "operator": "Exp",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "25fc91def52118f7f314394bb4cd4c21425dcffe6ab84fed3d36fc99c281afbf",
+      "sizeBytes": 3665
+    },
+    {
+      "entryPoint": "v_Expfloat16float16",
+      "operator": "Exp",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "1d509710202a7e6983a7817b7d24d437928672320389a550be6644fc3182dd6f",
+      "sizeBytes": 976
+    },
+    {
+      "entryPoint": "v_Expfloat32float32",
+      "operator": "Exp",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "ab5207445d620502e66f8a4d215b423c5d817e365c69a3a7569566076e4a96e9",
+      "sizeBytes": 989
+    },
+    {
+      "entryPoint": "v_Expm1bfloat16bfloat16",
+      "operator": "Expm1",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "03268bea1e03e1083823719ee190d4fc22dab1739eae3f6f538b705b37f19664",
+      "sizeBytes": 2047
+    },
+    {
+      "entryPoint": "v_Expm1float16float16",
+      "operator": "Expm1",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "32bcccdaf4dd94e0a41f249e9ac987b1a372efb3adb42e74a1cae8bc7d1d9859",
+      "sizeBytes": 1989
+    },
+    {
+      "entryPoint": "v_Expm1float32float32",
+      "operator": "Expm1",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "4cd6bc9a9bd8937eed1dc11a71ec65d00b23ad6f455f5f3e5c27a7cca890dbc8",
+      "sizeBytes": 2003
+    },
+    {
+      "entryPoint": "v_Floorbfloat16bfloat16",
+      "operator": "Floor",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "43eb2d74d3ff17ae4d11c59e58128236675809f52be09099caf34c0728a6ca4b",
+      "sizeBytes": 1060
+    },
+    {
+      "entryPoint": "v_Floorbool_bool_",
+      "operator": "Floor",
+      "inputType": "bool",
+      "outputType": "bool",
+      "family": "boolean-same-type",
+      "sha256": "fdf86d202102762c157c9fab5d58b20d6802979fd28998e65d1afafccd73263b",
+      "sizeBytes": 1045
+    },
+    {
+      "entryPoint": "v_Floorfloat16float16",
+      "operator": "Floor",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "ef602bfa5bd3cc1c3aec485db0835f9928186bdfb48722622242c4c5374d03d7",
+      "sizeBytes": 996
+    },
+    {
+      "entryPoint": "v_Floorfloat32float32",
+      "operator": "Floor",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "409df915fc3869066df9c2b9b127fde6ce16a35ec2bcc7ead07890e40f623188",
+      "sizeBytes": 1009
+    },
+    {
+      "entryPoint": "v_Floorint16int16",
+      "operator": "Floor",
+      "inputType": "int16_t",
+      "outputType": "int16_t",
+      "family": "int16-same-type",
+      "sha256": "c15110cedc6abce5b252e2b0c0d3618a5879f9f1b319067656ab20a1b3242642",
+      "sizeBytes": 1037
+    },
+    {
+      "entryPoint": "v_Floorint32int32",
+      "operator": "Floor",
+      "inputType": "int32_t",
+      "outputType": "int32_t",
+      "family": "int32-same-type",
+      "sha256": "b067163141042a0084e8b7fa614eda25d0a5d91e6b0728fef20b57dfffa14b50",
+      "sizeBytes": 1037
+    },
+    {
+      "entryPoint": "v_Floorint64int64",
+      "operator": "Floor",
+      "inputType": "int64_t",
+      "outputType": "int64_t",
+      "family": "int64-same-type",
+      "sha256": "2f292ed46c55aca35d6f640ebd1c10646c70f94c688dd7fd6057ff8ba0700b2e",
+      "sizeBytes": 1069
+    },
+    {
+      "entryPoint": "v_Floorint8int8",
+      "operator": "Floor",
+      "inputType": "int8_t",
+      "outputType": "int8_t",
+      "family": "int8-same-type",
+      "sha256": "2c1ddae4f0aab9f01531d24d797ebc59fd72cc6c31611ed97ad05745383038f5",
+      "sizeBytes": 1035
+    },
+    {
+      "entryPoint": "v_Flooruint16uint16",
+      "operator": "Floor",
+      "inputType": "uint16_t",
+      "outputType": "uint16_t",
+      "family": "uint16-same-type",
+      "sha256": "d36cc54590c32f1933c2cbadd7e318ec9eb4c642e7c6717ae355cffa1ccf108a",
+      "sizeBytes": 1047
+    },
+    {
+      "entryPoint": "v_Flooruint32uint32",
+      "operator": "Floor",
+      "inputType": "uint32_t",
+      "outputType": "uint32_t",
+      "family": "uint32-same-type",
+      "sha256": "744e9303327004bc9859cda1dc43c7f00b667e86ddc1f83f1bfc42a6e51c6cc0",
+      "sizeBytes": 1047
+    },
+    {
+      "entryPoint": "v_Flooruint64uint64",
+      "operator": "Floor",
+      "inputType": "uint64_t",
+      "outputType": "uint64_t",
+      "family": "uint64-same-type",
+      "sha256": "9052f4a176a9de77933299bdf04fb7ce1a1bdec404eed90c0638787910ac6401",
+      "sizeBytes": 1079
+    },
+    {
+      "entryPoint": "v_Flooruint8uint8",
+      "operator": "Floor",
+      "inputType": "uint8_t",
+      "outputType": "uint8_t",
+      "family": "uint8-same-type",
+      "sha256": "ee31c1de79696fc8f99bd215ad1f30bd8b3471288c779d78660262377ac69793",
+      "sizeBytes": 1045
+    },
+    {
+      "entryPoint": "v_FromFP8uint8bfloat16",
+      "operator": "FromFP8",
+      "inputType": "uint8_t",
+      "outputType": "bfloat16_t",
+      "family": "fp8-decode",
+      "sha256": "b6017e5e572bfc682831059c76ddede22dca040230479a9078b5d2bd58c0c710",
+      "sizeBytes": 1425
+    },
+    {
+      "entryPoint": "v_FromFP8uint8float16",
+      "operator": "FromFP8",
+      "inputType": "uint8_t",
+      "outputType": "float16_t",
+      "family": "fp8-decode",
+      "sha256": "69f36458d0e90702b9c5f7b92d829e3cb285bb0a7fe022b9809259dba9296af1",
+      "sizeBytes": 1418
+    },
+    {
+      "entryPoint": "v_FromFP8uint8float32",
+      "operator": "FromFP8",
+      "inputType": "uint8_t",
+      "outputType": "float",
+      "family": "fp8-decode",
+      "sha256": "fbdc366da7b8851c4ebb3e36f8fa58d776fe950661355c6ea670cc35679d436f",
+      "sizeBytes": 1421
+    },
+    {
+      "entryPoint": "v_Imagcomplex64float32",
+      "operator": "Imag",
+      "inputType": "complex64_t",
+      "outputType": "float",
+      "family": "complex64-projection",
+      "sha256": "eb9b00ccd4f86358343bbaa730655b10b18f0be13787b847feb8d7578312bced",
+      "sizeBytes": 1055
+    },
+    {
+      "entryPoint": "v_Log10bfloat16bfloat16",
+      "operator": "Log10",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "1d8d7aaef577563ad73e1bf57ad30efc92fd2f635eb1b3322d91dd9ad5e4a357",
+      "sizeBytes": 1060
+    },
+    {
+      "entryPoint": "v_Log10complex64complex64",
+      "operator": "Log10",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "f89aa27a7be425215d598582b94180c634e55962c3c8193b218549ff41b54512",
+      "sizeBytes": 2172
+    },
+    {
+      "entryPoint": "v_Log10float16float16",
+      "operator": "Log10",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "f28883a15340af86e0fc82da7769213f6e619dcba25abc7b6d7c5987fcb6a3ae",
+      "sizeBytes": 996
+    },
+    {
+      "entryPoint": "v_Log10float32float32",
+      "operator": "Log10",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "e6add6cf4944a842df04d993fefa3d3b102cb8f8c05060c57aa3130fa5c8797b",
+      "sizeBytes": 1009
+    },
+    {
+      "entryPoint": "v_Log1pbfloat16bfloat16",
+      "operator": "Log1p",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "db738ee035eccb4277998a7978beaeb4291811b9f9c33b66deea6e13c0a5a59e",
+      "sizeBytes": 1363
+    },
+    {
+      "entryPoint": "v_Log1pcomplex64complex64",
+      "operator": "Log1p",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "04f7048b0e79a20c4823eb00958f784d8e524053b54036402b30dc25fa1f44a5",
+      "sizeBytes": 2215
+    },
+    {
+      "entryPoint": "v_Log1pfloat16float16",
+      "operator": "Log1p",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "1c57aa38b61672a7bfb88429eee3f33eeb30b0ca85a17762fadd06dfbf3e92b4",
+      "sizeBytes": 1266
+    },
+    {
+      "entryPoint": "v_Log1pfloat32float32",
+      "operator": "Log1p",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "23e3bf52d386fe4a78fa7db0d44ce9aee4b884da7afef88a999d0c0850554267",
+      "sizeBytes": 1279
+    },
+    {
+      "entryPoint": "v_Log2bfloat16bfloat16",
+      "operator": "Log2",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "6af1fbdd472154d803925df545c598cc7e4230fb253c583eb8e39d3d5138d4e7",
+      "sizeBytes": 1050
+    },
+    {
+      "entryPoint": "v_Log2complex64complex64",
+      "operator": "Log2",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "9ef1c1b32694bea458b0c09901fab016dc1559ffeeb6833422c197e65b6b2507",
+      "sizeBytes": 2161
+    },
+    {
+      "entryPoint": "v_Log2float16float16",
+      "operator": "Log2",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "4af4e012eece305c492b83e5fd00248f761e886d7bffedfc82bfbf83467bc979",
+      "sizeBytes": 986
+    },
+    {
+      "entryPoint": "v_Log2float32float32",
+      "operator": "Log2",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "fe12519ca0749b9f4c362572faed177c87aa903f6181edf7ad5311730e6e45ad",
+      "sizeBytes": 999
+    },
+    {
+      "entryPoint": "v_Logbfloat16bfloat16",
+      "operator": "Log",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "f3ed7aba975244f0f27976f3dbfbf997a0356597e89330d363e459e51dfcda61",
+      "sizeBytes": 1040
+    },
+    {
+      "entryPoint": "v_Logcomplex64complex64",
+      "operator": "Log",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "a8836c6b4710dff1d21628cfe8ae54ece9fe6602109dab18979cb8e406e5839f",
+      "sizeBytes": 1798
+    },
+    {
+      "entryPoint": "v_Logfloat16float16",
+      "operator": "Log",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "649d20e3a525394315087e098b97980888cba4e30e0cea9f802be1b38641386e",
+      "sizeBytes": 976
+    },
+    {
+      "entryPoint": "v_Logfloat32float32",
+      "operator": "Log",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "770b0befc6b8970e08e205ffff7d2f8be3fe7e303cb6882ca86d32627752b42a",
+      "sizeBytes": 989
+    },
+    {
+      "entryPoint": "v_LogicalNotbool_bool_",
+      "operator": "LogicalNot",
+      "inputType": "bool",
+      "outputType": "bool",
+      "family": "boolean-same-type",
+      "sha256": "ff648f7a57b8a603a5027b06e5b7d371981935d8a7c1d25f808b2830fe47232d",
+      "sizeBytes": 1031
+    },
+    {
+      "entryPoint": "v_Negativebfloat16bfloat16",
+      "operator": "Negative",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "05abe5918ab76cabb9aa141e55f0af7a0c1dd6061f3bbeb3187fa629b61aaba0",
+      "sizeBytes": 1081
+    },
+    {
+      "entryPoint": "v_Negativebool_bool_",
+      "operator": "Negative",
+      "inputType": "bool",
+      "outputType": "bool",
+      "family": "boolean-same-type",
+      "sha256": "57e016ecc33803baf28ffccf260f7eea34b575cb4174521ee0351671ba18b898",
+      "sizeBytes": 1013
+    },
+    {
+      "entryPoint": "v_Negativecomplex64complex64",
+      "operator": "Negative",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "8f3018283c42a104c5339157371b46aae77d810fa3245d327dc303106638f976",
+      "sizeBytes": 1598
+    },
+    {
+      "entryPoint": "v_Negativefloat16float16",
+      "operator": "Negative",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "203dcd099e153fabd0c3234d7e84a85fe2d2d0f726605584101319f21b40118e",
+      "sizeBytes": 1017
+    },
+    {
+      "entryPoint": "v_Negativefloat32float32",
+      "operator": "Negative",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "29a647c06f40977101e3c50408e1118a440f322f38e23758f90266603686b05c",
+      "sizeBytes": 1030
+    },
+    {
+      "entryPoint": "v_Negativeint16int16",
+      "operator": "Negative",
+      "inputType": "int16_t",
+      "outputType": "int16_t",
+      "family": "int16-same-type",
+      "sha256": "dabd6e5c06be3ddf5c8b43fdd4b2c353a7f1fb4c20e32827a14a6a8fbf7f718c",
+      "sizeBytes": 1020
+    },
+    {
+      "entryPoint": "v_Negativeint32int32",
+      "operator": "Negative",
+      "inputType": "int32_t",
+      "outputType": "int32_t",
+      "family": "int32-same-type",
+      "sha256": "23fb800384b2cfb7bca02ee4ee2a15abc08acfec1f181e56ceed99a5cab2f3f7",
+      "sizeBytes": 1020
+    },
+    {
+      "entryPoint": "v_Negativeint64int64",
+      "operator": "Negative",
+      "inputType": "int64_t",
+      "outputType": "int64_t",
+      "family": "int64-same-type",
+      "sha256": "d1522c08c9d3742ec527ab4a84161179a02d9f7394590d8db19e9b59424e5474",
+      "sizeBytes": 1052
+    },
+    {
+      "entryPoint": "v_Negativeint8int8",
+      "operator": "Negative",
+      "inputType": "int8_t",
+      "outputType": "int8_t",
+      "family": "int8-same-type",
+      "sha256": "82e5905d1ad9acae70aa353a37e211be90131585af1719f376659cb44ffc501d",
+      "sizeBytes": 1013
+    },
+    {
+      "entryPoint": "v_Negativeuint16uint16",
+      "operator": "Negative",
+      "inputType": "uint16_t",
+      "outputType": "uint16_t",
+      "family": "uint16-same-type",
+      "sha256": "f380f9f00b53dd620929a7eb03beb3b432fb8a30b5e6e3a1ce7c94efb186dedb",
+      "sizeBytes": 1035
+    },
+    {
+      "entryPoint": "v_Negativeuint32uint32",
+      "operator": "Negative",
+      "inputType": "uint32_t",
+      "outputType": "uint32_t",
+      "family": "uint32-same-type",
+      "sha256": "7e47bc224bbba7a1235661174852c938cdda797ba270a64552ffefbe2f374d24",
+      "sizeBytes": 1035
+    },
+    {
+      "entryPoint": "v_Negativeuint64uint64",
+      "operator": "Negative",
+      "inputType": "uint64_t",
+      "outputType": "uint64_t",
+      "family": "uint64-same-type",
+      "sha256": "02cf3040c2dc1cebe4b6f5187962ca12575a4851c6c4a1983273dba2a5d9eca0",
+      "sizeBytes": 1067
+    },
+    {
+      "entryPoint": "v_Negativeuint8uint8",
+      "operator": "Negative",
+      "inputType": "uint8_t",
+      "outputType": "uint8_t",
+      "family": "uint8-same-type",
+      "sha256": "cf5c0d3b95c9772a7cae10b5ef1a7333f0b91687364b838b1bffd8c756358ac7",
+      "sizeBytes": 1028
+    },
+    {
+      "entryPoint": "v_Realcomplex64float32",
+      "operator": "Real",
+      "inputType": "complex64_t",
+      "outputType": "float",
+      "family": "complex64-projection",
+      "sha256": "7a004746f47c6af60e6240f53f6298a67b5156f09846f483976030a4879dde05",
+      "sizeBytes": 1055
+    },
+    {
+      "entryPoint": "v_Roundbfloat16bfloat16",
+      "operator": "Round",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "a6bc1f02008816e81c84829c924887e70f540c3f07d5772b189324f6e649a185",
+      "sizeBytes": 1059
+    },
+    {
+      "entryPoint": "v_Roundcomplex64complex64",
+      "operator": "Round",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "614590d6b2f667b1e5ddddb4575a87fe96f30323f65b35f4394d1ee1a946a797",
+      "sizeBytes": 1367
+    },
+    {
+      "entryPoint": "v_Roundfloat16float16",
+      "operator": "Round",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "f28c6dfd1680ebd9c5c1f9bb9f9427b2a7940fbffbdeb7678eac098a0b028549",
+      "sizeBytes": 995
+    },
+    {
+      "entryPoint": "v_Roundfloat32float32",
+      "operator": "Round",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "51a5152996626c057daabb9199d19f81c9a1cfe7d93a2533cee468772eee1206",
+      "sizeBytes": 1008
+    },
+    {
+      "entryPoint": "v_Rsqrtbfloat16bfloat16",
+      "operator": "Rsqrt",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "ade038b879627ed9a1c32ef797eb4fbb760f207f65490287a660259fed6c857c",
+      "sizeBytes": 1060
+    },
+    {
+      "entryPoint": "v_Rsqrtcomplex64complex64",
+      "operator": "Rsqrt",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "5eaddbbe5d5ac565fe336f45575b8493cb94f7405c40fcc7810a1c4ed02632c5",
+      "sizeBytes": 2644
+    },
+    {
+      "entryPoint": "v_Rsqrtfloat16float16",
+      "operator": "Rsqrt",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "d9253bf8e4d9db0864cb334e455887092adaa0265da774364d8746ef83ec7907",
+      "sizeBytes": 996
+    },
+    {
+      "entryPoint": "v_Rsqrtfloat32float32",
+      "operator": "Rsqrt",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "db5434e6844457c3e78e013bfaf139afaf63e29171a0d27ecd826a7b84948a48",
+      "sizeBytes": 1009
+    },
+    {
+      "entryPoint": "v_Sigmoidbfloat16bfloat16",
+      "operator": "Sigmoid",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "25d033df10755a2a34ba5bb2a246c02503ff28b7eb675b7da01847ae533cede7",
+      "sizeBytes": 1130
+    },
+    {
+      "entryPoint": "v_Sigmoidfloat16float16",
+      "operator": "Sigmoid",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "7d4790c08d2823845d4b0cd384fc8053941bdf529e4df7df4180a939723f9fd9",
+      "sizeBytes": 1059
+    },
+    {
+      "entryPoint": "v_Sigmoidfloat32float32",
+      "operator": "Sigmoid",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "2300101589b447614c6deff51b9fee39bd6c44e01f22f7a7b53a0da0ded0d27b",
+      "sizeBytes": 1073
+    },
+    {
+      "entryPoint": "v_Signbfloat16bfloat16",
+      "operator": "Sign",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "65b6982d181cbf1d2ae83da1d5b1dfe561cf6eeb936e88c9c59e49e64af4dbf5",
+      "sizeBytes": 1076
+    },
+    {
+      "entryPoint": "v_Signbool_bool_",
+      "operator": "Sign",
+      "inputType": "bool",
+      "outputType": "bool",
+      "family": "boolean-same-type",
+      "sha256": "c384cd6955f61a4b180f8f7b3f5b00934655a0c10c71e067e48b6353856a243c",
+      "sizeBytes": 1004
+    },
+    {
+      "entryPoint": "v_Signcomplex64complex64",
+      "operator": "Sign",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "8040b96f1502150fe548309a3b944ba2ded257d9d45982c8cc25828343b225a3",
+      "sizeBytes": 2674
+    },
+    {
+      "entryPoint": "v_Signfloat16float16",
+      "operator": "Sign",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "dff6b0aec7391458333f111c5d73700e7f1f581a29fa5702dedc97fbe39a26f6",
+      "sizeBytes": 1008
+    },
+    {
+      "entryPoint": "v_Signfloat32float32",
+      "operator": "Sign",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "f3804c200fd8f8dce96d5a63f6dbc71ccc36c8c5d39a80923105dfa83ac3ba3c",
+      "sizeBytes": 1023
+    },
+    {
+      "entryPoint": "v_Signint16int16",
+      "operator": "Sign",
+      "inputType": "int16_t",
+      "outputType": "int16_t",
+      "family": "int16-same-type",
+      "sha256": "2b9537510b83ad4a61f7576171b4061de9b77e80eb37326c772fbecbac8b6611",
+      "sizeBytes": 1009
+    },
+    {
+      "entryPoint": "v_Signint32int32",
+      "operator": "Sign",
+      "inputType": "int32_t",
+      "outputType": "int32_t",
+      "family": "int32-same-type",
+      "sha256": "81dbf6aee775badc6d0f5683d125caf2d03d063ef2b26967e05a3c79a60c3d61",
+      "sizeBytes": 1009
+    },
+    {
+      "entryPoint": "v_Signint64int64",
+      "operator": "Sign",
+      "inputType": "int64_t",
+      "outputType": "int64_t",
+      "family": "int64-same-type",
+      "sha256": "246bf41c34674f1caaf3d38fa6983bc42ec0038b45e1b1cb663e094966dd915c",
+      "sizeBytes": 1049
+    },
+    {
+      "entryPoint": "v_Signint8int8",
+      "operator": "Sign",
+      "inputType": "int8_t",
+      "outputType": "int8_t",
+      "family": "int8-same-type",
+      "sha256": "26cc0e2d164f9c7c17cc801843e959c7d6b99fa7df4abace85c5d36fdaec6edb",
+      "sizeBytes": 1002
+    },
+    {
+      "entryPoint": "v_Signuint16uint16",
+      "operator": "Sign",
+      "inputType": "uint16_t",
+      "outputType": "uint16_t",
+      "family": "uint16-same-type",
+      "sha256": "615c9680947c5be4915966dcf3500fad7880998fa10b07bad674d61c3bf3beee",
+      "sizeBytes": 1026
+    },
+    {
+      "entryPoint": "v_Signuint32uint32",
+      "operator": "Sign",
+      "inputType": "uint32_t",
+      "outputType": "uint32_t",
+      "family": "uint32-same-type",
+      "sha256": "96f0c1e54047ab3e20518c97b62fe87ad28cdfe464bd4d1e0ad65d5729c9aa46",
+      "sizeBytes": 2636
+    },
+    {
+      "entryPoint": "v_Signuint64uint64",
+      "operator": "Sign",
+      "inputType": "uint64_t",
+      "outputType": "uint64_t",
+      "family": "uint64-same-type",
+      "sha256": "75c3ce4603c6eb5b30d83ee82d7725276404ecd3957413a1a83080ad84641c79",
+      "sizeBytes": 1066
+    },
+    {
+      "entryPoint": "v_Signuint8uint8",
+      "operator": "Sign",
+      "inputType": "uint8_t",
+      "outputType": "uint8_t",
+      "family": "uint8-same-type",
+      "sha256": "8b0d22b64b827b772f1744190dfff18f3497e85c961f86410ca4c09d4a26154e",
+      "sizeBytes": 1019
+    },
+    {
+      "entryPoint": "v_Sinbfloat16bfloat16",
+      "operator": "Sin",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "a730aace127a3d8afd5baeb2803da9ba3de8975e88006fe87b5f0488a050b41a",
+      "sizeBytes": 1040
+    },
+    {
+      "entryPoint": "v_Sincomplex64complex64",
+      "operator": "Sin",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "5373a1823405d3255829994160c4d08e5a6169f9765ed5c29e172ab8ddd191ca",
+      "sizeBytes": 1377
+    },
+    {
+      "entryPoint": "v_Sinfloat16float16",
+      "operator": "Sin",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "648ec257c0b1827be48305d72982400ca43fe81e2e6ce5422d0456e744c01f5b",
+      "sizeBytes": 976
+    },
+    {
+      "entryPoint": "v_Sinfloat32float32",
+      "operator": "Sin",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "556d5d04978a0ad37d3a224b30f46b039cab44d7956aa131a1a200ce2e891f75",
+      "sizeBytes": 989
+    },
+    {
+      "entryPoint": "v_Sinhbfloat16bfloat16",
+      "operator": "Sinh",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "540d03aeefbf8c358f05aea72a102cd52930c48f1c8801a114ebc6c5c85220ca",
+      "sizeBytes": 1050
+    },
+    {
+      "entryPoint": "v_Sinhcomplex64complex64",
+      "operator": "Sinh",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "293b7019bb9f291843f924ed12e23fa8e3c13eeb18fd4e8bd4c4264b7504abc7",
+      "sizeBytes": 1386
+    },
+    {
+      "entryPoint": "v_Sinhfloat16float16",
+      "operator": "Sinh",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "08c814d3d83aa69bb284368792c9f31fc8cb2a0a7366bb52cea935fc3f02e6bc",
+      "sizeBytes": 986
+    },
+    {
+      "entryPoint": "v_Sinhfloat32float32",
+      "operator": "Sinh",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "08e011639022b4ab43997f7dffa03a605e3a63df2b11e365f6dcd1aae88f7ebc",
+      "sizeBytes": 999
+    },
+    {
+      "entryPoint": "v_Sqrtbfloat16bfloat16",
+      "operator": "Sqrt",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "79e4dedb9e9dcc4889a8808e57cc9042b76ea16d1d3354029b90f82e91a4b531",
+      "sizeBytes": 1050
+    },
+    {
+      "entryPoint": "v_Sqrtcomplex64complex64",
+      "operator": "Sqrt",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "6ca9278edfb1c89611387068f32fe5f5c4a3831dad77e16e2336221fc029ca11",
+      "sizeBytes": 1993
+    },
+    {
+      "entryPoint": "v_Sqrtfloat16float16",
+      "operator": "Sqrt",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "34dfd7a43c1ef66ecc3948434f18eac2121d307e523b9707ee373587d4cbe0c9",
+      "sizeBytes": 986
+    },
+    {
+      "entryPoint": "v_Sqrtfloat32float32",
+      "operator": "Sqrt",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "88a3324c88ec900652bd4816037b449d32d4abbb151f1e6d9fb6310c85b2aa94",
+      "sizeBytes": 999
+    },
+    {
+      "entryPoint": "v_Squarebfloat16bfloat16",
+      "operator": "Square",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "bb353de1fa49c7fcf92e1ea3b47bd0a567440658ce060fe39d266829489f4566",
+      "sizeBytes": 1066
+    },
+    {
+      "entryPoint": "v_Squarebool_bool_",
+      "operator": "Square",
+      "inputType": "bool",
+      "outputType": "bool",
+      "family": "boolean-same-type",
+      "sha256": "0df4b8de3c4a8202a12ca5ee0bd1197bad26d092bf49bfeef0506121b40d7f6d",
+      "sizeBytes": 998
+    },
+    {
+      "entryPoint": "v_Squarecomplex64complex64",
+      "operator": "Square",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "27bf705d77ed9012d71abd68eae6bd67f4e9d972bc979f070aa796c5d229d111",
+      "sizeBytes": 1692
+    },
+    {
+      "entryPoint": "v_Squarefloat16float16",
+      "operator": "Square",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "2b0093d572ff5e8f75a3f91c747e45a48fbc1f905b7bf178f11475e13ae246c5",
+      "sizeBytes": 1002
+    },
+    {
+      "entryPoint": "v_Squarefloat32float32",
+      "operator": "Square",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495",
+      "sizeBytes": 1015
+    },
+    {
+      "entryPoint": "v_Squareint16int16",
+      "operator": "Square",
+      "inputType": "int16_t",
+      "outputType": "int16_t",
+      "family": "int16-same-type",
+      "sha256": "f28f02253d86e957857eccabf347cd81effb09a1a57120f95cf234c75cf232a4",
+      "sizeBytes": 1005
+    },
+    {
+      "entryPoint": "v_Squareint32int32",
+      "operator": "Square",
+      "inputType": "int32_t",
+      "outputType": "int32_t",
+      "family": "int32-same-type",
+      "sha256": "73884189e2e1860d4bc942c345fabfdc5f66236072f781f45b85b47aad8c298a",
+      "sizeBytes": 1005
+    },
+    {
+      "entryPoint": "v_Squareint64int64",
+      "operator": "Square",
+      "inputType": "int64_t",
+      "outputType": "int64_t",
+      "family": "int64-same-type",
+      "sha256": "d42dfd9d8d1cdebb3c329c5c702e70de1f315a249462955fc83e6a8e57bb375c",
+      "sizeBytes": 1037
+    },
+    {
+      "entryPoint": "v_Squareint8int8",
+      "operator": "Square",
+      "inputType": "int8_t",
+      "outputType": "int8_t",
+      "family": "int8-same-type",
+      "sha256": "8022ba4e6d0f55b4d6199e2dc3bfa61589e09387b6d84edc4e8e394a57fa5976",
+      "sizeBytes": 998
+    },
+    {
+      "entryPoint": "v_Squareuint16uint16",
+      "operator": "Square",
+      "inputType": "uint16_t",
+      "outputType": "uint16_t",
+      "family": "uint16-same-type",
+      "sha256": "96fdb3d8e34b109200569ddddadcac281f4f1bf9f4af1fe299f6766c36bcd19d",
+      "sizeBytes": 1020
+    },
+    {
+      "entryPoint": "v_Squareuint32uint32",
+      "operator": "Square",
+      "inputType": "uint32_t",
+      "outputType": "uint32_t",
+      "family": "uint32-same-type",
+      "sha256": "4b5ee9890b6fab11287ec2d789d45af8dd0386ceab0c76da76cf9d530c980ddb",
+      "sizeBytes": 1020
+    },
+    {
+      "entryPoint": "v_Squareuint64uint64",
+      "operator": "Square",
+      "inputType": "uint64_t",
+      "outputType": "uint64_t",
+      "family": "uint64-same-type",
+      "sha256": "59fca6341754c6122f8ae3c540c7de976d08aed72fbffd7275bd421a25a286d6",
+      "sizeBytes": 1052
+    },
+    {
+      "entryPoint": "v_Squareuint8uint8",
+      "operator": "Square",
+      "inputType": "uint8_t",
+      "outputType": "uint8_t",
+      "family": "uint8-same-type",
+      "sha256": "3cb4b8521c0574680283d0bc2c1c7eb0c3d37b338e79da360d89a76195e1b9c3",
+      "sizeBytes": 1013
+    },
+    {
+      "entryPoint": "v_Tanbfloat16bfloat16",
+      "operator": "Tan",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "b38cb207c3f6320824fc086e36e03b15fc589ac3ff0cd8a74455b56c18d96d2b",
+      "sizeBytes": 1040
+    },
+    {
+      "entryPoint": "v_Tancomplex64complex64",
+      "operator": "Tan",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "aeb4cd38ea120cd883edd5fc214d4d7e1d298896005e4d02b674be2ea05b565b",
+      "sizeBytes": 1511
+    },
+    {
+      "entryPoint": "v_Tanfloat16float16",
+      "operator": "Tan",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "ea0911f7fbd9b3759678298f1c529ebc1b5b8068c63f2d566d29ee37ab1b76eb",
+      "sizeBytes": 976
+    },
+    {
+      "entryPoint": "v_Tanfloat32float32",
+      "operator": "Tan",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "35f7ab6b8e0d4aec3476f0956f261be1b2f300b9c21a846fea3fb56f5968742a",
+      "sizeBytes": 989
+    },
+    {
+      "entryPoint": "v_Tanhbfloat16bfloat16",
+      "operator": "Tanh",
+      "inputType": "bfloat16_t",
+      "outputType": "bfloat16_t",
+      "family": "bfloat16-same-type",
+      "sha256": "6c3d73f3a562798323b6f6a2e8378a8d73e392a7c451845e8dfa6f8b379c884b",
+      "sizeBytes": 1050
+    },
+    {
+      "entryPoint": "v_Tanhcomplex64complex64",
+      "operator": "Tanh",
+      "inputType": "complex64_t",
+      "outputType": "complex64_t",
+      "family": "complex64-same-type",
+      "sha256": "ce9b225637929df2c6eda837a4f2bf90a8b09bc5d33be31d97ade01d68f6482a",
+      "sizeBytes": 1520
+    },
+    {
+      "entryPoint": "v_Tanhfloat16float16",
+      "operator": "Tanh",
+      "inputType": "half",
+      "outputType": "half",
+      "family": "float16-same-type",
+      "sha256": "ef594029b7efa80c7d3000a02f6ed086b240216b8ef1f1940b987371af4d5fe2",
+      "sizeBytes": 986
+    },
+    {
+      "entryPoint": "v_Tanhfloat32float32",
+      "operator": "Tanh",
+      "inputType": "float",
+      "outputType": "float",
+      "family": "float32-same-type",
+      "sha256": "f82fc0eec4708ee6e8dc6315d173b91e819cfc248ce9bcf4e7a5518bc0fb8e39",
+      "sizeBytes": 999
+    },
+    {
+      "entryPoint": "v_ToFP8bfloat16uint8",
+      "operator": "ToFP8",
+      "inputType": "bfloat16_t",
+      "outputType": "uint8_t",
+      "family": "fp8-encode",
+      "sha256": "b99ae8c028596e8488a811a565df5a5b6a0836a0875d9f6906d5517d805b09b2",
+      "sizeBytes": 1923
+    },
+    {
+      "entryPoint": "v_ToFP8float16uint8",
+      "operator": "ToFP8",
+      "inputType": "float16_t",
+      "outputType": "uint8_t",
+      "family": "fp8-encode",
+      "sha256": "b48907371a38d3516929ce46ae05fc1d95ccfa68ccc89ba1edfaba1644aadd62",
+      "sizeBytes": 1905
+    },
+    {
+      "entryPoint": "v_ToFP8float32uint8",
+      "operator": "ToFP8",
+      "inputType": "float",
+      "outputType": "uint8_t",
+      "family": "fp8-encode",
+      "sha256": "32ffeba1d9634a25f4cabea111180e94b7d6c69211279ccfb56dabe612374dcf",
+      "sizeBytes": 1891
+    }
+  ]
+}

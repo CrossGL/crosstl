@@ -21649,6 +21649,7 @@ def _project_template_materialization_for_artifact(
         work_budget=explicit_work_budget,
     )
     materialized = preprocessor._evaluate_static_assertions(materialized)
+    materialized = preprocessor._materialize_free_operator_overloads(materialized)
     materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
     discovered_struct_specializations = (
         set(preprocessor._materialized_struct_specializations)

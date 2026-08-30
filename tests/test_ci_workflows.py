@@ -3844,7 +3844,7 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
 
     family_metal_step = ci_coverage.workflow_step_section(
         mlx_porting,
-        "Prove current MLX float32 unary family Metal round-trips",
+        "Prove current MLX scalar unary family Metal round-trips",
     )
     assert "if: runner.os == 'macOS'" in family_metal_step
     assert (
@@ -3854,14 +3854,14 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     assert 'CROSTL_REQUIRE_MLX_UNARY_METAL_ROUNDTRIP: "1"' in family_metal_step
     assert (
         f"{test_path}::"
-        "test_current_mlx_float32_unary_family_roundtrips_through_metal"
+        "test_current_mlx_scalar_unary_family_roundtrips_through_metal"
         in family_metal_step
     )
     assert "-n auto" in family_metal_step
     assert "-k" not in family_metal_step
     assert ci_coverage.workflow_step_after(
         mlx_porting,
-        "Prove current MLX float32 unary family Metal round-trips",
+        "Prove current MLX scalar unary family Metal round-trips",
         "Checkout current MLX runtime proof corpus",
     )
 

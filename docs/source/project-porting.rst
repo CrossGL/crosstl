@@ -494,19 +494,31 @@ Entry selection scopes shader or kernel translation; it does not infer host
 dispatch dimensions, runtime bindings, or backend integration. Record those
 requirements through the corresponding dispatch and runtime contracts.
 
-The current-pinned MLX integration exercises this path for all 30 float32
-``v_<Op>float32float32`` entries from the same include-expanded ``unary.metal``
-source. Every independently translated artifact has exactly one reachable
-operator struct, one kernel, three reflected buffer bindings, and a host-owned
-``[1, 1, 1]`` workgroup contract. Deterministic identities range from the
-989-byte Abs, Cos, Exp, Log, Sin, and Tan artifacts to the 2,742-byte
-``v_ArcCosfloat32float32`` artifact. ArcCos retains its portable precise
-float32 range reduction under explicit no-contraction regions rather than
-falling back to the target ``acos`` intrinsic. Required macOS CI compiles all
-30 exact artifacts with ``xcrun -sdk macosx metal -c`` and requires a non-empty
-AIR output from each. This selected-entry family proof does not claim Metal
-numerical execution, host-runtime redirection, other dtypes, FP8 conversions,
-or the ``v2_``, ``gn*``, and ``vn_`` entry shapes.
+The current-pinned MLX integration exercises this path for all 183 scalar
+``v_`` entries (``N=1``) from the same include-expanded ``unary.metal`` source.
+The exact checked contract covers 37 operators and 20 concrete input/output type
+pairs across bfloat16, Boolean, complex64, float16, float32, signed and unsigned
+integers, FP8 encode/decode, and complex projection. Every independently
+translated artifact has one selected operator implementation, one kernel, three
+reflected buffer bindings, and a host-owned ``[1, 1, 1]`` workgroup contract;
+required empty helper tags may remain while every non-selected operator body is
+pruned. Deterministic identities range from the 972-byte
+``v_Absint8int8`` artifact to the 3,910-byte
+``v_ArcTancomplex64complex64`` artifact. The 2,742-byte
+``v_ArcCosfloat32float32`` artifact retains its portable precise range
+reduction under explicit no-contraction regions rather than falling back to the
+target ``acos`` intrinsic.
+
+Required macOS CI compiles all 183 exact artifacts with
+``xcrun -sdk macosx metal -c`` and requires a non-empty AIR output from each.
+The generic path resolves source typedef chains and bfloat reconstruction,
+materializes source-compatible constrained free operators, infers aggregate
+aliases, recognizes branch-complete returns, preserves narrow ``as_type``
+storage, and admits only a proven read-only immediate scalar-parameter view as
+a matching thread-local single-field aggregate. Other pointer reinterpretation
+continues to fail closed. This selected-entry family proof does not claim Metal
+numerical execution, host-runtime redirection, non-scalar ``v2_``/``gn*``/``vn_``
+entry shapes, DirectX/OpenGL family coverage, or the MLX test suite.
 
 OpenGL Software Subgroup Specialization
 ----------------------------------------

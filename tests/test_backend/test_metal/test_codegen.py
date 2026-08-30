@@ -59,6 +59,9 @@ from crosstl.translator.codegen.directx_codegen import (
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.pointer_reinterpret import (
+    PointerReinterpretationError,
+)
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -9434,6 +9437,256 @@ def test_codegen_infers_nested_metal_builtin_results_across_targets(tmp_path):
     assert_opengl_compute_validates_if_available(
         direct_outputs["opengl"], tmp_path, "nested-builtin-results"
     )
+
+
+def test_metal_target_elides_bfloat_type_alias_and_compiles_natively(tmp_path):
+    source = """
+    typedef bfloat bfloat16_t;
+
+    bfloat16_t passthrough(bfloat16_t value) {
+      return bfloat16_t(value);
+    }
+
+    kernel void bfloat_alias_kernel(
+        device bfloat16_t* output [[buffer(0)]],
+        device const bfloat16_t* input [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      output[index] = passthrough(input[index]);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    assert "typedef bfloat16 bfloat16_t;" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    normalized = normalize(metal)
+    assert "bfloat passthrough(bfloat value)" in normalized
+    assert "return bfloat(value);" in normalized
+    assert "device bfloat* output [[buffer(0)]]" in normalized
+    assert "const device bfloat* input [[buffer(1)]]" in normalized
+    assert "bfloat16_t" not in metal
+    assert "program-scope global" not in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-bfloat-type-alias-roundtrip"
+    )
+
+
+def test_metal_target_resolves_chained_aliases_and_rejects_cycles():
+    chained = parse_crossgl("""
+        shader main {
+            typedef bfloat16 BFloat;
+            typedef BFloat Scalar;
+            Scalar passthrough(Scalar value) { return value; }
+        }
+        """)
+    metal = normalize(MetalCodeGen().generate(chained))
+    assert "bfloat passthrough(bfloat value)" in metal
+    assert "BFloat" not in metal
+    assert "Scalar" not in metal
+
+    cyclic = parse_crossgl("""
+        shader main {
+            typedef AliasB AliasA;
+            typedef AliasA AliasB;
+            AliasA passthrough(AliasA value) { return value; }
+        }
+        """)
+    with pytest.raises(ValueError, match="Cyclic Metal type alias"):
+        MetalCodeGen().generate(cyclic)
+
+
+def test_metal_target_materializes_and_rebinds_aggregate_free_operator(tmp_path):
+    source = """
+    template <typename T>
+    struct Box { T value; };
+
+    template <typename T>
+    constexpr Box<T> operator+(Box<T> a, Box<T> b) {
+      return {a.value + b.value};
+    }
+
+    kernel void add_boxes(device float* out [[buffer(0)]]) {
+      Box<float> a;
+      Box<float> b;
+      a.value = 1.0f;
+      b.value = 2.0f;
+      auto result = a + b;
+      out[0] = result.value;
+    }
+    """
+
+    preprocessed = MetalPreprocessor().preprocess(source)
+    helper = "crosstl_metal_operator_add__Box_float__Box_float"
+    assert f"Box_float {helper}(Box_float a, Box_float b)" in preprocessed
+
+    crossgl = convert_without_preprocessing(preprocessed)
+    normalized_crossgl = normalize(crossgl)
+    assert f"Box_float result = {helper}(a, b);" in normalized_crossgl
+    assert "Box_float result = a + b;" not in normalized_crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    normalized_metal = normalize(metal)
+    assert normalized_metal.index(f"Box_float {helper}(") < normalized_metal.index(
+        "kernel void add_boxes("
+    )
+    assert f"Box_float result = {helper}(a, b);" in normalized_metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-materialized-free-operator"
+    )
+
+
+def test_codegen_selects_exact_bfloat_free_operator_and_fails_closed_on_widening():
+    float_helper = (
+        "Payload crosstl_metal_operator_add__float__Payload("
+        "float scalar, Payload value) { return value; }"
+    )
+    source = f"""
+    struct Payload {{ float value; }};
+    {float_helper}
+    Payload crosstl_metal_operator_add__bfloat__Payload(
+        bfloat scalar, Payload value) {{ return value; }}
+
+    kernel void select_operators(
+        device float* out [[buffer(0)]], float scalar, bfloat narrow) {{
+      Payload value{{scalar}};
+      Payload from_float = scalar + value;
+      Payload from_bfloat = narrow + value;
+      out[0] = from_float.value + from_bfloat.value;
+    }}
+    """
+
+    normalized = normalize(convert_without_preprocessing(source))
+    assert (
+        "Payload from_float = "
+        "crosstl_metal_operator_add__float__Payload(scalar, value);" in normalized
+    )
+    assert (
+        "Payload from_bfloat = "
+        "crosstl_metal_operator_add__bfloat__Payload(narrow, value);" in normalized
+    )
+
+    with pytest.raises(MetalSourceOverloadResolutionError) as exc_info:
+        convert_without_preprocessing(source.replace(float_helper, ""))
+    error = exc_info.value
+    assert error.function_name == "operator +"
+    assert error.argument_types == ("float", "Payload")
+    assert error.candidates == (
+        "crosstl_metal_operator_add__bfloat__Payload(bfloat, Payload)",
+    )
+    assert error.reason == (
+        "no source-compatible materialized free operator matches the inferred "
+        "argument types"
+    )
+
+
+def test_metal_target_promotes_bfloat_abs_and_restores_expected_result(tmp_path):
+    ast = parse_crossgl("""
+        shader main {
+            bfloat16 magnitude(bfloat16 value) { return abs(value); }
+        }
+        """)
+
+    metal = MetalCodeGen().generate(ast)
+    assert "bfloat magnitude(bfloat value)" in metal
+    assert "return bfloat(abs(float(value)));" in metal
+    assert "abs(value)" not in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-bfloat-abs-promotion"
+    )
+
+
+def test_metal_target_recognizes_complete_conditional_returns():
+    metal = MetalCodeGen().generate(parse_crossgl("""
+            shader main {
+                float complete(bool condition) {
+                    if (condition) { return 1.0; }
+                    else { return 2.0; }
+                }
+                float incomplete(bool condition) {
+                    if (condition) { return 1.0; }
+                }
+            }
+            """))
+
+    complete_body = metal.split("float complete", 1)[1].split("float incomplete", 1)[0]
+    incomplete_body = metal.split("float incomplete", 1)[1]
+    marker = "fallback for unmatched generated control flow"
+    assert marker not in complete_body
+    assert marker in incomplete_body
+    assert "return float(0)" in incomplete_body
+
+
+def test_metal_target_uses_native_narrow_storage_for_explicit_as_type(tmp_path):
+    metal = MetalCodeGen().generate(parse_crossgl("""
+            shader main {
+                half unpack(uint16 value) { return as_type<half>(value); }
+            }
+            """))
+
+    assert "half unpack(uint value)" in metal
+    assert "return as_type<half>(ushort(value));" in metal
+    assert "as_type<half>(uint(value))" not in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-narrow-as-type-storage"
+    )
+
+
+def test_metal_target_lowers_local_single_field_parameter_reinterpret_read(tmp_path):
+    metal = MetalCodeGen().generate(parse_crossgl("""
+            shader main {
+                struct ByteView { uint8 bits; }
+                ByteView read(uint8 value) {
+                    return *((thread ByteView*)(&value));
+                }
+            }
+            """))
+
+    assert "ByteView read(uint value)" in metal
+    assert "return ByteView{value};" in metal
+    assert "reinterpret" not in metal
+    assert "PointerReinterpretNode" not in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-local-single-field-reinterpret-read"
+    )
+
+
+@pytest.mark.parametrize(
+    ("members", "body"),
+    [
+        (
+            "uint8 bits;",
+            "uint8 local = value; return *((thread ByteView*)(&local));",
+        ),
+        (
+            "uint8 bits; uint8 tag;",
+            "return *((thread ByteView*)(&value));",
+        ),
+        (
+            "uint16 bits;",
+            "return *((thread ByteView*)(&value));",
+        ),
+        (
+            "uint8 bits;",
+            "auto pointer = (thread ByteView*)(&value); return *pointer;",
+        ),
+    ],
+    ids=("local-storage", "multiple-fields", "mismatched-field", "pointer-escape"),
+)
+def test_metal_target_rejects_unproven_local_single_field_reinterpret_views(
+    members, body
+):
+    ast = parse_crossgl(f"""
+        shader main {{
+            struct ByteView {{ {members} }}
+            ByteView read(uint8 value) {{ {body} }}
+        }}
+        """)
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        MetalCodeGen().generate(ast)
+    error = exc_info.value
+    assert error.target_backend == "metal"
+    assert error.target_type == "ByteView"
+    assert error.reason == "target-lowering-unavailable"
 
 
 def test_codegen_prefers_qualified_bfloat_builtin_overload_result():

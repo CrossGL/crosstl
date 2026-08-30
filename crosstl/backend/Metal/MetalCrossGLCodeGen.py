@@ -694,6 +694,20 @@ class MetalToCrossGLConverter:
         r"^(?:0[xX][0-9a-fA-F]+u?|0[bB][01]+u?|"
         r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fF]?|\d+u?)$"
     )
+    metal_free_operator_helper_labels = {
+        "+": "add",
+        "-": "subtract",
+        "*": "multiply",
+        "/": "divide",
+        "%": "modulo",
+        "==": "equal",
+        "!=": "not_equal",
+        "<": "less",
+        ">": "greater",
+        "<=": "less_equal",
+        ">=": "greater_equal",
+    }
+    metal_free_operator_helper_prefix = "crosstl_metal_operator_"
     binary_precedence = {
         "||": 1,
         "&&": 2,
@@ -9923,6 +9937,14 @@ class MetalToCrossGLConverter:
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr, is_main)
         elif isinstance(expr, BinaryOpNode):
+            free_operator_call = self.generate_metal_free_operator_call(
+                expr.op,
+                (expr.left, expr.right),
+                is_main,
+                getattr(expr, "source_location", None),
+            )
+            if free_operator_call is not None:
+                return free_operator_call
             cooperative_matrix_operation = {
                 "*": "cooperative_matrix_multiply",
                 "+": "cooperative_matrix_add",
@@ -10200,6 +10222,14 @@ class MetalToCrossGLConverter:
                 return f"{array}.lanes[{index}]"
             return f"{array}[{index}]"
         elif isinstance(expr, UnaryOpNode):
+            free_operator_call = self.generate_metal_free_operator_call(
+                expr.op,
+                (expr.operand,),
+                is_main,
+                getattr(expr, "source_location", None),
+            )
+            if free_operator_call is not None:
+                return free_operator_call
             if expr.op in {"++", "--"} and isinstance(expr.operand, ArrayAccessNode):
                 component_update = self.generate_small_vector_component_update(
                     expr.operand, expr.op, postfix=False, is_main=is_main
@@ -11534,6 +11564,14 @@ class MetalToCrossGLConverter:
             return None
         return 3 if actual_cv == parameter_cv else 2
 
+    @classmethod
+    def metal_source_overload_identity_contains_bfloat(cls, identity):
+        if not identity:
+            return False
+        if identity[0] in {"pointer", "vector"}:
+            return cls.metal_source_overload_identity_contains_bfloat(identity[2])
+        return identity[0] == "scalar" and identity[1] == "bfloat"
+
     def metal_source_overload_argument_match_rank(
         self, argument, actual_type, parameter
     ):
@@ -11551,6 +11589,12 @@ class MetalToCrossGLConverter:
                 )
                 return pointer_rank + 1 if pointer_rank is not None else None
             return 4
+        # Native Metal does not implicitly convert half/float values to bfloat,
+        # even though those formats share a 16-bit descriptor after portable
+        # normalization. Keep bfloat destination overloads exact; a bfloat
+        # source may still widen to float, matching the native language.
+        if self.metal_source_overload_identity_contains_bfloat(expected_identity):
+            return None
         if actual == expected:
             if actual[0] == "pointer":
                 return self.metal_source_overload_pointer_qualifier_rank(
@@ -11578,6 +11622,119 @@ class MetalToCrossGLConverter:
         }:
             return 1
         return None
+
+    def metal_free_operator_helper_label(self, operator, arity):
+        if operator == "-" and arity == 1:
+            return "negate"
+        return self.metal_free_operator_helper_labels.get(operator)
+
+    def metal_free_operator_candidates(self, operator, arity):
+        label = self.metal_free_operator_helper_label(operator, arity)
+        if label is None:
+            return []
+        prefix = f"{self.metal_free_operator_helper_prefix}{label}__"
+        candidates = []
+        overloads_by_name = getattr(self, "user_function_overloads_by_name", {})
+        for function_name, overloads in overloads_by_name.items():
+            if not str(function_name).startswith(prefix):
+                continue
+            candidates.extend(
+                function
+                for function in overloads
+                if len(getattr(function, "params", []) or []) == arity
+            )
+        return candidates
+
+    def resolve_metal_free_operator(self, operator, arguments, source_location=None):
+        candidates = self.metal_free_operator_candidates(operator, len(arguments))
+        if not candidates:
+            return None
+        argument_types = [
+            self.metal_source_overload_value_type(self.expression_metal_type(argument))
+            for argument in arguments
+        ]
+        if any(argument_type is None for argument_type in argument_types):
+            return None
+        ranked = []
+        for function in candidates:
+            ranks = []
+            for argument, argument_type, parameter in zip(
+                arguments,
+                argument_types,
+                getattr(function, "params", []) or [],
+            ):
+                rank = self.metal_source_overload_argument_match_rank(
+                    argument,
+                    argument_type,
+                    parameter,
+                )
+                if rank is None:
+                    break
+                ranks.append(rank)
+            else:
+                ranked.append((tuple(ranks), function))
+        if not ranked:
+            aggregate_arguments = [
+                argument_type
+                for argument_type in argument_types
+                if self.normalized_metal_type(self.resolve_type_alias(argument_type))
+                in self.struct_member_types
+            ]
+            if aggregate_arguments:
+                raise MetalSourceOverloadResolutionError(
+                    f"operator {operator}",
+                    [argument_type or "<unknown>" for argument_type in argument_types],
+                    [
+                        self.metal_function_candidate_signature(item)
+                        for item in candidates
+                    ],
+                    "no source-compatible materialized free operator matches the "
+                    "inferred argument types",
+                    source_location,
+                )
+            return None
+
+        def dominates(left, right):
+            return all(a >= b for a, b in zip(left, right)) and any(
+                a > b for a, b in zip(left, right)
+            )
+
+        winners = [
+            entry
+            for entry in ranked
+            if not any(
+                other is not entry and dominates(other[0], entry[0]) for other in ranked
+            )
+        ]
+        if len(winners) != 1:
+            raise MetalSourceOverloadResolutionError(
+                f"operator {operator}",
+                [argument_type or "<unknown>" for argument_type in argument_types],
+                [
+                    self.metal_function_candidate_signature(function)
+                    for _ranks, function in winners
+                ],
+                "multiple source-compatible materialized free operators remain "
+                "after type matching",
+                source_location,
+            )
+        return winners[0][1]
+
+    def generate_metal_free_operator_call(
+        self, operator, arguments, is_main=False, source_location=None
+    ):
+        selected = self.resolve_metal_free_operator(
+            operator,
+            arguments,
+            source_location,
+        )
+        if selected is None:
+            return None
+        function_name = self.sanitize_identifier(self.function_output_name(selected))
+        rendered_arguments = ", ".join(
+            self.generate_expression(argument, is_main) for argument in arguments
+        )
+        return f"{function_name}({rendered_arguments})"
 
     def metal_source_overload_groups_for_name(self, function_name):
         signature_groups = self.metal_source_overload_groups.get(function_name)
@@ -15495,6 +15652,15 @@ class MetalToCrossGLConverter:
         return self.metal_common_integer_type(left_info, right_info)
 
     def metal_binary_expression_type(self, expr):
+        selected_operator = self.resolve_metal_free_operator(
+            expr.op,
+            (expr.left, expr.right),
+            getattr(expr, "source_location", None),
+        )
+        if selected_operator is not None:
+            return self.resolve_type_alias(
+                getattr(selected_operator, "return_type", None)
+            )
         left_type = self.expression_metal_type(expr.left)
         right_type = self.expression_metal_type(expr.right)
         if expr.op in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
@@ -15925,6 +16091,15 @@ class MetalToCrossGLConverter:
         if isinstance(expr, PostfixOpNode):
             return self.expression_metal_type(expr.operand)
         if isinstance(expr, UnaryOpNode):
+            selected_operator = self.resolve_metal_free_operator(
+                expr.op,
+                (expr.operand,),
+                getattr(expr, "source_location", None),
+            )
+            if selected_operator is not None:
+                return self.resolve_type_alias(
+                    getattr(selected_operator, "return_type", None)
+                )
             if expr.op == "!":
                 return "bool"
             if expr.op == "&":

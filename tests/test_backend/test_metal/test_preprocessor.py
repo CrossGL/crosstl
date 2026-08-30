@@ -7452,6 +7452,69 @@ def test_preprocessor_lowers_temporary_functor_call_with_arithmetic_and_functor_
     assert "complex64_t Sqrt__operator_call(thread Sqrt& self, complex64_t x)" in output
 
 
+def test_preprocessor_materializes_boolean_constrained_free_operator():
+    code = """
+    template <typename T> struct Box { T value; };
+    template <typename T>
+    static constexpr constant bool is_box_v = false;
+    template <typename T>
+    static constexpr constant bool is_box_v<Box<T>> = true;
+    template <typename From, typename To>
+    static constexpr constant bool is_lane_convertible_v =
+        is_convertible_v<From, To> ||
+        (is_same_v<To, bfloat16_t> && is_convertible_v<From, float>);
+
+    template <
+        typename T,
+        typename U,
+        enable_if_t<!is_box_v<U> && is_lane_convertible_v<U, T>, bool> = true>
+    constexpr Box<T> operator+(U scalar, Box<T> value) {
+      return {static_cast<T>(scalar) + value.value};
+    }
+
+    kernel void add_scalar(device float* out [[buffer(0)]], float scalar) {
+      Box<float> value{1.0f};
+      auto result = scalar + value;
+      out[0] = result.value;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "Box_float crosstl_metal_operator_add__float__Box_float("
+        "float scalar, Box_float value)" in output
+    )
+    assert "return {static_cast<float>(scalar) + value.value};" in output
+    assert "auto result = scalar + value;" in output
+    assert output.count("crosstl_metal_operator_add__float__Box_float") == 1
+
+
+def test_preprocessor_infers_materialized_aggregate_alias_for_auto_functor_call():
+    code = """
+    template <typename T> struct Box { T value; };
+    using BoxAlias = Box<float>;
+
+    struct Identity {
+      BoxAlias operator()(BoxAlias value) { return value; }
+    };
+
+    kernel void use_alias(device float* out [[buffer(0)]]) {
+      auto value = BoxAlias{1.0f};
+      auto result = Identity{}(value);
+      out[0] = result.value;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "using BoxAlias = Box_float;" in output
+    assert "auto value = BoxAlias{1.0f};" in output
+    assert "auto result = Identity__operator_call__temporary(value);" in output
+    assert "BoxAlias Identity__operator_call__temporary(BoxAlias value)" in output
+    assert "Identity{}(value)" not in output
+
+
 def test_preprocessor_prunes_unselected_out_of_line_member_overload():
     code = """
     struct complex64_t { float real; float imag; };
@@ -10310,11 +10373,35 @@ def test_sfinae_constraint_evaluation_size_and_integral_tables():
         pp._evaluate_template_constraint("metal::is_same_v<T, float>", {"T": "float"})
         is True
     )
-    # An unsupported constraint or unresolved type still clean-fails.
-    with pytest.raises(MetalPreprocessor._UnrecognizedConstraint):
+    # Numeric convertibility follows Metal's implicit scalar rules. Bfloat is
+    # explicitly constructible from ordinary floating point but is not an
+    # implicit destination; it may widen back to float. Aggregate destinations
+    # remain conservatively non-convertible.
+    assert (
         pp._evaluate_template_constraint(
             "metal::is_convertible_v<T, float>", {"T": "float"}
         )
+        is True
+    )
+    assert (
+        pp._evaluate_template_constraint(
+            "metal::is_convertible_v<T, bfloat16_t>", {"T": "float"}
+        )
+        is False
+    )
+    assert (
+        pp._evaluate_template_constraint(
+            "metal::is_convertible_v<T, float>", {"T": "bfloat16_t"}
+        )
+        is True
+    )
+    assert (
+        pp._evaluate_template_constraint(
+            "metal::is_convertible_v<T, complex64_t>", {"T": "float"}
+        )
+        is False
+    )
+    # A distinct unsupported constraint still fails closed.
     with pytest.raises(MetalPreprocessor._UnrecognizedConstraint):
         pp._evaluate_template_constraint(less8, {"T": "complex64_t"})
 
