@@ -624,6 +624,34 @@ reflection, and native compiler coverage. It does not claim Metal numerical
 execution, whole-family DirectX/OpenGL translation, host-runtime redirection,
 or MLX test-suite parity.
 
+The same selected-entry pipeline translates all 4,122 binary entries to
+standalone OpenGL ``main`` artifacts. The schema-v2
+``binary.opengl-translation.json`` contract preserves all 18 shapes, 11 kernel
+templates, 24 operators, 25 input/output type pairs, and 6,026 exact
+materializations. It pins 16,276,504 generated GLSL bytes
+and 19,106 reflected resources across exact three-, four-, five-, and
+seven-resource target interfaces. Scalar forms expose three storage buffers;
+size-bounded forms add an entry-scoped size uniform block; fixed generalized
+forms expose scalar stride blocks or stride storage buffers; and rank-generic
+forms expose shape and stride buffers plus an entry-scoped rank block.
+
+OpenGL's 32-bit index profile cannot implicitly preserve the source's runtime
+64-bit buffer indices. The complete contract therefore declares host/runtime
+bounds of ``[0, 2147483647]`` for ``offset + i``, ``a_idx``, ``b_idx``,
+``out_idx``, ``out_idx++``, ``idx.x``, and ``idx.y``. These are explicit
+portability preconditions, not inferred facts or generated runtime checks;
+unproven wide-index translation remains fail-closed.
+
+Required Linux CI partitions the family into 24 disjoint shards. Each shard
+retranslates its exact entries, checks deterministic identity, materialization
+provenance, standalone ``main`` workgroup metadata, and target reflection,
+compiles every artifact with
+``glslangValidator --target-env opengl --target-env spirv1.3 -S comp``, validates
+it with ``spirv-val --target-env spv1.3``, and requires a non-empty SPIR-V
+module. This closes complete discovered-binary OpenGL translation, reflection,
+and native compiler coverage; it does not claim numerical execution, complete
+DirectX translation, MLX host-runtime redirection, or MLX test-suite parity.
+
 OpenGL Software Subgroup Specialization
 ----------------------------------------
 

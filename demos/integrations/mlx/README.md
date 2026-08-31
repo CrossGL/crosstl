@@ -90,6 +90,22 @@ The current harness verifies:
   warnings fatal and requires 4,122 non-empty AIR outputs. This proves every
   discovered binary instantiation for Metal translation, reflection, and native
   compilation, not Metal numerical execution;
+- selected-entry translation of all 4,122 discovered current-pinned
+  `binary.metal` entries to OpenGL. The schema-v2
+  `contracts/binary.opengl-translation.json` contract pins every standalone
+  `main` artifact across all 18 shapes, 11 templates, 24 operators, 25 type
+  pairs, 6,026 materializations, and 19,106 reflected resources, totaling
+  16,276,504 generated GLSL bytes. Seven explicit
+  host/runtime index-range preconditions bound `offset + i`, `a_idx`, `b_idx`,
+  `out_idx`, `out_idx++`, `idx.x`, and `idx.y` to signed 32-bit OpenGL index
+  space; they are portability promises, not inferred or runtime-enforced
+  checks, and unproven wide indices still fail closed. Twenty-four required
+  Linux CI shards retranslate every exact entry, verify deterministic identity,
+  materialization, workgroup metadata, and reflected ABI, compile for
+  OpenGL/SPIR-V 1.3 with `glslangValidator`, validate with `spirv-val`, and
+  require 4,122 non-empty SPIR-V modules. This is complete binary OpenGL
+  translation, reflection, and native compiler coverage, not numerical
+  execution or MLX host runtime redirection;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains
@@ -1792,6 +1808,38 @@ selected-entry translation, reflection, and native compilation for every
 discovered binary instantiation. It is not Metal numerical execution,
 DirectX/OpenGL whole-family coverage, MLX host-runtime redirection, or an MLX
 test-suite claim.
+
+The same selected-entry pipeline translates all 4,122 binary entries to
+standalone OpenGL ``main`` artifacts. The schema-v2
+[`contracts/binary.opengl-translation.json`](contracts/binary.opengl-translation.json)
+contract preserves all 18 shapes, 11 templates, 24 operators, 25 type pairs,
+and 6,026 exact materializations while pinning
+16,276,504 generated GLSL bytes and 19,106 reflected
+resources. Scalar artifacts expose three storage buffers; size-bounded vector
+forms add an entry-scoped uniform block. One-dimensional generalized forms add
+entry-scoped stride blocks, fixed two- and three-dimensional forms expose stride
+storage buffers, and rank-generic forms expose shape and two stride buffers plus
+an entry-scoped rank block.
+
+OpenGL cannot implicitly preserve the source's runtime 64-bit buffer indices.
+The complete contract therefore records explicit host/runtime bounds of
+``[0, 2147483647]`` for ``offset + i``, ``a_idx``, ``b_idx``, ``out_idx``,
+``out_idx++``, ``idx.x``, and ``idx.y``. These bounds are declared portability
+preconditions, not inferred facts or generated runtime checks; omitting the
+relevant proof keeps wide-index translation fail-closed. The generated target
+retains exactly the selected operator implementation and one kernel while pruning
+all unrelated operator bodies.
+
+Required Linux CI partitions the family into 24 disjoint shards. Every shard
+retranslates its exact entries, verifies artifact identity, source/default and
+call-site materialization provenance, ``main`` workgroup metadata, and exact
+three- through seven-resource host ABI, then compiles with
+``glslangValidator --target-env opengl --target-env spirv1.3 -S comp`` and
+validates with ``spirv-val --target-env spv1.3``. All 4,122 SPIR-V modules must
+be non-empty. This closes discovered binary OpenGL translation, reflection, and
+native compiler coverage; it does not claim numerical execution, DirectX
+whole-family translation, MLX host-runtime redirection, or MLX test-suite
+parity.
 
 Windows CI compiles the selected HLSL entries with DXC and executes them through
 the native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entries with

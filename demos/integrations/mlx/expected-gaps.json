@@ -2024,6 +2024,8 @@
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
     "metal_numerical_runtime_included": false,
+    "opengl_family_translation_included": true,
+    "directx_family_translation_included": false,
     "directx_and_opengl_family_translation_included": false,
     "mlx_host_runtime_included": false,
     "runtime_integration_included": false,
@@ -2031,7 +2033,196 @@
     "remaining_scope": {
       "uncovered_binary_entry_count": 0,
       "metal_numerical_execution_included": false,
+      "opengl_whole_family_included": true,
+      "directx_whole_family_included": false,
       "directx_and_opengl_whole_family_included": false,
+      "mlx_host_runtime_redirection_included": false
+    },
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
+  "binary_opengl_translation_status": {
+    "status": "selected-entry-complete-family-native-compilation-validated",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/binary.metal",
+    "source_sha256": "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e",
+    "target": "opengl",
+    "scope": {
+      "discovered_binary_instantiation_count": 4122,
+      "entry_count": 4122,
+      "shape_count": 18,
+      "template_count": 11,
+      "operator_count": 24,
+      "input_output_type_pair_count": 25,
+      "semantic_family_count": 25,
+      "base_shape_entry_count": 3570,
+      "work_per_thread_shape_entry_count": 552,
+      "uncovered_binary_entry_count": 0,
+      "all_discovered_binary_instantiations_included": true
+    },
+    "contract": {
+      "path": "demos/integrations/mlx/contracts/binary.opengl-translation.json",
+      "schema_version": 2,
+      "sha256": "041504d65e8a73f2da0fcf4d89330065fa9fd0d0260613067c06202e8ab20f67",
+      "size_bytes": 1467711,
+      "entry_identity_fields": [
+        "entryPoint",
+        "shape",
+        "templateName",
+        "operator",
+        "inputType",
+        "outputType",
+        "family",
+        "sha256",
+        "sizeBytes"
+      ]
+    },
+    "shape_counts": {
+      "g1": 238,
+      "g1large": 238,
+      "g2": 238,
+      "g2large": 238,
+      "g3": 238,
+      "g3large": 238,
+      "gn2": 238,
+      "gn4large": 238,
+      "ss": 238,
+      "sv": 238,
+      "sv2": 238,
+      "svn": 184,
+      "vs": 238,
+      "vs2": 238,
+      "vsn": 184,
+      "vv": 238,
+      "vv2": 238,
+      "vvn": 184
+    },
+    "template_counts": {
+      "binary_g": 476,
+      "binary_g_nd1": 476,
+      "binary_g_nd2": 476,
+      "binary_g_nd3": 476,
+      "binary_ss": 238,
+      "binary_sv": 422,
+      "binary_sv2": 238,
+      "binary_vs": 422,
+      "binary_vs2": 238,
+      "binary_vv": 422,
+      "binary_vv2": 238
+    },
+    "project_translation": {
+      "selected_entry_run_count": 4122,
+      "artifact_count": 4122,
+      "translated_count": 4122,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "target_entry_point": "main",
+      "provenance": "entry-scoped-translate",
+      "intermediate": "crossgl",
+      "specialization_count": 6026,
+      "reachable_index_helper_specialization_count": 1904,
+      "unsupported_specialization_count": 0,
+      "selected_operator_implementation_count_per_artifact": 1,
+      "unselected_operator_bodies_pruned": true,
+      "reachable_kernel_count_per_artifact": 1,
+      "residual_template_syntax": false,
+      "residual_decltype_syntax": false,
+      "residual_call_operator_syntax": false,
+      "unsupported_placeholder_count": 0
+    },
+    "portability_preconditions": {
+      "kind": "explicit-host-runtime-portability-preconditions",
+      "inferred": false,
+      "runtime_enforced": false,
+      "minimum": 0,
+      "maximum": 2147483647,
+      "expressions": [
+        "offset + i",
+        "a_idx",
+        "b_idx",
+        "out_idx",
+        "out_idx++",
+        "idx.x",
+        "idx.y"
+      ]
+    },
+    "implementation_contracts": {
+      "explicit_index_range_preconditions_required": true,
+      "unproven_index_narrowing_fail_closed": true,
+      "source_default_template_parameter_provenance": true,
+      "call_site_index_helper_materialization": true,
+      "shape_specific_resource_reflection": true,
+      "storage_buffer_array_resource_lowering": true,
+      "selected_operator_body_pruning": true
+    },
+    "host_interface": {
+      "status": "ready",
+      "minimum_resource_count_per_artifact": 3,
+      "maximum_resource_count_per_artifact": 7,
+      "reflected_resource_count": 19106,
+      "resource_counts_by_shape": {
+        "g1": 1190,
+        "g1large": 1190,
+        "g2": 1190,
+        "g2large": 1190,
+        "g3": 1190,
+        "g3large": 1190,
+        "gn2": 1666,
+        "gn4large": 1666,
+        "ss": 714,
+        "sv": 952,
+        "sv2": 952,
+        "svn": 736,
+        "vs": 952,
+        "vs2": 952,
+        "vsn": 736,
+        "vv": 952,
+        "vv2": 952,
+        "vvn": 736
+      },
+      "host_dispatch_workgroup_size": [
+        1,
+        1,
+        1
+      ]
+    },
+    "artifacts": {
+      "generated_size_bytes_total": 16276504,
+      "generated_size_range": {
+        "minimum": {
+          "entryPoint": "ss_Addint32",
+          "sizeBytes": 2875
+        },
+        "maximum": {
+          "entryPoint": "gn4large_LogAddExpcomplex64",
+          "sizeBytes": 8526
+        }
+      }
+    },
+    "native_validation": {
+      "platform": "ubuntu-latest",
+      "compiler": "glslangValidator --target-env opengl --target-env spirv1.3 -S comp",
+      "validator": "spirv-val --target-env spv1.3",
+      "status": "required-on-ci",
+      "compiled_artifact_count": 4122,
+      "validated_artifact_count": 4122,
+      "all_spirv_artifacts_nonempty": true,
+      "ci_shard_count": 24,
+      "test": "tests/test_translator/test_mlx_binary_complete_opengl.py::test_current_mlx_binary_family_translates_to_opengl"
+    },
+    "host_interface_reflection_included": true,
+    "metal_roundtrip_included": true,
+    "opengl_family_translation_included": true,
+    "opengl_numerical_runtime_included": false,
+    "directx_family_translation_included": false,
+    "directx_and_opengl_family_translation_included": false,
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": false,
+    "full_mlx_test_suite_included": false,
+    "remaining_scope": {
+      "all_discovered_binary_instantiations_included": true,
+      "opengl_numerical_execution_included": false,
+      "directx_whole_family_included": false,
       "mlx_host_runtime_redirection_included": false
     },
     "numerical_parity_claimed": false,

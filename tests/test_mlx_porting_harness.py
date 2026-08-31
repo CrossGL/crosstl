@@ -12596,6 +12596,8 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
     assert status["host_interface_reflection_included"] is True
     assert status["metal_roundtrip_included"] is True
     assert status["metal_numerical_runtime_included"] is False
+    assert status["opengl_family_translation_included"] is True
+    assert status["directx_family_translation_included"] is False
     assert status["directx_and_opengl_family_translation_included"] is False
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is False
@@ -12603,6 +12605,8 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
     assert status["remaining_scope"] == {
         "uncovered_binary_entry_count": 0,
         "metal_numerical_execution_included": False,
+        "opengl_whole_family_included": True,
+        "directx_whole_family_included": False,
         "directx_and_opengl_whole_family_included": False,
         "mlx_host_runtime_redirection_included": False,
     }
@@ -12625,6 +12629,217 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
     assert "4,122 artifacts contain 6,026 exact materializations" in guide
     assert "compiles all 4,122 exact artifacts" in guide
     assert "does not claim Metal numerical execution" in guide
+
+
+def test_binary_opengl_translation_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["binary_opengl_translation_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/binary.metal"
+    assert status["source_sha256"] == (
+        "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e"
+    )
+    assert status["target"] == "opengl"
+    assert status["scope"] == {
+        "discovered_binary_instantiation_count": 4122,
+        "entry_count": 4122,
+        "shape_count": 18,
+        "template_count": 11,
+        "operator_count": 24,
+        "input_output_type_pair_count": 25,
+        "semantic_family_count": 25,
+        "base_shape_entry_count": 3570,
+        "work_per_thread_shape_entry_count": 552,
+        "uncovered_binary_entry_count": 0,
+        "all_discovered_binary_instantiations_included": True,
+    }
+
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/binary.opengl-translation.json",
+        "schema_version": 2,
+        "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "size_bytes": len(contract_bytes),
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryCount": 4122,
+        "shapeCount": 18,
+        "templateCount": 11,
+        "operatorCount": 24,
+        "typePairCount": 25,
+        "familyCount": 25,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    assert len(contract["entries"]) == 4122
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 4122
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["shape_counts"] == contract["classifications"]["shapes"]
+    assert sum(status["shape_counts"].values()) == 4122
+    assert len(status["shape_counts"]) == 18
+    assert status["template_counts"] == contract["classifications"]["templates"]
+    assert sum(status["template_counts"].values()) == 4122
+    assert len(status["template_counts"]) == 11
+    assert len(contract["classifications"]["operators"]) == 24
+    assert sum(contract["classifications"]["operators"].values()) == 4122
+    assert len(contract["classifications"]["typePairs"]) == 25
+    assert sum(contract["classifications"]["typePairs"].values()) == 4122
+    assert len(contract["classifications"]["families"]) == 25
+    assert sum(contract["classifications"]["families"].values()) == 4122
+
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 4122,
+        "artifact_count": 4122,
+        "translated_count": 4122,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "target_entry_point": "main",
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 6026,
+        "reachable_index_helper_specialization_count": 1904,
+        "unsupported_specialization_count": 0,
+        "selected_operator_implementation_count_per_artifact": 1,
+        "unselected_operator_bodies_pruned": True,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["portability_preconditions"] == {
+        "kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
+        "minimum": 0,
+        "maximum": 2147483647,
+        "expressions": [
+            "offset + i",
+            "a_idx",
+            "b_idx",
+            "out_idx",
+            "out_idx++",
+            "idx.x",
+            "idx.y",
+        ],
+    }
+    assert contract["portabilityPreconditions"] == {
+        "indexRangeAssertions": [
+            {
+                "source": status["source"],
+                "expression": expression,
+                "minimum": 0,
+                "maximum": 2147483647,
+            }
+            for expression in status["portability_preconditions"]["expressions"]
+        ],
+        "contractKind": status["portability_preconditions"]["kind"],
+        "inferred": False,
+        "runtimeEnforced": False,
+    }
+    assert status["implementation_contracts"] == {
+        "explicit_index_range_preconditions_required": True,
+        "unproven_index_narrowing_fail_closed": True,
+        "source_default_template_parameter_provenance": True,
+        "call_site_index_helper_materialization": True,
+        "shape_specific_resource_reflection": True,
+        "storage_buffer_array_resource_lowering": True,
+        "selected_operator_body_pruning": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": 3,
+        "maximum_resource_count_per_artifact": 7,
+        "reflected_resource_count": 19106,
+        "resource_counts_by_shape": contract["artifactContract"][
+            "reflectedResourceCountsByShape"
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": contract["artifactContract"][
+            "generatedSizeBytesTotal"
+        ],
+        "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
+    }
+    assert status["native_validation"] == {
+        "platform": "ubuntu-latest",
+        "compiler": (
+            "glslangValidator --target-env opengl --target-env spirv1.3 -S comp"
+        ),
+        "validator": "spirv-val --target-env spv1.3",
+        "status": "required-on-ci",
+        "compiled_artifact_count": 4122,
+        "validated_artifact_count": 4122,
+        "all_spirv_artifacts_nonempty": True,
+        "ci_shard_count": 24,
+        "test": (
+            "tests/test_translator/test_mlx_binary_complete_opengl.py::"
+            "test_current_mlx_binary_family_translates_to_opengl"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["opengl_family_translation_included"] is True
+    assert status["opengl_numerical_runtime_included"] is False
+    assert status["directx_family_translation_included"] is False
+    assert status["directx_and_opengl_family_translation_included"] is False
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "all_discovered_binary_instantiations_included": True,
+        "opengl_numerical_execution_included": False,
+        "directx_whole_family_included": False,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "all 4,122 discovered current-pinned `binary.metal` entries" in readme
+    assert "Seven explicit host/runtime index-range preconditions" in readme
+    assert "require 4,122 non-empty SPIR-V modules" in readme
+    assert "not numerical execution or MLX host runtime redirection" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 4,122 binary entries to standalone OpenGL" in guide
+    assert "seven-resource target interfaces" in guide
+    assert "Required Linux CI partitions the family into 24 disjoint shards" in guide
+    assert "does not claim numerical execution" in guide
 
 
 def test_fft_directx_evidence_records_selected_native_runtime_proof():
