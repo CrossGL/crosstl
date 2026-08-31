@@ -377,6 +377,110 @@ MLX_RMS_NORM_DISPATCH_VARIANTS = {
         "specializationConstants": {"20": True},
     },
 }
+MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS = {
+    "layer_norm": {
+        "layer_normfloat32": {
+            "sha256": (
+                "36ddd66d46bc007e5476666f40dc905d772a5fa0586ee3b891dca77cd168baa7"
+            ),
+            "sizeBytes": 6397,
+        },
+        "vjp_layer_normfloat32": {
+            "sha256": (
+                "5d8e2722213b594a957a6a6241652d897f22f211d79558c378836371ef777257"
+            ),
+            "sizeBytes": 9365,
+        },
+    },
+    "logsumexp": {
+        "block-float32-axis-1025": {
+            "sha256": (
+                "2195c1362deda57c8303e925de7fc81c2d4c896ee05fd83b192a5e7694756d1d"
+            ),
+            "sizeBytes": 3906,
+        },
+        "block-float32-axis-32": {
+            "sha256": (
+                "29eecb2db0519de538dbada8248054f45d9202e3febbec72ccf91a228d0d6978"
+            ),
+            "sizeBytes": 3326,
+        },
+    },
+    "rms_norm": {
+        "forward-bfloat16-axis-32": {
+            "sha256": (
+                "677b53a014ca7914d39e72587e01e85224d7269d7d33158530abdcddb7bdbc87"
+            ),
+            "sizeBytes": 4727,
+        },
+        "forward-float16-axis-32": {
+            "sha256": (
+                "f728add5b10029d27ead20cb927e7d31d283438daa285b752fc598bceb0619a4"
+            ),
+            "sizeBytes": 3655,
+        },
+        "forward-float32-axis-256": {
+            "sha256": (
+                "ecff511f6979f715730356d0590c07eb12d921993ad2da48b6f93d775580ed44"
+            ),
+            "sizeBytes": 4213,
+        },
+        "forward-float32-axis-32": {
+            "sha256": (
+                "86a704015cf599637a9c5bcb1569f8f2b433c2c15fcb28150478e29603b7d1a5"
+            ),
+            "sizeBytes": 3635,
+        },
+        "forward-float32-axis-4099": {
+            "sha256": (
+                "3aac235117ae56935115039b56e2f7fc5bb9fa77d382f51f347733e2e1e6abe7"
+            ),
+            "sizeBytes": 4831,
+        },
+        "forward-float32-axis-512": {
+            "sha256": (
+                "b48ea9a08160a6e7fb83d0cad5a45fc3f40f123d25294d46af2df48ee53f8755"
+            ),
+            "sizeBytes": 4215,
+        },
+        "vjp-float32-axis-256-has-w-false": {
+            "sha256": (
+                "6999e3a5ac77626a3cb19428b964c7dbb9269d54cbf11e37a74a1f9c2685ebf5"
+            ),
+            "sizeBytes": 6003,
+        },
+        "vjp-float32-axis-256-has-w-true": {
+            "sha256": (
+                "848119e50fbe9b4b6cdb7865d64cfbd485e9985647adfdf33442ead93ddd1c48"
+            ),
+            "sizeBytes": 6002,
+        },
+        "vjp-float32-axis-32-has-w-false": {
+            "sha256": (
+                "407d649da971792f1bd1fcf57b3709f2b604b2b6ff51f32759a1e0f4128ba28c"
+            ),
+            "sizeBytes": 5425,
+        },
+        "vjp-float32-axis-32-has-w-true": {
+            "sha256": (
+                "bdddb028a8f7dbe2f74a1e1d06172db34e3383e7fc96da5bf8ca91457a314aea"
+            ),
+            "sizeBytes": 5424,
+        },
+        "vjp-float32-axis-8192-has-w-false": {
+            "sha256": (
+                "3e4867f43e1ba6b3d410c2d80bee6cf3851cb8a615f258658d398547c8b5f058"
+            ),
+            "sizeBytes": 6972,
+        },
+        "vjp-float32-axis-8192-has-w-true": {
+            "sha256": (
+                "fa157ff00915cb82aafae347b08acc8595597b11f8e3636eec385d85945c9704"
+            ),
+            "sizeBytes": 6971,
+        },
+    },
+}
 MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
     "mlx/backend/metal/kernels/scaled_dot_product_attention.metal"
@@ -1031,7 +1135,7 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
     "translation_diagnostic_count": 0,
     "required_capabilities": [],
     "generated_hlsl": {
-        "sha256": "52569209d98f1bf2ae7fa645f2e4858a420f3920368e14aecb98c2ba9939ac8f",
+        "sha256": "a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438",
         "size_bytes": 4357,
     },
     "materialization": {
@@ -1151,8 +1255,8 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "b7d6251d27fcdafc003c85975bf5c5774a1fca0a3d4602b9e9ea5ef62673f76e",
-        "size_bytes": 15835,
+        "sha256": "c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de",
+        "size_bytes": 16359,
     },
     "compiler_validation": {
         "compiler": "dxc",
@@ -5144,6 +5248,31 @@ def _require_clean_frontier_report(
     return artifacts_by_source
 
 
+def _require_directx_dispatch_generated_artifacts(
+    family: str,
+    variants: Mapping[str, Mapping[str, Any]],
+    *,
+    hash_field: str,
+) -> None:
+    observed: dict[str, dict[str, Any]] = {}
+    for name, variant in variants.items():
+        generated = variant.get("generatedHlsl")
+        _require(
+            isinstance(generated, Mapping)
+            and isinstance(generated.get(hash_field), str)
+            and isinstance(generated.get("sizeBytes"), int),
+            f"{family} generated HLSL identity is incomplete for {name}",
+        )
+        observed[name] = {
+            "sha256": generated[hash_field],
+            "sizeBytes": generated["sizeBytes"],
+        }
+    _require(
+        observed == MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS[family],
+        f"{family} generated HLSL identities changed",
+    )
+
+
 def _require_layer_norm_dispatch_frontier_report(
     mlx_root: Path,
     output_dir: Path,
@@ -5427,6 +5556,12 @@ def _require_layer_norm_dispatch_frontier_report(
             and all(run.get("status") == "ok" for run in toolchain_runs),
             "LayerNorm dispatch DXC did not validate both artifacts",
         )
+
+    _require_directx_dispatch_generated_artifacts(
+        "layer_norm",
+        generated_evidence,
+        hash_field="sha256",
+    )
 
     evidence = {
         "status": "translated-dxc-validated" if validated else "translated",
@@ -5758,6 +5893,12 @@ def _require_logsumexp_dispatch_frontier_report(
             and {run.get("path") for run in toolchain_runs} == artifact_paths,
             "LogSumExp dispatch DXC did not validate every artifact",
         )
+
+    _require_directx_dispatch_generated_artifacts(
+        "logsumexp",
+        generated_evidence,
+        hash_field="normalizedSha256",
+    )
 
     evidence = {
         "status": "translated-dxc-validated" if validated else "translated",
@@ -6113,6 +6254,12 @@ def _require_rms_norm_dispatch_frontier_report(
             and {run.get("path") for run in toolchain_runs} == artifact_paths,
             "RMSNorm dispatch DXC did not validate every artifact",
         )
+
+    _require_directx_dispatch_generated_artifacts(
+        "rms_norm",
+        generated_evidence,
+        hash_field="normalizedSha256",
+    )
 
     evidence = {
         "status": "translated-dxc-validated" if validated else "translated",

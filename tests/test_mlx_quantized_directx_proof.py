@@ -317,6 +317,20 @@ def test_quantized_directx_proof_pins_revision_source_header_and_entry():
         module.MLX_QUANTIZED_ENTRY_POINT,
         module.MLX_QUANTIZED_GATHER_ENTRY_POINT,
     }
+    assert module.GENERATED_ARTIFACTS == {
+        module.MLX_QUANTIZED_ENTRY_POINT: {
+            "sha256": (
+                "a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438"
+            ),
+            "sizeBytes": 4357,
+        },
+        module.MLX_QUANTIZED_GATHER_ENTRY_POINT: {
+            "sha256": (
+                "c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de"
+            ),
+            "sizeBytes": 16359,
+        },
+    }
     assert module.DIRECTX_TARGET_PROFILE == "directx-12"
     assert module.TEMPLATE_SPECIALIZATION_LIMIT == 128
     assert module.MATERIALIZATION_WORK_LIMIT == 4096
@@ -928,6 +942,33 @@ def test_quantized_directx_toolchain_requirement_and_output_fail_closed(
         )
 
 
+def test_quantized_directx_run_fails_closed_on_generated_identity_drift(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_proof()
+    mlx_root = _synthetic_checkout(module, tmp_path, monkeypatch)
+    work_dir = mlx_root / "proof"
+
+    def translate_report(_config, *, report_path):
+        payload, _artifact_path = _translated_payload(module, mlx_root, work_dir)
+        module._write_json(report_path, payload)
+        return payload
+
+    monkeypatch.setattr(module, "_translate_report", translate_report)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: None)
+
+    with pytest.raises(
+        module.MlxQuantizedDirectXProofError,
+        match="generated DirectX artifact identity changed",
+    ):
+        module.run_proof(
+            mlx_root,
+            work_dir,
+            require_directx_toolchain=False,
+        )
+
+
 def test_quantized_directx_run_writes_deterministic_compile_only_summary(
     tmp_path,
     monkeypatch,
@@ -943,6 +984,15 @@ def test_quantized_directx_run_writes_deterministic_compile_only_summary(
 
     monkeypatch.setattr(module, "_translate_report", translate_report)
     monkeypatch.setattr(module.shutil, "which", lambda _name: None)
+    generated = _generated_hlsl().encode("utf-8")
+    monkeypatch.setitem(
+        module.GENERATED_ARTIFACTS,
+        module.MLX_QUANTIZED_ENTRY_POINT,
+        {
+            "sha256": hashlib.sha256(generated).hexdigest(),
+            "sizeBytes": len(generated),
+        },
+    )
 
     summary = module.run_proof(
         mlx_root,

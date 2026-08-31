@@ -595,7 +595,7 @@ A selected DirectX replay of `quantized.metal` now emits one artifact with zero
 translation diagnostics for `affine_quantize_float_gs_32_b_2`. It materializes
 six reachable specializations and three concrete records while pruning 110,861
 unreachable candidates. The generated HLSL is 4,357 bytes with SHA-256
-`52569209d98f1bf2ae7fa645f2e4858a420f3920368e14aecb98c2ba9939ac8f`.
+`a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438`.
 This path verifies the completed template-member and owner-dependent `constexpr`
 work tracked by CrossGL/crosstl#1476 and CrossGL/crosstl#1672. After unreachable
 materializations are pruned, this selected float specialization contains no live
@@ -647,8 +647,8 @@ The pinned `gather_qmv` host dispatch in `mlx/backend/metal/quantized.cpp` sets
 `bk = 32` and `MTL::Size group_dims(bk, 2, 1)`. The project rule therefore
 emits `[numthreads(32, 2, 1)]`. The kernel's simdgroup indices require a
 32-lane subgroup, so the generated HLSL also emits `[WaveSize(32)]` and requires
-Shader Model 6.6. The resulting artifact is 15,835 bytes with SHA-256
-`b7d6251d27fcdafc003c85975bf5c5774a1fca0a3d4602b9e9ea5ef62673f76e`.
+Shader Model 6.6. The resulting artifact is 16,359 bytes with SHA-256
+`c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de`.
 Windows CI compiles it with DXC profile `cs_6_6` and `-WX`. This is selected-entry
 evidence for the fixed-array alias work tracked by
 [#1497](https://github.com/CrossGL/crosstl/issues/1497) and the read-only storage

@@ -2541,6 +2541,19 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     }
     assert layer_norm["artifact_count"] == len(module.MLX_LAYER_NORM_DISPATCH_VARIANTS)
     assert set(layer_norm["variants"]) == set(module.MLX_LAYER_NORM_DISPATCH_VARIANTS)
+
+    def generated_identities(variants, hash_key):
+        return {
+            name: {
+                "sha256": variant["generated_hlsl"][hash_key],
+                "sizeBytes": variant["generated_hlsl"]["size_bytes"],
+            }
+            for name, variant in variants.items()
+        }
+
+    assert generated_identities(layer_norm["variants"], "sha256") == (
+        module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS["layer_norm"]
+    )
     assert layer_norm["dxc_validated_artifact_count"] == 2
     assert layer_norm["runtime_execution_attempted"] is False
     assert layer_norm["numerical_parity_claimed"] is False
@@ -2561,6 +2574,9 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     }
     assert logsumexp["artifact_count"] == len(module.MLX_LOGSUMEXP_DISPATCH_VARIANTS)
     assert set(logsumexp["variants"]) == set(module.MLX_LOGSUMEXP_DISPATCH_VARIANTS)
+    assert generated_identities(logsumexp["variants"], "sha256") == (
+        module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS["logsumexp"]
+    )
     assert logsumexp["dxc_validated_artifact_count"] == 2
     for workload_id, expected in module.MLX_LOGSUMEXP_DISPATCH_VARIANTS.items():
         variant = logsumexp["variants"][workload_id]
@@ -2595,6 +2611,9 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     }
     assert rms_norm["artifact_count"] == len(module.MLX_RMS_NORM_DISPATCH_VARIANTS)
     assert set(rms_norm["variants"]) == set(module.MLX_RMS_NORM_DISPATCH_VARIANTS)
+    assert generated_identities(rms_norm["variants"], "normalized_sha256") == (
+        module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS["rms_norm"]
+    )
     assert rms_norm["dxc_validated_artifact_count"] == 12
     for workload_id, expected in module.MLX_RMS_NORM_DISPATCH_VARIANTS.items():
         variant = rms_norm["variants"][workload_id]
@@ -9626,7 +9645,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`MTL::Size group_dims(bk, 2, 1)`" in normalized_readme
     assert "`[numthreads(32, 2, 1)]`" in normalized_readme
     assert "`[WaveSize(32)]`" in normalized_readme
-    assert "15,835 bytes" in normalized_readme
+    assert "16,359 bytes" in normalized_readme
     assert "materializes the overloaded `elem_to_loc` helper" in normalized_readme
     assert "independent shape and stride resource offsets" in normalized_readme
     assert "passes its logical offset as `inout int64_t`" in normalized_readme
@@ -9659,7 +9678,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["compiler_target_profiles"] == ["directx-12"]
     assert directx["required_capabilities"] == []
     assert directx["generated_hlsl"] == {
-        "sha256": "52569209d98f1bf2ae7fa645f2e4858a420f3920368e14aecb98c2ba9939ac8f",
+        "sha256": "a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438",
         "size_bytes": 4357,
     }
     assert directx["materialization"] == {
@@ -9839,8 +9858,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         },
     }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "b7d6251d27fcdafc003c85975bf5c5774a1fca0a3d4602b9e9ea5ef62673f76e",
-        "size_bytes": 15835,
+        "sha256": "c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de",
+        "size_bytes": 16359,
     }
     assert adjacent["compiler_validation"] == {
         "compiler": "dxc",
