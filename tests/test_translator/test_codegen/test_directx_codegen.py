@@ -13439,13 +13439,13 @@ def test_for_statement_preserves_declaration_initializers():
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "const float weights[2];" in generated_code
-    assert "for (int i = 0; (i < 2); ++i)" in generated_code
-    assert "for (i = 0; (i < 4); ++i)" in generated_code
+    assert "for (int i = 0; (i < 2); i++)" in generated_code
+    assert "for (i = 0; (i < 4); i++)" in generated_code
     assert "for (const int fixed = 0; (fixed < 0); )" in generated_code
     assert "for (; ; )" in generated_code
     assert "continue;" in generated_code
     assert "break;" in generated_code
-    assert "for (i; (i < 2); ++i)" not in generated_code
+    assert "for (i; (i < 2); i++)" not in generated_code
     assert "for (fixed; (fixed < 0); )" not in generated_code
     assert "BreakNode(" not in generated_code
     assert "ContinueNode(" not in generated_code

@@ -1261,18 +1261,18 @@
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
     "metal_numerical_runtime_included": false,
-    "directx_family_translation_included": false,
+    "directx_family_translation_included": true,
     "opengl_family_translation_included": true,
-    "directx_and_opengl_family_translation_included": false,
+    "directx_and_opengl_family_translation_included": true,
     "mlx_host_runtime_included": false,
     "runtime_integration_included": false,
     "full_mlx_test_suite_included": false,
     "remaining_scope": {
       "all_discovered_unary_instantiations_included": true,
       "metal_numerical_execution_included": false,
-      "directx_whole_family_included": false,
+      "directx_whole_family_included": true,
       "opengl_whole_family_included": true,
-      "directx_and_opengl_whole_family_included": false,
+      "directx_and_opengl_whole_family_included": true,
       "mlx_host_runtime_redirection_included": false
     },
     "numerical_parity_claimed": false,
@@ -1460,18 +1460,254 @@
     "host_interface_reflection_included": true,
     "opengl_family_translation_included": true,
     "opengl_numerical_runtime_included": false,
-    "directx_family_translation_included": false,
+    "directx_family_translation_included": true,
     "mlx_host_runtime_included": false,
     "runtime_integration_included": false,
     "full_mlx_test_suite_included": false,
     "remaining_scope": {
       "all_discovered_unary_instantiations_included": true,
       "opengl_numerical_execution_included": false,
-      "directx_whole_family_included": false,
+      "directx_whole_family_included": true,
       "mlx_host_runtime_redirection_included": false
     },
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
+  },
+  "unary_directx_translation_status": {
+    "status": "selected-entry-complete-family-native-compilation-validated",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/unary.metal",
+    "source_sha256": "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b",
+    "target": "directx",
+    "scope": {
+      "discovered_unary_instantiation_count": 877,
+      "entry_count": 877,
+      "shape_counts": {
+        "v": 183,
+        "v2": 183,
+        "vn": 145,
+        "gn1": 183,
+        "gn4large": 183
+      },
+      "template_count": 3,
+      "operator_count": 37,
+      "input_output_type_pair_count": 20,
+      "semantic_family_count": 16,
+      "all_discovered_unary_instantiations_included": true
+    },
+    "contract": {
+      "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
+      "schema_version": 2,
+      "sha256": "bbaf6d03c436670a769ecafbfa787dd6b3bdecd23e8d7f3b725714fee0a14cbd",
+      "size_bytes": 318158,
+      "entry_identity_fields": [
+        "entryPoint",
+        "shape",
+        "templateName",
+        "operator",
+        "inputType",
+        "outputType",
+        "family",
+        "sha256",
+        "sizeBytes"
+      ]
+    },
+    "project_translation": {
+      "selected_entry_run_count": 877,
+      "artifact_count": 877,
+      "translated_count": 877,
+      "failed_count": 0,
+      "project_error_diagnostic_count": 0,
+      "local_generation_warning_count": 1,
+      "local_generation_warning_codes": [
+        "project.validate.toolchain-unavailable"
+      ],
+      "target_entry_point": "CSMain",
+      "provenance": "entry-scoped-translate",
+      "intermediate": "crossgl",
+      "specialization_count": 1243,
+      "specialization_counts_by_shape": {
+        "v": 183,
+        "v2": 183,
+        "vn": 145,
+        "gn1": 366,
+        "gn4large": 366
+      },
+      "unsupported_specialization_count": 0,
+      "selected_operator_implementation_count_per_artifact": 1,
+      "unselected_operator_bodies_pruned": true,
+      "reachable_complex_operator_dependencies_retained": true,
+      "reachable_kernel_count_per_artifact": 1,
+      "residual_template_syntax": false,
+      "residual_decltype_syntax": false,
+      "residual_call_operator_syntax": false,
+      "unsupported_placeholder_count": 0
+    },
+    "portability_preconditions": {
+      "kind": "explicit-host-runtime-portability-preconditions",
+      "inferred": false,
+      "runtime_enforced": false,
+      "minimum": 0,
+      "maximum": 2147483647,
+      "expressions": [
+        "offset + i",
+        "out_idx++",
+        "idx"
+      ]
+    },
+    "implementation_contracts": {
+      "complete_bfloat16_unary_intrinsic_lowering": true,
+      "bfloat16_inverse_hyperbolic_float_helper_roundtrip": true,
+      "const_device_scalar_reference_emitted_as_read_only_structured_buffer": true,
+      "const_device_scalar_reference_expression_aliases_element_zero": true,
+      "const_device_scalar_reference_preserves_scalar_expression_type": true,
+      "postfix_update_position_preserved": true,
+      "source_derived_native_16bit_compiler_arguments": true,
+      "explicit_index_range_preconditions_required": true,
+      "unproven_index_narrowing_fail_closed": true
+    },
+    "host_interface": {
+      "status": "ready",
+      "resource_counts_by_shape": {
+        "v": 3,
+        "v2": 4,
+        "vn": 3,
+        "gn1": 6,
+        "gn4large": 6
+      },
+      "reflected_resource_count": 3912,
+      "vector_resources": [
+        {
+          "name": "in_",
+          "kind": "buffer",
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "name": "out_",
+          "kind": "buffer",
+          "binding": 1,
+          "access": "read_write"
+        },
+        {
+          "name": "{sanitizedEntryPoint}_size_Constants",
+          "kind": "constant-buffer",
+          "binding": 2,
+          "access": "read"
+        }
+      ],
+      "work_per_thread_resources": [
+        {
+          "name": "in_",
+          "kind": "buffer",
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "name": "out_",
+          "kind": "buffer",
+          "binding": 1,
+          "access": "read_write"
+        },
+        {
+          "name": "{sanitizedEntryPoint}_size_Constants",
+          "kind": "constant-buffer",
+          "binding": 2,
+          "access": "read"
+        },
+        {
+          "name": "CrossGLDispatchInfo",
+          "kind": "constant-buffer",
+          "binding": 3,
+          "access": "read"
+        }
+      ],
+      "gather_resources": [
+        {
+          "name": "in_",
+          "kind": "buffer",
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "name": "out_",
+          "kind": "buffer",
+          "binding": 1,
+          "access": "read_write"
+        },
+        {
+          "name": "in_shape",
+          "kind": "buffer",
+          "binding": 2,
+          "access": "read"
+        },
+        {
+          "name": "in_strides",
+          "kind": "buffer",
+          "binding": 3,
+          "access": "read"
+        },
+        {
+          "name": "ndim",
+          "kind": "buffer",
+          "binding": 4,
+          "access": "read"
+        },
+        {
+          "name": "CrossGLDispatchInfo",
+          "kind": "constant-buffer",
+          "binding": 0,
+          "access": "read"
+        }
+      ],
+      "host_dispatch_workgroup_size": [
+        1,
+        1,
+        1
+      ]
+    },
+    "artifacts": {
+      "generated_size_bytes_total": 3033599,
+      "generated_size_range": {
+        "minimum": {
+          "entryPoint": "v_Absint8int8",
+          "sizeBytes": 2252
+        },
+        "maximum": {
+          "entryPoint": "gn4large_ArcTancomplex64complex64",
+          "sizeBytes": 7332
+        }
+      }
+    },
+    "native_validation": {
+      "platform": "windows-latest",
+      "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
+      "compiler_arguments": [
+        "-enable-16bit-types"
+      ],
+      "status": "required-on-ci",
+      "compiled_artifact_count": 877,
+      "all_dxil_artifacts_nonempty": true,
+      "ci_shard_count": 5,
+      "test": "tests/test_translator/test_mlx_unary_complete_directx.py::test_current_mlx_unary_family_translates_to_directx"
+    },
+    "host_interface_reflection_included": true,
+    "opengl_family_translation_included": true,
+    "directx_family_translation_included": true,
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": false,
+    "full_mlx_test_suite_included": false,
+    "remaining_scope": {
+      "all_discovered_unary_instantiations_included": true,
+      "directx_numerical_execution_included": false,
+      "opengl_numerical_execution_included": false,
+      "directx_and_opengl_whole_family_included": true,
+      "mlx_host_runtime_redirection_included": false
+    },
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false,
+    "directx_numerical_runtime_included": false,
+    "directx_and_opengl_family_translation_included": true
   },
   "binary_scalar_metal_roundtrip_status": {
     "status": "selected-entry-scalar-family-native-compilation-validated",

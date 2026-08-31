@@ -4026,6 +4026,72 @@ def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
     )
 
 
+def test_mlx_project_porting_workflow_runs_unary_complete_directx_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_unary_complete_directx.py"
+
+    directx_job = _workflow_job_section(
+        mlx_porting,
+        "mlx-unary-complete-directx-translation",
+    )
+    assert (
+        "name: MLX complete unary DirectX translation "
+        "(shard ${{ matrix.shard_index }} of 5)" in directx_job
+    )
+    assert "if: github.event_name != 'schedule'" in directx_job
+    assert "runs-on: windows-latest" in directx_job
+    assert "timeout-minutes: 180" in directx_job
+    assert "fail-fast: false" in directx_job
+    assert _matrix_values(directx_job, "shard_index") == {
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+    }
+    assert 'python-version: "3.12"' in directx_job
+    assert "python -m pip install -e . pytest-xdist" in directx_job
+    assert "Install pinned Windows DirectX Shader Compiler" in directx_job
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in directx_job
+    assert "dxc_2026_05_27.zip" in directx_job
+    assert "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4" in (
+        directx_job
+    )
+    assert "Get-FileHash -Path $archive -Algorithm SHA256" in directx_job
+    assert "DXC archive checksum mismatch" in directx_job
+    assert "dxc.exe" in directx_job
+    assert "--version" in directx_job
+    assert "Checkout current MLX unary corpus" in directx_job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in directx_job
+
+    directx_step = ci_coverage.workflow_step_section(
+        directx_job,
+        "Prove current MLX complete unary family DirectX translation",
+    )
+    assert "if: runner.os" not in directx_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_UNARY_DIRECTX_TRANSLATION: "1"' in directx_step
+    assert (
+        "CROSTL_MLX_UNARY_DIRECTX_SHARD_INDEX: ${{ matrix.shard_index }}"
+        in directx_step
+    )
+    assert 'CROSTL_MLX_UNARY_DIRECTX_SHARD_COUNT: "5"' in directx_step
+    assert (
+        f"{test_path}::test_current_mlx_unary_family_translates_to_directx"
+        in directx_step
+    )
+    assert "-n auto" in directx_step
+    assert "-k" not in directx_step
+    assert mlx_porting.count(f'- "{test_path}"') == 2
+    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
+    assert "Prove current MLX complete unary family DirectX translation" not in (
+        matrix_job
+    )
+
+
 def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()

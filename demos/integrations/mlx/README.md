@@ -57,7 +57,27 @@ The current harness verifies:
   `glslangValidator` and validate every module with `spirv-val`. The gate
   requires 877 non-empty SPIR-V 1.3 modules. This is complete OpenGL
   translation, reflection, and native compiler coverage, not numerical
-  execution, MLX host runtime redirection, or complete DirectX family coverage;
+  execution or MLX host runtime redirection;
+- selected-entry translation of all 877 discovered current-pinned
+  `unary.metal` entries to DirectX. The schema-v2
+  `contracts/unary.directx-translation.json` contract pins every standalone
+  `CSMain` artifact across the same five shapes, 37 operators, 20 type pairs,
+  and 1,243 materializations, with 3,912 reflected HLSL resources: three per
+  `v_` and `vn_` artifact, four per `v2_` artifact, and six per gather artifact.
+  Work-per-thread and gather forms include the generated `CrossGLDispatchInfo`
+  dispatch cbuffer at bindings `b3` and `b0`, respectively. DirectX bfloat
+  lowering covers the
+  complete unary intrinsic family, while `acosh`, `asinh`, and `atanh` decode
+  through portable float helpers before exact bfloat reconstruction. The
+  read-only source `device const int& ndim` becomes a `StructuredBuffer<int>`
+  scalar view at element zero, and source `out_idx++` remains postfix in HLSL.
+  The same three explicit host/runtime index-range preconditions are required.
+  Five required Windows CI shards compile every artifact with pinned DXC,
+  source-derived `-enable-16bit-types`, warnings fatal, profile `cs_6_2`, and
+  entry point `CSMain`; the gate requires 877 non-empty DXIL modules. Together
+  with the OpenGL proof this closes complete discovered unary translation,
+  reflection, and native compiler coverage on both targets, not numerical
+  execution or MLX host runtime redirection;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 4,122
   discovered current-pinned binary entries from ``binary.metal``. The complete
   contract spans 18 shapes and 11 concrete kernel templates, 24 operators, and

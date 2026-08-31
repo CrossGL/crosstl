@@ -524,7 +524,7 @@ constant-resource provenance, const-device references, postfix update position,
 and native Metal union aliasing while ambiguous address spaces and unsupported
 reinterpretation continue to fail closed. This complete discovered-unary
 selected-entry proof does not claim Metal numerical execution, host-runtime
-redirection, DirectX whole-family coverage, or the MLX test suite.
+redirection, or the MLX test suite.
 
 The same entry-scoped pipeline now translates all 877 current-pinned unary
 entries to standalone OpenGL ``main`` artifacts. The schema-v2
@@ -553,8 +553,38 @@ retranslates its exact entries, verifies generated identity, materialization,
 with ``spirv-val --target-env spv1.3``, and requires every SPIR-V module to be
 non-empty. This closes whole-family OpenGL translation, reflection, and native
 compiler coverage; it does not claim OpenGL numerical execution, MLX host
-runtime redirection, complete DirectX family translation, or MLX test-suite
-parity.
+runtime redirection, or MLX test-suite parity.
+
+The same entry-scoped pipeline now translates all 877 current-pinned unary
+entries to standalone DirectX ``CSMain`` artifacts. The schema-v2
+``unary.directx-translation.json`` contract retains the exact five-shape,
+37-operator, 20-type-pair classification and 1,243 materializations. ``v_`` and
+``vn_`` artifacts reflect input, output, and entry-scoped size resources;
+``v2_`` artifacts additionally reflect the generated ``CrossGLDispatchInfo``
+workgroup-count cbuffer at ``b3``. Gather artifacts reflect input, output,
+shape, stride, and read-only ``ndim`` structured buffers plus their generated
+``CrossGLDispatchInfo`` cbuffer at ``b0``, for 3,912 reflected HLSL resources
+in total. Source scalar uses of
+``device const int& ndim`` alias ``ndim[0]`` and source ``out_idx++`` remains a
+postfix update.
+
+DirectX bfloat support covers every unary intrinsic required by the family.
+The inverse-hyperbolic ``acosh``, ``asinh``, and ``atanh`` paths decode bfloat
+to float, invoke their portable float helpers, and round back to the exact
+bfloat payload representation. All artifacts derive
+``-enable-16bit-types`` from retained native 16-bit declarations and target
+shader model ``cs_6_2``. As with OpenGL, explicit host/runtime bounds of
+``[0, 2147483647]`` for ``offset + i``, ``out_idx++``, and ``idx`` remain
+portability preconditions rather than inferred or generated checks.
+
+Required CI partitions the family across five disjoint Windows shards. Each
+shard retranslates its exact entries, verifies deterministic identity,
+materialization, ``CSMain`` workgroup metadata, and reflected ABI, then compiles
+with pinned DXC using ``-enable-16bit-types -WX -T cs_6_2 -E CSMain`` and
+requires non-empty DXIL modules. Together, the DirectX and OpenGL contracts
+close complete discovered-unary translation, reflection, and native compiler
+coverage on both targets; they do not claim numerical execution, MLX host
+runtime redirection, or MLX test-suite parity.
 
 The current-pinned MLX binary integration independently proves all 4,122
 discovered entries from ``binary.metal``. Fifteen 238-entry base shapes and

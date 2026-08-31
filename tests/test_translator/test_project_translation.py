@@ -14711,6 +14711,73 @@ workgroup_size = [1, 1, 1]
     assert_compute_glsl_validates_if_available(generated, tmp_path)
 
 
+def test_metal_device_scalar_reference_and_postfix_lower_exactly_to_directx(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    (project_root / "reference.metal").write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+kernel void read_device_reference(
+    device const int& ndim [[buffer(0)]],
+    device int* output [[buffer(1)]],
+    uint gid [[thread_position_in_grid]]) {
+  int cursor = int(gid);
+  output[cursor++] = ndim;
+  output[cursor] = ndim + 1;
+}
+""".strip() + "\n",
+        encoding="utf-8",
+    )
+    (project_root / "crosstl.toml").write_text(
+        """[project]
+include = ["reference.metal"]
+targets = ["directx"]
+output_dir = "out"
+workgroup_size = [1, 1, 1]
+
+[project.sources]
+"**/*.metal" = "metal"
+
+[project.entry_points]
+"reference.metal" = "read_device_reference"
+""",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(project_root), format_output=False)
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    generated = (project_root / artifact["path"]).read_text(encoding="utf-8")
+    assert "StructuredBuffer<int> ndim : register(t0);" in generated
+    assert "RWStructuredBuffer<int> output : register(u1);" in generated
+    assert "output[cursor++] = ndim[0];" in generated
+    assert "output[++cursor]" not in generated
+    assert "const int ndim" not in generated
+    assert "void CSMain(uint3 gid_dispatchThreadID : SV_DispatchThreadID)" in generated
+
+    report_path = project_root / "portability-report.json"
+    report.write_json(report_path)
+    runtime_artifacts = build_runtime_artifact_manifest(report_path)
+    assert runtime_artifacts["success"] is True
+    host_interface = runtime_artifacts["artifacts"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert {
+        resource["name"]: (resource["binding"], resource["access"])
+        for resource in host_interface["resources"]
+    } == {
+        "ndim": (0, "read"),
+        "output": (1, "read_write"),
+    }
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_plain_metal_helper_materialization_retains_reachable_unbound_parameter():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 

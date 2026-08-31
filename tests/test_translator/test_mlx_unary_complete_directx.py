@@ -19,25 +19,26 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_UNARY_SOURCE = "mlx/backend/metal/kernels/unary.metal"
 MLX_UNARY_SHA256 = "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
-REQUIRE_UNARY_OPENGL_ENV = "CROSTL_REQUIRE_MLX_UNARY_OPENGL_TRANSLATION"
-UNARY_OPENGL_SHARD_INDEX_ENV = "CROSTL_MLX_UNARY_OPENGL_SHARD_INDEX"
-UNARY_OPENGL_SHARD_COUNT_ENV = "CROSTL_MLX_UNARY_OPENGL_SHARD_COUNT"
-UNARY_OPENGL_CI_SHARD_COUNT = 5
+REQUIRE_UNARY_DIRECTX_ENV = "CROSTL_REQUIRE_MLX_UNARY_DIRECTX_TRANSLATION"
+UNARY_DIRECTX_SHARD_INDEX_ENV = "CROSTL_MLX_UNARY_DIRECTX_SHARD_INDEX"
+UNARY_DIRECTX_SHARD_COUNT_ENV = "CROSTL_MLX_UNARY_DIRECTX_SHARD_COUNT"
+UNARY_DIRECTX_CI_SHARD_COUNT = 5
 ROOT = Path(__file__).resolve().parents[2]
-UNARY_OPENGL_CONTRACT_PATH = (
+UNARY_DIRECTX_CONTRACT_PATH = (
     ROOT
     / "demos"
     / "integrations"
     / "mlx"
     / "contracts"
-    / "unary.opengl-translation.json"
+    / "unary.directx-translation.json"
 )
-UNARY_OPENGL_CONTRACT_SHA256 = (
-    "9708dd97ea36d14cb6bcf167a0153fc89b8e61d01698130722eac3733669758f"
+UNARY_DIRECTX_CONTRACT_SHA256 = (
+    "bbaf6d03c436670a769ecafbfa787dd6b3bdecd23e8d7f3b725714fee0a14cbd"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -53,7 +54,7 @@ INDEX_RANGE_ASSERTIONS = (
 
 
 @dataclass(frozen=True)
-class UnaryOpenGLWorkload:
+class UnaryDirectXWorkload:
     entry_point: str
     shape: str
     template_name: str
@@ -83,20 +84,20 @@ def _load_contract(path: Path, expected_sha256: str) -> dict:
     return json.loads(contract_bytes)
 
 
-UNARY_OPENGL_CONTRACT = _load_contract(
-    UNARY_OPENGL_CONTRACT_PATH,
-    UNARY_OPENGL_CONTRACT_SHA256,
+UNARY_DIRECTX_CONTRACT = _load_contract(
+    UNARY_DIRECTX_CONTRACT_PATH,
+    UNARY_DIRECTX_CONTRACT_SHA256,
 )
 UNARY_METAL_CONTRACT = _load_contract(
     UNARY_METAL_CONTRACT_PATH,
     UNARY_METAL_CONTRACT_SHA256,
 )
-UNARY_OPENGL_ENTRIES = tuple(UNARY_OPENGL_CONTRACT["entries"])
-UNARY_OPENGL_OPERATOR_TYPES = frozenset(
-    entry["operator"] for entry in UNARY_OPENGL_ENTRIES
+UNARY_DIRECTX_ENTRIES = tuple(UNARY_DIRECTX_CONTRACT["entries"])
+UNARY_DIRECTX_OPERATOR_TYPES = frozenset(
+    entry["operator"] for entry in UNARY_DIRECTX_ENTRIES
 )
-UNARY_OPENGL_WORKLOADS = tuple(
-    UnaryOpenGLWorkload(
+UNARY_DIRECTX_WORKLOADS = tuple(
+    UnaryDirectXWorkload(
         entry_point=entry["entryPoint"],
         shape=entry["shape"],
         template_name=entry["templateName"],
@@ -107,48 +108,48 @@ UNARY_OPENGL_WORKLOADS = tuple(
         sha256=entry["sha256"],
         size_bytes=entry["sizeBytes"],
     )
-    for entry in UNARY_OPENGL_ENTRIES
+    for entry in UNARY_DIRECTX_ENTRIES
 )
 
 
 def _partition_workloads(
-    workloads: tuple[UnaryOpenGLWorkload, ...],
+    workloads: tuple[UnaryDirectXWorkload, ...],
     shard_index: int,
     shard_count: int,
-) -> tuple[UnaryOpenGLWorkload, ...]:
+) -> tuple[UnaryDirectXWorkload, ...]:
     if shard_count <= 0:
-        raise ValueError("MLX unary OpenGL shard count must be positive")
+        raise ValueError("MLX unary DirectX shard count must be positive")
     if shard_index < 0 or shard_index >= shard_count:
         raise ValueError(
-            "MLX unary OpenGL shard index must be in "
+            "MLX unary DirectX shard index must be in "
             f"[0, {shard_count}), got {shard_index}"
         )
     selected = workloads[shard_index::shard_count]
     if not selected:
         raise ValueError(
-            f"MLX unary OpenGL shard {shard_index} of {shard_count} is empty"
+            f"MLX unary DirectX shard {shard_index} of {shard_count} is empty"
         )
     return selected
 
 
-def _current_workloads() -> tuple[UnaryOpenGLWorkload, ...]:
-    raw_index = os.environ.get(UNARY_OPENGL_SHARD_INDEX_ENV)
-    raw_count = os.environ.get(UNARY_OPENGL_SHARD_COUNT_ENV)
+def _current_workloads() -> tuple[UnaryDirectXWorkload, ...]:
+    raw_index = os.environ.get(UNARY_DIRECTX_SHARD_INDEX_ENV)
+    raw_count = os.environ.get(UNARY_DIRECTX_SHARD_COUNT_ENV)
     if raw_index is None and raw_count is None:
-        return UNARY_OPENGL_WORKLOADS
+        return UNARY_DIRECTX_WORKLOADS
     if raw_index is None or raw_count is None:
         raise RuntimeError(
-            f"{UNARY_OPENGL_SHARD_INDEX_ENV} and {UNARY_OPENGL_SHARD_COUNT_ENV} "
+            f"{UNARY_DIRECTX_SHARD_INDEX_ENV} and {UNARY_DIRECTX_SHARD_COUNT_ENV} "
             "must be configured together"
         )
     try:
         shard_index = int(raw_index)
         shard_count = int(raw_count)
     except ValueError as error:
-        raise RuntimeError("MLX unary OpenGL shard values must be integers") from error
+        raise RuntimeError("MLX unary DirectX shard values must be integers") from error
     try:
         return _partition_workloads(
-            UNARY_OPENGL_WORKLOADS,
+            UNARY_DIRECTX_WORKLOADS,
             shard_index,
             shard_count,
         )
@@ -156,36 +157,53 @@ def _current_workloads() -> tuple[UnaryOpenGLWorkload, ...]:
         raise RuntimeError(str(error)) from error
 
 
-CURRENT_UNARY_OPENGL_WORKLOADS = _current_workloads()
+CURRENT_UNARY_DIRECTX_WORKLOADS = _current_workloads()
 
 
 def _target_shape_contracts() -> dict[str, object]:
     contracts = json.loads(json.dumps(UNARY_METAL_CONTRACT["shapeContracts"]))
     target_names = {
-        "in_": "in_Buffer",
-        "out_": "out_Buffer",
-        "size": "{sanitizedEntryPoint}_size_Args",
-        "in_shape": "in_shapeBuffer",
-        "in_strides": "in_stridesBuffer",
-        "ndim": "ndimBuffer",
+        "in_": "in_",
+        "out_": "out_",
+        "size": "{sanitizedEntryPoint}_size_Constants",
+        "in_shape": "in_shape",
+        "in_strides": "in_strides",
+        "ndim": "ndim",
     }
-    for shape_contract in contracts.values():
+    for shape, shape_contract in contracts.items():
         for resource in shape_contract["hostResources"]:
             source_name = resource["name"]
             resource["sourceName"] = source_name
             resource["name"] = target_names[source_name]
             if source_name in {"in_shape", "in_strides"}:
                 resource["kind"] = "buffer"
+        dispatch_binding = None
+        if shape == "v2":
+            shape_contract["hostResourceCountPerArtifact"] = 4
+            dispatch_binding = 3
+        elif shape.startswith("gn"):
+            shape_contract["hostResourceCountPerArtifact"] = 6
+            dispatch_binding = 0
+        if dispatch_binding is not None:
+            shape_contract["hostResources"].append(
+                {
+                    "name": "CrossGLDispatchInfo",
+                    "kind": "constant-buffer",
+                    "binding": dispatch_binding,
+                    "access": "read",
+                    "sourceName": "generated-dispatch-workgroup-count",
+                }
+            )
     return contracts
 
 
-def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
-    contract = UNARY_OPENGL_CONTRACT
+def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None:
+    contract = UNARY_DIRECTX_CONTRACT
     assert contract["schemaVersion"] == 2
     assert contract["commit"] == MLX_COMMIT
     assert contract["source"] == MLX_UNARY_SOURCE
     assert contract["sourceSha256"] == MLX_UNARY_SHA256
-    assert contract["target"] == "opengl"
+    assert contract["target"] == "directx"
     assert contract["selection"] == {
         "entryCount": 877,
         "shapeCount": 5,
@@ -231,35 +249,30 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
         "provenance": "entry-scoped-translate",
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
-        "targetEntryPoint": "main",
-        "reflectedResourceCount": 3363,
+        "targetEntryPoint": "CSMain",
+        "reflectedResourceCount": 3912,
         "reflectedResourceCountsByShape": {
             "v": 549,
-            "v2": 549,
+            "v2": 732,
             "vn": 435,
-            "gn1": 915,
-            "gn4large": 915,
+            "gn1": 1098,
+            "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 4060696,
+        "generatedSizeBytesTotal": 3033599,
         "generatedSizeRange": {
-            "minimum": {
-                "entryPoint": "v_Absint32int32",
-                "sizeBytes": 3568,
-            },
+            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 2252},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 8746,
+                "sizeBytes": 7332,
             },
         },
-        "nativeCompiler": (
-            "glslangValidator --target-env opengl --target-env spirv1.3 -S comp"
-        ),
-        "nativeValidator": "spirv-val --target-env spv1.3",
-        "requiresNonemptySpirvArtifact": True,
+        "nativeCompiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
+        "compilerArguments": ["-enable-16bit-types"],
+        "requiresNonemptyDxilArtifact": True,
     }
 
-    entries = UNARY_OPENGL_ENTRIES
+    entries = UNARY_DIRECTX_ENTRIES
     assert len(entries) == 877
     assert [entry["entryPoint"] for entry in entries] == sorted(
         entry["entryPoint"] for entry in entries
@@ -285,13 +298,13 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 4060696
+    assert sum(entry["sizeBytes"] for entry in entries) == 3033599
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        3568,
-        "v_Absint32int32",
+        2252,
+        "v_Absint8int8",
     )
     assert max((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        8746,
+        7332,
         "gn4large_ArcTancomplex64complex64",
     )
 
@@ -338,27 +351,29 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
         assert entry["sizeBytes"] > 0
 
 
-def test_current_mlx_unary_opengl_ci_shards_are_complete_and_disjoint() -> None:
+def test_current_mlx_unary_directx_ci_shards_are_complete_and_disjoint() -> None:
     shards = tuple(
         _partition_workloads(
-            UNARY_OPENGL_WORKLOADS,
+            UNARY_DIRECTX_WORKLOADS,
             shard_index,
-            UNARY_OPENGL_CI_SHARD_COUNT,
+            UNARY_DIRECTX_CI_SHARD_COUNT,
         )
-        for shard_index in range(UNARY_OPENGL_CI_SHARD_COUNT)
+        for shard_index in range(UNARY_DIRECTX_CI_SHARD_COUNT)
     )
     assert [len(shard) for shard in shards] == [176, 176, 175, 175, 175]
     for shard_index, shard in enumerate(shards):
-        assert shard == UNARY_OPENGL_WORKLOADS[shard_index::UNARY_OPENGL_CI_SHARD_COUNT]
+        assert (
+            shard == UNARY_DIRECTX_WORKLOADS[shard_index::UNARY_DIRECTX_CI_SHARD_COUNT]
+        )
     entry_points = [workload.entry_point for shard in shards for workload in shard]
     assert len(entry_points) == 877
     assert len(set(entry_points)) == 877
     assert set(entry_points) == {
-        workload.entry_point for workload in UNARY_OPENGL_WORKLOADS
+        workload.entry_point for workload in UNARY_DIRECTX_WORKLOADS
     }
 
 
-def _expected_materializations(workload: UnaryOpenGLWorkload) -> list[dict]:
+def _expected_materializations(workload: UnaryDirectXWorkload) -> list[dict]:
     if workload.shape == "v":
         n_value = "1"
         n_source = "source-instantiation"
@@ -415,7 +430,7 @@ def _expected_materializations(workload: UnaryOpenGLWorkload) -> list[dict]:
     return records
 
 
-def _project_config(workload: UnaryOpenGLWorkload) -> str:
+def _project_config(workload: UnaryDirectXWorkload) -> str:
     assertions = "\n\n".join(textwrap.dedent(f"""
             [[project.index_range_assertions]]
             source = "{MLX_UNARY_SOURCE}"
@@ -428,7 +443,7 @@ def _project_config(workload: UnaryOpenGLWorkload) -> str:
         source_roots = ["mlx/backend/metal/kernels"]
         include = ["{MLX_UNARY_SOURCE}"]
         include_dirs = ["."]
-        targets = ["opengl"]
+        targets = ["directx"]
         output_dir = "out"
 
         [project.sources]
@@ -451,7 +466,7 @@ def _project_config(workload: UnaryOpenGLWorkload) -> str:
 def _pinned_mlx_root() -> Path:
     root_value = os.environ.get("CROSTL_MLX_ROOT")
     if not root_value:
-        if os.environ.get(REQUIRE_UNARY_OPENGL_ENV) == "1":
+        if os.environ.get(REQUIRE_UNARY_DIRECTX_ENV) == "1":
             pytest.fail("CROSTL_MLX_ROOT is not configured")
         pytest.skip("CROSTL_MLX_ROOT is not configured")
     mlx_root = Path(root_value).resolve()
@@ -475,44 +490,51 @@ def _required_tool(name: str) -> str:
     path = shutil.which(name)
     if path is not None:
         return path
-    message = f"{name} is required for the complete MLX unary OpenGL proof"
-    if os.environ.get(REQUIRE_UNARY_OPENGL_ENV) == "1":
+    message = f"{name} is required for the complete MLX unary DirectX proof"
+    if os.environ.get(REQUIRE_UNARY_DIRECTX_ENV) == "1":
         pytest.fail(message)
     pytest.skip(message)
 
 
-def _expected_resources(workload: UnaryOpenGLWorkload) -> dict[str, tuple]:
+def _expected_resources(workload: UnaryDirectXWorkload) -> dict[str, tuple]:
     resources = {
-        "in_Buffer": ("buffer", 0, "read"),
-        "out_Buffer": ("buffer", 1, "read_write"),
+        "in_": ("buffer", 0, "read"),
+        "out_": ("buffer", 1, "read_write"),
     }
     if workload.shape.startswith("gn"):
         resources.update(
             {
-                "in_shapeBuffer": ("buffer", 2, "read"),
-                "in_stridesBuffer": ("buffer", 3, "read"),
-                "ndimBuffer": ("buffer", 4, "read"),
+                "in_shape": ("buffer", 2, "read"),
+                "in_strides": ("buffer", 3, "read"),
+                "ndim": ("buffer", 4, "read"),
+                "CrossGLDispatchInfo": ("constant-buffer", 0, "read"),
             }
         )
     else:
-        resources[f"{workload.entry_point.rstrip('_')}_size_Args"] = (
+        resources[f"{workload.entry_point.rstrip('_')}_size_Constants"] = (
             "constant-buffer",
             2,
             "read",
         )
+        if workload.shape == "v2":
+            resources["CrossGLDispatchInfo"] = (
+                "constant-buffer",
+                3,
+                "read",
+            )
     return resources
 
 
 def _translate_and_validate(
     mlx_root: Path,
     work_dir: Path,
-    workload: UnaryOpenGLWorkload,
+    workload: UnaryDirectXWorkload,
 ) -> None:
     config_path = work_dir / "crosstl.toml"
     config_path.write_text(_project_config(workload) + "\n", encoding="utf-8")
     report = translate_project(
         load_project_config(mlx_root, config_path),
-        targets=("opengl",),
+        targets=("directx",),
         output_dir=(work_dir / "out").relative_to(mlx_root).as_posix(),
         format_output=False,
         validate=True,
@@ -523,7 +545,15 @@ def _translate_and_validate(
     assert payload["summary"]["artifactCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    assert payload["diagnostics"] == []
+    if shutil.which("dxc") is None:
+        assert len(payload["diagnostics"]) == 1
+        diagnostic = payload["diagnostics"][0]
+        assert diagnostic["code"] == "project.validate.toolchain-unavailable"
+        assert diagnostic["severity"] == "warning"
+        assert diagnostic["target"] == "directx"
+        assert diagnostic["missingCapabilities"] == ["toolchain.validation"]
+    else:
+        assert payload["diagnostics"] == []
     artifact = payload["artifacts"][0]
     assert artifact["source"] == MLX_UNARY_SOURCE
     assert artifact["sourceHash"] == {
@@ -537,7 +567,7 @@ def _translate_and_validate(
     assert artifact["generatedSizeBytes"] == workload.size_bytes
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
-        "target": "main",
+        "target": "CSMain",
         "stage": "compute",
     }
     assert artifact["provenance"] == {
@@ -548,7 +578,7 @@ def _translate_and_validate(
     assert len(execution_entries) == 1
     assert execution_entries[0]["sourceEntryPoint"] == workload.entry_point
     assert execution_entries[0]["materializedEntryPoint"] == workload.entry_point
-    assert execution_entries[0]["targetEntryPoint"] == "main"
+    assert execution_entries[0]["targetEntryPoint"] == "CSMain"
     assert execution_entries[0]["workgroupSize"] == [1, 1, 1]
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
@@ -561,24 +591,22 @@ def _translate_and_validate(
 
     generated_path = mlx_root / artifact["path"]
     generated = generated_path.read_text(encoding="utf-8")
-    assert (
-        "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;" in generated
-    )
-    assert generated.count("void main()") == 1
+    assert "[numthreads(1, 1, 1)]" in generated
+    assert generated.count("void CSMain(") == 1
     selected_signatures = [
         line
         for line in generated.splitlines()
-        if f" {workload.operator_type}_operator_call" in line
-        and "_temporary(" not in line
+        if f" {workload.operator_type}__operator_call" in line
+        and "__temporary(" not in line
         and line.rstrip().endswith("{")
     ]
     assert selected_signatures
     defined_operator_bodies = {
         operator
-        for operator in UNARY_OPENGL_OPERATOR_TYPES
+        for operator in UNARY_DIRECTX_OPERATOR_TYPES
         if any(
-            f" {operator}_operator_call" in line
-            and "_temporary(" not in line
+            f" {operator}__operator_call" in line
+            and "__temporary(" not in line
             and line.rstrip().endswith("{")
             for line in generated.splitlines()
         )
@@ -597,16 +625,48 @@ def _translate_and_validate(
         "fallback for unmatched generated control flow",
     ):
         assert residue not in generated
-    if workload.operator_type == "Log10":
-        assert "log10(" not in generated
-        assert "metal_u3a_u3alog10(" not in generated
-        if workload.input_type == "complex64_t":
-            assert "2.30258509299404568401799145468436421" in generated
-        else:
-            assert "0.3010299956639812" in generated
+
+    if workload.input_type == "bfloat16_t" and workload.operator_type in {
+        "ArcCos",
+        "ArcCosh",
+        "ArcSin",
+        "ArcSinh",
+        "ArcTan",
+        "ArcTanh",
+        "Cos",
+        "Cosh",
+        "Log",
+        "Log2",
+        "Rsqrt",
+        "Sin",
+        "Sinh",
+        "Sqrt",
+        "Tan",
+        "Tanh",
+    }:
+        assert "__crossgl_bfloat16_to_float" in generated
+        assert "__crossgl_bfloat16_from_float" in generated
+    if workload.input_type == "bfloat16_t" and workload.operator_type in {
+        "ArcCosh",
+        "ArcSinh",
+        "ArcTanh",
+    }:
+        helper = {
+            "ArcCosh": "acosh",
+            "ArcSinh": "asinh",
+            "ArcTanh": "atanh",
+        }[workload.operator_type]
+        assert f"__crossgl_{helper}_float" in generated
+
     if workload.shape.startswith("gn"):
+        assert "StructuredBuffer<int> ndim : register(t4);" in generated
         assert "ndim[0]" in generated
-        assert "readonly buffer ndimBuffer" in generated
+        if workload.shape == "gn1":
+            assert "out_[out_idx++]" in generated
+        else:
+            assert workload.shape == "gn4large"
+            assert "out_[uint(out_idx++)]" in generated
+        assert "++out_idx" not in generated
 
     report_path = work_dir / "portability-report.json"
     report.write_json(report_path)
@@ -621,14 +681,9 @@ def _translate_and_validate(
     assert reflected["status"] == "ready"
     assert reflected["entryPoints"] == [
         {
-            "name": "main",
+            "name": "CSMain",
             "stage": "compute",
-            "executionConfig": {
-                "local_size_x": 1,
-                "local_size_y": 1,
-                "local_size_z": 1,
-                "local_size": [1, 1, 1],
-            },
+            "executionConfig": {"numthreads": [1, 1, 1]},
         }
     ]
     assert {
@@ -640,21 +695,22 @@ def _translate_and_validate(
         for resource in reflected["resources"]
     } == _expected_resources(workload)
 
-    glslang = _required_tool("glslangValidator")
-    spirv_val = _required_tool("spirv-val")
-    spirv_path = work_dir / f"{workload.entry_point}.spv"
+    dxc = _required_tool("dxc")
+    compiler_arguments = dxc_compiler_arguments_for_source(generated)
+    assert compiler_arguments == ("-enable-16bit-types",)
+    dxil_path = work_dir / f"{workload.entry_point}.dxil"
     compilation = subprocess.run(
         [
-            glslang,
-            "--target-env",
-            "opengl",
-            "--target-env",
-            "spirv1.3",
-            "-S",
-            "comp",
+            dxc,
+            *compiler_arguments,
+            "-WX",
+            "-T",
+            "cs_6_2",
+            "-E",
+            "CSMain",
             str(generated_path),
-            "-o",
-            str(spirv_path),
+            "-Fo",
+            str(dxil_path),
         ],
         check=False,
         capture_output=True,
@@ -662,29 +718,21 @@ def _translate_and_validate(
         timeout=120,
     )
     assert compilation.returncode == 0, compilation.stdout + compilation.stderr
-    assert spirv_path.is_file()
-    assert spirv_path.stat().st_size > 0
-    validation = subprocess.run(
-        [spirv_val, "--target-env", "spv1.3", str(spirv_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert validation.returncode == 0, validation.stdout + validation.stderr
+    assert dxil_path.is_file()
+    assert dxil_path.stat().st_size > 0
 
 
 @pytest.mark.parametrize(
     "workload",
-    CURRENT_UNARY_OPENGL_WORKLOADS,
+    CURRENT_UNARY_DIRECTX_WORKLOADS,
     ids=lambda workload: workload.entry_point,
 )
-def test_current_mlx_unary_family_translates_to_opengl(
-    workload: UnaryOpenGLWorkload,
+def test_current_mlx_unary_family_translates_to_directx(
+    workload: UnaryDirectXWorkload,
 ) -> None:
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
-        prefix=".crosstl-unary-opengl-",
+        prefix=".crosstl-unary-directx-",
         dir=mlx_root,
     ) as temporary_directory:
         _translate_and_validate(

@@ -11755,18 +11755,18 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["host_interface_reflection_included"] is True
     assert status["metal_roundtrip_included"] is True
     assert status["metal_numerical_runtime_included"] is False
-    assert status["directx_family_translation_included"] is False
+    assert status["directx_family_translation_included"] is True
     assert status["opengl_family_translation_included"] is True
-    assert status["directx_and_opengl_family_translation_included"] is False
+    assert status["directx_and_opengl_family_translation_included"] is True
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is False
     assert status["full_mlx_test_suite_included"] is False
     assert status["remaining_scope"] == {
         "all_discovered_unary_instantiations_included": True,
         "metal_numerical_execution_included": False,
-        "directx_whole_family_included": False,
+        "directx_whole_family_included": True,
         "opengl_whole_family_included": True,
-        "directx_and_opengl_whole_family_included": False,
+        "directx_and_opengl_whole_family_included": True,
         "mlx_host_runtime_redirection_included": False,
     }
     assert status["numerical_parity_claimed"] is False
@@ -11966,14 +11966,14 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert status["host_interface_reflection_included"] is True
     assert status["opengl_family_translation_included"] is True
     assert status["opengl_numerical_runtime_included"] is False
-    assert status["directx_family_translation_included"] is False
+    assert status["directx_family_translation_included"] is True
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is False
     assert status["full_mlx_test_suite_included"] is False
     assert status["remaining_scope"] == {
         "all_discovered_unary_instantiations_included": True,
         "opengl_numerical_execution_included": False,
-        "directx_whole_family_included": False,
+        "directx_whole_family_included": True,
         "mlx_host_runtime_redirection_included": False,
     }
     assert status["numerical_parity_claimed"] is False
@@ -11992,6 +11992,221 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert "all 877 current-pinned unary entries to standalone OpenGL" in guide
     assert "4,060,696 generated GLSL bytes" in guide
     assert "five disjoint Linux shards" in guide
+
+
+def test_unary_directx_translation_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["unary_directx_translation_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/unary.metal"
+    assert status["source_sha256"] == (
+        "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
+    )
+    assert status["target"] == "directx"
+    assert status["scope"] == {
+        "discovered_unary_instantiation_count": 877,
+        "entry_count": 877,
+        "shape_counts": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 183,
+            "gn4large": 183,
+        },
+        "template_count": 3,
+        "operator_count": 37,
+        "input_output_type_pair_count": 20,
+        "semantic_family_count": 16,
+        "all_discovered_unary_instantiations_included": True,
+    }
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
+        "schema_version": 2,
+        "sha256": "bbaf6d03c436670a769ecafbfa787dd6b3bdecd23e8d7f3b725714fee0a14cbd",
+        "size_bytes": 318158,
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert len(contract_bytes) == status["contract"]["size_bytes"]
+    assert hashlib.sha256(contract_bytes).hexdigest() == status["contract"]["sha256"]
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"]["entryCount"] == status["scope"]["entry_count"]
+    assert contract["classifications"]["shapes"] == status["scope"]["shape_counts"]
+    assert len(contract["entries"]) == 877
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 877
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 877,
+        "artifact_count": 877,
+        "translated_count": 877,
+        "failed_count": 0,
+        "project_error_diagnostic_count": 0,
+        "local_generation_warning_count": 1,
+        "local_generation_warning_codes": ["project.validate.toolchain-unavailable"],
+        "target_entry_point": "CSMain",
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 1243,
+        "specialization_counts_by_shape": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 366,
+            "gn4large": 366,
+        },
+        "unsupported_specialization_count": 0,
+        "selected_operator_implementation_count_per_artifact": 1,
+        "unselected_operator_bodies_pruned": True,
+        "reachable_complex_operator_dependencies_retained": True,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["portability_preconditions"] == {
+        "kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
+        "minimum": 0,
+        "maximum": 2147483647,
+        "expressions": ["offset + i", "out_idx++", "idx"],
+    }
+    assert (
+        contract["portabilityPreconditions"]["contractKind"]
+        == status["portability_preconditions"]["kind"]
+    )
+    assert [
+        assertion["expression"]
+        for assertion in contract["portabilityPreconditions"]["indexRangeAssertions"]
+    ] == status["portability_preconditions"]["expressions"]
+    assert status["implementation_contracts"] == {
+        "complete_bfloat16_unary_intrinsic_lowering": True,
+        "bfloat16_inverse_hyperbolic_float_helper_roundtrip": True,
+        "const_device_scalar_reference_emitted_as_read_only_structured_buffer": True,
+        "const_device_scalar_reference_expression_aliases_element_zero": True,
+        "const_device_scalar_reference_preserves_scalar_expression_type": True,
+        "postfix_update_position_preserved": True,
+        "source_derived_native_16bit_compiler_arguments": True,
+        "explicit_index_range_preconditions_required": True,
+        "unproven_index_narrowing_fail_closed": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "resource_counts_by_shape": {
+            "v": 3,
+            "v2": 4,
+            "vn": 3,
+            "gn1": 6,
+            "gn4large": 6,
+        },
+        "reflected_resource_count": 3912,
+        "vector_resources": [
+            {key: value for key, value in resource.items() if key != "sourceName"}
+            for resource in contract["shapeContracts"]["v"]["hostResources"]
+        ],
+        "work_per_thread_resources": [
+            {key: value for key, value in resource.items() if key != "sourceName"}
+            for resource in contract["shapeContracts"]["v2"]["hostResources"]
+        ],
+        "gather_resources": [
+            {key: value for key, value in resource.items() if key != "sourceName"}
+            for resource in contract["shapeContracts"]["gn1"]["hostResources"]
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": 3033599,
+        "generated_size_range": {
+            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 2252},
+            "maximum": {
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 7332,
+            },
+        },
+    }
+    artifact_contract = contract["artifactContract"]
+    assert (
+        artifact_contract["generatedSizeBytesTotal"]
+        == status["artifacts"]["generated_size_bytes_total"]
+    )
+    assert artifact_contract["reflectedResourceCount"] == 3912
+    assert artifact_contract["compilerArguments"] == ["-enable-16bit-types"]
+    assert artifact_contract["requiresNonemptyDxilArtifact"] is True
+    assert status["native_validation"] == {
+        "platform": "windows-latest",
+        "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
+        "compiler_arguments": ["-enable-16bit-types"],
+        "status": "required-on-ci",
+        "compiled_artifact_count": 877,
+        "all_dxil_artifacts_nonempty": True,
+        "ci_shard_count": 5,
+        "test": (
+            "tests/test_translator/test_mlx_unary_complete_directx.py::"
+            "test_current_mlx_unary_family_translates_to_directx"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["directx_family_translation_included"] is True
+    assert status["directx_numerical_runtime_included"] is False
+    assert status["opengl_family_translation_included"] is True
+    assert status["directx_and_opengl_family_translation_included"] is True
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "all_discovered_unary_instantiations_included": True,
+        "directx_numerical_execution_included": False,
+        "opengl_numerical_execution_included": False,
+        "directx_and_opengl_whole_family_included": True,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert (
+        "all 877 discovered current-pinned `unary.metal` entries to DirectX" in readme
+    )
+    assert "3,912 reflected HLSL resources" in readme
+    assert "requires 877 non-empty DXIL modules" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 877 current-pinned unary entries to standalone DirectX" in guide
+    assert "five disjoint Windows shards" in guide
+    assert "non-empty DXIL modules" in guide
 
 
 def test_binary_scalar_metal_roundtrip_evidence_records_complete_family():

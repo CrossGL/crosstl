@@ -1477,7 +1477,12 @@ class HLSLCodeGen:
     HLSL_SOURCE_BFLOAT16_TYPES = frozenset({"bfloat", "bfloat16", "bfloat16_t"})
     HLSL_BFLOAT16_BUILTIN_CONTRACTS = {
         "abs": ("abs", 1, "bfloat"),
+        "acos": ("acos", 1, "bfloat"),
+        "asin": ("asin", 1, "bfloat"),
+        "atan": ("atan", 1, "bfloat"),
         "ceil": ("ceil", 1, "bfloat"),
+        "cos": ("cos", 1, "bfloat"),
+        "cosh": ("cosh", 1, "bfloat"),
         "exp": ("exp", 1, "bfloat"),
         "fabs": ("abs", 1, "bfloat"),
         "floor": ("floor", 1, "bfloat"),
@@ -1485,8 +1490,16 @@ class HLSLCodeGen:
         "isfinite": ("isfinite", 1, "bool"),
         "isinf": ("isinf", 1, "bool"),
         "isnan": ("isnan", 1, "bool"),
+        "log": ("log", 1, "bfloat"),
         "log10": ("log10", 1, "bfloat"),
+        "log2": ("log2", 1, "bfloat"),
         "rint": ("round", 1, "bfloat"),
+        "rsqrt": ("rsqrt", 1, "bfloat"),
+        "sin": ("sin", 1, "bfloat"),
+        "sinh": ("sinh", 1, "bfloat"),
+        "sqrt": ("sqrt", 1, "bfloat"),
+        "tan": ("tan", 1, "bfloat"),
+        "tanh": ("tanh", 1, "bfloat"),
         "trunc": ("trunc", 1, "bfloat"),
     }
     HLSL_NATIVE_16_BIT_STORAGE_RESOURCES = frozenset(
@@ -17872,6 +17885,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if bfloat_unary is not None:
                 return bfloat_unary
+            if mapped_op in {"++", "--"} and getattr(expr, "is_postfix", False):
+                return f"{operand}{mapped_op}"
             return f"{mapped_op}{operand}"
         elif isinstance(expr, WaveOpNode):
             return self.generate_wave_op_expression(expr)
@@ -19754,6 +19769,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reason="unresolved-operand-type",
                 source_location=source_location,
             )
+
+        if self.is_hlsl_bfloat16_type(source_type):
+            self.required_hlsl_inverse_hyperbolic_helpers.add((operation, "float"))
+            helper_name = self.hlsl_inverse_hyperbolic_helper_name(operation, "float")
+            argument = self.generate_expression(args[0])
+            decoded = self.hlsl_bfloat16_to_float_expression(argument)
+            return self.hlsl_float_to_bfloat16_expression(f"{helper_name}({decoded})")
 
         type_info = self.hlsl_inverse_hyperbolic_type_info(source_type)
         mapped_type = type_info["type"]
@@ -22172,6 +22194,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     parameter,
                     func,
                 )
+            scalar_reference_type = (
+                self.hlsl_stage_entry_metal_scalar_reference_element_type(parameter)
+            )
+            if scalar_reference_type is not None:
+                self.local_variable_types[parameter_name] = scalar_reference_type
+                self.local_variable_source_types[parameter_name] = scalar_reference_type
+                emitted_identifier = self.hlsl_identifier_name(emitted_name)
+                self.current_identifier_aliases[parameter_name] = (
+                    f"{emitted_identifier}[0]"
+                )
+                continue
             if promoted_type:
                 self.local_variable_types[parameter_name] = self.type_name_string(
                     promoted_type
@@ -22223,6 +22256,46 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             }
             parameter_prologue_statements.append(f"int64_t {offset_name} = int64_t(0);")
 
+    def hlsl_stage_entry_metal_scalar_reference_element_type(self, parameter):
+        if (
+            self.explicit_resource_binding_index(
+                parameter,
+                {"binding", "buffer", "uav"},
+                ("t", "u"),
+            )
+            is None
+        ):
+            return None
+
+        raw_type = self.hlsl_parameter_raw_type(parameter)
+        if not isinstance(raw_type, ReferenceType):
+            return None
+        address_space = str(getattr(raw_type, "address_space", None) or "").lower()
+        if not address_space:
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(parameter, "qualifiers", []) or []
+            }
+            address_space = next(
+                (
+                    candidate
+                    for candidate in ("device", "global", "storage")
+                    if candidate in qualifiers
+                ),
+                "",
+            )
+        if address_space not in {"device", "global", "storage"}:
+            return None
+
+        element_type = self.type_name_string(raw_type.referenced_type)
+        if (
+            not element_type
+            or element_type in self.structs_by_name
+            or not self.is_scalar_value_type(element_type)
+        ):
+            return None
+        return element_type
+
     def hlsl_entry_resource_parameter_global(self, parameter, func=None):
         mapped_type = self.hlsl_entry_resource_parameter_global_type(parameter, func)
         if mapped_type is None:
@@ -22237,10 +22310,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             annotations=annotations,
         )
         raw_type = self.hlsl_parameter_raw_type(parameter)
-        source_element_type = self.hlsl_typed_buffer_element_type(
-            raw_type,
-            {"Buffer", "RWBuffer", "StructuredBuffer", "RWStructuredBuffer"},
+        source_element_type = self.hlsl_stage_entry_metal_scalar_reference_element_type(
+            parameter
         )
+        if source_element_type is None:
+            source_element_type = self.hlsl_typed_buffer_element_type(
+                raw_type,
+                {"Buffer", "RWBuffer", "StructuredBuffer", "RWStructuredBuffer"},
+            )
         if source_element_type is None:
             source_element_type = self.hlsl_pointer_element_type(raw_type)
         if source_element_type is None:
@@ -22287,6 +22364,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return f"stage-entry parameter {function_name}.{parameter_name}"
 
     def hlsl_entry_resource_parameter_global_type(self, parameter, func=None):
+        scalar_reference_type = (
+            self.hlsl_stage_entry_metal_scalar_reference_element_type(parameter)
+        )
+        if scalar_reference_type is not None:
+            raw_type = self.hlsl_parameter_raw_type(parameter)
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(parameter, "qualifiers", []) or []
+            }
+            read_only = not getattr(raw_type, "is_mutable", True) or bool(
+                qualifiers.intersection({"const", "constant", "read", "readonly"})
+            )
+            resource_name = "StructuredBuffer" if read_only else "RWStructuredBuffer"
+            storage_type = self.hlsl_bfloat16_storage_type(
+                scalar_reference_type,
+                operation=(
+                    "stage-entry scalar reference "
+                    f"'{getattr(parameter, 'name', '<anonymous>')}' storage"
+                ),
+                source_location=getattr(parameter, "source_location", None),
+            )
+            return f"{resource_name}<{storage_type}>"
+
         storage_array_type = self.hlsl_storage_array_parameter_resource_type(parameter)
         if storage_array_type is not None:
             return storage_array_type
