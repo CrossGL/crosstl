@@ -484,7 +484,7 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 3033709,
+    "generatedSizeBytesTotal": 3033764,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "v_Absint8int8",
@@ -1588,8 +1588,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "b9ecd1b10dc7d34b2234752ea593ae22dfd09a9c6e836237277ffacae1ffadbe",
-      "sizeBytes": 3772
+      "sha256": "1a7d1f5848dfd7fc0bb1bf0d46bd0d3200b525286ca43da40792e7a2821be286",
+      "sizeBytes": 3783
     },
     {
       "entryPoint": "gn1_Log1pfloat32float32",
@@ -3601,8 +3601,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "3082982834ac3598775506878cb04524b7c859c4b9938edf4a5c54dcba3428be",
-      "sizeBytes": 3831
+      "sha256": "219340665f1aa2838a0579c966945b1076e72de603c97a3059a5ac975a7163ad",
+      "sizeBytes": 3842
     },
     {
       "entryPoint": "gn4large_Log1pfloat32float32",
@@ -5614,8 +5614,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "a5ab0ccfc670400b68431207e9bb0574b32722b3411b5bc34e9e114c2bbbd425",
-      "sizeBytes": 3185
+      "sha256": "bb19325fed8c7b5d9e8186e8f70c8eee7ef22070e69946794ea5bbf6f9e03344",
+      "sizeBytes": 3196
     },
     {
       "entryPoint": "v2_Log1pfloat32float32",
@@ -7627,8 +7627,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "5a8efce6c7bf0bf8661eda1bc43f448011ae397107f7f9b5d0f6b867b0fb464f",
-      "sizeBytes": 2643
+      "sha256": "fa05e874adb4d3230f3a73cbafc80bbae7c1270ea5d4b3f676837e3c10e5613a",
+      "sizeBytes": 2654
     },
     {
       "entryPoint": "v_Log1pfloat32float32",
@@ -9431,8 +9431,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "76214ae71478fea7db3b01b146e285639fe285e17a4669a1b972e2369b9bd4e3",
-      "sizeBytes": 2940
+      "sha256": "c31965985458e4cb73585e9870b9c771f34cb083b771ebfad500b9dd4e4e061c",
+      "sizeBytes": 2951
     },
     {
       "entryPoint": "vn_Log1pfloat32float32",
