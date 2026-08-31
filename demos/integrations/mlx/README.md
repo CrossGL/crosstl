@@ -1207,7 +1207,7 @@ and artifact ID
 `sha256:dd0138695bd82e1f8ea49bd667052b484420ee96cb2849c6eed20ba5eae39a89`.
 
 The 8,721-byte HLSL artifact has SHA-256
-`2182a09b1e03815f11e36c3ab1addb2138257e0bcf69284f99a0c33ec344816b`.
+`003c8b9e85bad7363bae2e3d80380d979cbe0b8988d0d98751131c3acfbff6b6`.
 Official DXC 1.9.2602.24 accepts `CSMain` under `cs_6_6`,
 `-enable-16bit-types`, and warnings as errors, producing 9,000 bytes of DXIL.
 Its 32 physical waves receive unique workgroup-synchronized subgroup IDs; no

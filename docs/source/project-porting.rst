@@ -1773,7 +1773,7 @@ and no mask, causal mode, or sinks. It fixes ``[1024, 1, 1]`` with 32 logical
 subgroups and one dispatched workgroup. Function constants 20 through 25 are
 all false; two-pass-only ID 26 is not part of this artifact. The exact HLSL is
 8,721 bytes with SHA-256
-``2182a09b1e03815f11e36c3ab1addb2138257e0bcf69284f99a0c33ec344816b``
+``003c8b9e85bad7363bae2e3d80380d979cbe0b8988d0d98751131c3acfbff6b6``
 and passes DXC 1.9.2602.24 under ``cs_6_6``, ``-enable-16bit-types``, and
 warnings as errors. Its 32 physical waves receive unique, wave-uniform IDs
 through the synchronized allocator; no lane-varying flattened-index quotient
