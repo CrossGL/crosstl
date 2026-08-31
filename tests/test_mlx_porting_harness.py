@@ -10408,12 +10408,12 @@ def test_softmax_native_runtime_evidence_records_bounded_cross_target_proof():
         },
     }
     assert status["guarded_artifacts"]["directx"]["block-float32-axis-32-two-rows"] == {
-        "sha256": "de5ae241c037cf9a0b37f456d777d51c544c8f725cf2efe8a51c45ae968a0fc2",
+        "sha256": "8b5540acc90669bc8b4a75985b42ee34c9e45258c63889f703f140b1330337ee",
         "size_bytes": 4213,
         "subgroup_id_lowering": "fixed-single-wave-group-index-quotient",
     }
     assert status["guarded_artifacts"]["directx"]["block-float32-axis-2049"] == {
-        "sha256": "3a3f443fdb6df38e37bda4828601b967cc6aa216c0805e6dc060be7e7bddd02c",
+        "sha256": "1c20679115f29d981762165f7c9e1ecd57a641ceff376b2f8d13f33520857f05",
         "size_bytes": 4784,
         "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
     }

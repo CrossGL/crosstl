@@ -1584,8 +1584,8 @@ resources: float32 input and output buffers plus the int32 axis-size block.
 DirectX emits one guarded `CSMain` artifact for each workgroup size, retaining
 `[WaveSize(32)]`. Official DXC 1.9.2602.24 accepts both under `cs_6_6` with
 `-enable-16bit-types` and warnings as errors. Their SHA-256 values are
-`de5ae241c037cf9a0b37f456d777d51c544c8f725cf2efe8a51c45ae968a0fc2`
-and `3a3f443fdb6df38e37bda4828601b967cc6aa216c0805e6dc060be7e7bddd02c`.
+`8b5540acc90669bc8b4a75985b42ee34c9e45258c63889f703f140b1330337ee`
+and `1c20679115f29d981762165f7c9e1ecd57a641ceff376b2f8d13f33520857f05`.
 The 32-thread entry is provably one wave and keeps the zero-ID quotient fast
 path; the 544-thread entry allocates one uniform ID per physical wave through a
 workgroup-synchronized counter. The default OpenGL path remains a separate
