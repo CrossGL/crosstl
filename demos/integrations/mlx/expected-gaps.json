@@ -668,7 +668,7 @@
       ]
     },
     "artifact": {
-      "sha256": "459d779fb07557c81931cadc0bf6c4020d8f08adafc62986504b8f1faf872feb",
+      "sha256": "d5fa5d6e088743cc00a4a3f4b604c0704d33a8697a570f11a61cf99cb8d8d6fb",
       "size_bytes": 116260,
       "promoted_native_16_shift_count": 20,
       "first_class_workgroup_pointer_residue": false
@@ -2084,7 +2084,7 @@
       "pruned_candidate_count": 2120
     },
     "artifact": {
-      "sha256": "dd64cfa562f4463f3ecb237d00c0273560e62839565e8638c2343a922149c6ab",
+      "sha256": "3bc42b2dd3bf128bcbe1fd202763f3434d64df6e60b53da4b6e754ceff0f6e7a",
       "size_bytes": 146763,
       "promoted_native_16_shift_count": 20,
       "first_class_workgroup_pointer_residue": false,

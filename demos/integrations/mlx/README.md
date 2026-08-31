@@ -804,7 +804,7 @@ parameter through the forwarding chain rather than inventing a backing buffer.
 A null pointer that can be observed or dereferenced still fails closed.
 
 The current source emits a 146,763-byte HLSL artifact with SHA-256
-`dd64cfa562f4463f3ecb237d00c0273560e62839565e8638c2343a922149c6ab`
+`3bc42b2dd3bf128bcbe1fd202763f3434d64df6e60b53da4b6e754ceff0f6e7a`
 and zero project diagnostics. All 20 native-16 ``power`` shift counts are
 explicitly promoted to ``int`` before HLSL shifting, matching Metal/C++ integer
 promotion rather than retaining minimum-precision count semantics. Windows CI

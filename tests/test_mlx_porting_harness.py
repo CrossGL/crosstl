@@ -12734,7 +12734,7 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "dd64cfa562f4463f3ecb237d00c0273560e62839565e8638c2343a922149c6ab",
+        "sha256": "3bc42b2dd3bf128bcbe1fd202763f3434d64df6e60b53da4b6e754ceff0f6e7a",
         "size_bytes": 146763,
         "promoted_native_16_shift_count": 20,
         "first_class_workgroup_pointer_residue": False,
