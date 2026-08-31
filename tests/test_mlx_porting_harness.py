@@ -10540,7 +10540,7 @@ def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
         "selected_parameters": {"N_READS": "RMS_N_READS", "T": "float"},
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "83f7b6e437122b2afe3dbc5d7649f6bc882d671947bcc72579ae5aa568fb2a5b"
+        "f03d8c3c1df2256e5c867bfd235e57b66d68a1c6e3c3c04701a581d8ef7b3e67"
     )
     assert status["artifacts"]["directx"]["size_bytes"] == 3486
     assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
@@ -10700,7 +10700,7 @@ def test_rms_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proo
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "008a7a6f1614cb7c087d11c7e65adef919b58504e5fff3bd6479940aebc0aa1d"
+        "7c1fe2a3c5f6d883b11b3fb17511663ebb3ead2a0931611229930c3f07035c9f"
     )
     assert directx["size_bytes"] == 6795
     assert directx["wave_active_sum_call_count"] == 4
@@ -10844,7 +10844,7 @@ def test_layer_norm_native_runtime_evidence_records_bounded_cross_target_proof()
         },
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "7fea4cd2ecf9b636ef2aa9a1a588e4186704bff5cb80163820c02fdb113194ba"
+        "7e790d4e665c72025e46c7c038aba2bec57ba6f65e209178eae5160c0c7ea8e9"
     )
     assert status["artifacts"]["directx"]["size_bytes"] == 5216
     assert status["artifacts"]["directx"]["wave_active_sum_call_count"] == 2
@@ -11038,7 +11038,7 @@ def test_layer_norm_vjp_native_runtime_evidence_records_deferred_cross_target_pr
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "7d45e40974cc5419bb93c106708460eb1edd5d68ec21a6afba7e9b7f6f05cf7e"
+        "6d4a3281d038309c8c294952411acfeb773f6ee8ddd8d73935cb3f3c4ce93a61"
     )
     assert directx["size_bytes"] == 7504
     assert directx["wave_active_sum_call_count"] == 4

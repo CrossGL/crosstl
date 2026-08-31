@@ -62,7 +62,7 @@ MLX_RMS_NORM_VJP_DISPATCH_CONTRACT = (
 )
 MLX_RMS_NORM_VJP_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "008a7a6f1614cb7c087d11c7e65adef919b58504e5fff3bd6479940aebc0aa1d",
+        "sha256": "7c1fe2a3c5f6d883b11b3fb17511663ebb3ead2a0931611229930c3f07035c9f",
         "sizeBytes": 6795,
     },
     "opengl": {

@@ -64,7 +64,7 @@ MLX_LAYER_NORM_VJP_DISPATCH_CONTRACT = (
 )
 MLX_LAYER_NORM_VJP_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "7d45e40974cc5419bb93c106708460eb1edd5d68ec21a6afba7e9b7f6f05cf7e",
+        "sha256": "6d4a3281d038309c8c294952411acfeb773f6ee8ddd8d73935cb3f3c4ce93a61",
         "sizeBytes": 7504,
     },
     "opengl": {

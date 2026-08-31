@@ -2204,7 +2204,7 @@ MLX_RMS_NORM_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "83f7b6e437122b2afe3dbc5d7649f6bc882d671947bcc72579ae5aa568fb2a5b"
+                "f03d8c3c1df2256e5c867bfd235e57b66d68a1c6e3c3c04701a581d8ef7b3e67"
             ),
             "size_bytes": 3486,
             "subgroup_enforcement": "hlsl-wave-size-attribute",

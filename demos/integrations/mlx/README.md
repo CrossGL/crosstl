@@ -1392,7 +1392,7 @@ Materialization emits the forward entry plus `initialize_buffer<1>` and
 candidates.
 
 The generated HLSL artifact is 5,216 bytes with SHA-256
-`7fea4cd2ecf9b636ef2aa9a1a588e4186704bff5cb80163820c02fdb113194ba`.
+`7e790d4e665c72025e46c7c038aba2bec57ba6f65e209178eae5160c0c7ea8e9`.
 It retains `[WaveSize(32)]`, two `WaveActiveSum` calls, and compiles as
 `cs_6_6` with `-enable-16bit-types`; Windows CI requires Direct3D 12 WARP
 execution. The generated GLSL artifact is 5,914 bytes with SHA-256
@@ -1439,7 +1439,7 @@ shape and weighted-gradient provenance. Materialization selects
 specializations while pruning 194 candidates.
 
 The generated HLSL is 7,504 bytes with SHA-256
-`7d45e40974cc5419bb93c106708460eb1edd5d68ec21a6afba7e9b7f6f05cf7e`.
+`6d4a3281d038309c8c294952411acfeb773f6ee8ddd8d73935cb3f3c4ce93a61`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, compiles as `cs_6_6` with `-enable-16bit-types`, and
 must execute numerically through Direct3D 12 WARP on Windows CI. The generated
@@ -1888,7 +1888,7 @@ materializes one `rms_single_row<float, RMS_N_READS>` specialization from four
 reachable specializations while pruning 168 unrelated candidates.
 
 The generated HLSL artifact is 3,486 bytes with SHA-256
-`83f7b6e437122b2afe3dbc5d7649f6bc882d671947bcc72579ae5aa568fb2a5b`;
+`f03d8c3c1df2256e5c867bfd235e57b66d68a1c6e3c3c04701a581d8ef7b3e67`;
 it retains `[WaveSize(32)]` and compiles as `cs_6_6` with
 `-enable-16bit-types`. The generated GLSL
 artifact is 4,393 bytes with SHA-256
@@ -1920,7 +1920,7 @@ input and cotangent views. Materialization selects
 while pruning 168 unrelated candidates.
 
 The generated HLSL is 6,795 bytes with SHA-256
-`008a7a6f1614cb7c087d11c7e65adef919b58504e5fff3bd6479940aebc0aa1d`.
+`7c1fe2a3c5f6d883b11b3fb17511663ebb3ead2a0931611229930c3f07035c9f`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, and compiles as `cs_6_6` with
 `-enable-16bit-types`. The generated software-subgroup GLSL is 7,771 bytes
