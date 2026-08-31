@@ -1529,13 +1529,13 @@ MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "argmin_float32": {
                 "sha256": (
-                    "b63a160f4ca102cc6407d88b84f5c3e6f849840f73e57d372722f9828569a34d"
+                    "e3f7392023bbb6457eb03398a766bdaa128ed709d66ce814c7209cd13de7e896"
                 ),
                 "size_bytes": 6655,
             },
             "argmax_float32": {
                 "sha256": (
-                    "99359b364f701a420f1ee918f481eaabac7d5ea9b02c5872c915c7672c60b398"
+                    "ef67c5d24ae7c7492a6676a35e0604800c1d18e4113c411fffaa2070090a92c3"
                 ),
                 "size_bytes": 6657,
             },

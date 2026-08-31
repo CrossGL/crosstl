@@ -1150,8 +1150,8 @@ wave width of 32, emits `[32, 1, 1]`, and dispatches `[1, 2, 1]` workgroups.
 Signature-aware helper materialization selects the scalar
 `elem_to_loc<int64_t>` overload rather than the `uint3` overload. The HLSL
 artifacts are 6,655 and 6,657 bytes with SHA-256
-`b63a160f4ca102cc6407d88b84f5c3e6f849840f73e57d372722f9828569a34d`
-and `99359b364f701a420f1ee918f481eaabac7d5ea9b02c5872c915c7672c60b398`;
+`e3f7392023bbb6457eb03398a766bdaa128ed709d66ce814c7209cd13de7e896`
+and `ef67c5d24ae7c7492a6676a35e0604800c1d18e4113c411fffaa2070090a92c3`;
 official DXC 1.9.2602.24 accepts both under `cs_6_6`,
 `-enable-16bit-types`, and warnings as errors. This proof explicitly sets
 `project.source_options.metal.target_options.directx.relative_wave_shuffle_out_of_range`
