@@ -9290,6 +9290,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         "validate-directx-logsumexp-dispatch-toolchain",
         "validate-directx-rms-norm-dispatch-toolchain",
     ]
+    assert all("--no-format" in command for _name, command in commands)
     assert "--run-toolchains" in commands[5][1]
     assert "--run-toolchains" in commands[6][1]
     assert "--run-toolchains" in commands[7][1]
