@@ -10553,6 +10553,44 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         return f"{expected_info['mapped_type']}({rendered})"
 
+    def hlsl_contextual_floating_narrowing_expression(
+        self,
+        rendered,
+        expected_type,
+        source_type,
+    ):
+        """Render an explicit source-defined floating narrowing conversion.
+
+        DXC diagnoses implicit float/double to native or minimum-precision
+        assignments under ``-Wconversion``. HLSL constructors preserve the
+        source conversion while making that narrowing intentional. Limit this
+        lowering to identical scalar/vector shapes; shape conversion remains a
+        separate constructor or semantic-analysis contract.
+        """
+        expected_info = self.hlsl_floating_arithmetic_type_info(expected_type)
+        source_info = self.hlsl_floating_arithmetic_type_info(source_type)
+        if expected_info is None or source_info is None:
+            return None
+
+        precision_bits = {
+            "double": 64,
+            "float": 32,
+            "half": 16,
+            "float16_t": 16,
+            "min16float": 16,
+            "min10float": 10,
+        }
+        expected_bits = precision_bits.get(expected_info["base_type"])
+        source_bits = precision_bits.get(source_info["base_type"])
+        if (
+            expected_bits is None
+            or source_bits is None
+            or expected_bits >= source_bits
+            or expected_info["width"] != source_info["width"]
+        ):
+            return None
+        return f"{expected_info['mapped_type']}({rendered})"
+
     def hlsl_narrowing_cast_expression(
         self, rendered, expected_type, source_type, *, source_location=None
     ):
@@ -10584,6 +10622,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if expected == "complex64_t" and self.is_scalar_value_type(source):
             self.required_hlsl_complex64_helpers.add("__crossgl_complex64_make")
             return f"__crossgl_complex64_make({rendered}, 0.0)"
+        floating_narrowing = self.hlsl_contextual_floating_narrowing_expression(
+            rendered,
+            expected,
+            source,
+        )
+        if floating_narrowing is not None:
+            return floating_narrowing
         expected_integer = self.hlsl_integer_arithmetic_type_info(expected)
         source_integer = self.hlsl_integer_arithmetic_type_info(source)
         integer_narrowing = self.hlsl_contextual_integer_narrowing_expression(

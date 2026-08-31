@@ -3823,6 +3823,54 @@ def test_hlsl_codegen_emits_contextual_integer_narrowing_for_assignment_targets(
     assert_directx_warnings_clean_if_available(generated, tmp_path)
 
 
+def test_hlsl_codegen_emits_contextual_floating_narrowing_for_native_16_targets(
+    tmp_path,
+):
+    shader = """
+    shader ContextualFloatingNarrowing {
+        float wideScalar(float value) {
+            return value + 1.0;
+        }
+
+        vec2 widePair(vec2 value) {
+            return value + vec2(1.0, 2.0);
+        }
+
+        float16_t narrowReturn(float value) {
+            return wideScalar(value);
+        }
+
+        float16_t2 narrowPairReturn(vec2 value) {
+            return widePair(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float16_t> output @ binding(0)) {
+                float16_t localValue = wideScalar(2.0);
+                float16_t2 localPair = widePair(vec2(3.0, 4.0));
+                localValue = wideScalar(5.0);
+                output[0] = localValue + narrowReturn(6.0) + localPair.x
+                    + narrowPairReturn(vec2(7.0, 8.0)).y;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        parse_code(tokenize_code(shader))
+    )
+
+    assert "return float16_t(wideScalar(value));" in generated
+    assert "return float16_t2(widePair(value));" in generated
+    assert "float16_t localValue = float16_t(wideScalar(2.0));" in generated
+    assert "float16_t2 localPair = float16_t2(widePair(float2(3.0, 4.0)));" in generated
+    assert "localValue = float16_t(wideScalar(5.0));" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_codegen_rejects_contextual_integer_narrowing_with_lane_mismatch():
     codegen = HLSLCodeGen()
     codegen.local_variable_types.update(

@@ -68,7 +68,9 @@ The current harness verifies:
   dispatch cbuffer at bindings `b3` and `b0`, respectively. DirectX bfloat
   lowering covers the
   complete unary intrinsic family, while `acosh`, `asinh`, and `atanh` decode
-  through portable float helpers before exact bfloat reconstruction. The
+  through portable float helpers before exact bfloat reconstruction. Explicit
+  contextual casts preserve float-to-native-16 return and initializer narrowing
+  without DXC `-Wconversion` diagnostics under warnings-fatal compilation. The
   read-only source `device const int& ndim` becomes a `StructuredBuffer<int>`
   scalar view at element zero, and source `out_idx++` remains postfix in HLSL.
   The same three explicit host/runtime index-range preconditions are required.

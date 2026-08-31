@@ -38,7 +38,7 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "bbaf6d03c436670a769ecafbfa787dd6b3bdecd23e8d7f3b725714fee0a14cbd"
+    "4383f2b55c0ab87ca75834840025f38947dcc7eb10c57291e1e682683570d2c7"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -259,7 +259,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 3033599,
+        "generatedSizeBytesTotal": 3033709,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 2252},
             "maximum": {
@@ -298,7 +298,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 3033599
+    assert sum(entry["sizeBytes"] for entry in entries) == 3033709
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         2252,
         "v_Absint8int8",
@@ -646,6 +646,10 @@ def _translate_and_validate(
     }:
         assert "__crossgl_bfloat16_to_float" in generated
         assert "__crossgl_bfloat16_from_float" in generated
+    if workload.input_type == "half" and workload.operator_type == "ArcCos":
+        assert "return float16_t(__crossgl_metal_precise_acos_float(x));" in generated
+    if workload.input_type == "bfloat16_t" and workload.operator_type == "Sigmoid":
+        assert "float16_t y = float16_t(" in generated
     if workload.input_type == "bfloat16_t" and workload.operator_type in {
         "ArcCosh",
         "ArcSinh",

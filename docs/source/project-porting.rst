@@ -571,7 +571,9 @@ postfix update.
 DirectX bfloat support covers every unary intrinsic required by the family.
 The inverse-hyperbolic ``acosh``, ``asinh``, and ``atanh`` paths decode bfloat
 to float, invoke their portable float helpers, and round back to the exact
-bfloat payload representation. All artifacts derive
+bfloat payload representation. Explicit contextual HLSL constructors preserve
+float-to-native-16 return and initializer narrowing without ``-Wconversion``
+diagnostics when warnings are fatal. All artifacts derive
 ``-enable-16bit-types`` from retained native 16-bit declarations and target
 shader model ``cs_6_2``. As with OpenGL, explicit host/runtime bounds of
 ``[0, 2147483647]`` for ``offset + i``, ``out_idx++``, and ``idx`` remain
