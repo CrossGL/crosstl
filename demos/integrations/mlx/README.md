@@ -41,7 +41,23 @@ The current harness verifies:
   reference, and postfix output indexing survive the round trip. A host-owned
   ``[1, 1, 1]`` dispatch contract is preserved, and macOS CI compiles every
   deterministic artifact to non-empty AIR. This is complete discovered unary
-  compiler/reflection coverage, not Metal numerical execution;
+  Metal compiler/reflection coverage, not Metal numerical execution;
+- selected-entry translation of all 877 discovered current-pinned
+  `unary.metal` entries to OpenGL. The schema-v2
+  `contracts/unary.opengl-translation.json` contract pins every standalone
+  `main` artifact across the same five shapes, 37 operators, 20 type pairs,
+  1,243 materializations, and 3,363 reflected resources, totaling 4,060,696
+  generated GLSL bytes. Translation requires three explicit host/runtime
+  index-range preconditions for `offset + i`, `out_idx++`, and `idx`; these are
+  portability promises rather than inferred or runtime-enforced bounds. The
+  lowering maps Metal `log10` through one-evaluation GLSL `log2`, preserves user
+  overloads, and exposes the read-only `device const int& ndim` as a storage
+  buffer whose scalar expression aliases element zero. Five required Linux CI
+  shards compile every artifact for OpenGL/SPIR-V 1.3 with
+  `glslangValidator` and validate every module with `spirv-val`. The gate
+  requires 877 non-empty SPIR-V 1.3 modules. This is complete OpenGL
+  translation, reflection, and native compiler coverage, not numerical
+  execution, MLX host runtime redirection, or complete DirectX family coverage;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 4,122
   discovered current-pinned binary entries from ``binary.metal``. The complete
   contract spans 18 shapes and 11 concrete kernel templates, 24 operators, and

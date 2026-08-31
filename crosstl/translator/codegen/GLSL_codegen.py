@@ -13538,7 +13538,14 @@ class GLSLCodeGen:
                     if record is not None:
                         emitted_name, declaration = record
                 declaration_node.name = emitted_name
-                if emitted_name != original_name:
+                scalar_reference_type = (
+                    self.stage_entry_metal_scalar_reference_element_type(param)
+                )
+                if scalar_reference_type is not None:
+                    self.stage_entry_resource_parameter_aliases.setdefault(
+                        id(func), {}
+                    )[original_name] = f"{emitted_name}[0]"
+                elif emitted_name != original_name:
                     self.stage_entry_resource_parameter_aliases.setdefault(
                         id(func), {}
                     )[original_name] = emitted_name
@@ -14062,9 +14069,43 @@ class GLSLCodeGen:
             return None
         return type_name
 
+    def stage_entry_metal_scalar_reference_element_type(self, param):
+        if self.explicit_resource_binding_index(param) is None:
+            return None
+
+        raw_type = self.resource_node_type(param)
+        if not isinstance(raw_type, ReferenceType):
+            return None
+        address_space = str(getattr(raw_type, "address_space", None) or "").lower()
+        if not address_space:
+            qualifiers = {
+                str(q).lower() for q in getattr(param, "qualifiers", []) or []
+            }
+            address_space = next(
+                (
+                    candidate
+                    for candidate in ("device", "global", "storage")
+                    if candidate in qualifiers
+                ),
+                "",
+            )
+        if address_space not in {"device", "global", "storage"}:
+            return None
+
+        type_name = self.type_name_string(raw_type.referenced_type)
+        if not type_name or type_name in self.structs_by_name:
+            return None
+        return type_name
+
     def stage_entry_metal_pointer_element_type(self, param):
         if self.explicit_resource_binding_index(param) is None:
             return None
+
+        scalar_reference_type = self.stage_entry_metal_scalar_reference_element_type(
+            param
+        )
+        if scalar_reference_type is not None:
+            return scalar_reference_type
 
         qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", []) or []}
         if not qualifiers.intersection({"constant", "device"}):
@@ -14089,9 +14130,14 @@ class GLSLCodeGen:
             return None
 
         qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", []) or []}
+        raw_type = self.resource_node_type(param)
+        read_only_reference = isinstance(raw_type, ReferenceType) and not getattr(
+            raw_type, "is_mutable", True
+        )
         buffer_type = (
             "StructuredBuffer"
-            if qualifiers.intersection({"constant", "const"})
+            if qualifiers.intersection({"constant", "const", "readonly"})
+            or read_only_reference
             else "RWStructuredBuffer"
         )
         return f"{buffer_type}<{element_type}>"
@@ -14196,7 +14242,10 @@ class GLSLCodeGen:
                 return self.constant_buffer_element_type(raw_type)
             return self.type_name_string(raw_type)
         if self.is_structured_buffer_type(resource_type):
-            return f"{self.structured_buffer_element_type(resource_type)}[]"
+            element_type = self.structured_buffer_element_type(resource_type)
+            if self.stage_entry_metal_scalar_reference_element_type(param) is not None:
+                return element_type
+            return f"{element_type}[]"
         if self.is_constant_buffer_type(resource_type):
             return self.constant_buffer_element_type(resource_type)
         return self.type_name_string(resource_type)
@@ -25632,6 +25681,10 @@ complex64_t crossgl_complex64_mod_assign(
             if reciprocal_call is not None:
                 return reciprocal_call
 
+            log10_call = self.generate_glsl_log10_call(original_func_name, expr.args)
+            if log10_call is not None:
+                return log10_call
+
             trailing_zero_call = self.generate_glsl_trailing_zero_call(
                 original_func_name,
                 expr.args,
@@ -26370,6 +26423,18 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             return f"(1.0 / {value})"
         return None
+
+    def generate_glsl_log10_call(self, func_name, args):
+        if (
+            func_name not in {"log10", "metal::log10", "metal_u3a_u3alog10"}
+            or func_name in self.function_return_types
+        ):
+            return None
+        if len(args) != 1:
+            raise ValueError("OpenGL log10 requires 1 argument")
+
+        value = self.generate_expression(args[0])
+        return f"(log2({value}) * 0.3010299956639812)"
 
     def glsl_signbit_type_info(self, type_name):
         if type_name is None:

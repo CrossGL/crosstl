@@ -3969,6 +3969,63 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     assert "-k" not in arccos_opengl_step
 
 
+def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_unary_complete_opengl.py"
+
+    opengl_job = _workflow_job_section(
+        mlx_porting,
+        "mlx-unary-complete-opengl-translation",
+    )
+    assert (
+        "name: MLX complete unary OpenGL translation "
+        "(shard ${{ matrix.shard_index }} of 5)" in opengl_job
+    )
+    assert "if: github.event_name != 'schedule'" in opengl_job
+    assert "runs-on: ubuntu-latest" in opengl_job
+    assert "timeout-minutes: 75" in opengl_job
+    assert "fail-fast: false" in opengl_job
+    assert _matrix_values(opengl_job, "shard_index") == {
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+    }
+    assert 'python-version: "3.12"' in opengl_job
+    assert "sudo apt-get install -y glslang-tools spirv-tools" in opengl_job
+    assert "python -m pip install -e . pytest-xdist" in opengl_job
+    assert "glslangValidator --version" in opengl_job
+    assert "spirv-val --version" in opengl_job
+    assert "Checkout current MLX unary corpus" in opengl_job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in opengl_job
+
+    opengl_step = ci_coverage.workflow_step_section(
+        opengl_job,
+        "Prove current MLX complete unary family OpenGL translation",
+    )
+    assert "if: runner.os" not in opengl_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_UNARY_OPENGL_TRANSLATION: "1"' in opengl_step
+    assert (
+        "CROSTL_MLX_UNARY_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}" in opengl_step
+    )
+    assert 'CROSTL_MLX_UNARY_OPENGL_SHARD_COUNT: "5"' in opengl_step
+    assert (
+        f"{test_path}::test_current_mlx_unary_family_translates_to_opengl"
+        in opengl_step
+    )
+    assert "-n auto" in opengl_step
+    assert "-k" not in opengl_step
+    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
+    assert "Prove current MLX complete unary family OpenGL translation" not in (
+        matrix_job
+    )
+
+
 def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()

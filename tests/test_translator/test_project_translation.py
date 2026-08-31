@@ -14656,6 +14656,61 @@ output_dir = "out"
     assert "uint3 elem" not in generated
 
 
+def test_metal_device_scalar_reference_entry_resource_lowers_to_opengl_buffer(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    (project_root / "reference.metal").write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+kernel void read_device_reference(
+    device const int& ndim [[buffer(0)]],
+    device int* output [[buffer(1)]],
+    uint gid [[thread_position_in_grid]]) {
+  output[gid] = ndim + int(gid);
+}
+""".strip() + "\n",
+        encoding="utf-8",
+    )
+    (project_root / "crosstl.toml").write_text(
+        """[project]
+include = ["reference.metal"]
+targets = ["opengl"]
+output_dir = "out"
+workgroup_size = [1, 1, 1]
+
+[project.sources]
+"**/*.metal" = "metal"
+
+[project.entry_points]
+"reference.metal" = "read_device_reference"
+""",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(project_root), format_output=False)
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    generated = (project_root / artifact["path"]).read_text(encoding="utf-8")
+    assert (
+        "layout(std430, binding = 0) readonly buffer ndimBuffer { int ndim[]; };"
+        in generated
+    )
+    assert (
+        "layout(std430, binding = 1) buffer output_Buffer { int output_[]; };"
+        in generated
+    )
+    assert "ndim[0]" in generated
+    assert "void main()" in generated
+    assert_compute_glsl_validates_if_available(generated, tmp_path)
+
+
 def test_plain_metal_helper_materialization_retains_reachable_unbound_parameter():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 

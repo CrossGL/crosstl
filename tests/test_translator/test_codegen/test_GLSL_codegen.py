@@ -510,6 +510,62 @@ def test_glsl_rint_lowers_to_round_even(tmp_path):
     )
 
 
+def test_glsl_log10_lowers_through_log2_and_validates(tmp_path):
+    source = """
+    shader BaseTenLog {
+        StructuredBuffer<vec4> input_values @ binding(0);
+        RWStructuredBuffer<vec4> output_values @ binding(1);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                vec4 values = input_values[0];
+                output_values[0] = metal_u3a_u3alog10(values)
+                    + vec4(log10(values.x));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+
+    assert generated.count("log2(") == 2
+    assert "(log2(values) * 0.3010299956639812)" in generated
+    assert "(log2(values.x) * 0.3010299956639812)" in generated
+    assert "log10(" not in generated
+    assert "metal_u3a_u3alog10(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "base_ten_log",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_user_defined_log10_remains_an_ordinary_call():
+    source = """
+    shader UserBaseTenLog {
+        float log10(float value) {
+            return value + 10.0;
+        }
+
+        float apply(float value) {
+            return log10(value);
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "float log10(float value)" in generated
+    assert "return log10(value);" in generated
+    assert "0.3010299956639812" not in generated
+
+
 def test_glsl_copysign_preserves_ieee_payload_bits_and_validates(tmp_path):
     source = """
     shader ExactCopySign {

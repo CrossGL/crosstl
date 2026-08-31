@@ -524,7 +524,37 @@ constant-resource provenance, const-device references, postfix update position,
 and native Metal union aliasing while ambiguous address spaces and unsupported
 reinterpretation continue to fail closed. This complete discovered-unary
 selected-entry proof does not claim Metal numerical execution, host-runtime
-redirection, DirectX/OpenGL whole-family coverage, or the MLX test suite.
+redirection, DirectX whole-family coverage, or the MLX test suite.
+
+The same entry-scoped pipeline now translates all 877 current-pinned unary
+entries to standalone OpenGL ``main`` artifacts. The schema-v2
+``unary.opengl-translation.json`` contract preserves the same five-shape,
+37-operator, 20-type-pair classification and all 1,243 exact materializations,
+while pinning 4,060,696 generated GLSL bytes and all 3,363 target-reflected
+resources. Vector artifacts expose read-only input, read-write output, and an
+entry-scoped size uniform block. Gather artifacts expose input, output, shape,
+stride, and the read-only ``ndimBuffer`` storage resource; scalar uses of the
+source ``device const int& ndim`` alias element zero without changing expression
+typing.
+
+OpenGL's 32-bit index profile cannot represent every source 64-bit index
+implicitly. The complete contract therefore records explicit host/runtime
+bounds of ``[0, 2147483647]`` for ``offset + i``, ``out_idx++``, and ``idx``.
+These are declared portability preconditions, not inferred facts or generated
+runtime checks; absent proof continues to fail closed. GLSL also has no native
+``log10`` overload, so reachable Metal base-ten logarithms lower through a
+single evaluation of ``log2(value) * 0.3010299956639812`` while user-defined
+``log10`` functions remain ordinary calls.
+
+Required CI partitions the family across five disjoint Linux shards. Each shard
+retranslates its exact entries, verifies generated identity, materialization,
+``main`` workgroup metadata, and reflected ABI, compiles with
+``glslangValidator --target-env opengl --target-env spirv1.3 -S comp``, validates
+with ``spirv-val --target-env spv1.3``, and requires every SPIR-V module to be
+non-empty. This closes whole-family OpenGL translation, reflection, and native
+compiler coverage; it does not claim OpenGL numerical execution, MLX host
+runtime redirection, complete DirectX family translation, or MLX test-suite
+parity.
 
 The current-pinned MLX binary integration independently proves all 4,122
 discovered entries from ``binary.metal``. Fifteen 238-entry base shapes and

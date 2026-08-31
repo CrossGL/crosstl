@@ -1261,6 +1261,8 @@
     "host_interface_reflection_included": true,
     "metal_roundtrip_included": true,
     "metal_numerical_runtime_included": false,
+    "directx_family_translation_included": false,
+    "opengl_family_translation_included": true,
     "directx_and_opengl_family_translation_included": false,
     "mlx_host_runtime_included": false,
     "runtime_integration_included": false,
@@ -1268,7 +1270,204 @@
     "remaining_scope": {
       "all_discovered_unary_instantiations_included": true,
       "metal_numerical_execution_included": false,
+      "directx_whole_family_included": false,
+      "opengl_whole_family_included": true,
       "directx_and_opengl_whole_family_included": false,
+      "mlx_host_runtime_redirection_included": false
+    },
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
+  "unary_opengl_translation_status": {
+    "status": "selected-entry-complete-family-native-compilation-validated",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/unary.metal",
+    "source_sha256": "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b",
+    "target": "opengl",
+    "scope": {
+      "discovered_unary_instantiation_count": 877,
+      "entry_count": 877,
+      "shape_counts": {
+        "v": 183,
+        "v2": 183,
+        "vn": 145,
+        "gn1": 183,
+        "gn4large": 183
+      },
+      "template_count": 3,
+      "operator_count": 37,
+      "input_output_type_pair_count": 20,
+      "semantic_family_count": 16,
+      "all_discovered_unary_instantiations_included": true
+    },
+    "contract": {
+      "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
+      "schema_version": 2,
+      "sha256": "9708dd97ea36d14cb6bcf167a0153fc89b8e61d01698130722eac3733669758f",
+      "size_bytes": 317614,
+      "entry_identity_fields": [
+        "entryPoint",
+        "shape",
+        "templateName",
+        "operator",
+        "inputType",
+        "outputType",
+        "family",
+        "sha256",
+        "sizeBytes"
+      ]
+    },
+    "project_translation": {
+      "selected_entry_run_count": 877,
+      "artifact_count": 877,
+      "translated_count": 877,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "target_entry_point": "main",
+      "provenance": "entry-scoped-translate",
+      "intermediate": "crossgl",
+      "specialization_count": 1243,
+      "specialization_counts_by_shape": {
+        "v": 183,
+        "v2": 183,
+        "vn": 145,
+        "gn1": 366,
+        "gn4large": 366
+      },
+      "unsupported_specialization_count": 0,
+      "selected_operator_implementation_count_per_artifact": 1,
+      "unselected_operator_bodies_pruned": true,
+      "reachable_complex_operator_dependencies_retained": true,
+      "reachable_kernel_count_per_artifact": 1,
+      "residual_template_syntax": false,
+      "residual_decltype_syntax": false,
+      "residual_call_operator_syntax": false,
+      "unsupported_placeholder_count": 0
+    },
+    "portability_preconditions": {
+      "kind": "explicit-host-runtime-portability-preconditions",
+      "inferred": false,
+      "runtime_enforced": false,
+      "minimum": 0,
+      "maximum": 2147483647,
+      "expressions": [
+        "offset + i",
+        "out_idx++",
+        "idx"
+      ]
+    },
+    "implementation_contracts": {
+      "glsl_log10_lowered_through_single_evaluation_log2": true,
+      "user_defined_log10_preserved": true,
+      "const_device_scalar_reference_emitted_as_read_only_storage_buffer": true,
+      "const_device_scalar_reference_expression_aliases_element_zero": true,
+      "const_device_scalar_reference_preserves_scalar_expression_type": true,
+      "explicit_index_range_preconditions_required": true,
+      "unproven_index_narrowing_fail_closed": true
+    },
+    "host_interface": {
+      "status": "ready",
+      "resource_counts_by_shape": {
+        "v": 3,
+        "v2": 3,
+        "vn": 3,
+        "gn1": 5,
+        "gn4large": 5
+      },
+      "reflected_resource_count": 3363,
+      "vector_resources": [
+        {
+          "name": "in_Buffer",
+          "kind": "buffer",
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "name": "out_Buffer",
+          "kind": "buffer",
+          "binding": 1,
+          "access": "read_write"
+        },
+        {
+          "name": "{sanitizedEntryPoint}_size_Args",
+          "kind": "constant-buffer",
+          "binding": 2,
+          "access": "read"
+        }
+      ],
+      "gather_resources": [
+        {
+          "name": "in_Buffer",
+          "kind": "buffer",
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "name": "out_Buffer",
+          "kind": "buffer",
+          "binding": 1,
+          "access": "read_write"
+        },
+        {
+          "name": "in_shapeBuffer",
+          "kind": "buffer",
+          "binding": 2,
+          "access": "read"
+        },
+        {
+          "name": "in_stridesBuffer",
+          "kind": "buffer",
+          "binding": 3,
+          "access": "read"
+        },
+        {
+          "name": "ndimBuffer",
+          "kind": "buffer",
+          "binding": 4,
+          "access": "read"
+        }
+      ],
+      "host_dispatch_workgroup_size": [
+        1,
+        1,
+        1
+      ]
+    },
+    "artifacts": {
+      "generated_size_bytes_total": 4060696,
+      "generated_size_range": {
+        "minimum": {
+          "entryPoint": "v_Absint32int32",
+          "sizeBytes": 3568
+        },
+        "maximum": {
+          "entryPoint": "gn4large_ArcTancomplex64complex64",
+          "sizeBytes": 8746
+        }
+      }
+    },
+    "native_validation": {
+      "platform": "ubuntu-latest",
+      "compiler": "glslangValidator --target-env opengl --target-env spirv1.3 -S comp",
+      "validator": "spirv-val --target-env spv1.3",
+      "status": "required-on-ci",
+      "compiled_artifact_count": 877,
+      "validated_artifact_count": 877,
+      "all_spirv_artifacts_nonempty": true,
+      "ci_shard_count": 5,
+      "test": "tests/test_translator/test_mlx_unary_complete_opengl.py::test_current_mlx_unary_family_translates_to_opengl"
+    },
+    "host_interface_reflection_included": true,
+    "opengl_family_translation_included": true,
+    "opengl_numerical_runtime_included": false,
+    "directx_family_translation_included": false,
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": false,
+    "full_mlx_test_suite_included": false,
+    "remaining_scope": {
+      "all_discovered_unary_instantiations_included": true,
+      "opengl_numerical_execution_included": false,
+      "directx_whole_family_included": false,
       "mlx_host_runtime_redirection_included": false
     },
     "numerical_parity_claimed": false,
