@@ -8960,6 +8960,33 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         lambda *_args: rms_norm_contract,
     )
     commands = []
+    # This orchestration fixture intentionally emits minimal HLSL instead of the
+    # production artifacts. Keep the production identity validator active by
+    # pinning each synthetic family to the exact bytes written below; separate
+    # evidence tests retain the real generated-artifact identity contract.
+    synthetic_generated_artifacts = {
+        family: dict(identities)
+        for family, identities in (
+            module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS.items()
+        )
+    }
+    monkeypatch.setattr(
+        module,
+        "MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS",
+        synthetic_generated_artifacts,
+    )
+
+    def pin_synthetic_generated_artifacts(family, names, report):
+        artifacts = report["artifacts"]
+        assert len(artifacts) == len(names)
+        identities = {}
+        for name, artifact in zip(names, artifacts):
+            artifact_path = mlx_root / artifact["path"]
+            identities[name] = {
+                "sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+                "sizeBytes": artifact_path.stat().st_size,
+            }
+        synthetic_generated_artifacts[family] = identities
 
     def warning_stderr(source, relative_path):
         lines = []
@@ -9008,6 +9035,9 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
                 report_dir / f"{name}.json",
                 contract=layer_norm_contract,
             )
+            pin_synthetic_generated_artifacts(
+                "layer_norm", module.MLX_LAYER_NORM_DISPATCH_VARIANTS, report
+            )
             if is_toolchain:
                 toolchain_runs = [
                     {
@@ -9049,6 +9079,9 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
                 report_dir / f"{name}.json",
                 contract=logsumexp_contract,
             )
+            pin_synthetic_generated_artifacts(
+                "logsumexp", module.MLX_LOGSUMEXP_DISPATCH_VARIANTS, report
+            )
             if is_toolchain:
                 toolchain_runs = [
                     {
@@ -9089,6 +9122,9 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
                 output_dir,
                 report_dir / f"{name}.json",
                 contract=rms_norm_contract,
+            )
+            pin_synthetic_generated_artifacts(
+                "rms_norm", module.MLX_RMS_NORM_DISPATCH_VARIANTS, report
             )
             if is_toolchain:
                 toolchain_runs = [
