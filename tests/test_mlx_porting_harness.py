@@ -13291,7 +13291,7 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "9972997d87bb4c8c5fac0c0f7182bb19648654ca2c30eacd4b304bfaf18f64d2"
+                "f300bbea75b2ed9e47c29313a56f882ed848cbb93858f1347fbc97a60e167223"
             ),
             "size_bytes": 8188,
             "subgroup_id_lowering": "flattened-logical-software-subgroups",

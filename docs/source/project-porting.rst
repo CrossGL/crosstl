@@ -1615,7 +1615,7 @@ float32 vector-matrix product with ``M=1``, ``N=32``, and ``K=32``. The
 host-derived contract fixes workgroup ``[32, 2, 1]``, subgroup width 32, and
 one dispatched workgroup. Entry-scoped translation materializes the selected
 GEMV and ``elem_to_loc_uint`` only. Its 8,188-byte HLSL has SHA-256
-``9972997d87bb4c8c5fac0c0f7182bb19648654ca2c30eacd4b304bfaf18f64d2``
+``f300bbea75b2ed9e47c29313a56f882ed848cbb93858f1347fbc97a60e167223``
 and passes official DXC 1.9.2602.24 under ``cs_6_6``,
 ``-enable-16bit-types``, and warnings as errors. DirectX explicitly enables a
 32-lane target-scoped software subgroup because physical waves need not contain
