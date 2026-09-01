@@ -57,6 +57,7 @@ class ScalarToStructureConversion:
     destination_type: str
     source_kinds: FrozenSet[ScalarKind]
     fields: Tuple[StructureConversionField, ...]
+    representation_types: FrozenSet[str] = frozenset()
 
     def __post_init__(self):
         if not self.destination_type:
@@ -68,6 +69,11 @@ class ScalarToStructureConversion:
         if not self.fields:
             raise ValueError(
                 f"Structure conversion '{self.destination_type}' needs fields"
+            )
+        if any(not name for name in self.representation_types):
+            raise ValueError(
+                f"Structure conversion '{self.destination_type}' has an invalid "
+                "representation type"
             )
         field_names = [field.name for field in self.fields]
         if any(not name for name in field_names) or len(set(field_names)) != len(
@@ -118,6 +124,7 @@ COMPLEX64_SCALAR_CONVERSION = ScalarToStructureConversion(
             ScalarKind.FLOATING,
         }
     ),
+    representation_types=frozenset({"complex_t_float"}),
     fields=(
         StructureConversionField(
             name="real",
@@ -142,8 +149,36 @@ REGISTERED_SCALAR_TO_STRUCTURE_CONVERSIONS: Mapping[
 )
 
 
+def _registered_structure_conversion_identities() -> (
+    Mapping[str, ScalarToStructureConversion]
+):
+    identities = {}
+    for contract in REGISTERED_SCALAR_TO_STRUCTURE_CONVERSIONS.values():
+        for identity in {contract.destination_type, *contract.representation_types}:
+            existing = identities.get(identity)
+            if existing is not None and existing is not contract:
+                raise ValueError(
+                    "Structure conversion identity "
+                    f"'{identity}' is registered by more than one contract"
+                )
+            identities[identity] = contract
+    return MappingProxyType(identities)
+
+
+REGISTERED_STRUCTURE_CONVERSION_IDENTITIES = (
+    _registered_structure_conversion_identities()
+)
+
+
 def registered_scalar_to_structure_conversion(
     destination_type: str,
 ) -> Optional[ScalarToStructureConversion]:
     """Return the exact registered contract for ``destination_type``."""
     return REGISTERED_SCALAR_TO_STRUCTURE_CONVERSIONS.get(destination_type)
+
+
+def registered_structure_conversion_for_identity(
+    type_name: str,
+) -> Optional[ScalarToStructureConversion]:
+    """Return a contract only for an exact destination or representation name."""
+    return REGISTERED_STRUCTURE_CONVERSION_IDENTITIES.get(type_name)

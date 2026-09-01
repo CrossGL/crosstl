@@ -49,6 +49,11 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from ..structure_conversions import (
+    StructureConversionKind,
+    StructureFieldValue,
+    registered_structure_conversion_for_identity,
+)
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
     INTEGER_COORDINATE_INTRINSIC_NAMES,
@@ -353,6 +358,30 @@ class UnsupportedMetalFeatureError(ValueError):
         self.feature = feature
         self.missing_capabilities = tuple(missing_capabilities)
         self.operation = operation
+        self.reason = reason
+        self.source_location = source_location
+
+
+class MetalStructConversionError(ValueError):
+    """Raised when a registered source structure conversion is not faithful."""
+
+    project_diagnostic_code = "project.translate.metal-struct-construction-unsupported"
+    missing_capabilities = ("metal.struct-conversion-construction",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        destination_type=None,
+        source_type=None,
+        conversion_kind=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.destination_type = destination_type
+        self.source_type = source_type
+        self.conversion_kind = conversion_kind
         self.reason = reason
         self.source_location = source_location
 
@@ -8339,6 +8368,133 @@ class MetalCodeGen:
             return f"float({rendered})"
         return rendered
 
+    def metal_registered_structure_scalar_conversion(
+        self,
+        expr,
+        destination_type,
+        arguments,
+    ):
+        """Lower a registered structure-to-scalar value conversion exactly.
+
+        CrossGL intentionally carries structure fields rather than source C++
+        conversion operators.  A round trip may therefore reconstruct a scalar
+        constructor call whose source operand is a registered structure-backed
+        value.  Admit only the exact registered destination identity and field
+        shape, and evaluate the source expression once through its designated
+        converted field.
+        """
+        arguments = list(arguments or [])
+        if (
+            not isinstance(destination_type, str)
+            or destination_type in getattr(self, "user_function_names", set())
+            or len(arguments) != 1
+        ):
+            return None
+
+        mapped_destination = self.map_type(destination_type)
+        if mapped_destination not in {
+            "bool",
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "int64_t",
+            "uint64_t",
+            "half",
+            "float",
+            "double",
+            "bfloat",
+        }:
+            return None
+
+        argument = arguments[0]
+        source_type = self.expression_result_type(argument)
+        source_type_name = self.type_name_string(source_type)
+        if not source_type_name:
+            return None
+
+        mapped_source = self.map_type(source_type_name)
+        source_struct_name = self.resolve_metal_type_alias(source_type_name)
+        source_identities = {
+            source_type_name,
+            source_struct_name,
+            mapped_source,
+        }
+        matching_contracts = {
+            contract
+            for identity in source_identities
+            if (contract := registered_structure_conversion_for_identity(identity))
+            is not None
+        }
+        if not matching_contracts:
+            return None
+        if len(matching_contracts) != 1:
+            raise MetalStructConversionError(
+                "Metal structure value conversion source identity is ambiguous: "
+                f"'{source_type_name}'",
+                destination_type=destination_type,
+                source_type=source_type_name,
+                conversion_kind=StructureConversionKind.VALUE_CONVERSION.value,
+                reason="source-identity-ambiguous",
+                source_location=getattr(expr, "source_location", None),
+            )
+        contract = next(iter(matching_contracts))
+
+        member_types = self.struct_member_types.get(source_struct_name)
+        if member_types is None:
+            member_types = self.struct_member_types.get(mapped_source)
+        actual_shape = (
+            None
+            if member_types is None
+            else tuple(
+                (name, self.map_type(member_type))
+                for name, member_type in member_types.items()
+            )
+        )
+        expected_shape = tuple(
+            (field.name, self.map_type(field.type_name)) for field in contract.fields
+        )
+        if actual_shape != expected_shape:
+            reason = (
+                "source-shape-unknown"
+                if actual_shape is None
+                else "source-shape-mismatch"
+            )
+            raise MetalStructConversionError(
+                "Metal cannot preserve registered structure value conversion "
+                f"from '{source_type_name}' to '{destination_type}': "
+                f"{reason.replace('-', ' ')}",
+                destination_type=destination_type,
+                source_type=source_type_name,
+                conversion_kind=StructureConversionKind.VALUE_CONVERSION.value,
+                reason=reason,
+                source_location=getattr(expr, "source_location", None),
+            )
+
+        converted_fields = [
+            field
+            for field in contract.fields
+            if field.scalar_value is StructureFieldValue.CONVERTED_SOURCE
+        ]
+        if len(converted_fields) != 1:
+            raise MetalStructConversionError(
+                "Metal registered structure value conversion requires exactly "
+                "one converted source field",
+                destination_type=destination_type,
+                source_type=source_type_name,
+                conversion_kind=StructureConversionKind.VALUE_CONVERSION.value,
+                reason="source-single-evaluation-unsupported",
+                source_location=getattr(expr, "source_location", None),
+            )
+
+        rendered = self.generate_expression_with_expected(argument, None)
+        source_field = converted_fields[0].name
+        return f"{mapped_destination}(({rendered}).{source_field})"
+
     def is_scalar_value_type(self, vtype):
         vtype = self.type_name_string(vtype)
         if not vtype:
@@ -9750,6 +9906,13 @@ class MetalCodeGen:
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
+            registered_conversion = self.metal_registered_structure_scalar_conversion(
+                expr,
+                getattr(expr, "constructor_type", None),
+                getattr(expr, "arguments", []),
+            )
+            if registered_conversion is not None:
+                return registered_conversion
             enum_constructor = generate_enum_constructor_expression(self, expr)
             if enum_constructor is not None:
                 return enum_constructor
@@ -10016,243 +10179,260 @@ class MetalCodeGen:
                     else func_name
                 )
                 return f"{call_name}({args})"
-            if func_name in self.metal_type_aliases or func_name in [
-                "float",
-                "half",
-                "float16",
-                "min16float",
-                "min10float",
-                "double",
-                "f16",
-                "f32",
-                "f64",
-                "bfloat",
-                "bfloat16",
-                "bfloat16_t",
-                "int",
-                "i8",
-                "i16",
-                "i32",
-                "char",
-                "signed char",
-                "int8",
-                "int16",
-                "int8_t",
-                "int16_t",
-                "int32_t",
-                "int64",
-                "int64_t",
-                "long",
-                "signed long",
-                "ptrdiff_t",
-                "min16int",
-                "min12int",
-                "uint",
-                "u8",
-                "u16",
-                "u32",
-                "uchar",
-                "unsigned char",
-                "uint8",
-                "uint16",
-                "uint8_t",
-                "uint16_t",
-                "uint32_t",
-                "uint64",
-                "uint64_t",
-                "ulong",
-                "unsigned long",
-                "size_t",
-                "min16uint",
-                "short",
-                "signed short",
-                "ushort",
-                "unsigned short",
-                "bool",
-                "vec2",
-                "vec3",
-                "vec4",
-                "vec2<f16>",
-                "vec3<f16>",
-                "vec4<f16>",
-                "vec2<f32>",
-                "vec3<f32>",
-                "vec4<f32>",
-                "vec2<f64>",
-                "vec3<f64>",
-                "vec4<f64>",
-                "vec2<i8>",
-                "vec3<i8>",
-                "vec4<i8>",
-                "vec2<u8>",
-                "vec3<u8>",
-                "vec4<u8>",
-                "vec2<i16>",
-                "vec3<i16>",
-                "vec4<i16>",
-                "vec2<u16>",
-                "vec3<u16>",
-                "vec4<u16>",
-                "vec2<i32>",
-                "vec3<i32>",
-                "vec4<i32>",
-                "vec2<u32>",
-                "vec3<u32>",
-                "vec4<u32>",
-                "vec2<i64>",
-                "vec3<i64>",
-                "vec4<i64>",
-                "vec2<u64>",
-                "vec3<u64>",
-                "vec4<u64>",
-                "vec2<bool>",
-                "vec3<bool>",
-                "vec4<bool>",
-                "ivec2",
-                "ivec3",
-                "ivec4",
-                "i64vec2",
-                "i64vec3",
-                "i64vec4",
-                "uvec2",
-                "uvec3",
-                "uvec4",
-                "u64vec2",
-                "u64vec3",
-                "u64vec4",
-                "bvec2",
-                "bvec3",
-                "bvec4",
-                "packed_float2",
-                "packed_float3",
-                "packed_float4",
-                "simd_float2",
-                "simd_float3",
-                "simd_float4",
-                "half2",
-                "half3",
-                "half4",
-                "packed_half2",
-                "packed_half3",
-                "packed_half4",
-                "simd_half2",
-                "simd_half3",
-                "simd_half4",
-                "f16vec2",
-                "f16vec3",
-                "f16vec4",
-                "mat2",
-                "mat3",
-                "mat4",
-                "mat2x2",
-                "mat2x3",
-                "mat2x4",
-                "mat3x2",
-                "mat3x3",
-                "mat3x4",
-                "mat4x2",
-                "mat4x3",
-                "mat4x4",
-                "f16mat2",
-                "f16mat3",
-                "f16mat4",
-                "f16mat2x2",
-                "f16mat2x3",
-                "f16mat2x4",
-                "f16mat3x2",
-                "f16mat3x3",
-                "f16mat3x4",
-                "f16mat4x2",
-                "f16mat4x3",
-                "f16mat4x4",
-                "char2",
-                "char3",
-                "char4",
-                "uchar2",
-                "uchar3",
-                "uchar4",
-                "packed_int2",
-                "packed_int3",
-                "packed_int4",
-                "packed_uint2",
-                "packed_uint3",
-                "packed_uint4",
-                "simd_int2",
-                "simd_int3",
-                "simd_int4",
-                "simd_uint2",
-                "simd_uint3",
-                "simd_uint4",
-                "simd_float2x2",
-                "simd_float2x3",
-                "simd_float2x4",
-                "simd_float3x2",
-                "simd_float3x3",
-                "simd_float3x4",
-                "simd_float4x2",
-                "simd_float4x3",
-                "simd_float4x4",
-                "simd_half2x2",
-                "simd_half2x3",
-                "simd_half2x4",
-                "simd_half3x2",
-                "simd_half3x3",
-                "simd_half3x4",
-                "simd_half4x2",
-                "simd_half4x3",
-                "simd_half4x4",
-                "i8vec2",
-                "i8vec3",
-                "i8vec4",
-                "u8vec2",
-                "u8vec3",
-                "u8vec4",
-                "short2",
-                "short3",
-                "short4",
-                "ushort2",
-                "ushort3",
-                "ushort4",
-                "i16vec2",
-                "i16vec3",
-                "i16vec4",
-                "u16vec2",
-                "u16vec3",
-                "u16vec4",
-                "min16float2",
-                "min16float3",
-                "min16float4",
-                "min10float2",
-                "min10float3",
-                "min10float4",
-                "min16int2",
-                "min16int3",
-                "min16int4",
-                "min12int2",
-                "min12int3",
-                "min12int4",
-                "min16uint2",
-                "min16uint3",
-                "min16uint4",
-                "min16float2x2",
-                "min16float2x3",
-                "min16float2x4",
-                "min16float3x2",
-                "min16float3x3",
-                "min16float3x4",
-                "min16float4x2",
-                "min16float4x3",
-                "min16float4x4",
-                "min10float2x2",
-                "min10float2x3",
-                "min10float2x4",
-                "min10float3x2",
-                "min10float3x3",
-                "min10float3x4",
-                "min10float4x2",
-                "min10float4x3",
-                "min10float4x4",
-            ]:
+            registered_conversion = self.metal_registered_structure_scalar_conversion(
+                expr,
+                func_name,
+                expr.args,
+            )
+            if registered_conversion is not None:
+                return registered_conversion
+            if (
+                func_name in self.metal_type_aliases
+                or re.fullmatch(
+                    r"(?:u?int(?:8|16|32|64)(?:_t)?|"
+                    r"(?:float(?:16|32|64)|bfloat16)(?:_t)?)[234]",
+                    str(func_name),
+                )
+                is not None
+                or func_name
+                in [
+                    "float",
+                    "half",
+                    "float16",
+                    "min16float",
+                    "min10float",
+                    "double",
+                    "f16",
+                    "f32",
+                    "f64",
+                    "bfloat",
+                    "bfloat16",
+                    "bfloat16_t",
+                    "int",
+                    "i8",
+                    "i16",
+                    "i32",
+                    "char",
+                    "signed char",
+                    "int8",
+                    "int16",
+                    "int8_t",
+                    "int16_t",
+                    "int32_t",
+                    "int64",
+                    "int64_t",
+                    "long",
+                    "signed long",
+                    "ptrdiff_t",
+                    "min16int",
+                    "min12int",
+                    "uint",
+                    "u8",
+                    "u16",
+                    "u32",
+                    "uchar",
+                    "unsigned char",
+                    "uint8",
+                    "uint16",
+                    "uint8_t",
+                    "uint16_t",
+                    "uint32_t",
+                    "uint64",
+                    "uint64_t",
+                    "ulong",
+                    "unsigned long",
+                    "size_t",
+                    "min16uint",
+                    "short",
+                    "signed short",
+                    "ushort",
+                    "unsigned short",
+                    "bool",
+                    "vec2",
+                    "vec3",
+                    "vec4",
+                    "vec2<f16>",
+                    "vec3<f16>",
+                    "vec4<f16>",
+                    "vec2<f32>",
+                    "vec3<f32>",
+                    "vec4<f32>",
+                    "vec2<f64>",
+                    "vec3<f64>",
+                    "vec4<f64>",
+                    "vec2<i8>",
+                    "vec3<i8>",
+                    "vec4<i8>",
+                    "vec2<u8>",
+                    "vec3<u8>",
+                    "vec4<u8>",
+                    "vec2<i16>",
+                    "vec3<i16>",
+                    "vec4<i16>",
+                    "vec2<u16>",
+                    "vec3<u16>",
+                    "vec4<u16>",
+                    "vec2<i32>",
+                    "vec3<i32>",
+                    "vec4<i32>",
+                    "vec2<u32>",
+                    "vec3<u32>",
+                    "vec4<u32>",
+                    "vec2<i64>",
+                    "vec3<i64>",
+                    "vec4<i64>",
+                    "vec2<u64>",
+                    "vec3<u64>",
+                    "vec4<u64>",
+                    "vec2<bool>",
+                    "vec3<bool>",
+                    "vec4<bool>",
+                    "ivec2",
+                    "ivec3",
+                    "ivec4",
+                    "i64vec2",
+                    "i64vec3",
+                    "i64vec4",
+                    "uvec2",
+                    "uvec3",
+                    "uvec4",
+                    "u64vec2",
+                    "u64vec3",
+                    "u64vec4",
+                    "bvec2",
+                    "bvec3",
+                    "bvec4",
+                    "packed_float2",
+                    "packed_float3",
+                    "packed_float4",
+                    "simd_float2",
+                    "simd_float3",
+                    "simd_float4",
+                    "half2",
+                    "half3",
+                    "half4",
+                    "packed_half2",
+                    "packed_half3",
+                    "packed_half4",
+                    "simd_half2",
+                    "simd_half3",
+                    "simd_half4",
+                    "f16vec2",
+                    "f16vec3",
+                    "f16vec4",
+                    "mat2",
+                    "mat3",
+                    "mat4",
+                    "mat2x2",
+                    "mat2x3",
+                    "mat2x4",
+                    "mat3x2",
+                    "mat3x3",
+                    "mat3x4",
+                    "mat4x2",
+                    "mat4x3",
+                    "mat4x4",
+                    "f16mat2",
+                    "f16mat3",
+                    "f16mat4",
+                    "f16mat2x2",
+                    "f16mat2x3",
+                    "f16mat2x4",
+                    "f16mat3x2",
+                    "f16mat3x3",
+                    "f16mat3x4",
+                    "f16mat4x2",
+                    "f16mat4x3",
+                    "f16mat4x4",
+                    "char2",
+                    "char3",
+                    "char4",
+                    "uchar2",
+                    "uchar3",
+                    "uchar4",
+                    "packed_int2",
+                    "packed_int3",
+                    "packed_int4",
+                    "packed_uint2",
+                    "packed_uint3",
+                    "packed_uint4",
+                    "simd_int2",
+                    "simd_int3",
+                    "simd_int4",
+                    "simd_uint2",
+                    "simd_uint3",
+                    "simd_uint4",
+                    "simd_float2x2",
+                    "simd_float2x3",
+                    "simd_float2x4",
+                    "simd_float3x2",
+                    "simd_float3x3",
+                    "simd_float3x4",
+                    "simd_float4x2",
+                    "simd_float4x3",
+                    "simd_float4x4",
+                    "simd_half2x2",
+                    "simd_half2x3",
+                    "simd_half2x4",
+                    "simd_half3x2",
+                    "simd_half3x3",
+                    "simd_half3x4",
+                    "simd_half4x2",
+                    "simd_half4x3",
+                    "simd_half4x4",
+                    "i8vec2",
+                    "i8vec3",
+                    "i8vec4",
+                    "u8vec2",
+                    "u8vec3",
+                    "u8vec4",
+                    "short2",
+                    "short3",
+                    "short4",
+                    "ushort2",
+                    "ushort3",
+                    "ushort4",
+                    "i16vec2",
+                    "i16vec3",
+                    "i16vec4",
+                    "u16vec2",
+                    "u16vec3",
+                    "u16vec4",
+                    "min16float2",
+                    "min16float3",
+                    "min16float4",
+                    "min10float2",
+                    "min10float3",
+                    "min10float4",
+                    "min16int2",
+                    "min16int3",
+                    "min16int4",
+                    "min12int2",
+                    "min12int3",
+                    "min12int4",
+                    "min16uint2",
+                    "min16uint3",
+                    "min16uint4",
+                    "min16float2x2",
+                    "min16float2x3",
+                    "min16float2x4",
+                    "min16float3x2",
+                    "min16float3x3",
+                    "min16float3x4",
+                    "min16float4x2",
+                    "min16float4x3",
+                    "min16float4x4",
+                    "min10float2x2",
+                    "min10float2x3",
+                    "min10float2x4",
+                    "min10float3x2",
+                    "min10float3x3",
+                    "min10float3x4",
+                    "min10float4x2",
+                    "min10float4x3",
+                    "min10float4x4",
+                ]
+            ):
                 metal_type = self.map_type(func_name)
                 matrix_resize = self.generate_metal_matrix_resize_constructor(
                     metal_type, expr.args
@@ -10416,11 +10596,115 @@ class MetalCodeGen:
         match = re.fullmatch(r"(?:(?:metal)::)?as_type<(.+)>", func_name)
         if match is None:
             return None
-        return self.map_type(match.group(1).strip())
+        target_type = match.group(1).strip()
+        packed_target = self.metal_explicit_packed_vector_type(target_type)
+        if packed_target is not None:
+            return packed_target
+        return self.metal_native_narrow_bitcast_storage_type(
+            target_type
+        ) or self.map_type(target_type)
+
+    def metal_explicit_packed_vector_type(self, value_type):
+        """Return an exact packed-vector identity that cannot be normalized."""
+        source_name = self.type_name_string(value_type)
+        raw_type = self.resolve_metal_type_alias(source_name)
+        normalized = re.sub(r"^(?:metal::)+", "", str(raw_type or "").strip())
+        if re.fullmatch(
+            r"packed_(?:char|uchar|short|ushort|int|uint|half|float)[234]",
+            normalized,
+        ) or re.fullmatch(
+            r"packed_(?:vector|vec)\s*<.+,\s*[234]\s*>",
+            normalized,
+        ):
+            return normalized
+        return None
+
+    def metal_explicit_bitcast_type_info(self, value_type):
+        """Return the exact native scalar/vector storage width for ``as_type``."""
+        source_name = self.type_name_string(value_type)
+        raw_type = self.resolve_metal_type_alias(source_name)
+        if self.metal_explicit_packed_vector_type(raw_type) is not None:
+            return None
+        mapped_type = self.metal_native_narrow_bitcast_storage_type(
+            raw_type
+        ) or self.map_type(raw_type)
+        normalized = re.sub(r"^(?:metal::)+", "", str(mapped_type or "").strip())
+        scalar_widths = {
+            "char": 8,
+            "uchar": 8,
+            "int8": 8,
+            "uint8": 8,
+            "int8_t": 8,
+            "uint8_t": 8,
+            "short": 16,
+            "ushort": 16,
+            "int16": 16,
+            "uint16": 16,
+            "int16_t": 16,
+            "uint16_t": 16,
+            "half": 16,
+            "float16": 16,
+            "float16_t": 16,
+            "bfloat": 16,
+            "bfloat16": 16,
+            "bfloat16_t": 16,
+            "int": 32,
+            "uint": 32,
+            "int32": 32,
+            "uint32": 32,
+            "int32_t": 32,
+            "uint32_t": 32,
+            "float": 32,
+            "long": 64,
+            "ulong": 64,
+            "int64": 64,
+            "uint64": 64,
+            "int64_t": 64,
+            "uint64_t": 64,
+            "double": 64,
+        }
+        component_type = normalized
+        lanes = 1
+        vector_match = re.fullmatch(r"(.+?)([234])", normalized)
+        if vector_match is not None and vector_match.group(1) in scalar_widths:
+            component_type = vector_match.group(1)
+            lanes = int(vector_match.group(2))
+        else:
+            generic_match = re.fullmatch(
+                r"(?:vector|vec)\s*<\s*(.+?)\s*,\s*([234])\s*>",
+                normalized,
+            )
+            if generic_match is not None:
+                component_type = re.sub(
+                    r"^(?:metal::)+", "", generic_match.group(1).strip()
+                )
+                lanes = int(generic_match.group(2))
+        component_width = scalar_widths.get(component_type)
+        if component_width is None:
+            return None
+        # Metal's ordinary three-component vectors have the same size and
+        # alignment as their four-component counterparts.  ``as_type`` is
+        # constrained by native object size, not by the number of semantic
+        # lanes, so uint3 <-> uint4 (and corresponding scalar families) is a
+        # valid 128-bit bitcast.  Packed vectors are rejected before mapping,
+        # because normalizing them to ordinary vectors would change storage.
+        storage_lanes = 4 if lanes == 3 else lanes
+        return {
+            "type": normalized,
+            "component": component_type,
+            "componentWidth": component_width,
+            "lanes": lanes,
+            "storageLanes": storage_lanes,
+            "totalWidth": component_width * storage_lanes,
+        }
 
     def metal_native_narrow_bitcast_storage_type(self, value_type):
         raw_type = self.resolve_metal_type_alias(self.type_name_string(value_type))
         scalar_types = {
+            "char": "char",
+            "uchar": "uchar",
+            "short": "short",
+            "ushort": "ushort",
             "int8": "char",
             "int8_t": "char",
             "i8": "char",
@@ -10438,7 +10722,8 @@ class MetalCodeGen:
             return scalar_types[raw_type]
         vector_match = re.fullmatch(
             r"(?:(?P<prefix>[iu])(?P<bits>8|16)vec|"
-            r"(?P<word>u?int(?:8|16)(?:_t)?))(?P<width>[234])",
+            r"(?P<word>char|uchar|short|ushort|u?int(?:8|16)(?:_t)?))"
+            r"(?P<width>[234])",
             raw_type,
         )
         if vector_match is None:
@@ -10471,13 +10756,46 @@ class MetalCodeGen:
         if target_type is None:
             return None
         argument = args[0]
-        rendered = self.generate_expression(argument)
-        storage_type = self.metal_native_narrow_bitcast_storage_type(
-            self.expression_result_type(argument)
+        source_type = self.expression_result_type(argument)
+        source_value_type = (
+            self.reference_referent_type_name(source_type) or source_type
         )
+        packed_target = self.metal_explicit_packed_vector_type(target_type)
+        packed_source = self.metal_explicit_packed_vector_type(source_value_type)
+        if packed_target is not None or packed_source is not None:
+            packed_roles = []
+            if packed_target is not None:
+                packed_roles.append(f"target {packed_target}")
+            if packed_source is not None:
+                packed_roles.append(f"source {packed_source}")
+            raise ValueError(
+                f"Metal as_type<{target_type}> cannot preserve packed vector "
+                f"storage for {', '.join(packed_roles)}"
+            )
+        target_info = self.metal_explicit_bitcast_type_info(target_type)
+        source_info = self.metal_explicit_bitcast_type_info(source_value_type)
+        if target_info is None or source_info is None:
+            source_display = self.type_name_string(source_type) or "<unknown>"
+            raise ValueError(
+                f"Metal as_type<{target_type}> requires statically known numeric "
+                f"scalar or vector storage types; inferred source type is "
+                f"{source_display}"
+            )
+        if target_info["totalWidth"] != source_info["totalWidth"]:
+            raise ValueError(
+                f"Metal as_type<{target_info['type']}> cannot bitcast from "
+                f"{source_info['type']}: total widths are "
+                f"{target_info['totalWidth']} and {source_info['totalWidth']} bits"
+            )
+        rendered = self.generate_expression(argument)
+        storage_type = self.metal_native_narrow_bitcast_storage_type(source_value_type)
         if storage_type is not None:
             rendered = f"{storage_type}({rendered})"
-        return f"as_type<{target_type}>({rendered})"
+        bitcast = f"as_type<{target_type}>({rendered})"
+        mapped_result_type = self.map_type(target_type)
+        if mapped_result_type != target_type:
+            return f"{mapped_result_type}({bitcast})"
+        return bitcast
 
     def metal_bitcast_result_type(self, func_name, args):
         if (
@@ -10489,12 +10807,18 @@ class MetalCodeGen:
 
         argument_type = self.expression_result_type(args[0])
         mapped_argument_type = self.map_type(argument_type)
+        target_component = self.METAL_BITCAST_FUNCTION_TARGETS[func_name]
+        narrow_match = re.fullmatch(r"(?:half|bfloat)([234])?", mapped_argument_type)
+        if narrow_match is not None and target_component in {"int", "uint"}:
+            width = narrow_match.group(1) or ""
+            narrow_component = "short" if target_component == "int" else "ushort"
+            return f"{narrow_component}{width}"
         match = re.fullmatch(r"(?:float|int|uint)([234])?", mapped_argument_type)
         if match is None:
-            return self.METAL_BITCAST_FUNCTION_TARGETS[func_name]
+            return target_component
 
         width = match.group(1) or ""
-        return f"{self.METAL_BITCAST_FUNCTION_TARGETS[func_name]}{width}"
+        return f"{target_component}{width}"
 
     def generate_metal_bitcast_call(self, func_name, args):
         target_type = self.metal_bitcast_result_type(func_name, args)
@@ -24355,6 +24679,35 @@ class MetalCodeGen:
 
         if vtype_str in getattr(self, "enum_struct_type_names", set()):
             return vtype_str
+
+        fixed_width_vector = re.fullmatch(
+            r"(?P<unsigned>u?)int(?P<bits>8|16|32|64)(?:_t)?(?P<lanes>[234])",
+            vtype_str,
+        )
+        if fixed_width_vector is not None:
+            bits = fixed_width_vector.group("bits")
+            unsigned = bool(fixed_width_vector.group("unsigned"))
+            if bits == "64":
+                component = "ulong" if unsigned else "long"
+            else:
+                component = "uint" if unsigned else "int"
+            return f"{component}{fixed_width_vector.group('lanes')}"
+
+        fixed_float_vector = re.fullmatch(
+            r"(?P<component>(?:float(?:16|32|64)|bfloat16)(?:_t)?)" r"(?P<lanes>[234])",
+            vtype_str,
+        )
+        if fixed_float_vector is not None:
+            component_name = fixed_float_vector.group("component")
+            if component_name.startswith("bfloat"):
+                component = "bfloat"
+            elif "16" in component_name:
+                component = "half"
+            elif "64" in component_name:
+                component = "double"
+            else:
+                component = "float"
+            return f"{component}{fixed_float_vector.group('lanes')}"
 
         return self.type_mapping.get(vtype_str, vtype_str)
 

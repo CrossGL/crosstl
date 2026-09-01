@@ -3522,6 +3522,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             return {}
         aliases: Dict[str, List[_MetalTypeAliasBinding]] = {}
         lexical_scopes = self._find_lexical_brace_scopes(code)
+        namespace_spans = self._find_namespace_spans(code)
+        namespace_scopes = {(start, end) for start, end, _namespace in namespace_spans}
         for declaration_position, alias, target in sorted(raw_aliases):
             resolved_target = self._resolve_type_aliases_at(
                 target,
@@ -3539,7 +3541,53 @@ class MetalPreprocessor(HLSLPreprocessor):
                     target=resolved_target,
                 )
             )
+            namespace = self._namespace_at(namespace_spans, declaration_position)
+            if namespace and (scope_start, scope_end) in namespace_scopes:
+                # A namespace member's fully qualified spelling is visible from
+                # every later lexical scope, not only from inside the namespace
+                # braces where its unqualified spelling was declared.
+                aliases.setdefault(f"{namespace}::{alias}", []).append(
+                    _MetalTypeAliasBinding(
+                        declaration_position=declaration_position,
+                        scope_start=0,
+                        scope_end=len(code),
+                        target=resolved_target,
+                    )
+                )
         return aliases
+
+    def _qualified_type_alias_references(
+        self,
+        text: str,
+        aliases: Dict[str, List[_MetalTypeAliasBinding]],
+    ) -> List[Tuple[int, int, str]]:
+        """Return longest qualified alias prefixes without reading comments."""
+        if "::" not in text or not aliases:
+            return []
+        ignored_spans = self._find_comment_and_literal_spans(text)
+        references: List[Tuple[int, int, str]] = []
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_:])(?:::)?[A-Za-z_]\w*" r"(?:\s*::\s*[A-Za-z_]\w*)+"
+        )
+        for match in pattern.finditer(text):
+            if self._containing_span(match.start(), ignored_spans) is not None:
+                continue
+            components = list(IDENTIFIER_RE.finditer(match.group(0)))
+            for component_count in range(len(components), 1, -1):
+                alias = "::".join(
+                    component.group(0) for component in components[:component_count]
+                )
+                if alias not in aliases:
+                    continue
+                references.append(
+                    (
+                        match.start(),
+                        match.start() + components[component_count - 1].end(),
+                        alias,
+                    )
+                )
+                break
+        return references
 
     def _resolve_type_aliases_at(
         self,
@@ -3550,14 +3598,27 @@ class MetalPreprocessor(HLSLPreprocessor):
         replacements = {
             alias: resolved
             for alias in aliases
-            if (
+            if "::" not in alias
+            and (
                 resolved := self._resolve_struct_type_alias_at(aliases, alias, position)
             )
             is not None
         }
         resolved = self._normalize_template_argument_text(type_text)
-        for _ in range(len(replacements)):
-            candidate = self._replace_identifiers(resolved, replacements)
+        for _ in range(max(len(aliases), 1)):
+            qualified_replacements = []
+            for start, end, alias in self._qualified_type_alias_references(
+                resolved,
+                aliases,
+            ):
+                target = self._resolve_struct_type_alias_at(aliases, alias, position)
+                if target is not None:
+                    qualified_replacements.append((start, end, target))
+            candidate = self._apply_text_replacements(
+                resolved,
+                qualified_replacements,
+            )
+            candidate = self._replace_identifiers(candidate, replacements)
             if candidate == resolved:
                 break
             resolved = candidate
@@ -3575,7 +3636,9 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         Alias targets are resolved at their own declaration positions. This
         preserves lexical shadowing and prevents a later declaration from
-        retroactively satisfying an unresolved or forward alias target.
+        retroactively satisfying an unresolved or forward alias target. Fully
+        qualified namespace aliases are resolved atomically before individual
+        identifiers so a namespace prefix cannot be mistaken for a local alias.
         """
         normalized = self._normalize_template_argument_text(type_text)
         if not normalized:
@@ -3591,6 +3654,48 @@ class MetalPreprocessor(HLSLPreprocessor):
             candidate = self._normalize_template_argument_text(text)
             if not candidate:
                 return None
+
+            qualified_replacements: List[Tuple[int, int, str]] = []
+            for start, end, identifier in self._qualified_type_alias_references(
+                candidate,
+                aliases,
+            ):
+                binding = self._resolve_type_alias_binding_at(
+                    aliases,
+                    identifier,
+                    context_position,
+                )
+                if binding is None:
+                    if any(
+                        future.declaration_position > context_position
+                        and future.scope_start <= context_position < future.scope_end
+                        for future in aliases.get(identifier, [])
+                    ):
+                        return None
+                    continue
+                key = (
+                    identifier,
+                    binding.declaration_position,
+                    binding.scope_start,
+                    binding.scope_end,
+                )
+                if key in resolving or binding.target is None:
+                    return None
+                if key not in cache:
+                    cache[key] = canonicalize(
+                        binding.target,
+                        binding.declaration_position,
+                        {*resolving, key},
+                    )
+                resolved = cache[key]
+                if resolved is None:
+                    return None
+                qualified_replacements.append((start, end, resolved))
+            candidate = self._apply_text_replacements(
+                candidate,
+                qualified_replacements,
+            )
+
             replacements: Dict[str, str] = {}
             identifiers = dict.fromkeys(
                 match.group(0)
@@ -3638,6 +3743,53 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
 
         return canonicalize(normalized, position, set())
+
+    def _canonicalize_template_function_arguments_at(
+        self,
+        template: _MetalTemplateFunction,
+        arguments: Sequence[str],
+        aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+    ) -> Optional[Tuple[str, ...]]:
+        """Canonicalize only TYPE arguments of one function template at a point.
+
+        Non-type arguments may legitimately use an identifier that is also a type
+        alias in another scope, so applying alias replacement indiscriminately can
+        change a value specialization. Variadic packs are mapped with the same
+        fixed-tail rule as template argument binding.
+        """
+        canonical = [
+            self._normalize_template_argument_text(argument) for argument in arguments
+        ]
+        non_type_parameters = set(template.template_parameter_types)
+        variadic_parameters = set(template.variadic_template_parameters)
+        argument_index = 0
+        for parameter_index, parameter in enumerate(template.template_parameters):
+            if parameter in variadic_parameters:
+                remaining_fixed = (
+                    len(template.template_parameters) - parameter_index - 1
+                )
+                argument_count = max(
+                    0,
+                    len(canonical) - argument_index - remaining_fixed,
+                )
+            else:
+                argument_count = int(argument_index < len(canonical))
+            if parameter not in non_type_parameters:
+                for index in range(
+                    argument_index,
+                    min(argument_index + argument_count, len(canonical)),
+                ):
+                    resolved = self._canonicalize_type_aliases_at(
+                        canonical[index],
+                        aliases,
+                        position,
+                    )
+                    if resolved is None:
+                        return None
+                    canonical[index] = resolved
+            argument_index += argument_count
+        return tuple(canonical)
 
     def _collect_local_integral_constant_bindings(
         self,
@@ -18626,6 +18778,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             code,
             local_binding_owner_spans,
         )
+        source_type_aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+        )
+        explicit_free_specializations = (
+            self._find_explicit_template_function_specializations(code)
+        )
         constexpr_functions = self._materialization_constexpr_function_index(code)
         local_integral_constants = self._collect_local_integral_constant_bindings(
             code,
@@ -18702,6 +18861,91 @@ class MetalPreprocessor(HLSLPreprocessor):
                     callee_template=function_name,
                     requested_arguments=tuple(resolved_arguments),
                 )
+            template = templates_by_name[function_name]
+            canonical_call_arguments = (
+                self._canonicalize_template_function_arguments_at(
+                    template,
+                    resolved_arguments,
+                    source_type_aliases,
+                    span[0],
+                )
+            )
+            if canonical_call_arguments is None:
+                requested_signature = self._template_specialization_signature(
+                    function_name,
+                    resolved_arguments,
+                )
+                suggested_action = (
+                    "declare every call-site type alias before use and remove "
+                    "cyclic alias declarations"
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal function template materialization cannot determine "
+                    f"whether '{requested_signature}' has an explicit "
+                    "specialization because a call-site type alias is unresolved "
+                    "at its lexical position. Suggested action: "
+                    f"{suggested_action}.",
+                    requested_signature=requested_signature,
+                    suggested_action=suggested_action,
+                    source_location=self._source_location_for_offsets(
+                        code,
+                        span[0],
+                        span[1],
+                    ),
+                    callee_template=function_name,
+                    requested_arguments=tuple(resolved_arguments),
+                )
+
+            alias_equivalent_specialization = False
+            for specialization in explicit_free_specializations.values():
+                if specialization["name"] != function_name:
+                    continue
+                if not specialization["templateArgumentsExplicit"]:
+                    # `template <> R f(P)` and `template <> R f<>(P)` deduce
+                    # their template arguments from the concrete function type.
+                    # Only the project-level exact-signature selector has enough
+                    # type information to decide which overload owns the body.
+                    alias_equivalent_specialization = True
+                    break
+                specialization_position = int(specialization["span"][0])
+                canonical_specialization_arguments = (
+                    self._canonicalize_template_function_arguments_at(
+                        template,
+                        specialization["arguments"],
+                        source_type_aliases,
+                        specialization_position,
+                    )
+                )
+                if canonical_specialization_arguments is None:
+                    requested_signature = self._template_specialization_signature(
+                        function_name,
+                        resolved_arguments,
+                    )
+                    suggested_action = (
+                        "declare every specialization type alias before use and "
+                        "remove cyclic alias declarations"
+                    )
+                    raise MetalTemplateSpecializationError(
+                        "Metal function template materialization cannot determine "
+                        f"whether '{requested_signature}' has an explicit "
+                        "specialization because a specialization type alias is "
+                        "unresolved at its lexical position. Suggested action: "
+                        f"{suggested_action}.",
+                        requested_signature=requested_signature,
+                        suggested_action=suggested_action,
+                        source_location=specialization.get("sourceLocation"),
+                        callee_template=function_name,
+                        requested_arguments=tuple(resolved_arguments),
+                    )
+                if canonical_specialization_arguments == canonical_call_arguments:
+                    alias_equivalent_specialization = True
+                    break
+            if alias_equivalent_specialization:
+                # Leave this call for the project-level full-signature selector.
+                # Another overload may own the explicit body, in which case that
+                # selector safely materializes the chosen primary instead.
+                continue
+
             resolved_key = self._template_specialization_key(
                 function_name,
                 resolved_arguments,
@@ -20972,6 +21216,154 @@ class MetalPreprocessor(HLSLPreprocessor):
             pos = declaration_start
         return spans
 
+    def _find_explicit_template_function_specializations(self, code: str) -> Dict[
+        Tuple[str, Tuple[str, ...], Tuple[str, ...]],
+        Dict[str, object],
+    ]:
+        """Return exact global free-function specializations with concrete bodies.
+
+        Direct Metal preprocessing intentionally preserves explicit specializations
+        as source C++. Entry-scoped project translation targets template-hostile
+        backends, however, and must select the exact body once call-site inference
+        supplies all template arguments. Only unqualified declarations at global
+        scope are admitted here. Namespaced declarations and out-of-line member
+        specializations retain owner semantics that this free-function materializer
+        cannot preserve, so they remain available to their owner-aware paths.
+
+        C++ permits distinct overloaded primaries to have explicit specializations
+        with the same template arguments. The concrete parameter signature is
+        therefore part of the identity; keying only by template arguments can bind
+        a valid body to the wrong overload or reject two valid specializations.
+        """
+        specializations: Dict[
+            Tuple[str, Tuple[str, ...], Tuple[str, ...]],
+            Dict[str, object],
+        ] = {}
+        masked_code = self._mask_comments_and_literals(code)
+        scope_cursor = 0
+        scope_depth = 0
+        for match in re.finditer(r"\btemplate\s*<\s*>\s*", masked_code):
+            for character in masked_code[scope_cursor : match.start()]:
+                if character == "{":
+                    scope_depth += 1
+                elif character == "}":
+                    scope_depth = max(0, scope_depth - 1)
+            scope_cursor = match.start()
+            if scope_depth != 0:
+                continue
+
+            declaration_start = match.end()
+            body_start = self._find_next_top_level_char(
+                masked_code, declaration_start, "{"
+            )
+            semicolon = self._find_next_top_level_char(
+                masked_code, declaration_start, ";"
+            )
+            if body_start is None or (semicolon is not None and semicolon < body_start):
+                continue
+            body_end = self._find_matching_brace(code, body_start)
+            if body_end is None:
+                continue
+
+            header = masked_code[declaration_start:body_start]
+            paren_index = self._function_parameter_start(header)
+            if paren_index is None:
+                continue
+            before_params = header[:paren_index].rstrip()
+            angle_end: Optional[int] = None
+            angle_start: Optional[int] = None
+            if before_params.endswith(">"):
+                angle_end = len(before_params) - 1
+                angle_start = self._matching_open_angle(before_params, angle_end)
+            if angle_start is not None and angle_end is not None:
+                name_source = before_params[:angle_start]
+                arguments = self._split_top_level_commas(
+                    before_params[angle_start + 1 : angle_end]
+                )
+                relative_name_end = angle_end + 1
+            else:
+                # Standard C++ permits an explicit function specialization to
+                # omit its template argument list when all arguments can be
+                # deduced from the concrete function type.
+                name_source = before_params
+                arguments = []
+                relative_name_end = -1
+            name_match = re.search(
+                r"([A-Za-z_][A-Za-z0-9_:]*)\s*$",
+                name_source,
+            )
+            if name_match is None:
+                continue
+            qualified_name = re.sub(r"\s*::\s*", "::", name_match.group(1))
+            name_prefix = before_params[: name_match.start(1)].rstrip()
+            if "::" in qualified_name or name_prefix.endswith("::"):
+                continue
+            function_name = qualified_name
+            if relative_name_end < 0:
+                relative_name_end = name_match.end(1)
+            specialization_key = self._template_specialization_key(
+                function_name,
+                arguments,
+            )
+            parameter_types = tuple(self._function_parameter_type_texts(header))
+            key = (
+                specialization_key[0],
+                tuple(specialization_key[1]),
+                parameter_types,
+            )
+            source_location = self._source_location_for_offsets(
+                code,
+                match.start(),
+                body_end,
+            )
+            if key in specializations:
+                requested_signature = self._template_specialization_signature(
+                    function_name,
+                    list(specialization_key[1]),
+                )
+                concrete_signature = (
+                    f"{requested_signature}({', '.join(parameter_types)})"
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal explicit free-function template specialization is "
+                    f"defined more than once for '{concrete_signature}'",
+                    requested_signature=requested_signature,
+                    source_location=source_location,
+                    callee_template=function_name,
+                    requested_arguments=tuple(specialization_key[1]),
+                )
+
+            source = code[declaration_start:body_end]
+            relative_name_start = name_match.start(1)
+            specializations[key] = {
+                "name": function_name,
+                "arguments": tuple(specialization_key[1]),
+                "templateArgumentsExplicit": bool(arguments),
+                "parameterTypes": parameter_types,
+                "header": header,
+                "span": (match.start(), body_end),
+                "sourceLocation": source_location,
+                "source": source,
+                "nameSpan": (relative_name_start, relative_name_end),
+            }
+        return specializations
+
+    def _materialize_explicit_template_function_specialization(
+        self,
+        specialization: Dict[str, object],
+        function_identifier: str,
+    ) -> str:
+        """Render one parsed explicit specialization as a concrete function."""
+        source = str(specialization["source"])
+        name_start, name_end = specialization["nameSpan"]
+        materialized = (
+            source[: int(name_start)] + function_identifier + source[int(name_end) :]
+        )
+        if not materialized.endswith("\n"):
+            materialized += "\n"
+        self._materialized_function_names.add(function_identifier)
+        return materialized
+
     def _find_explicit_template_specialization_keys(
         self, code: str
     ) -> Set[Tuple[str, Tuple[str, ...]]]:
@@ -22471,9 +22863,32 @@ class MetalPreprocessor(HLSLPreprocessor):
             return False
         if text[previous] == ".":
             return True
-        if previous >= 1 and text[previous - 1 : previous + 1] == "::":
+        if previous >= 1 and text[previous - 1 : previous + 1] in {"::", "->"}:
             return True
-        return previous >= 1 and text[previous - 1 : previous + 1] == "->"
+
+        # A dependent member-template call uses a disambiguating ``template``
+        # token between its object/scope qualifier and member name, for example
+        # ``value.template convert<T>()`` or ``pointer->template convert<T>()``.
+        # Treat the selected identifier as a member in those forms too; otherwise
+        # free-template materialization and alias replacement can claim it by
+        # basename when an unrelated free function has the same name.
+        word_end = previous + 1
+        word_start = word_end
+        while word_start > 0 and (
+            text[word_start - 1].isalnum() or text[word_start - 1] == "_"
+        ):
+            word_start -= 1
+        if text[word_start:word_end] != "template":
+            return False
+        qualifier_end = word_start
+        while qualifier_end > 0 and text[qualifier_end - 1].isspace():
+            qualifier_end -= 1
+        if qualifier_end > 0 and text[qualifier_end - 1] == ".":
+            return True
+        return qualifier_end >= 2 and text[qualifier_end - 2 : qualifier_end] in {
+            "::",
+            "->",
+        }
 
     def _find_matching_angle(self, code: str, start: int) -> Optional[int]:
         return self._find_matching_delimiter(code, start, "<", ">")

@@ -2017,6 +2017,174 @@ def test_preprocessor_preserves_explicit_template_specialization_calls():
     assert "uint convert_type_uint(float value)" not in output
 
 
+def test_preprocessor_parses_explicit_free_specialization_for_project_materialization():
+    code = """
+    template <typename T, typename U>
+    T cast_to(U value) {
+        return T(value);
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return (as_type<uint>(value) & 0x7FFFFFFF) != 0;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+
+    specializations = preprocessor._find_explicit_template_function_specializations(
+        code
+    )
+
+    specialization = specializations[("cast_to", ("bool", "float"), ("float",))]
+    assert specialization["arguments"] == ("bool", "float")
+    assert "0x7FFFFFFF" in specialization["source"]
+    materialized = preprocessor._materialize_explicit_template_function_specialization(
+        specialization,
+        "cast_to_bool_float",
+    )
+    assert "bool cast_to_bool_float(float value)" in materialized
+    assert "return (as_type<uint>(value) & 0x7FFFFFFF) != 0;" in materialized
+    assert "template <>" not in materialized
+
+
+def test_preprocessor_explicit_free_specialization_scan_ignores_comments_and_literals():
+    code = r"""
+    // template <> bool cast_to<bool, float>(float value) { return false; }
+    constant char* description =
+        "template <> bool cast_to<bool, float>(float value) { return false; }";
+
+    template <typename U, typename T>
+    U cast_to(T value) {
+        return U(value);
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return value != 0.0f;
+    }
+    """
+
+    specializations = (
+        MetalPreprocessor()._find_explicit_template_function_specializations(code)
+    )
+
+    assert list(specializations) == [("cast_to", ("bool", "float"), ("float",))]
+    assert "return value != 0.0f;" in next(iter(specializations.values()))["source"]
+
+
+def test_preprocessor_explicit_free_specialization_scan_excludes_owned_scopes():
+    code = """
+    struct Box {
+        template <typename U, typename T>
+        static U cast_to(T value);
+    };
+
+    template <>
+    bool Box::cast_to<bool, float>(float value) {
+        return value > 1.0f;
+    }
+
+    namespace hidden {
+    template <typename U, typename T>
+    U cast_to(T value) {
+        return U(value);
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return value < -1.0f;
+    }
+    }
+
+    template <typename U, typename T>
+    U cast_to(T value) {
+        return U(value);
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return value != 0.0f;
+    }
+    """
+
+    specializations = (
+        MetalPreprocessor()._find_explicit_template_function_specializations(code)
+    )
+
+    assert list(specializations) == [("cast_to", ("bool", "float"), ("float",))]
+    specialization = specializations[("cast_to", ("bool", "float"), ("float",))]
+    assert specialization["parameterTypes"] == ("float",)
+    assert "return value != 0.0f;" in specialization["source"]
+    assert "Box::cast_to" not in specialization["source"]
+    assert "value < -1.0f" not in specialization["source"]
+
+
+def test_preprocessor_rejects_duplicate_explicit_free_specializations():
+    code = """
+    template <typename T, typename U>
+    T cast_to(U value) {
+        return T(value);
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return value != 0.0f;
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return value > 0.0f;
+    }
+    """
+
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="explicit free-function template specialization is defined more than once",
+    ):
+        MetalPreprocessor()._find_explicit_template_function_specializations(code)
+
+
+def test_preprocessor_distinguishes_explicit_free_specialization_overloads():
+    code = """
+    template <typename T>
+    T choose(T value) {
+        return value;
+    }
+
+    template <typename T>
+    T choose(device T* value) {
+        return value[0];
+    }
+
+    template <>
+    int choose<int>(int value) {
+        return value + 10;
+    }
+
+    template <>
+    int choose<int>(device int* value) {
+        return value[0] + 20;
+    }
+    """
+
+    specializations = (
+        MetalPreprocessor()._find_explicit_template_function_specializations(code)
+    )
+
+    assert list(specializations) == [
+        ("choose", ("int",), ("int",)),
+        ("choose", ("int",), ("device int*",)),
+    ]
+    assert (
+        "return value + 10;"
+        in specializations[("choose", ("int",), ("int",))]["source"]
+    )
+    assert (
+        "return value[0] + 20;"
+        in specializations[("choose", ("int",), ("device int*",))]["source"]
+    )
+
+
 def test_preprocessor_preserves_explicit_specialization_called_through_local_alias():
     code = """
     template <typename T>
@@ -2040,6 +2208,125 @@ def test_preprocessor_preserves_explicit_specialization_called_through_local_ali
     assert "convert_type_uint(1.0)" not in output
     assert "uint convert_type<uint>(float value)" in output
     assert "uint convert_type_uint(float value)" not in output
+
+
+def test_preprocessor_preserves_alias_equivalent_explicit_specialization_call():
+    code = """
+    typedef uint Word;
+
+    template <typename T>
+    T choose(T value) {
+        return value;
+    }
+
+    template <>
+    uint choose<Word>(Word value) {
+        return value + 1u;
+    }
+
+    kernel void chosen(
+        device uint* dst [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        using LocalWord = uint;
+        dst[gid] = choose<LocalWord>(gid);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "choose<LocalWord>(gid)" in output
+    assert "uint choose<Word>(Word value)" in output
+    assert "choose_LocalWord" not in output
+
+
+@pytest.mark.parametrize("specialized_name", ["choose", "choose<>"])
+def test_preprocessor_preserves_deduced_explicit_free_specialization(
+    specialized_name,
+):
+    code = f"""
+    template <typename T>
+    T choose(T value) {{
+        return value;
+    }}
+
+    template <>
+    uint {specialized_name}(uint value) {{
+        return value + 1u;
+    }}
+
+    kernel void chosen(device uint* dst [[buffer(0)]]) {{
+        dst[0] = choose<uint>(0u);
+    }}
+    """
+    preprocessor = MetalPreprocessor()
+
+    specializations = preprocessor._find_explicit_template_function_specializations(
+        code
+    )
+    output = preprocessor.preprocess(code)
+
+    assert list(specializations) == [("choose", (), ("uint",))]
+    specialization = specializations[("choose", (), ("uint",))]
+    assert specialization["templateArgumentsExplicit"] is False
+    assert "return value + 1u;" in specialization["source"]
+    assert "choose<uint>(0u)" in output
+    assert "choose_uint(0u)" not in output
+
+
+def test_preprocessor_canonicalizes_namespace_qualified_type_aliases():
+    code = """
+    namespace types {
+    using BaseWord = uint;
+    using Word = BaseWord;
+    void local_owner() { using LocalWord = uint; }
+    struct Owner { using MemberWord = uint; };
+    }
+
+    ::types::Word value;
+    """
+    preprocessor = MetalPreprocessor()
+    aliases = preprocessor._collect_local_type_alias_bindings(
+        code,
+        [(0, len(code))],
+    )
+    use_position = code.index("::types::Word")
+
+    assert "types::BaseWord" in aliases
+    assert "types::Word" in aliases
+    assert "types::LocalWord" not in aliases
+    assert "types::MemberWord" not in aliases
+    assert (
+        preprocessor._canonicalize_type_aliases_at(
+            "::types::Word",
+            aliases,
+            use_position,
+        )
+        == "uint"
+    )
+
+
+def test_preprocessor_qualified_type_alias_resolution_obeys_declaration_order():
+    code = """
+    types::Word value;
+
+    namespace types {
+    using Word = uint;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    aliases = preprocessor._collect_local_type_alias_bindings(
+        code,
+        [(0, len(code))],
+    )
+
+    assert (
+        preprocessor._canonicalize_type_aliases_at(
+            "types::Word",
+            aliases,
+            code.index("types::Word"),
+        )
+        is None
+    )
 
 
 def test_preprocessor_reports_explicit_template_specialization_limit():

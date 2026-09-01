@@ -80,6 +80,18 @@ The current harness verifies:
   with the OpenGL proof this closes complete discovered unary translation,
   reflection, and native compiler coverage on both targets, not numerical
   execution or MLX host runtime redirection;
+- selected-entry Metal-to-CrossGL-to-Metal translation of all 2,496
+  discovered current-pinned copy entries from `copy.metal`. The schema-v2
+  `contracts/copy.metal-roundtrip.json` contract spans 30 shapes, 16 concrete
+  templates, 13 source types, all 169 conversion pairs, 6,566 exact
+  materializations, and 8,684 reflected resources. It records the conditional
+  nested specialization on exactly 14 complex-to-Boolean entries, preserves
+  explicit float and bfloat16 bit-pattern semantics, and validates registered
+  complex representation shape before scalar projection. Twenty-four required
+  macOS shards each compile 104 exact artifacts with warnings fatal and require
+  2,496 non-empty AIR objects in aggregate. This is complete copy translation,
+  reflection, and native compiler coverage, not numerical execution or MLX host
+  runtime redirection;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 4,122
   discovered current-pinned binary entries from ``binary.metal``. The complete
   contract spans 18 shapes and 11 concrete kernel templates, 24 operators, and
@@ -1373,6 +1385,34 @@ one scalar copy entry. It does not cover the complex or bfloat16 entries,
 redirect the MLX host runtime, or run the MLX test suite. Aggregate input layout
 for `s_copycomplex64float32` remains part of the physical-resource contract
 tracked by [#1543](https://github.com/CrossGL/crosstl/issues/1543).
+
+The independent current-pinned complete copy Metal gate covers all 2,496
+discovered entries from `copy.metal` at commit
+`846d176227a0ac13d2667e58d2bb68b322109ab0`. It spans 30 shapes, 16 concrete
+kernel templates, all 169 input/output type pairs over the 13 source types, and
+six explicit conversion families. Every entry is translated under its own
+entry scope through CrossGL, and a schema-v2 hash-pinned contract records the
+exact artifact identity, source/default template provenance, and reflected ABI.
+The 2,496 artifacts contain 6,566 exact materializations and 8,684 reflected
+resources. Each artifact owns one `cast_to` specialization; the 14
+complex-to-bool artifacts additionally own the nested `cast_to<bool, float>`
+specialization, so the proof does not falsely assume one fixed specialization
+count per shape.
+
+The gate preserves MLX's explicit float and bfloat16 Boolean bit-pattern tests,
+including the native-width `as_type<ushort>` bfloat path. Registered
+`complex64_t` representation conversions validate the exact ordered
+`real: float, imag: float` shape before projecting `.real`; malformed registered
+representations fail closed and unregistered lookalikes are not projected.
+Scalar/vector forms reflect three resources, generalized forms reflect exact
+three- through eight-resource interfaces, and every artifact retains the
+host-owned `[1, 1, 1]` workgroup contract. Required macOS CI partitions the
+family into 24 disjoint 104-entry shards, compiles every artifact with
+`xcrun -sdk macosx metal -Werror -c`, and requires 2,496 non-empty AIR outputs.
+This is complete discovered-copy translation, reflection, and native compiler
+evidence, not Metal numerical execution, MLX host-runtime redirection, or MLX
+test-suite parity. The older selected OpenGL, DirectX, and native-loader checks
+remain separate bounded evidence.
 
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32

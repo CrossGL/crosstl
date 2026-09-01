@@ -588,6 +588,28 @@ close complete discovered-unary translation, reflection, and native compiler
 coverage on both targets; they do not claim numerical execution, MLX host
 runtime redirection, or MLX test-suite parity.
 
+The current-pinned MLX copy integration proves all 2,496 discovered entries
+from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family
+covers 30 shapes, 16 concrete templates, 13 input and output types, and all 169
+conversion pairs. Its schema-v2 contract pins every artifact and shape ABI,
+including source/default parameter provenance. The 2,496 artifacts contain
+6,566 exact materializations and 8,684 reflected resources. Every artifact has
+one exact ``cast_to`` materialization; only the 14 complex-to-Boolean entries
+add the nested ``cast_to<bool, float>`` body, so materialization accounting is
+explicitly data-dependent rather than a false fixed per-shape count.
+
+The generic lowering preserves MLX's float and bfloat16 Boolean bit tests,
+recovers native ``ushort`` width after frontend ``uint16_t`` normalization, and
+projects registered ``complex64_t`` values only after validating the ordered
+``real``/``imag`` float representation. Wrong registered shapes fail closed and
+unregistered lookalikes remain untouched. Reflected interfaces contain three to
+eight exact resources and retain host-owned ``[1, 1, 1]`` workgroup metadata.
+Required macOS CI uses 24 disjoint 104-entry shards and compiles all 2,496 exact
+artifacts with ``xcrun -sdk macosx metal -Werror -c``, requiring a non-empty AIR
+object for each. This proves translation, reflection, and native compiler
+acceptance; it does not claim Metal numerical execution, MLX host-runtime
+redirection, or MLX test-suite parity.
+
 The current-pinned MLX binary integration independently proves all 4,122
 discovered entries from ``binary.metal``. Fifteen 238-entry base shapes and
 three 184-entry work-per-thread shapes span 18 shapes, 11 concrete kernel

@@ -15505,3 +15505,205 @@ def test_mlx_workflow_runs_platform_native_rms_norm_specialization_proof():
     assert 'if [ "$RUNNER_OS" = "Windows" ]; then' in workflow
     assert 'elif [ "$RUNNER_OS" = "Linux" ]; then' in workflow
     assert "rms-norm-specialization" in workflow
+
+
+def test_copy_metal_roundtrip_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["copy_metal_roundtrip_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/copy.metal"
+    assert status["source_sha256"] == (
+        "ed8a579eb6fe6a14c36560d2c8b548baf99e66fa77d300fb4ad7554883820eba"
+    )
+    assert status["target"] == "metal"
+    assert status["scope"] == {
+        "discovered_copy_instantiation_count": 2496,
+        "entry_count": 2496,
+        "shape_count": 30,
+        "template_count": 16,
+        "input_type_count": 13,
+        "output_type_count": 13,
+        "input_output_type_pair_count": 169,
+        "semantic_family_count": 6,
+        "base_conversion_shape_entry_count": 2028,
+        "work_per_thread_shape_entry_count": 260,
+        "generalized_same_type_shape_entry_count": 208,
+        "uncovered_copy_entry_count": 0,
+        "all_discovered_copy_instantiations_included": True,
+    }
+
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/copy.metal-roundtrip.json",
+        "schema_version": 2,
+        "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "size_bytes": len(contract_bytes),
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+            "resources",
+        ],
+    }
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryCount": 2496,
+        "shapeCount": 30,
+        "templateCount": 16,
+        "inputTypeCount": 13,
+        "outputTypeCount": 13,
+        "typePairCount": 169,
+        "familyCount": 6,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    assert len(contract["entries"]) == 2496
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 2496
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["shape_counts"] == contract["classifications"]["shapes"]
+    assert sum(status["shape_counts"].values()) == 2496
+    assert len(status["shape_counts"]) == 30
+    assert status["template_counts"] == contract["classifications"]["templates"]
+    assert sum(status["template_counts"].values()) == 2496
+    assert len(status["template_counts"]) == 16
+    assert len(contract["classifications"]["inputTypes"]) == 13
+    assert sum(contract["classifications"]["inputTypes"].values()) == 2496
+    assert len(contract["classifications"]["outputTypes"]) == 13
+    assert sum(contract["classifications"]["outputTypes"].values()) == 2496
+    assert len(contract["classifications"]["typePairs"]) == 169
+    assert sum(contract["classifications"]["typePairs"].values()) == 2496
+    assert len(contract["classifications"]["families"]) == 6
+    assert sum(contract["classifications"]["families"].values()) == 2496
+
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 2496,
+        "artifact_count": 2496,
+        "translated_count": 2496,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 6566,
+        "entry_cast_specialization_count": 2496,
+        "reachable_index_helper_specialization_count": 1560,
+        "nested_complex_bool_specialization_count": 14,
+        "unsupported_specialization_count": 0,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["implementation_contracts"] == {
+        "exact_explicit_free_specialization_selection": True,
+        "partial_template_argument_inference": True,
+        "nested_explicit_specialization_selection": True,
+        "duplicate_exact_free_specialization_rejected": True,
+        "float_bool_bit_pattern_body_preserved": True,
+        "bfloat_bool_native_width_bit_pattern_body_preserved": True,
+        "registered_complex_representation_exact_shape_required": True,
+        "unregistered_structure_lookalike_projection_rejected": True,
+        "complex_scalar_source_evaluated_once": True,
+        "source_default_template_parameter_provenance": True,
+        "call_site_index_helper_materialization": True,
+        "shape_specific_resource_reflection": True,
+        "exact_reflected_resource_types": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": 3,
+        "maximum_resource_count_per_artifact": 8,
+        "reflected_resource_count": 8684,
+        "resource_counts_by_shape": contract["artifactContract"][
+            "reflectedResourceCountsByShape"
+        ],
+        "resource_type_counts": contract["artifactContract"][
+            "reflectedResourceTypeCounts"
+        ],
+        "resource_abi_fields": [
+            "name",
+            "kind",
+            "set",
+            "binding",
+            "access",
+            "type",
+        ],
+        "resource_types_included": True,
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": contract["artifactContract"][
+            "generatedSizeBytesTotal"
+        ],
+        "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
+    }
+    assert status["native_validation"] == {
+        "platform": "macos-latest",
+        "compiler": "xcrun -sdk macosx metal -Werror -c",
+        "source_warning_exemption": None,
+        "status": "required-on-ci",
+        "ci_shard_count": 24,
+        "entries_per_shard": 104,
+        "compiled_artifact_count": 2496,
+        "all_air_artifacts_nonempty": True,
+        "test": (
+            "tests/test_translator/test_mlx_copy_complete_metal_roundtrip.py::"
+            "test_current_mlx_copy_family_roundtrips_through_metal"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
+    assert status["opengl_complete_family_translation_included"] is False
+    assert status["directx_complete_family_translation_included"] is False
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "uncovered_copy_metal_entry_count": 0,
+        "metal_numerical_execution_included": False,
+        "opengl_whole_family_included": False,
+        "directx_whole_family_included": False,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "all 2,496 discovered entries from `copy.metal`" in readme
+    assert "30 shapes, 16 concrete kernel templates" in readme
+    assert "6,566 exact materializations and 8,684 reflected resources" in readme
+    assert "requires 2,496 non-empty AIR outputs" in readme
+    assert "not Metal numerical execution" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 2,496 discovered entries from ``copy.metal``" in guide
+    assert "2,496 artifacts contain 6,566 exact materializations" in guide
+    assert "compiles all 2,496 exact artifacts" in guide
+    assert "does not claim Metal numerical execution" in guide

@@ -84,7 +84,12 @@ def assert_spirv_asm_validates_if_available(spv_code, tmp_path):
     assert validate.returncode == 0, validate.stderr
 
 
-def assert_metal_validates_if_available(metal_code, tmp_path):
+def assert_metal_validates_if_available(
+    metal_code,
+    tmp_path,
+    *,
+    warnings_as_errors=False,
+):
     xcrun = shutil.which("xcrun")
     if not xcrun:
         return
@@ -101,18 +106,20 @@ def assert_metal_validates_if_available(metal_code, tmp_path):
     shader_path = tmp_path / "shader.metal"
     output_path = tmp_path / "shader.air"
     shader_path.write_text(metal_code, encoding="utf-8")
-
-    compile_result = subprocess.run(
+    command = [xcrun, "-sdk", "macosx", "metal"]
+    if warnings_as_errors:
+        command.append("-Werror")
+    command.extend(
         [
-            xcrun,
-            "-sdk",
-            "macosx",
-            "metal",
             "-c",
             str(shader_path),
             "-o",
             str(output_path),
-        ],
+        ]
+    )
+
+    compile_result = subprocess.run(
+        command,
         capture_output=True,
         text=True,
         check=False,
@@ -122,6 +129,8 @@ def assert_metal_validates_if_available(metal_code, tmp_path):
     ):
         return
     assert compile_result.returncode == 0, compile_result.stderr
+    assert output_path.is_file()
+    assert output_path.stat().st_size > 0
 
 
 def assert_directx_vertex_validates_if_available(hlsl_code, tmp_path):
@@ -57526,6 +57535,1030 @@ def test_translate_project_reports_ambiguous_metal_call_operator_helpers(tmp_pat
     ]
 
     report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+
+
+def test_metal_project_materialization_selects_partial_and_nested_explicit_specializations(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "copy.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct complex_t_float {
+                float real;
+                float imag;
+            };
+
+            template <typename T, typename U>
+            T cast_to(U value) {
+                return T(value);
+            }
+
+            template <>
+            bool cast_to<bool, float>(float value) {
+                return (as_type<uint>(value) & 0x7FFFFFFF) != 0;
+            }
+
+            template <>
+            bool cast_to<bool, complex_t_float>(complex_t_float value) {
+                return cast_to<bool>(value.real) || cast_to<bool>(value.imag);
+            }
+
+            template <typename U>
+            kernel void copy(
+                device const U* src [[buffer(0)]],
+                device bool* dst [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = cast_to<bool>(src[gid]);
+            }
+
+            instantiate_kernel("copy_complex", copy, complex_t_float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["metal"]
+            output_dir = "translated"
+
+            [project.entry_points]
+            "shaders/copy.metal" = "copy_complex"
+
+            [project.entry_workgroup_size_rules."shaders/copy.metal"]
+            copy_complex = [1, 1, 1]
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 0,
+    }
+    artifact = payload["artifacts"][0]
+    specializations = artifact["templateMaterialization"]["specializations"]
+    assert [record["materializedName"] for record in specializations] == [
+        "copy_complex",
+        "cast_to_bool_complex_t_float",
+        "cast_to_bool_float",
+    ]
+
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "bool cast_to_bool_complex_t_float(complex_t_float value)" in generated
+    assert (
+        "return cast_to_bool_float(value.real) || "
+        "cast_to_bool_float(value.imag);" in generated
+    )
+    assert "bool cast_to_bool_float(float value)" in generated
+    assert "return (as_type<uint>(value) & 2147483647) != 0;" in generated
+    assert "return bool(value);" not in generated
+    assert "cast_to<bool>" not in generated
+    assert_metal_validates_if_available(generated, tmp_path)
+
+
+def test_metal_project_materialization_preserves_bfloat_bool_bit_specialization(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "copy.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            typedef bfloat bfloat16_t;
+
+            template <typename T, typename U>
+            T cast_to(U value) {
+                return T(value);
+            }
+
+            template <>
+            bool cast_to<bool, bfloat16_t>(bfloat16_t value) {
+                return (as_type<uint16_t>(value) & 0x7FFF) != 0;
+            }
+
+            template <typename U>
+            kernel void copy(
+                device const U* src [[buffer(0)]],
+                device bool* dst [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = cast_to<bool>(src[gid]);
+            }
+
+            instantiate_kernel("copy_bfloat", copy, bfloat16_t)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["metal"]
+            output_dir = "translated"
+
+            [project.entry_points]
+            "shaders/copy.metal" = "copy_bfloat"
+
+            [project.entry_workgroup_size_rules."shaders/copy.metal"]
+            copy_bfloat = [1, 1, 1]
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert [
+        record["materializedName"]
+        for record in artifact["templateMaterialization"]["specializations"]
+    ] == ["copy_bfloat", "cast_to_bool_bfloat16_t"]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "bool cast_to_bool_bfloat16_t(bfloat value)" in generated
+    assert "return (as_type<ushort>(value) & 32767) != 0;" in generated
+    assert "return bool(value);" not in generated
+    assert "as_type<uint>(value)" not in generated
+    assert_metal_validates_if_available(generated, tmp_path)
+
+
+def test_metal_explicit_free_specialization_binding_uses_selected_primary_overload():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    template <typename T>
+    T choose(T value) {
+        return value + T(1);
+    }
+
+    template <typename T>
+    T choose(device T* value) {
+        return value[0] + T(9);
+    }
+
+    template <>
+    int choose<int>(device int* value) {
+        return value[0] + 99;
+    }
+
+    kernel void chosen(
+        device int* src [[buffer(0)]],
+        device int* dst [[buffer(1)]]) {
+        dst[0] = choose<int>(src[0]);
+    }
+    """
+
+    materialized, records, _names, _mapping = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "dst[0] = choose_int(src[0]);" in materialized
+    assert "int choose_int(int value)" in materialized
+    assert "return value + int(1);" in materialized
+    assert "int choose_int(device int* value)" not in materialized
+    assert records == [
+        {
+            "name": "choose",
+            "materializedName": "choose_int",
+            "parameters": {"T": "int"},
+            "parameterSources": {"T": "call-site"},
+            "source": "call-site",
+        }
+    ]
+
+
+def test_metal_explicit_free_specialization_binding_selects_matching_overload():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    template <typename T>
+    T choose(T value) {
+        return value + T(1);
+    }
+
+    template <typename T>
+    T choose(device T* value) {
+        return value[0] + T(9);
+    }
+
+    template <>
+    int choose<int>(device int* value) {
+        return value[0] + 99;
+    }
+
+    kernel void chosen(
+        device int* src [[buffer(0)]],
+        device int* dst [[buffer(1)]]) {
+        dst[0] = choose<int>(src);
+    }
+    """
+
+    materialized, records, _names, _mapping = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "dst[0] = choose_int(src);" in materialized
+    assert "int choose_int(device int* value)" in materialized
+    assert "return value[0] + 99;" in materialized
+    assert "int choose_int(int value)" not in materialized
+    assert records == [
+        {
+            "name": "choose",
+            "materializedName": "choose_int",
+            "parameters": {"T": "int"},
+            "parameterSources": {"T": "call-site"},
+            "source": "call-site",
+        }
+    ]
+
+
+def test_metal_explicit_free_specialization_binding_selects_each_overload_body():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    template <typename T>
+    T choose(T value) {
+        return value + T(1);
+    }
+
+    template <typename T>
+    T choose(device T* value) {
+        return value[0] + T(9);
+    }
+
+    template <>
+    int choose<int>(int value) {
+        return value + 101;
+    }
+
+    template <>
+    int choose<int>(device int* value) {
+        return value[0] + 202;
+    }
+
+    kernel void chosen(
+        device int* src [[buffer(0)]],
+        device int* dst [[buffer(1)]]) {
+        dst[0] = choose<int>(src[0]);
+        dst[1] = choose<int>(src);
+    }
+    """
+
+    materialized, records, _names, _mapping = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    scalar_call = re.search(r"dst\[0\] = (\w+)\(src\[0\]\);", materialized)
+    pointer_call = re.search(r"dst\[1\] = (\w+)\(src\);", materialized)
+    assert scalar_call is not None
+    assert pointer_call is not None
+    scalar_name = scalar_call.group(1)
+    pointer_name = pointer_call.group(1)
+    assert scalar_name != pointer_name
+    assert f"int {scalar_name}(int value)" in materialized
+    assert f"int {pointer_name}(device int* value)" in materialized
+    assert "return value + 101;" in materialized
+    assert "return value[0] + 202;" in materialized
+    assert [record["materializedName"] for record in records] == [
+        scalar_name,
+        pointer_name,
+    ]
+
+
+def test_metal_deduced_explicit_specialization_selects_exact_overload():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    template <typename T>
+    T choose(T value) {
+        return value + T(1);
+    }
+
+    template <typename T>
+    T choose(device T* value) {
+        return value[0] + T(2);
+    }
+
+    template <>
+    uint choose(device uint* value) {
+        return value[0] + 99u;
+    }
+
+    kernel void chosen(
+        device uint* src [[buffer(0)]],
+        device uint* dst [[buffer(1)]]) {
+        dst[0] = choose<uint>(src[0]);
+        dst[1] = choose<uint>(src);
+    }
+    """
+
+    materialized, records, _names, _mapping = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    scalar_call = re.search(r"dst\[0\] = (\w+)\(src\[0\]\);", materialized)
+    pointer_call = re.search(r"dst\[1\] = (\w+)\(src\);", materialized)
+    assert scalar_call is not None
+    assert pointer_call is not None
+    scalar_name = scalar_call.group(1)
+    pointer_name = pointer_call.group(1)
+    assert scalar_name != pointer_name
+    assert f"uint {scalar_name}(uint value)" in materialized
+    assert f"uint {pointer_name}(device uint* value)" in materialized
+    scalar_body = materialized.split(f"uint {scalar_name}(uint value)", 1)[1]
+    scalar_body = scalar_body.split(f"uint {pointer_name}", 1)[0]
+    pointer_body = materialized.split(f"uint {pointer_name}(device uint* value)", 1)[1]
+    assert "return value + uint(1);" in scalar_body
+    assert "return value[0] + 99u;" in pointer_body
+    assert [record["materializedName"] for record in records] == [
+        scalar_name,
+        pointer_name,
+    ]
+
+
+def test_metal_project_materialization_selects_deduced_explicit_specialization(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "deduced_specialization.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T choose(T value) {
+                return value + T(1);
+            }
+
+            template <>
+            uint choose(uint value) {
+                return value + 99u;
+            }
+
+            template <typename U>
+            kernel void copy(
+                device U* dst [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = choose<uint>(gid);
+            }
+
+            instantiate_kernel("chosen", copy, uint)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["metal"]
+            output_dir = "translated"
+
+            [project.entry_points]
+            "shaders/deduced_specialization.metal" = "chosen"
+
+            [project.entry_workgroup_size_rules."shaders/deduced_specialization.metal"]
+            chosen = [1, 1, 1]
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo),
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "uint choose_uint(uint value)" in generated
+    assert "return value + 99u;" in generated
+    assert "return value + uint(1);" not in generated
+    assert "choose<" not in generated
+    assert_metal_validates_if_available(
+        generated,
+        tmp_path,
+        warnings_as_errors=True,
+    )
+
+
+def test_metal_namespaced_explicit_specialization_call_fails_closed(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "scoped_specialization.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            namespace choices {
+            template <typename T>
+            T choose(T value) {
+                return value + T(1);
+            }
+
+            template <>
+            uint choose<uint>(uint value) {
+                return value + 99u;
+            }
+            }
+
+            kernel void chosen(
+                device uint* dst [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = choices::choose<uint>(gid);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["metal"]
+            output_dir = "translated"
+
+            [project.entry_points]
+            "shaders/scoped_specialization.metal" = "chosen"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo),
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    unsupported = artifact["templateMaterialization"]["unsupported"]
+    assert len(unsupported) == 1
+    assert unsupported[0]["name"] == "choose"
+    assert unsupported[0]["missingParameters"] == []
+    assert unsupported[0]["reason"] == "unmaterialized-template-function-call"
+    assert unsupported[0]["requiredSignature"] == "choices::choose<uint>"
+
+    diagnostics = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"]
+        == "project.translate.template-materialization-unsupported"
+    ]
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert (
+        diagnostic["details"]["sourceDeclarations"][0]["reason"]
+        == "unmaterialized-template-function-call"
+    )
+    assert "unmaterialized reachable template function call" in diagnostic["message"]
+
+
+def test_post_materialization_template_function_call_scan_ignores_object_members(
+    tmp_path,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        kernel void chosen() {
+            writer.choose<uint>(0);
+            pointer->choose<uint>(0);
+            writer.template choose<uint>(0);
+            pointer->template choose<uint>(0);
+            Writer::template choose<uint>(0);
+            choices::choose<uint>(0);
+        }
+        """).strip() + "\n"
+    source_path = tmp_path / "scoped_calls.metal"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path=source_path.name,
+        source_backend="metal",
+        extension=".metal",
+        source_hash=project_pipeline._source_hash(source_path),
+        source_size_bytes=source_path.stat().st_size,
+    )
+
+    records = project_pipeline._post_materialization_unresolved_metal_template_function_records(
+        preprocessor=MetalPreprocessor(),
+        unit=unit,
+        source=source,
+        target="metal",
+        template_names=["choose"],
+    )
+
+    assert [record["requiredSignature"] for record in records] == [
+        "choices::choose<uint>"
+    ]
+
+
+def test_metal_explicit_free_specialization_binding_canonicalizes_visible_alias():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    typedef uint Word;
+
+    template <typename T>
+    T choose(T value) {
+        return value + T(1);
+    }
+
+    template <>
+    uint choose<uint>(Word value) {
+        return value + 99u;
+    }
+
+    kernel void chosen(
+        device uint* dst [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        dst[gid] = choose<uint>(gid);
+    }
+    """
+
+    materialized, records, _names, _mapping = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "dst[gid] = choose_uint(gid);" in materialized
+    assert "uint choose_uint(uint value)" in materialized
+    selected_body = materialized.split("uint choose_uint(uint value)", 1)[1]
+    assert "return value + 99u;" in selected_body
+    assert "return value + uint(1);" not in selected_body
+    assert records == [
+        {
+            "name": "choose",
+            "materializedName": "choose_uint",
+            "parameters": {"T": "uint"},
+            "parameterSources": {"T": "call-site"},
+            "source": "call-site",
+        }
+    ]
+
+
+def test_metal_helper_materialization_preserves_file_visible_alias_spelling():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    using Result = uint;
+
+    template <typename U, typename T>
+    U cast_to(T value) {
+        return U(value);
+    }
+
+    kernel void chosen(
+        device uint* dst [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        dst[gid] = cast_to<Result>(gid);
+    }
+    """
+
+    materialized, records, _names, mapping = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "dst[gid] = cast_to_Result_uint(gid);" in materialized
+    assert "Result cast_to_Result_uint(uint value)" in materialized
+    assert records == [
+        {
+            "name": "cast_to",
+            "materializedName": "cast_to_Result_uint",
+            "parameters": {"T": "uint", "U": "Result"},
+            "parameterSources": {"T": "call-site", "U": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    assert mapping == {("cast_to", ("Result", "uint"), ("T",)): "cast_to_Result_uint"}
+
+
+def test_metal_helper_materialization_canonicalizes_function_local_alias():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    template <typename U, typename T>
+    U cast_to(T value) {
+        return U(value);
+    }
+
+    kernel void chosen(
+        device uint* dst [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        using LocalResult = uint;
+        dst[gid] = cast_to<LocalResult>(gid);
+    }
+    """
+
+    materialized, records, _names, mapping = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "dst[gid] = cast_to_uint_uint(gid);" in materialized
+    assert "uint cast_to_uint_uint(uint value)" in materialized
+    assert "LocalResult cast_to_" not in materialized
+    assert records == [
+        {
+            "name": "cast_to",
+            "materializedName": "cast_to_uint_uint",
+            "parameters": {"T": "uint", "U": "uint"},
+            "parameterSources": {"T": "call-site", "U": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    assert mapping == {("cast_to", ("uint", "uint"), ("T",)): "cast_to_uint_uint"}
+
+
+def test_metal_explicit_free_specialization_binding_canonicalizes_qualified_alias():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = """
+    namespace copy_types {
+    using BaseWord = uint;
+    using Word = BaseWord;
+    }
+
+    template <typename T>
+    T choose(T value) {
+        return value + T(1);
+    }
+
+    template <>
+    uint choose<uint>(::copy_types::Word value) {
+        return value + 99u;
+    }
+
+    kernel void chosen(
+        device uint* dst [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        dst[gid] = choose<uint>(gid);
+    }
+    """
+
+    materialized, records, _names, _mapping = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "dst[gid] = choose_uint(gid);" in materialized
+    assert "uint choose_uint(uint value)" in materialized
+    selected_body = materialized.split("uint choose_uint(uint value)", 1)[1]
+    assert "return value + 99u;" in selected_body
+    assert "return value + uint(1);" not in selected_body
+    assert records == [
+        {
+            "name": "choose",
+            "materializedName": "choose_uint",
+            "parameters": {"T": "uint"},
+            "parameterSources": {"T": "call-site"},
+            "source": "call-site",
+        }
+    ]
+
+
+def test_metal_project_materialization_selects_qualified_alias_specialization(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "qualified_alias.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            namespace copy_types {
+            using BaseWord = uint;
+            using Word = BaseWord;
+            }
+
+            template <typename T>
+            T choose(T value) {
+                return value + T(1);
+            }
+
+            template <>
+            uint choose<uint>(::copy_types::Word value) {
+                return value + 99u;
+            }
+
+            template <typename U>
+            kernel void copy(
+                device U* dst [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = choose<uint>(gid);
+            }
+
+            instantiate_kernel("chosen", copy, uint)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["metal"]
+            output_dir = "translated"
+
+            [project.entry_points]
+            "shaders/qualified_alias.metal" = "chosen"
+
+            [project.entry_workgroup_size_rules."shaders/qualified_alias.metal"]
+            chosen = [1, 1, 1]
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo),
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 0,
+    }
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "uint choose_uint(uint value)" in generated
+    assert "return value + 99u;" in generated
+    assert "return value + uint(1);" not in generated
+    assert "copy_types::Word value" not in generated
+    assert "choose<" not in generated
+    assert_metal_validates_if_available(
+        generated,
+        tmp_path,
+        warnings_as_errors=True,
+    )
+
+
+def test_metal_explicit_free_specialization_alias_resolution_fails_closed():
+    from crosstl.backend.Metal.preprocessor import (
+        MetalPreprocessor,
+        MetalTemplateSpecializationError,
+    )
+
+    source = """
+    template <typename T>
+    T choose(T value) {
+        return value;
+    }
+
+    template <>
+    int choose<int>(FutureWord value) {
+        return value + 1;
+    }
+
+    typedef int FutureWord;
+
+    kernel void chosen(device int* dst [[buffer(0)]]) {
+        dst[0] = choose<int>(0);
+    }
+    """
+
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="cannot be resolved with declaration-order and lexical-scope fidelity",
+    ) as exc_info:
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+
+    assert exc_info.value.requested_signature == "choose<int>"
+    assert exc_info.value.callee_template == "choose"
+    assert exc_info.value.requested_arguments == ("int",)
+    assert exc_info.value.source_location is not None
+
+
+def test_metal_explicit_free_specialization_alias_collision_fails_closed():
+    from crosstl.backend.Metal.preprocessor import (
+        MetalPreprocessor,
+        MetalTemplateSpecializationError,
+    )
+
+    source = """
+    typedef int Word;
+
+    template <typename T>
+    T choose(T value) {
+        return value;
+    }
+
+    template <>
+    int choose<int>(int value) {
+        return value + 1;
+    }
+
+    template <>
+    int choose<int>(Word value) {
+        return value + 2;
+    }
+
+    kernel void chosen(device int* dst [[buffer(0)]]) {
+        dst[0] = choose<int>(0);
+    }
+    """
+
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="more than one explicit body matches",
+    ) as exc_info:
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+
+    assert exc_info.value.requested_signature == "choose<int>"
+    assert exc_info.value.requested_arguments == ("int",)
+    assert "canonical concrete overload signature" in (exc_info.value.suggested_action)
+
+
+def test_metal_project_materialization_selects_alias_equivalent_specialization(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "alias.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            typedef uint BaseWord;
+            using Word = BaseWord;
+
+            template <typename T>
+            T choose(T value) {
+                return value + T(1);
+            }
+
+            template <>
+            uint choose<Word>(Word value) {
+                return value + 99u;
+            }
+
+            template <typename U>
+            kernel void copy(
+                device U* dst [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                using LocalWord = uint;
+                dst[gid] = choose<LocalWord>(gid);
+            }
+
+            instantiate_kernel("chosen", copy, uint)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["metal"]
+            output_dir = "translated"
+
+            [project.entry_points]
+            "shaders/alias.metal" = "chosen"
+
+            [project.entry_workgroup_size_rules."shaders/alias.metal"]
+            chosen = [1, 1, 1]
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo),
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 0,
+    }
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "uint choose_uint(uint value)" in generated
+    assert "return value + 99u;" in generated
+    assert "return value + uint(1);" not in generated
+    assert "Word value" not in generated
+    assert "choose<" not in generated
+    assert_metal_validates_if_available(
+        generated,
+        tmp_path,
+        warnings_as_errors=True,
+    )
+
+
+def test_translate_project_reports_metal_registered_structure_conversion_failure(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "construction.cgl").write_text(
+        textwrap.dedent("""
+            shader InvalidMetalComplexValueConversion {
+                struct complex_t_float {
+                    float real;
+                    int imag;
+                };
+
+                compute {
+                    void main(uint3 tid @ gl_GlobalInvocationID) {
+                        complex_t_float value;
+                        float converted = float(value);
+                    }
+                }
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["metal"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-struct-construction-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.struct-conversion-construction": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["target"] == "metal"
+    assert diagnostic["location"]["file"] == "shaders/construction.cgl"
+    assert diagnostic["missingCapabilities"] == ["metal.struct-conversion-construction"]
+    assert diagnostic["details"] == {
+        "sourcePath": "shaders/construction.cgl",
+        "structConstruction": {
+            "conversionKind": "value-conversion",
+            "destinationType": "float",
+            "reason": "source-shape-mismatch",
+            "sourceType": "complex_t_float",
+        },
+        "targetArtifact": "translated/metal/shaders/construction.metal",
+    }
+
+    report_path = repo / "translated" / "report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
