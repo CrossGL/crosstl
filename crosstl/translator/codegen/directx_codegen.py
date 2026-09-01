@@ -357,7 +357,7 @@ class DirectXUnresolvedSourceTypeError(ValueError):
 
 
 class DirectXContextualConversionError(ValueError):
-    """Raised when a source assignment conversion has no HLSL equivalent."""
+    """Raised when a source-defined numeric conversion has no HLSL equivalent."""
 
     project_diagnostic_code = (
         "project.translate.directx-contextual-conversion-unrepresentable"
@@ -1480,6 +1480,7 @@ class HLSLCodeGen:
         "acos": ("acos", 1, "bfloat"),
         "asin": ("asin", 1, "bfloat"),
         "atan": ("atan", 1, "bfloat"),
+        "atan2": ("atan2", 2, "bfloat"),
         "ceil": ("ceil", 1, "bfloat"),
         "cos": ("cos", 1, "bfloat"),
         "cosh": ("cosh", 1, "bfloat"),
@@ -1493,6 +1494,9 @@ class HLSLCodeGen:
         "log": ("log", 1, "bfloat"),
         "log10": ("log10", 1, "bfloat"),
         "log2": ("log2", 1, "bfloat"),
+        "max": ("max", 2, "bfloat"),
+        "min": ("min", 2, "bfloat"),
+        "pow": ("pow", 2, "bfloat"),
         "rint": ("round", 1, "bfloat"),
         "rsqrt": ("rsqrt", 1, "bfloat"),
         "sin": ("sin", 1, "bfloat"),
@@ -10591,6 +10595,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         return f"{expected_info['mapped_type']}({rendered})"
 
+    def hlsl_contextual_wide_integer_to_float_expression(
+        self,
+        rendered,
+        expected_type,
+        source_type,
+        *,
+        source_location=None,
+    ):
+        """Make source-defined int64/uint64-to-float conversions explicit."""
+        expected_info = self.hlsl_floating_arithmetic_type_info(expected_type)
+        source_info = self.hlsl_integer_arithmetic_type_info(source_type)
+        if (
+            expected_info is None
+            or expected_info["base_type"] != "float"
+            or source_info is None
+            or source_info["base_type"] not in {"int64_t", "uint64_t"}
+        ):
+            return None
+        if expected_info["width"] != source_info["width"]:
+            raise DirectXContextualConversionError(
+                "DirectX cannot lower source 64-bit-integer-to-float conversion "
+                f"from '{source_info['mapped_type']}' to "
+                f"'{expected_info['mapped_type']}' because the scalar/vector lane "
+                "shapes differ",
+                source_type=source_info["mapped_type"],
+                target_type=expected_info["mapped_type"],
+                reason="wide-integer-floating-lane-shape-mismatch",
+                source_location=source_location,
+            )
+        return f"{expected_info['mapped_type']}({rendered})"
+
     def hlsl_narrowing_cast_expression(
         self, rendered, expected_type, source_type, *, source_location=None
     ):
@@ -10629,6 +10664,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if floating_narrowing is not None:
             return floating_narrowing
+        wide_integer_to_float = self.hlsl_contextual_wide_integer_to_float_expression(
+            rendered,
+            expected,
+            source,
+            source_location=source_location,
+        )
+        if wide_integer_to_float is not None:
+            return wide_integer_to_float
         expected_integer = self.hlsl_integer_arithmetic_type_info(expected)
         source_integer = self.hlsl_integer_arithmetic_type_info(source)
         integer_narrowing = self.hlsl_contextual_integer_narrowing_expression(
@@ -10880,6 +10923,101 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "native_16_bit": base_type == "float16_t",
             }
         return None
+
+    def hlsl_wide_integer_floating_binary_contract(
+        self,
+        node,
+        operator,
+        left_type,
+        right_type,
+    ):
+        """Describe warning-clean HLSL lowering for float/wide-integer operands.
+
+        Metal follows the usual arithmetic conversions for ``float`` combined
+        with a signed or unsigned 64-bit integer. HLSL performs the same numeric
+        conversion, but DXC diagnoses the implicit 64-bit-integer-to-float step
+        under ``-Wconversion`` (and therefore rejects it under ``-WX``). An
+        explicit HLSL float constructor preserves the source operation while
+        recording that the precision loss is intentional.
+        """
+        if operator not in {"+", "-", "*", "/", "==", "!=", "<", "<=", ">", ">="}:
+            return None
+
+        left_floating = self.hlsl_floating_arithmetic_type_info(left_type)
+        right_floating = self.hlsl_floating_arithmetic_type_info(right_type)
+        left_integer = self.hlsl_integer_arithmetic_type_info(left_type)
+        right_integer = self.hlsl_integer_arithmetic_type_info(right_type)
+
+        if (
+            left_floating is not None
+            and left_floating["base_type"] == "float"
+            and right_integer is not None
+            and right_integer["base_type"] in {"int64_t", "uint64_t"}
+        ):
+            floating = left_floating
+            integer = right_integer
+            integer_side = "right"
+        elif (
+            right_floating is not None
+            and right_floating["base_type"] == "float"
+            and left_integer is not None
+            and left_integer["base_type"] in {"int64_t", "uint64_t"}
+        ):
+            floating = right_floating
+            integer = left_integer
+            integer_side = "left"
+        else:
+            return None
+
+        if (
+            floating["width"] > 1
+            and integer["width"] > 1
+            and floating["width"] != integer["width"]
+        ):
+            raise DirectXContextualConversionError(
+                "DirectX cannot lower mixed float and 64-bit integer arithmetic "
+                f"from '{integer['mapped_type']}' to "
+                f"'{floating['mapped_type']}' because the vector lane shapes differ",
+                source_type=integer["mapped_type"],
+                target_type=floating["mapped_type"],
+                reason="wide-integer-floating-lane-shape-mismatch",
+                source_location=getattr(node, "source_location", None),
+            )
+
+        result_width = max(floating["width"], integer["width"])
+        result_type = "float" if result_width == 1 else f"float{result_width}"
+        integer_float_type = (
+            "float" if integer["width"] == 1 else f"float{integer['width']}"
+        )
+        return {
+            "floating": floating,
+            "integer": integer,
+            "integer_side": integer_side,
+            "integer_float_type": integer_float_type,
+            "result_type": result_type,
+        }
+
+    def hlsl_wide_integer_floating_binary_expression(
+        self,
+        expr,
+        left,
+        right,
+        operator,
+    ):
+        contract = self.hlsl_wide_integer_floating_binary_contract(
+            expr,
+            operator,
+            self.expression_result_type(getattr(expr, "left", None)),
+            self.expression_result_type(getattr(expr, "right", None)),
+        )
+        if contract is None:
+            return None
+
+        if contract["integer_side"] == "left":
+            left = f"{contract['integer_float_type']}({left})"
+        else:
+            right = f"{contract['integer_float_type']}({right})"
+        return f"({left} {operator} {right})"
 
     def hlsl_native_16_bit_arithmetic_error(
         self,
@@ -12317,6 +12455,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 }:
                     return other_type
                 return "float"
+            wide_integer_floating = self.hlsl_wide_integer_floating_binary_contract(
+                expr,
+                operator,
+                left_type,
+                right_type,
+            )
+            if wide_integer_floating is not None:
+                return wide_integer_floating["result_type"]
             mapped_operator = self.map_operator(operator)
             native_16_bit_contract = self.hlsl_native_16_bit_arithmetic_contract(
                 expr,
@@ -17860,6 +18006,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if native_16_bit_binary is not None:
                 return native_16_bit_binary
+            wide_integer_floating = self.hlsl_wide_integer_floating_binary_expression(
+                expr,
+                left,
+                right,
+                mapped_op,
+            )
+            if wide_integer_floating is not None:
+                return wide_integer_floating
             bool_arithmetic = self.hlsl_bool_arithmetic_expression(
                 expr,
                 left,

@@ -3871,6 +3871,87 @@ def test_hlsl_codegen_emits_contextual_floating_narrowing_for_native_16_targets(
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_codegen_makes_wide_integer_to_float_conversions_explicit(
+    tmp_path,
+):
+    shader = """
+    shader WideIntegerFloatArithmetic {
+        float remainderComponent(float left, float right) {
+            return left - (right * int64_t(left / right));
+        }
+
+        float contextual(int64_t value) {
+            return value;
+        }
+
+        bool compare(float left, uint64_t right) {
+            return left < right;
+        }
+
+        vec2 scale(vec2 value, int64_t2 factors) {
+            return value * factors;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @ binding(0)) {
+                output[0] = remainderComponent(7.0, 3.0)
+                    + contextual(int64_t(2));
+                output[1] = compare(1.0, uint64_t(2)) ? 1.0 : 0.0;
+                output[2] = scale(
+                    vec2(2.0, 3.0),
+                    int64_t2(4, 5)
+                ).x;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        parse_code(tokenize_code(shader))
+    )
+
+    assert "return (left - (right * float(int64_t((left / right)))));" in generated
+    assert "return float(value);" in generated
+    assert "return (left < float(right));" in generated
+    assert "return (value * float2(factors));" in generated
+    assert "right * int64_t((left / right))" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_codegen_rejects_wide_integer_float_vector_lane_mismatch():
+    codegen = HLSLCodeGen()
+    codegen.local_variable_types.update(
+        {
+            "floating": "float2",
+            "wide": "int64_t3",
+        }
+    )
+    expression = BinaryOpNode(
+        IdentifierNode("floating"),
+        "*",
+        IdentifierNode("wide"),
+    )
+    expression.source_location = ("mixed.cgl", 8, 13)
+
+    with pytest.raises(DirectXContextualConversionError) as exc_info:
+        codegen.generate_expression(expression)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-contextual-conversion-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.contextual-conversion-lowering",
+    )
+    assert diagnostic.reason == "wide-integer-floating-lane-shape-mismatch"
+    assert diagnostic.source_type == "int64_t3"
+    assert diagnostic.target_type == "float2"
+    assert diagnostic.source_location == ("mixed.cgl", 8, 13)
+
+
 def test_hlsl_codegen_rejects_contextual_integer_narrowing_with_lane_mismatch():
     codegen = HLSLCodeGen()
     codegen.local_variable_types.update(
@@ -7584,7 +7665,11 @@ def test_hlsl_compute_subgroup_id_fixed_single_wave_keeps_zero_id_fast_path(
     assert "uint simd_group_id = (groupIndex / WaveGetLaneCount());" in generated_code
     assert "__crossgl_physical_subgroup" not in generated_code
     assert generated_code.count(": SV_GroupIndex") == 1
-    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+    assert_directx_warnings_clean_if_available(
+        generated_code,
+        tmp_path,
+        profile="cs_6_6",
+    )
 
 
 def test_hlsl_compute_num_subgroups_body_reference_lowers_to_group_size_ceildiv():
@@ -44450,6 +44535,14 @@ def test_hlsl_private_pointer_partition_selects_concrete_ternary_branch(
             float total = 0.0;
             for (int k = 0; k < steps_per_thread; ++k) {{
                 total += consume(x_thread + k * values_per_step);
+            }}
+        }}
+
+        compute {{
+            @ stage_entry
+            @ numthreads(1, 1, 1)
+            void main() {{
+                dispatch();
             }}
         }}
     }}

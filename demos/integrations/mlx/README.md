@@ -106,6 +106,26 @@ The current harness verifies:
   require 4,122 non-empty SPIR-V modules. This is complete binary OpenGL
   translation, reflection, and native compiler coverage, not numerical
   execution or MLX host runtime redirection;
+- selected-entry translation of all 4,122 discovered current-pinned
+  `binary.metal` entries to DirectX. The schema-v2
+  `contracts/binary.directx-translation.json` contract pins every standalone
+  `CSMain` artifact across all 18 shapes, 11 templates, 24 operators, 25 type
+  pairs, and 6,026 materializations. Nine source shapes that consume
+  `threads_per_grid` receive explicit `CrossGLDispatchInfo` interfaces, raising
+  the exact aggregate reflection count to 21,248 resources across three-
+  through eight-resource ABIs. Computed-result bfloat `ArcTan2`, `LogAddExp`,
+  and `Power` paths expand to float and reconstruct with round-to-nearest-even;
+  `Maximum` and `Minimum` expand only for comparison and return the selected
+  original bfloat payload without requantization. All other unproven bfloat
+  builtins remain fail-closed. The
+  same seven explicit host/runtime index-range preconditions remain required.
+  Twenty-four required Windows CI shards retranslate every exact entry, verify
+  deterministic identity, materialization, `CSMain` workgroup metadata, and
+  reflected ABI, then compile with checksum-pinned DXC using native 16-bit
+  types and warnings fatal. The gate requires 4,122 non-empty DXIL modules.
+  Together with the OpenGL and Metal contracts this closes complete binary
+  translation, reflection, and native compiler coverage, not numerical
+  execution or MLX host runtime redirection;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains
@@ -1805,9 +1825,8 @@ remains an exact 238-entry ``ss_`` subset. Required native macOS CI invokes
 ``xcrun -sdk macosx metal -Werror -c`` across 24 disjoint shards and requires
 4,122 non-empty AIR outputs; no source-warning exemption is used. This closes
 selected-entry translation, reflection, and native compilation for every
-discovered binary instantiation. It is not Metal numerical execution,
-DirectX/OpenGL whole-family coverage, MLX host-runtime redirection, or an MLX
-test-suite claim.
+discovered binary instantiation. It is not Metal numerical execution, MLX
+host-runtime redirection, or an MLX test-suite claim.
 
 The same selected-entry pipeline translates all 4,122 binary entries to
 standalone OpenGL ``main`` artifacts. The schema-v2
@@ -1837,9 +1856,37 @@ three- through seven-resource host ABI, then compiles with
 ``glslangValidator --target-env opengl --target-env spirv1.3 -S comp`` and
 validates with ``spirv-val --target-env spv1.3``. All 4,122 SPIR-V modules must
 be non-empty. This closes discovered binary OpenGL translation, reflection, and
-native compiler coverage; it does not claim numerical execution, DirectX
-whole-family translation, MLX host-runtime redirection, or MLX test-suite
-parity.
+native compiler coverage; it does not claim numerical execution, MLX
+host-runtime redirection, or MLX test-suite parity.
+
+The DirectX sibling contract translates all 4,122 discovered entries to
+standalone ``CSMain`` artifacts and pins their exact HLSL identities in
+[`contracts/binary.directx-translation.json`](contracts/binary.directx-translation.json).
+It preserves the same 18 shapes, 11 templates, 24 operators, 25 type pairs,
+6,026 materializations, and seven explicit index-range preconditions. DirectX
+resource namespaces retain the source buffer coordinates, while nine shapes
+that consume ``threads_per_grid`` add ``CrossGLDispatchInfo``. The resulting
+21,248 reflected DirectX resources span exact three-, four-, five-, six-, and
+eight-resource target interfaces; the rank-generic forms expose shape and
+stride buffers, an entry-scoped rank constant block, and generated dispatch
+metadata.
+
+Computed-result bfloat ``ArcTan2``, ``LogAddExp``, and ``Power`` paths expand
+both operands to float, compute in float, and reconstruct the result in the
+exact low-16-bit bfloat register representation with round-to-nearest ties-to-
+even. ``Maximum`` and ``Minimum`` expand only for comparison and return the
+selected original bfloat payload without requantization. The contract remains
+explicit and fail-closed: unrelated bfloat builtins are not admitted, and
+storage still requires Shader Model 6.2 native 16-bit types.
+
+Required Windows CI partitions the family into 24 disjoint shards. Every shard
+retranslates its exact entries, verifies deterministic identity, source/default
+and call-site materialization provenance, ``CSMain`` workgroup metadata, and
+exact three- through eight-resource host ABI, then compiles with checksum-pinned
+DXC using ``-enable-16bit-types -WX -T cs_6_2 -E CSMain``. All 4,122 DXIL
+modules must be non-empty. This closes discovered binary DirectX translation,
+reflection, and native compiler coverage; it does not claim numerical
+execution, MLX host-runtime redirection, or MLX test-suite parity.
 
 Windows CI compiles the selected HLSL entries with DXC and executes them through
 the native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entries with

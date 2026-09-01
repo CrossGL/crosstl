@@ -621,8 +621,7 @@ CI compiles all 4,122 exact artifacts in 24 disjoint shards with
 ``xcrun -sdk macosx metal -Werror -c`` and requires non-empty AIR without a
 warning exemption. This closes discovered selected-entry translation,
 reflection, and native compiler coverage. It does not claim Metal numerical
-execution, whole-family DirectX/OpenGL translation, host-runtime redirection,
-or MLX test-suite parity.
+execution, host-runtime redirection, or MLX test-suite parity.
 
 The same selected-entry pipeline translates all 4,122 binary entries to
 standalone OpenGL ``main`` artifacts. The schema-v2
@@ -649,8 +648,34 @@ compiles every artifact with
 ``glslangValidator --target-env opengl --target-env spirv1.3 -S comp``, validates
 it with ``spirv-val --target-env spv1.3``, and requires a non-empty SPIR-V
 module. This closes complete discovered-binary OpenGL translation, reflection,
-and native compiler coverage; it does not claim numerical execution, complete
-DirectX translation, MLX host-runtime redirection, or MLX test-suite parity.
+and native compiler coverage; it does not claim numerical execution, MLX
+host-runtime redirection, or MLX test-suite parity.
+
+The same selected-entry pipeline translates all 4,122 binary entries to
+standalone DirectX ``CSMain`` artifacts. The schema-v2
+``binary.directx-translation.json`` contract preserves all 18 shapes, 11
+kernel templates, 24 operators, 25 input/output type pairs, 6,026 exact
+materializations, and the seven explicit index-range portability preconditions.
+DirectX resource namespaces preserve source buffer coordinates. The nine shapes
+that consume ``threads_per_grid`` add explicit ``CrossGLDispatchInfo``
+reflection, producing 21,248 resources across exact three- through
+eight-resource target interfaces.
+
+Computed-result bfloat ``ArcTan2``, ``LogAddExp``, and ``Power`` paths expand
+both operands to float, compute in float, and reconstruct the result with exact
+round-to-nearest-ties-to-even. ``Maximum`` and ``Minimum`` also expand for the
+comparison, but preserve and return the selected original low-16-bit bfloat
+payload without requantization. Unproven bfloat builtins remain fail-closed,
+and native 16-bit storage remains a Shader Model 6.2 requirement.
+
+Required Windows CI partitions the family into 24 disjoint shards. Each shard
+retranslates its exact entries, checks deterministic identity, materialization
+provenance, standalone ``CSMain`` workgroup metadata, and target reflection,
+then compiles every artifact with checksum-pinned DXC using
+``-enable-16bit-types -WX -T cs_6_2 -E CSMain`` and requires a non-empty DXIL
+module. This closes complete discovered-binary DirectX translation, reflection,
+and native compiler coverage; it does not claim numerical execution, MLX
+host-runtime redirection, or MLX test-suite parity.
 
 OpenGL Software Subgroup Specialization
 ----------------------------------------
