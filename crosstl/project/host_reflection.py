@@ -177,6 +177,12 @@ def reflect_target_host_interface(
                 artifact_format=artifact_format or "GLSL source",
                 stage=stage,
             )
+        if normalized_target in {"metal", "msl"}:
+            return _reflect_metal_source(
+                artifact_path,
+                artifact_format=artifact_format or "Metal source",
+                stage=stage,
+            )
         if normalized_target in {"vulkan", "spirv", "spv"}:
             return _reflect_spirv_artifact(
                 artifact_path,
@@ -275,7 +281,7 @@ def _finalize_reflection(
                 severity="warning",
             )
         )
-    current_diagnostics.extend(_binding_diagnostics(resources))
+    current_diagnostics.extend(_binding_diagnostics(resources, parser=parser))
     return host_interface_record(
         status=_status_for_reflection(
             entry_points,
@@ -297,9 +303,11 @@ def _finalize_reflection(
 
 def _binding_diagnostics(
     resources: Sequence[Mapping[str, Any]],
+    *,
+    parser: str,
 ) -> list[ReflectionDiagnostic]:
     diagnostics = []
-    seen: dict[tuple[Any, Any], tuple[str, tuple[str, ...]]] = {}
+    seen: dict[tuple[Any, Any, Any], tuple[str, tuple[str, ...]]] = {}
     for resource in resources:
         resource_name = str(resource.get("name") or "<unnamed>")
         binding = resource.get("binding")
@@ -313,7 +321,12 @@ def _binding_diagnostics(
                 )
             )
             continue
-        coordinate = (0 if set_number is None else set_number, binding)
+        binding_namespace = _reflection_binding_namespace(resource, parser=parser)
+        coordinate = (
+            binding_namespace,
+            0 if set_number is None else set_number,
+            binding,
+        )
         owners = _resource_entry_points(resource)
         if coordinate in seen:
             conflicting_resource, conflicting_owners = seen[coordinate]
@@ -323,21 +336,50 @@ def _binding_diagnostics(
                 and set(owners).isdisjoint(conflicting_owners)
             ):
                 continue
+            details = {
+                "resource": resource_name,
+                "conflictingResource": conflicting_resource,
+                "set": coordinate[1],
+                "binding": coordinate[2],
+            }
+            if binding_namespace is not None:
+                details["bindingNamespace"] = binding_namespace
             diagnostics.append(
                 ReflectionDiagnostic(
                     REFLECTION_AMBIGUOUS_BINDING,
                     "Multiple reflected resources use the same binding coordinate.",
-                    details={
-                        "resource": resource_name,
-                        "conflictingResource": conflicting_resource,
-                        "set": coordinate[0],
-                        "binding": coordinate[1],
-                    },
+                    details=details,
                 )
             )
         else:
             seen[coordinate] = (resource_name, owners)
     return diagnostics
+
+
+def _reflection_binding_namespace(
+    resource: Mapping[str, Any],
+    *,
+    parser: str,
+) -> str | None:
+    if parser == "metal-reflection":
+        kind = str(resource.get("kind") or "").lower()
+        if kind == "texture":
+            return "texture"
+        if kind == "sampler":
+            return "sampler"
+        return "buffer"
+    if parser != "directx-reflection":
+        return None
+    kind = str(resource.get("kind") or "").lower()
+    type_name = str(resource.get("type") or "").lower()
+    access = str(resource.get("access") or "").lower()
+    if kind == "constant-buffer" or type_name.startswith("constantbuffer"):
+        return "cbv"
+    if kind == "sampler" or "sampler" in type_name:
+        return "sampler"
+    if access == "read_write" or type_name.startswith("rw"):
+        return "uav"
+    return "srv"
 
 
 def _resource_entry_points(resource: Mapping[str, Any]) -> tuple[str, ...]:
@@ -392,6 +434,185 @@ def _parse_register(register_text: str | None) -> tuple[int | None, int | None]:
     return 0 if set_number is None else set_number, _int_value(match.group("binding"))
 
 
+METAL_ENTRY_HEADER_RE = re.compile(
+    r"^[ \t]*(?P<stage>kernel|vertex|fragment|mesh|object)\s+"
+    r"[^\n{};()]*?\b(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+METAL_RESOURCE_ATTRIBUTE_RE = re.compile(
+    r"\[\[\s*(?P<kind>buffer|texture|sampler)\s*\(\s*(?P<binding>\d+)\s*\)\s*\]\]"
+)
+METAL_FUNCTION_CONSTANT_RE = re.compile(
+    r"\bconstant\s+(?P<type>[A-Za-z_]\w*(?:\s*<[^;]+>)?)\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*"
+    r"\[\[\s*function_constant\s*\(\s*(?P<id>\d+)\s*\)\s*\]\]\s*;"
+)
+
+
+def _metal_matching_parenthesis(source: str, start: int) -> int | None:
+    depth = 0
+    index = start
+    while index < len(source):
+        character = source[index]
+        if character in {'"', "'"}:
+            index = _skip_hlsl_quoted_text(source, index)
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+            if depth < 0:
+                return None
+        index += 1
+    return None
+
+
+def _split_metal_parameters(parameters: str) -> list[str]:
+    parts = []
+    start = 0
+    depths = {"(": 0, "[": 0, "<": 0, "{": 0}
+    closers = {")": "(", "]": "[", ">": "<", "}": "{"}
+    index = 0
+    while index < len(parameters):
+        character = parameters[index]
+        if character in {'"', "'"}:
+            index = _skip_hlsl_quoted_text(parameters, index)
+            continue
+        if character in depths:
+            depths[character] += 1
+        elif character in closers:
+            opener = closers[character]
+            if depths[opener] > 0:
+                depths[opener] -= 1
+        elif character == "," and not any(depths.values()):
+            part = parameters[start:index].strip()
+            if part:
+                parts.append(part)
+            start = index + 1
+        index += 1
+    part = parameters[start:].strip()
+    if part:
+        parts.append(part)
+    return parts
+
+
+def _metal_resource_from_parameter(
+    parameter: str,
+    *,
+    entry_point: str,
+) -> dict[str, Any] | None:
+    attribute = METAL_RESOURCE_ATTRIBUTE_RE.search(parameter)
+    if attribute is None:
+        return None
+    declaration = parameter[: attribute.start()].strip()
+    name_match = re.search(r"(?P<name>[A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)?$", declaration)
+    if name_match is None:
+        return None
+    name = name_match.group("name")
+    type_name = " ".join(declaration[: name_match.start()].split())
+    if not type_name:
+        return None
+
+    attribute_kind = attribute.group("kind")
+    if attribute_kind == "texture":
+        kind = "texture"
+        access_match = re.search(
+            r"\baccess\s*::\s*(read|write|read_write)\b", type_name
+        )
+        access = access_match.group(1) if access_match is not None else "read"
+    elif attribute_kind == "sampler":
+        kind = "sampler"
+        access = "read"
+    else:
+        kind = "constant-buffer" if re.search(r"\bconstant\b", type_name) else "buffer"
+        access = (
+            "read"
+            if kind == "constant-buffer" or re.search(r"\bconst\b", type_name)
+            else "read_write"
+        )
+
+    return {
+        "name": name,
+        "kind": kind,
+        "type": type_name,
+        "set": 0,
+        "binding": _int_value(attribute.group("binding")),
+        "access": access,
+        "metadata": {"entryPoint": entry_point},
+    }
+
+
+def _reflect_metal_source(
+    artifact_path: Path,
+    *,
+    artifact_format: str,
+    stage: str | None,
+) -> dict[str, Any]:
+    source = _strip_comments(_read_text(artifact_path))
+    entry_points = []
+    resources = []
+    stage_names = {
+        "kernel": "compute",
+        "vertex": "vertex",
+        "fragment": "fragment",
+        "mesh": "mesh",
+        "object": "task",
+    }
+    forced_stage = _stage_name(stage)
+    for match in METAL_ENTRY_HEADER_RE.finditer(source):
+        parameter_start = match.end() - 1
+        parameter_end = _metal_matching_parenthesis(source, parameter_start)
+        if parameter_end is None:
+            continue
+        entry_name = match.group("name")
+        entry_points.append(
+            {
+                "name": entry_name,
+                "stage": forced_stage or stage_names[match.group("stage")],
+                "executionConfig": {},
+            }
+        )
+        for parameter in _split_metal_parameters(
+            source[parameter_start + 1 : parameter_end]
+        ):
+            resource = _metal_resource_from_parameter(
+                parameter,
+                entry_point=entry_name,
+            )
+            if resource is not None:
+                resources.append(resource)
+
+    specialization_constants = []
+    for match in METAL_FUNCTION_CONSTANT_RE.finditer(source):
+        source_type = " ".join(match.group("type").split())
+        specialization_constants.append(
+            {
+                "name": match.group("name"),
+                "kind": "function-constant",
+                "id": _int_value(match.group("id")),
+                "dtype": source_type,
+                "sourceType": source_type,
+                "required": True,
+                "overridden": False,
+                "overrideStatus": "not-overridden",
+                "status": "required",
+                "source": "metal.function_constant",
+            }
+        )
+
+    return _finalize_reflection(
+        parser="metal-reflection",
+        artifact_format=artifact_format,
+        entry_points=entry_points,
+        resources=resources,
+        constants=[],
+        specialization_constants=specialization_constants,
+        diagnostics=[],
+    )
+
+
 HLSL_NUMTHREADS_RE = re.compile(
     r"\[\s*numthreads\s*\(\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^,\]]+)\s*\)\s*\]",
     re.IGNORECASE,
@@ -419,13 +640,13 @@ HLSL_CONSTANT_RE = re.compile(
     re.IGNORECASE,
 )
 HLSL_VALUE_BLOCK_MEMBER_RE = re.compile(
-    r"\A\s*(?P<type>(?P<base>float|int|uint)(?P<width>[1-4])?)\s+"
+    r"\A\s*(?P<type>(?P<base>int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s+"
     r"(?P<name>[A-Za-z_]\w*)\s*;\s*\Z",
     re.IGNORECASE,
 )
 HLSL_STRUCTURED_VALUE_RE = re.compile(
     r"\A(?:RW)?StructuredBuffer\s*<\s*"
-    r"(?P<type>(?P<base>float|int|uint)(?P<width>[1-4])?)\s*>\Z",
+    r"(?P<type>(?P<base>int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s*>\Z",
     re.IGNORECASE,
 )
 HLSL_DISPATCH_INFO_BUFFER_RE = re.compile(r"\ACrossGLDispatchInfo_*\Z")
@@ -435,6 +656,15 @@ SCALAR_PHYSICAL_TYPES = {
     "float": "float32",
     "int": "int32",
     "uint": "uint32",
+    "int64_t": "int64",
+    "uint64_t": "uint64",
+}
+SCALAR_PHYSICAL_SIZES = {
+    "float": 4,
+    "int": 4,
+    "uint": 4,
+    "int64_t": 8,
+    "uint64_t": 8,
 }
 
 HLSL_ENTRY_STAGE_BY_NAME = {
@@ -818,9 +1048,13 @@ def _hlsl_value_block_layout(
     match = HLSL_VALUE_BLOCK_MEMBER_RE.fullmatch(body)
     if match is None:
         return None
+    base_type = match.group("base")
+    vector_width = int(match.group("width") or 1)
+    if base_type.lower() in {"int64_t", "uint64_t"} and vector_width != 1:
+        return None
     return _physical_value_layout(
-        match.group("base"),
-        vector_width=int(match.group("width") or 1),
+        base_type,
+        vector_width=vector_width,
         member_name=match.group("name"),
         storage_layout="hlsl-constant-buffer",
         alignment_bytes=16,
@@ -833,9 +1067,13 @@ def _hlsl_structured_value_layout(type_name: str) -> dict[str, Any] | None:
     match = HLSL_STRUCTURED_VALUE_RE.fullmatch(type_name)
     if match is None:
         return None
+    base_type = match.group("base")
+    vector_width = int(match.group("width") or 1)
+    if base_type.lower() in {"int64_t", "uint64_t"} and vector_width != 1:
+        return None
     return _physical_value_layout(
-        match.group("base"),
-        vector_width=int(match.group("width") or 1),
+        base_type,
+        vector_width=vector_width,
         storage_layout="hlsl-structured-buffer",
         alignment_bytes=4,
         runtime_sized=True,
@@ -878,11 +1116,24 @@ GLSL_BLOCK_RESOURCE_RE = re.compile(
     r"(?P<name>[A-Za-z_]\w*)?\s*;",
     re.IGNORECASE | re.DOTALL,
 )
-GLSL_SCALAR_BLOCK_MEMBER_RE = re.compile(
-    r"\A\s*(?P<type>float|int|uint)\s+(?P<name>[A-Za-z_]\w*)"
+GLSL_VALUE_BLOCK_MEMBER_RE = re.compile(
+    r"\A\s*(?P<type>[A-Za-z_]\w*)\s+"
+    r"(?P<name>[A-Za-z_]\w*)"
     r"(?P<runtime_array>\s*\[\s*\])?\s*;\s*\Z",
     re.IGNORECASE,
 )
+GLSL_VECTOR_VALUE_RE = re.compile(
+    r"\A(?P<family>vec|ivec|uvec|bvec|i64vec|u64vec)(?P<width>[2-4])\Z",
+    re.IGNORECASE,
+)
+GLSL_VECTOR_BASE_TYPES = {
+    "vec": "float",
+    "ivec": "int",
+    "uvec": "uint",
+    "bvec": "bool",
+    "i64vec": "int64_t",
+    "u64vec": "uint64_t",
+}
 GLSL_RESOURCE_RE = re.compile(
     r"(?:layout\s*\((?P<layout>[^)]*)\)\s*)?"
     r"(?P<qualifiers>(?:(?:readonly|writeonly|coherent|restrict|volatile)\s+)*)"
@@ -1067,12 +1318,38 @@ def _parse_layout(layout: str | None) -> dict[str, Any]:
     return values
 
 
+def _glsl_value_type_shape(type_name: str) -> tuple[str, int] | None:
+    normalized_type = type_name.lower()
+    if normalized_type in SCALAR_PHYSICAL_TYPES or normalized_type == "bool":
+        return normalized_type, 1
+    vector_match = GLSL_VECTOR_VALUE_RE.fullmatch(normalized_type)
+    if vector_match is None:
+        return None
+    return (
+        GLSL_VECTOR_BASE_TYPES[vector_match.group("family").lower()],
+        int(vector_match.group("width")),
+    )
+
+
 def _glsl_scalar_block_layout(
     *, storage: str, layout_text: str | None, body: str
 ) -> dict[str, Any] | None:
-    match = GLSL_SCALAR_BLOCK_MEMBER_RE.fullmatch(body)
+    match = GLSL_VALUE_BLOCK_MEMBER_RE.fullmatch(body)
     if match is None:
         return None
+    value_shape = _glsl_value_type_shape(match.group("type"))
+    if value_shape is None:
+        return None
+    base_type, vector_width = value_shape
+    normalized_base_type = "uint" if base_type == "bool" else base_type
+    component_size_bytes = SCALAR_PHYSICAL_SIZES[normalized_base_type]
+    element_size_bytes = component_size_bytes * vector_width
+    base_alignment_bytes = component_size_bytes
+    if vector_width == 2:
+        base_alignment_bytes *= 2
+    elif vector_width in {3, 4}:
+        base_alignment_bytes *= 4
+
     runtime_sized = match.group("runtime_array") is not None
     qualifiers = {
         part.strip().lower()
@@ -1082,22 +1359,36 @@ def _glsl_scalar_block_layout(
     if storage == "uniform":
         if runtime_sized or "std140" not in qualifiers:
             return None
+        block_alignment_bytes = max(16, base_alignment_bytes)
+        block_size_bytes = (
+            (element_size_bytes + block_alignment_bytes - 1)
+            // block_alignment_bytes
+            * block_alignment_bytes
+        )
         return _physical_value_layout(
-            match.group("type"),
+            base_type,
+            vector_width=vector_width,
             member_name=match.group("name"),
             storage_layout="std140",
-            alignment_bytes=16,
+            alignment_bytes=block_alignment_bytes,
             runtime_sized=False,
-            block_size_bytes=16,
+            block_size_bytes=block_size_bytes,
         )
     if not runtime_sized or "std430" not in qualifiers:
         return None
+    element_stride_bytes = (
+        (element_size_bytes + base_alignment_bytes - 1)
+        // base_alignment_bytes
+        * base_alignment_bytes
+    )
     return _physical_value_layout(
-        match.group("type"),
+        base_type,
+        vector_width=vector_width,
         member_name=match.group("name"),
         storage_layout="std430",
-        alignment_bytes=4,
+        alignment_bytes=base_alignment_bytes,
         runtime_sized=True,
+        element_stride_bytes=element_stride_bytes,
     )
 
 
@@ -1110,17 +1401,26 @@ def _physical_value_layout(
     runtime_sized: bool,
     member_name: str | None = None,
     block_size_bytes: int | None = None,
+    element_stride_bytes: int | None = None,
 ) -> dict[str, Any]:
     normalized_type = physical_type.lower()
-    element_size_bytes = 4 * vector_width
+    # HLSL and GLSL block-storage booleans occupy one 32-bit scalar slot.
+    # Expose that physical representation to host loaders rather than a
+    # language-level bool, which has no portable in-memory width.
+    if normalized_type == "bool":
+        normalized_type = "uint"
+    component_size_bytes = SCALAR_PHYSICAL_SIZES[normalized_type]
+    element_size_bytes = component_size_bytes * vector_width
     layout: dict[str, Any] = {
         "physicalType": (
             normalized_type if vector_width == 1 else f"{normalized_type}{vector_width}"
         ),
         "elementType": SCALAR_PHYSICAL_TYPES[normalized_type],
         "elementSizeBytes": element_size_bytes,
-        "elementStrideBytes": element_size_bytes,
-        "alignmentBytes": alignment_bytes,
+        "elementStrideBytes": (
+            element_size_bytes if element_stride_bytes is None else element_stride_bytes
+        ),
+        "alignmentBytes": max(alignment_bytes, component_size_bytes),
         "memberOffsetBytes": 0,
         "storageLayout": storage_layout,
         "runtimeSized": runtime_sized,

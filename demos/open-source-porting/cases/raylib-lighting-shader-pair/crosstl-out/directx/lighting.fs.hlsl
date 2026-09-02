@@ -30,7 +30,7 @@ float4 PSMain(FragmentInput input): SV_Target0 {
     float3 viewD = normalize((viewPos - input.fragPosition));
     float3 specular = float3(0.0, 0.0, 0.0);
     float4 tint = (colDiffuse * input.fragColor);
-    for (int i = 0; (i < 4); ++i) {
+    for (int i = 0; (i < 4); i++) {
         if (lights[i].enabled == 1) {
             float3 light = float3(0.0, 0.0, 0.0);
             if (lights[i].type == 0) {

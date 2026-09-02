@@ -307,6 +307,28 @@ class _MetalTemplateStruct:
 
 
 @dataclass(frozen=True)
+class _MetalFreeOperatorDefinition:
+    operator: str
+    template_text: str
+    template_parameters: Tuple[str, ...]
+    template_constraints: Tuple[str, ...]
+    return_type: str
+    parameters: str
+    parameter_types: Tuple[str, ...]
+    body: str
+    span: Tuple[int, int]
+
+
+@dataclass(frozen=True)
+class _MetalBooleanVariableTemplate:
+    name: str
+    template_parameters: Tuple[str, ...]
+    argument_patterns: Tuple[str, ...]
+    expression: str
+    is_partial_specialization: bool
+
+
+@dataclass(frozen=True)
 class _MLXKernelInstantiation:
     host_name: str
     function_name: str
@@ -320,6 +342,30 @@ class _MetalFunctionDefinition:
     span: Tuple[int, int]
     body_span: Tuple[int, int]
     is_entry: bool
+
+
+@dataclass(frozen=True)
+class _MetalOutOfLineMemberDefinition:
+    function: _MetalFunctionDefinition
+    owner_name: str
+    method: "_MetalStructMethod"
+
+
+@dataclass(frozen=True)
+class _MetalOutOfLineMemberCallSite:
+    method_name: str
+    argument_open: int
+    receiver_contract: Optional["_MetalReceiverContract"]
+
+
+@dataclass
+class _MetalReachabilityTypeContext:
+    buffer_element_types: "_MetalPositionedBufferTypes"
+    local_variable_types: Dict[str, List[Tuple[int, str]]]
+    receiver_variable_types: Dict[str, List[Tuple[int, str]]]
+    structs_by_name: Dict[str, "_MetalStructDefinition"]
+    struct_type_aliases: Dict[str, List["_MetalTypeAliasBinding"]]
+    source_type_aliases: Dict[str, List["_MetalTypeAliasBinding"]]
 
 
 @dataclass(frozen=True)
@@ -496,6 +542,7 @@ class _MetalStructMethod:
     parameter_names: List[str]
     body: str
     span: Tuple[int, int]
+    is_conversion_operator: bool = False
     is_const: bool = False
     is_volatile: bool = False
     ref_qualifier: str = ""
@@ -818,6 +865,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._configure_integral_constant_contracts(processed)
         processed = self._materialize_project_template_instantiations(processed)
         processed = self._materialize_explicit_template_struct_instantiations(processed)
+        processed = self._materialize_free_operator_overloads(processed)
         processed = self._elide_stateless_compile_time_globals(processed)
         processed = self._lower_struct_member_functions(processed)
         processed = self._materialize_explicit_template_function_calls(processed)
@@ -2324,10 +2372,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         structs = self._find_concrete_struct_definitions(code)
         self._apply_explicit_member_specializations(code, structs)
+        function_excluded_spans = sorted(
+            template_declaration_spans + [struct.span for struct in structs]
+        )
+        unresolved_call_skip_spans = sorted(
+            template_declaration_spans
+            + self._unreachable_function_spans(code, function_excluded_spans)
+        )
         self._reject_unresolved_temporary_functor_calls(
             code,
             {struct.name: struct for struct in structs},
-            template_declaration_spans,
+            unresolved_call_skip_spans,
         )
         if not structs:
             return code
@@ -2756,6 +2811,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             method.name,
             method.is_static,
             method.is_operator_call,
+            method.is_conversion_operator,
             self._normalize_template_argument_text(method.return_type),
             parameters,
             self._method_receiver_contract_key(method),
@@ -3466,6 +3522,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             return {}
         aliases: Dict[str, List[_MetalTypeAliasBinding]] = {}
         lexical_scopes = self._find_lexical_brace_scopes(code)
+        namespace_spans = self._find_namespace_spans(code)
+        namespace_scopes = {(start, end) for start, end, _namespace in namespace_spans}
         for declaration_position, alias, target in sorted(raw_aliases):
             resolved_target = self._resolve_type_aliases_at(
                 target,
@@ -3483,7 +3541,53 @@ class MetalPreprocessor(HLSLPreprocessor):
                     target=resolved_target,
                 )
             )
+            namespace = self._namespace_at(namespace_spans, declaration_position)
+            if namespace and (scope_start, scope_end) in namespace_scopes:
+                # A namespace member's fully qualified spelling is visible from
+                # every later lexical scope, not only from inside the namespace
+                # braces where its unqualified spelling was declared.
+                aliases.setdefault(f"{namespace}::{alias}", []).append(
+                    _MetalTypeAliasBinding(
+                        declaration_position=declaration_position,
+                        scope_start=0,
+                        scope_end=len(code),
+                        target=resolved_target,
+                    )
+                )
         return aliases
+
+    def _qualified_type_alias_references(
+        self,
+        text: str,
+        aliases: Dict[str, List[_MetalTypeAliasBinding]],
+    ) -> List[Tuple[int, int, str]]:
+        """Return longest qualified alias prefixes without reading comments."""
+        if "::" not in text or not aliases:
+            return []
+        ignored_spans = self._find_comment_and_literal_spans(text)
+        references: List[Tuple[int, int, str]] = []
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_:])(?:::)?[A-Za-z_]\w*" r"(?:\s*::\s*[A-Za-z_]\w*)+"
+        )
+        for match in pattern.finditer(text):
+            if self._containing_span(match.start(), ignored_spans) is not None:
+                continue
+            components = list(IDENTIFIER_RE.finditer(match.group(0)))
+            for component_count in range(len(components), 1, -1):
+                alias = "::".join(
+                    component.group(0) for component in components[:component_count]
+                )
+                if alias not in aliases:
+                    continue
+                references.append(
+                    (
+                        match.start(),
+                        match.start() + components[component_count - 1].end(),
+                        alias,
+                    )
+                )
+                break
+        return references
 
     def _resolve_type_aliases_at(
         self,
@@ -3494,14 +3598,27 @@ class MetalPreprocessor(HLSLPreprocessor):
         replacements = {
             alias: resolved
             for alias in aliases
-            if (
+            if "::" not in alias
+            and (
                 resolved := self._resolve_struct_type_alias_at(aliases, alias, position)
             )
             is not None
         }
         resolved = self._normalize_template_argument_text(type_text)
-        for _ in range(len(replacements)):
-            candidate = self._replace_identifiers(resolved, replacements)
+        for _ in range(max(len(aliases), 1)):
+            qualified_replacements = []
+            for start, end, alias in self._qualified_type_alias_references(
+                resolved,
+                aliases,
+            ):
+                target = self._resolve_struct_type_alias_at(aliases, alias, position)
+                if target is not None:
+                    qualified_replacements.append((start, end, target))
+            candidate = self._apply_text_replacements(
+                resolved,
+                qualified_replacements,
+            )
+            candidate = self._replace_identifiers(candidate, replacements)
             if candidate == resolved:
                 break
             resolved = candidate
@@ -3519,7 +3636,9 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         Alias targets are resolved at their own declaration positions. This
         preserves lexical shadowing and prevents a later declaration from
-        retroactively satisfying an unresolved or forward alias target.
+        retroactively satisfying an unresolved or forward alias target. Fully
+        qualified namespace aliases are resolved atomically before individual
+        identifiers so a namespace prefix cannot be mistaken for a local alias.
         """
         normalized = self._normalize_template_argument_text(type_text)
         if not normalized:
@@ -3535,6 +3654,48 @@ class MetalPreprocessor(HLSLPreprocessor):
             candidate = self._normalize_template_argument_text(text)
             if not candidate:
                 return None
+
+            qualified_replacements: List[Tuple[int, int, str]] = []
+            for start, end, identifier in self._qualified_type_alias_references(
+                candidate,
+                aliases,
+            ):
+                binding = self._resolve_type_alias_binding_at(
+                    aliases,
+                    identifier,
+                    context_position,
+                )
+                if binding is None:
+                    if any(
+                        future.declaration_position > context_position
+                        and future.scope_start <= context_position < future.scope_end
+                        for future in aliases.get(identifier, [])
+                    ):
+                        return None
+                    continue
+                key = (
+                    identifier,
+                    binding.declaration_position,
+                    binding.scope_start,
+                    binding.scope_end,
+                )
+                if key in resolving or binding.target is None:
+                    return None
+                if key not in cache:
+                    cache[key] = canonicalize(
+                        binding.target,
+                        binding.declaration_position,
+                        {*resolving, key},
+                    )
+                resolved = cache[key]
+                if resolved is None:
+                    return None
+                qualified_replacements.append((start, end, resolved))
+            candidate = self._apply_text_replacements(
+                candidate,
+                qualified_replacements,
+            )
+
             replacements: Dict[str, str] = {}
             identifiers = dict.fromkeys(
                 match.group(0)
@@ -3582,6 +3743,53 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
 
         return canonicalize(normalized, position, set())
+
+    def _canonicalize_template_function_arguments_at(
+        self,
+        template: _MetalTemplateFunction,
+        arguments: Sequence[str],
+        aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+    ) -> Optional[Tuple[str, ...]]:
+        """Canonicalize only TYPE arguments of one function template at a point.
+
+        Non-type arguments may legitimately use an identifier that is also a type
+        alias in another scope, so applying alias replacement indiscriminately can
+        change a value specialization. Variadic packs are mapped with the same
+        fixed-tail rule as template argument binding.
+        """
+        canonical = [
+            self._normalize_template_argument_text(argument) for argument in arguments
+        ]
+        non_type_parameters = set(template.template_parameter_types)
+        variadic_parameters = set(template.variadic_template_parameters)
+        argument_index = 0
+        for parameter_index, parameter in enumerate(template.template_parameters):
+            if parameter in variadic_parameters:
+                remaining_fixed = (
+                    len(template.template_parameters) - parameter_index - 1
+                )
+                argument_count = max(
+                    0,
+                    len(canonical) - argument_index - remaining_fixed,
+                )
+            else:
+                argument_count = int(argument_index < len(canonical))
+            if parameter not in non_type_parameters:
+                for index in range(
+                    argument_index,
+                    min(argument_index + argument_count, len(canonical)),
+                ):
+                    resolved = self._canonicalize_type_aliases_at(
+                        canonical[index],
+                        aliases,
+                        position,
+                    )
+                    if resolved is None:
+                        return None
+                    canonical[index] = resolved
+            argument_index += argument_count
+        return tuple(canonical)
 
     def _collect_local_integral_constant_bindings(
         self,
@@ -4864,6 +5072,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     }
     _METAL_TYPE_TRAIT_ARITIES: Dict[str, int] = {
         "is_same": 2,
+        "is_convertible": 2,
         "is_integral": 1,
         "is_floating_point": 1,
         "is_signed": 1,
@@ -4874,8 +5083,9 @@ class MetalPreprocessor(HLSLPreprocessor):
     _METAL_TYPE_TRAIT_START_RE = re.compile(
         r"(?<![A-Za-z0-9_:])"
         r"(?:(?:::)?metal\s*::\s*)?"
-        r"(?P<trait>is_same_v|is_integral_v|is_floating_point_v|is_signed_v|"
-        r"is_unsigned_v|is_const_v|is_pointer_v|is_same|is_integral|"
+        r"(?P<trait>is_same_v|is_convertible_v|is_integral_v|"
+        r"is_floating_point_v|is_signed_v|is_unsigned_v|is_const_v|"
+        r"is_pointer_v|is_same|is_convertible|is_integral|"
         r"is_floating_point|is_signed|is_unsigned|is_const|is_pointer)\s*<"
     )
 
@@ -5142,6 +5352,34 @@ class MetalPreprocessor(HLSLPreprocessor):
                 resolved_operands,
                 "evaluated",
             )
+        if trait == "is_convertible":
+            source, destination = resolved_operands
+            if source == destination:
+                return True, resolved_operands, "evaluated"
+            source_scalar = self._scalar_and_width(source)
+            destination_scalar = self._scalar_and_width(destination)
+            if source_scalar is None or destination_scalar is None:
+                return False, resolved_operands, "evaluated"
+            source_base, _source_width = source_scalar
+            destination_base, _destination_width = destination_scalar
+            # Metal exposes bfloat as explicitly constructible, not as an
+            # implicit half/float destination. It may still widen to ordinary
+            # floating-point types, matching native overload selection.
+            if destination_base == "bfloat16_t":
+                return False, resolved_operands, "evaluated"
+            source_numeric = (
+                source_base in self._METAL_INTEGRAL_SCALAR_TYPES
+                or source_base in self._METAL_FLOATING_SCALAR_TYPES
+            )
+            destination_numeric = (
+                destination_base in self._METAL_INTEGRAL_SCALAR_TYPES
+                or destination_base in self._METAL_FLOATING_SCALAR_TYPES
+            )
+            return (
+                source_numeric and destination_numeric,
+                resolved_operands,
+                "evaluated",
+            )
 
         operand = resolved_operands[0]
         if trait == "is_pointer":
@@ -5372,6 +5610,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         expr = expression.strip()
         if not expr:
             raise self._UnrecognizedConstraint(expression)
+        if expr == "true":
+            return True
+        if expr == "false":
+            return False
         # Leading negation.
         if expr.startswith("!"):
             return not self._evaluate_boolean_constraint(expr[1:], bindings)
@@ -5566,7 +5808,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         # the actual parameter list is the paren group that FOLLOWS the empty
         # `operator()` token rather than the first top-level `(`.
         operator_match = re.search(r"\boperator\s*\(\s*\)", header)
+        conversion_match = re.search(
+            r"\boperator\s+" r"(?P<type>[A-Za-z_][A-Za-z0-9_:]*(?:\s*<[^()]+>)?)\s*\(",
+            header,
+        )
         is_operator_call = False
+        is_conversion_operator = False
         if operator_match is not None:
             paren_start = self._function_parameter_start(header[operator_match.end() :])
             if paren_start is None:
@@ -5579,6 +5826,22 @@ class MetalPreprocessor(HLSLPreprocessor):
             method_name = "operator()"
             signature_prefix = header[: operator_match.start()].rstrip()
             parameters = header[paren_start + 1 : paren_end]
+        elif conversion_match is not None:
+            paren_start = conversion_match.end() - 1
+            paren_end = self._find_matching_delimiter(header, paren_start, "(", ")")
+            if paren_end is None:
+                return None
+            parameters = header[paren_start + 1 : paren_end]
+            if parameters.strip():
+                return None
+            conversion_type = self._normalize_template_argument_text(
+                conversion_match.group("type")
+            )
+            if not conversion_type:
+                return None
+            is_conversion_operator = True
+            method_name = f"operator {conversion_type}"
+            signature_prefix = conversion_type
         else:
             paren_start = self._function_parameter_start(header)
             if paren_start is None:
@@ -5652,6 +5915,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             free_name=free_name,
             is_static=is_static,
             is_operator_call=is_operator_call,
+            is_conversion_operator=is_conversion_operator,
             return_type=return_type,
             parameters=parameters.strip(),
             parameter_names=parameter_names,
@@ -5716,6 +5980,10 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> str:
         if is_operator_call:
             return f"{struct_name}__operator_call"
+        if method_name.startswith("operator "):
+            conversion_type = method_name[len("operator ") :].strip()
+            suffix = re.sub(r"[^A-Za-z0-9_]+", "_", conversion_type).strip("_")
+            return f"{struct_name}__operator_{suffix or 'conversion'}"
         return f"{struct_name}__{method_name}"
 
     def _assign_receiver_overload_free_names(
@@ -5979,6 +6247,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         specialized_body = self._specialize_concrete_method_body(
             struct, method, method.body, structs_by_name
         )
+        specialized_body = self._rewrite_explicit_conversion_operator_calls(
+            struct,
+            specialized_body,
+        )
         rewritten_body = self._rewrite_method_body(
             struct, replace(method, body=specialized_body)
         )
@@ -6016,8 +6288,126 @@ class MetalPreprocessor(HLSLPreprocessor):
                 new_params = self_param
         return f"{return_type} {method.free_name}({new_params}) {{{rewritten_body}}}"
 
-    @staticmethod
+    def _rewrite_explicit_conversion_operator_calls(
+        self,
+        struct: _MetalStructDefinition,
+        body: str,
+    ) -> str:
+        rewritten = body
+        for candidate in struct.methods:
+            if not candidate.is_conversion_operator:
+                continue
+            conversion_type = self._normalize_template_argument_text(
+                candidate.return_type
+            )
+            type_pattern = re.escape(conversion_type).replace(r"\ ", r"\s+")
+            pattern = (
+                r"\b(?:this\s*(?:->|\.)|self\s*\.)\s*operator\s+"
+                + type_pattern
+                + r"\s*\(\s*\)"
+            )
+            rewritten = re.sub(pattern, f"{candidate.free_name}(self)", rewritten)
+        return rewritten
+
+    def _conversion_operator_receiver_is_readonly(
+        self,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        active: Optional[Set[int]] = None,
+    ) -> bool:
+        if method.is_const:
+            return True
+        if not method.is_conversion_operator:
+            return False
+        active = set(active or ())
+        if id(method) in active:
+            return False
+        active.add(id(method))
+
+        body = self._mask_comments_and_literals(method.body)
+        explicit_conversion_pattern = re.compile(
+            r"\bthis\s*(?:->|\.)\s*operator\s+"
+            r"(?P<type>[A-Za-z_][A-Za-z0-9_:]*(?:\s*<[^()]+>)?)"
+            r"\s*\(\s*\)"
+        )
+        for conversion_call in explicit_conversion_pattern.finditer(body):
+            conversion_type = self._normalize_inferred_type(
+                conversion_call.group("type")
+            )
+            candidates = [
+                candidate
+                for candidate in struct.methods
+                if candidate.is_conversion_operator
+                and self._normalize_inferred_type(candidate.return_type)
+                == conversion_type
+            ]
+            if len(
+                candidates
+            ) != 1 or not self._conversion_operator_receiver_is_readonly(
+                struct, candidates[0], active
+            ):
+                return False
+
+        member_names = sorted(struct.data_member_names, key=len, reverse=True)
+        for member in member_names:
+            access = rf"(?:\bthis\s*(?:->|\.)\s*)?\b{re.escape(member)}\b"
+            for match in re.finditer(access, body):
+                prefix = body[max(0, match.start() - 8) : match.start()]
+                suffix = body[match.end() : match.end() + 8]
+                if re.search(r"(?:\+\+|--|&)\s*$", prefix):
+                    return False
+                if re.match(
+                    r"\s*(?:\+\+|--|(?:<<|>>|[+\-*/%&|^])=|=(?!=))",
+                    suffix,
+                ):
+                    return False
+                statement_start = body.rfind(";", 0, match.start()) + 1
+                statement_prefix = body[statement_start : match.start()]
+                if re.search(
+                    r"&\s*[A-Za-z_]\w*\s*=\s*$",
+                    statement_prefix,
+                ):
+                    return False
+
+        call_scan = explicit_conversion_pattern.sub("conversion_result", body)
+        safe_calls = set(self._METAL_SCALAR_VECTOR_TYPES)
+        safe_calls.update({"alignof", "as_type", "sizeof", "static_cast"})
+        call_pattern = re.compile(
+            r"(?P<callee>(?:(?:[A-Za-z_]\w*)::)*[A-Za-z_]\w*"
+            r"(?:\s*<[^(){};]+>)?)\s*\("
+        )
+        for call in call_pattern.finditer(call_scan):
+            callee = re.sub(r"\s+", "", call.group("callee"))
+            base = callee.split("<", 1)[0].rsplit("::", 1)[-1]
+            if base in {"if", "switch", "while", "for", "return"}:
+                continue
+            open_paren = call_scan.find("(", call.start("callee"))
+            close_paren = self._find_matching_delimiter(call_scan, open_paren, "(", ")")
+            if close_paren is None:
+                return False
+            if base in safe_calls:
+                continue
+            arguments = call_scan[open_paren + 1 : close_paren]
+            observes_receiver = bool(re.search(r"\bthis\b", arguments)) or any(
+                re.search(
+                    rf"(?:\bthis\s*(?:->|\.)\s*)?\b{re.escape(member)}\b",
+                    arguments,
+                )
+                for member in member_names
+            )
+            if "::" not in callee or observes_receiver:
+                return False
+
+        allowed_this = explicit_conversion_pattern.sub("conversion_result", body)
+        allowed_this = re.sub(
+            r"\bthis\s*(?:->|\.)\s*[A-Za-z_]\w*",
+            "member_read",
+            allowed_this,
+        )
+        return re.search(r"\bthis\b", allowed_this) is None
+
     def _instance_receiver_parameter(
+        self,
         struct: _MetalStructDefinition,
         method: _MetalStructMethod,
     ) -> str:
@@ -6037,7 +6427,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 missing_capabilities=("metal.member-receiver-qualifiers",),
             )
         cv_qualifiers = []
-        if method.is_const:
+        if method.is_const or self._conversion_operator_receiver_is_readonly(
+            struct, method
+        ):
             cv_qualifiers.append("const")
         if method.is_volatile:
             cv_qualifiers.append("volatile")
@@ -6784,6 +7176,589 @@ class MetalPreprocessor(HLSLPreprocessor):
                         )
                     )
         return results[0] if len(results) == 1 else None
+
+    _FREE_OPERATOR_LABELS = {
+        "+": "add",
+        "-": "subtract",
+        "*": "multiply",
+        "/": "divide",
+        "%": "modulo",
+        "==": "equal",
+        "!=": "not_equal",
+        "<": "less",
+        ">": "greater",
+        "<=": "less_equal",
+        ">=": "greater_equal",
+    }
+
+    def _find_boolean_variable_templates(
+        self, code: str
+    ) -> Dict[str, List[_MetalBooleanVariableTemplate]]:
+        definitions: Dict[str, List[_MetalBooleanVariableTemplate]] = {}
+        ignored = self._find_comment_and_literal_spans(code)
+        cursor = 0
+        while True:
+            match = re.search(r"\btemplate\s*<", code[cursor:])
+            if match is None:
+                break
+            template_start = cursor + match.start()
+            cursor = template_start + len("template")
+            if self._containing_span(template_start, ignored) is not None:
+                continue
+            angle_start = code.find("<", template_start, cursor + 4)
+            angle_end = self._find_matching_template_param_angle(code, angle_start)
+            if angle_end is None:
+                continue
+            header = re.match(
+                r"\s*(?:static\s+)?constexpr\s+(?:constant\s+)?bool\s+"
+                r"(?P<name>[A-Za-z_]\w*)",
+                code[angle_end + 1 :],
+            )
+            if header is None:
+                cursor = angle_end + 1
+                continue
+            name = header.group("name")
+            name_end = angle_end + 1 + header.end()
+            position = name_end
+            while position < len(code) and code[position].isspace():
+                position += 1
+            is_partial = position < len(code) and code[position] == "<"
+            if is_partial:
+                argument_end = self._find_matching_angle(code, position)
+                if argument_end is None:
+                    cursor = position + 1
+                    continue
+                argument_patterns = tuple(
+                    self._split_top_level_commas(code[position + 1 : argument_end])
+                )
+                position = argument_end + 1
+            else:
+                argument_patterns = tuple(
+                    self._template_parameter_names(code[angle_start + 1 : angle_end])
+                )
+            equals = code.find("=", position)
+            semicolon = code.find(";", position)
+            if equals == -1 or semicolon == -1 or semicolon < equals:
+                cursor = position
+                continue
+            prefix = code[position:equals]
+            if "{" in prefix or ";" in prefix:
+                cursor = position
+                continue
+            expression = code[equals + 1 : semicolon].strip()
+            parameter_names = tuple(
+                self._template_parameter_names(code[angle_start + 1 : angle_end])
+            )
+            if expression and argument_patterns:
+                definitions.setdefault(name, []).append(
+                    _MetalBooleanVariableTemplate(
+                        name=name,
+                        template_parameters=parameter_names,
+                        argument_patterns=argument_patterns,
+                        expression=expression,
+                        is_partial_specialization=is_partial,
+                    )
+                )
+            cursor = semicolon + 1
+        return definitions
+
+    def _evaluate_boolean_variable_template(
+        self,
+        name: str,
+        arguments: Sequence[str],
+        bindings: Dict[str, str],
+        definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
+        stack: Tuple[Tuple[str, Tuple[str, ...]], ...],
+    ) -> bool:
+        concrete_arguments = tuple(
+            self._normalize_template_argument_text(
+                self._replace_identifiers(argument, bindings)
+            )
+            for argument in arguments
+        )
+        key = (name, concrete_arguments)
+        if key in stack:
+            raise self._UnrecognizedConstraint(name)
+        candidates = []
+        for definition in definitions.get(name, []):
+            if len(definition.argument_patterns) != len(concrete_arguments):
+                continue
+            local_bindings: Dict[str, str] = {}
+            matched = True
+            score = 1 if definition.is_partial_specialization else 0
+            for pattern, concrete in zip(
+                definition.argument_patterns, concrete_arguments
+            ):
+                normalized_pattern = self._normalize_template_argument_text(pattern)
+                if normalized_pattern in definition.template_parameters:
+                    existing = local_bindings.get(normalized_pattern)
+                    if existing is not None and existing != concrete:
+                        matched = False
+                        break
+                    local_bindings[normalized_pattern] = concrete
+                    continue
+                self._infer_template_parameter_bindings_from_type(
+                    normalized_pattern,
+                    concrete,
+                    set(definition.template_parameters),
+                    local_bindings,
+                )
+                if not any(
+                    parameter in local_bindings
+                    for parameter in definition.template_parameters
+                    if re.search(rf"\b{re.escape(parameter)}\b", normalized_pattern)
+                ):
+                    matched = False
+                    break
+                score += 1
+            if matched and all(
+                parameter in local_bindings
+                for parameter in definition.template_parameters
+            ):
+                candidates.append((score, definition, local_bindings))
+        if not candidates:
+            raise self._UnrecognizedConstraint(name)
+        best_score = max(candidate[0] for candidate in candidates)
+        winners = [candidate for candidate in candidates if candidate[0] == best_score]
+        if len(winners) != 1:
+            raise self._UnrecognizedConstraint(name)
+        _score, definition, local_bindings = winners[0]
+        return self._evaluate_boolean_constraint_with_variable_templates(
+            definition.expression,
+            local_bindings,
+            definitions,
+            stack=(*stack, key),
+        )
+
+    def _expand_boolean_variable_templates(
+        self,
+        expression: str,
+        bindings: Dict[str, str],
+        definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
+        stack: Tuple[Tuple[str, Tuple[str, ...]], ...] = (),
+    ) -> str:
+        if not definitions:
+            return expression
+        names = sorted(definitions, key=len, reverse=True)
+        start_re = re.compile(
+            r"(?<![A-Za-z0-9_:])(?P<name>"
+            + "|".join(re.escape(name) for name in names)
+            + r")\s*<"
+        )
+        expanded = expression
+        for _ in range(64):
+            match = start_re.search(expanded)
+            if match is None:
+                return expanded
+            angle_start = expanded.find("<", match.start("name"), match.end())
+            angle_end = self._find_matching_angle(expanded, angle_start)
+            if angle_end is None:
+                raise self._UnrecognizedConstraint(expression)
+            arguments = self._split_top_level_commas(
+                expanded[angle_start + 1 : angle_end]
+            )
+            value = self._evaluate_boolean_variable_template(
+                match.group("name"),
+                arguments,
+                bindings,
+                definitions,
+                stack,
+            )
+            expanded = (
+                expanded[: match.start()]
+                + ("true" if value else "false")
+                + expanded[angle_end + 1 :]
+            )
+        raise self._UnrecognizedConstraint(expression)
+
+    def _evaluate_boolean_constraint_with_variable_templates(
+        self,
+        expression: str,
+        bindings: Dict[str, str],
+        definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
+        *,
+        stack: Tuple[Tuple[str, Tuple[str, ...]], ...] = (),
+    ) -> bool:
+        expanded = self._expand_boolean_variable_templates(
+            expression,
+            bindings,
+            definitions,
+            stack,
+        )
+        return self._evaluate_boolean_constraint(expanded, bindings)
+
+    def _free_operator_constraint_enabled(
+        self,
+        constraint: str,
+        bindings: Dict[str, str],
+        definitions: Dict[str, List[_MetalBooleanVariableTemplate]],
+    ) -> bool:
+        text = constraint.strip()
+        enable_match = re.match(
+            r"^(?:typename\s+)?(?:metal\s*::\s*)?enable_if_t\s*<", text
+        )
+        if enable_match is not None:
+            angle_start = text.find("<", enable_match.end() - 1)
+            angle_end = self._find_matching_template_param_angle(text, angle_start)
+            if angle_end is None or text[angle_end + 1 :].strip():
+                raise self._UnrecognizedConstraint(constraint)
+            arguments = self._split_template_parameter_list(
+                text[angle_start + 1 : angle_end]
+            )
+            if not arguments:
+                raise self._UnrecognizedConstraint(constraint)
+            text = arguments[0].strip()
+        return self._evaluate_boolean_constraint_with_variable_templates(
+            text,
+            bindings,
+            definitions,
+        )
+
+    def _find_free_operator_definitions(
+        self, code: str
+    ) -> List[_MetalFreeOperatorDefinition]:
+        definitions: List[_MetalFreeOperatorDefinition] = []
+        ignored = self._find_comment_and_literal_spans(code)
+        operator_re = re.compile(
+            r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%<>])\s*\("
+        )
+        cursor = 0
+        while True:
+            template_match = re.search(r"\btemplate\s*<", code[cursor:])
+            if template_match is None:
+                break
+            template_start = cursor + template_match.start()
+            cursor = template_start + len("template")
+            if self._containing_span(template_start, ignored) is not None:
+                continue
+            angle_start = code.find("<", template_start, cursor + 4)
+            angle_end = self._find_matching_template_param_angle(code, angle_start)
+            if angle_end is None:
+                continue
+            operator_match = operator_re.search(code, angle_end + 1)
+            if operator_match is None:
+                cursor = angle_end + 1
+                continue
+            declaration_prefix = code[angle_end + 1 : operator_match.start()]
+            if any(token in declaration_prefix for token in (";", "{", "}")):
+                cursor = angle_end + 1
+                continue
+            parameter_open = code.find(
+                "(", operator_match.start(), operator_match.end()
+            )
+            parameter_close = self._find_matching_delimiter(
+                code, parameter_open, "(", ")"
+            )
+            if parameter_close is None:
+                cursor = operator_match.end()
+                continue
+            body_open = code.find("{", parameter_close + 1)
+            declaration_end = code.find(";", parameter_close + 1)
+            if body_open == -1 or (
+                declaration_end != -1 and declaration_end < body_open
+            ):
+                cursor = parameter_close + 1
+                continue
+            body_end = self._find_matching_brace(code, body_open)
+            if body_end is None:
+                cursor = body_open + 1
+                continue
+            parameters = code[parameter_open + 1 : parameter_close]
+            parameter_types = tuple(self._parameter_declared_types(parameters))
+            if len(parameter_types) not in {1, 2} or any(
+                parameter_type is None for parameter_type in parameter_types
+            ):
+                cursor = body_end
+                continue
+            template_text = code[angle_start + 1 : angle_end]
+            template_records = self._parse_template_parameter_list(template_text)
+            template_parameters = tuple(
+                record.name for record in template_records if record.name
+            )
+            constraints = tuple(
+                record.constraint_text
+                for record in template_records
+                if record.constraint_text
+            )
+            return_type = re.sub(
+                r"\b(?:constexpr|consteval|inline|static|friend)\b",
+                " ",
+                declaration_prefix,
+            )
+            return_type = self._normalize_template_argument_text(return_type)
+            if not return_type or not template_parameters:
+                cursor = body_end
+                continue
+            definitions.append(
+                _MetalFreeOperatorDefinition(
+                    operator=operator_match.group("operator"),
+                    template_text=template_text,
+                    template_parameters=template_parameters,
+                    template_constraints=constraints,
+                    return_type=return_type,
+                    parameters=parameters,
+                    parameter_types=parameter_types,
+                    body=code[body_open + 1 : body_end - 1],
+                    span=(template_start, body_end),
+                )
+            )
+            cursor = body_end
+        return definitions
+
+    def _substitute_materialized_free_operator_text(
+        self,
+        text: str,
+        bindings: Dict[str, str],
+    ) -> str:
+        result = self._replace_identifiers(text, bindings)
+        for materialized_name, (source_name, source_arguments) in sorted(
+            self._materialized_struct_specializations.items()
+        ):
+            concrete_arguments = [
+                self._normalize_template_argument_text(
+                    self._replace_identifiers(argument, bindings)
+                )
+                for argument in source_arguments
+            ]
+            argument_patterns = [
+                re.escape(argument).replace(r"\ ", r"\s*")
+                for argument in concrete_arguments
+            ]
+            pattern = (
+                rf"\b{re.escape(source_name)}\s*<\s*"
+                + r"\s*,\s*".join(argument_patterns)
+                + r"\s*>"
+            )
+            result = re.sub(pattern, materialized_name, result)
+        return result
+
+    def _free_operator_helper_name(
+        self, operator: str, parameter_types: Sequence[str]
+    ) -> str:
+        if operator == "-" and len(parameter_types) == 1:
+            label = "negate"
+        else:
+            label = self._FREE_OPERATOR_LABELS[operator]
+        identities = []
+        for parameter_type in parameter_types:
+            identity = re.sub(
+                r"\b(?:const|volatile|thread|threadgroup|device|constant|restrict)\b",
+                " ",
+                parameter_type,
+            )
+            identity = re.sub(r"[&*]+", " ", identity)
+            identity = self._normalize_template_argument_text(identity)
+            identity = re.sub(r"[^A-Za-z0-9_]+", "_", identity).strip("_")
+            identities.append(identity or "unknown")
+        return f"crosstl_metal_operator_{label}__" + "__".join(identities)
+
+    def _rewrite_materialized_free_operator_calls(
+        self,
+        body: str,
+        parameters: str,
+        parameter_types: Sequence[str],
+        emitted_names: Set[str],
+    ) -> str:
+        """Bind direct dependent operator calls to earlier concrete helpers.
+
+        MLX's complex comparison operators define ``<`` and ``<=`` in terms of
+        direct calls to ``operator>`` and ``operator>=`` with reversed
+        arguments. Once the surrounding aggregate is materialized, those calls
+        have an exact source signature. Rewrite only a permutation of the
+        current function parameters and only when the referenced concrete
+        helper has already been emitted; every other dependent call remains
+        unresolved and keeps the existing fail-closed behavior.
+        """
+
+        parameter_names = self._parameter_identifier_names(parameters)
+        if len(parameter_names) != len(parameter_types):
+            return body
+        type_by_name = dict(zip(parameter_names, parameter_types))
+        replacements: List[Tuple[int, int, str]] = []
+        pattern = re.compile(r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%<>])\s*\(")
+        for match in pattern.finditer(body):
+            open_paren = match.end() - 1
+            close_paren = self._find_matching_delimiter(body, open_paren, "(", ")")
+            if close_paren is None:
+                continue
+            arguments = [
+                argument.strip()
+                for argument in self._split_top_level_commas(
+                    body[open_paren + 1 : close_paren]
+                )
+            ]
+            if len(arguments) != len(parameter_names) or any(
+                not re.fullmatch(r"[A-Za-z_]\w*", argument)
+                or argument not in type_by_name
+                for argument in arguments
+            ):
+                continue
+            helper_name = self._free_operator_helper_name(
+                match.group("operator"),
+                tuple(type_by_name[argument] for argument in arguments),
+            )
+            if helper_name not in emitted_names:
+                continue
+            replacements.append(
+                (
+                    match.start(),
+                    close_paren + 1,
+                    f"{helper_name}({', '.join(arguments)})",
+                )
+            )
+        if not replacements:
+            return body
+        return self._apply_text_replacements(body, replacements)
+
+    def _materialize_free_operator_overloads(self, code: str) -> str:
+        if not self._materialized_struct_specializations or "operator" not in code:
+            return code
+        operators = self._find_free_operator_definitions(code)
+        if not operators:
+            return code
+        boolean_templates = self._find_boolean_variable_templates(code)
+        replacements = []
+        emitted_names: Set[str] = set()
+        template_spans = self._find_template_declaration_spans(code)
+        concrete_functions = self._find_non_template_function_definitions(
+            code, template_spans
+        )
+        reachable_source = (
+            "\n".join(
+                code[function.span[0] : function.span[1]]
+                for function in concrete_functions
+            )
+            if concrete_functions
+            else None
+        )
+        source_aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+            skip_spans=template_spans,
+        )
+
+        def is_reachable_materialized_type(name: str) -> bool:
+            if reachable_source is None:
+                return True
+            spellings = {name}
+            for alias, bindings in source_aliases.items():
+                targets = {
+                    self._normalize_inferred_type(binding.target)
+                    for binding in bindings
+                    if binding.target
+                }
+                if targets == {name}:
+                    spellings.add(alias)
+            return any(
+                re.search(rf"\b{re.escape(spelling)}\b", reachable_source)
+                for spelling in spellings
+            )
+
+        retained_structs = {
+            name: specialization
+            for name, specialization in (
+                self._materialized_struct_specializations.items()
+            )
+            if re.search(rf"\b(?:struct|class)\s+{re.escape(name)}\b", code)
+            and is_reachable_materialized_type(name)
+        }
+        for definition in operators:
+            generated = []
+            for materialized_name, (source_name, source_arguments) in sorted(
+                retained_structs.items()
+            ):
+                if not any(
+                    re.search(rf"\b{re.escape(source_name)}\s*<", parameter_type)
+                    for parameter_type in definition.parameter_types
+                ):
+                    continue
+                bindings: Dict[str, str] = {}
+                for parameter_type in definition.parameter_types:
+                    if not re.search(
+                        rf"\b{re.escape(source_name)}\s*<", parameter_type
+                    ):
+                        continue
+                    self._infer_template_parameter_bindings_from_type(
+                        parameter_type,
+                        materialized_name,
+                        set(definition.template_parameters),
+                        bindings,
+                    )
+                    if not any(
+                        parameter in bindings
+                        for parameter in definition.template_parameters
+                        if re.search(rf"\b{re.escape(parameter)}\b", parameter_type)
+                    ):
+                        bindings = {}
+                        break
+                if not bindings:
+                    continue
+                lane_type = source_arguments[0] if len(source_arguments) == 1 else None
+                for parameter in definition.template_parameters:
+                    if parameter in bindings:
+                        continue
+                    scalar_parameter = any(
+                        self._normalize_inferred_type(parameter_type) == parameter
+                        for parameter_type in definition.parameter_types
+                    )
+                    if lane_type is None or not scalar_parameter:
+                        bindings = {}
+                        break
+                    bindings[parameter] = lane_type
+                if not bindings:
+                    continue
+                try:
+                    if not all(
+                        self._free_operator_constraint_enabled(
+                            constraint,
+                            bindings,
+                            boolean_templates,
+                        )
+                        for constraint in definition.template_constraints
+                    ):
+                        continue
+                except self._UnrecognizedConstraint:
+                    continue
+                return_type = self._substitute_materialized_free_operator_text(
+                    definition.return_type,
+                    bindings,
+                )
+                parameters = self._substitute_materialized_free_operator_text(
+                    definition.parameters,
+                    bindings,
+                )
+                parameter_types = tuple(self._parameter_declared_types(parameters))
+                if any(parameter_type is None for parameter_type in parameter_types):
+                    continue
+                body = self._substitute_materialized_free_operator_text(
+                    definition.body,
+                    bindings,
+                )
+                body = self._rewrite_materialized_free_operator_calls(
+                    body,
+                    parameters,
+                    parameter_types,
+                    emitted_names,
+                )
+                if re.search(r"\boperator\s*(?:==|!=|<=|>=|[+\-*/%<>])\s*\(", body):
+                    continue
+                helper_name = self._free_operator_helper_name(
+                    definition.operator,
+                    parameter_types,
+                )
+                if helper_name in emitted_names:
+                    continue
+                emitted_names.add(helper_name)
+                generated.append(
+                    f"{return_type} {helper_name}({parameters}) {{" f"{body}}}\n"
+                )
+            if generated:
+                replacements.append(
+                    (definition.span[0], definition.span[1], "\n".join(generated))
+                )
+        if not replacements:
+            return code
+        return self._apply_text_replacements(code, replacements)
 
     def _static_constexpr_binary_operators(
         self,
@@ -9269,10 +10244,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         # still reference unbound template parameters (`U a`, `static_cast<U>(b)`),
         # so their aliases and call sites must not participate in concrete
         # inference. Concrete and template spans are disjoint.
-        scan_skip_spans = all_struct_spans
+        scan_skip_spans = list(all_struct_spans)
         template_declaration_spans = self._find_template_declaration_spans(code)
         if template_declaration_spans:
             scan_skip_spans = sorted(all_struct_spans + template_declaration_spans)
+        scan_skip_spans = sorted(
+            scan_skip_spans + self._unreachable_function_spans(code, scan_skip_spans)
+        )
         # Member specialization uses the same proven lexical constants as nested
         # struct materialization; unresolved or runtime bindings remain absent.
         local_constant_owner_spans = [
@@ -9301,7 +10279,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
 
         variable_types = self._collect_struct_variable_types(
-            code, struct_names, struct_spans
+            code, struct_names, scan_skip_spans
         )
         # Struct-typed locals for EVERY struct/union type (used for `obj.member`
         # inference), resolved over the full struct span set so member-access
@@ -9309,7 +10287,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         field_variable_types = self._collect_struct_variable_types(
             code,
             all_struct_names,
-            all_struct_spans,
+            scan_skip_spans,
             include_indirect=True,
         )
         aliased_variable_types = self._collect_aliased_struct_variable_types(
@@ -9329,12 +10307,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if entry[1] in struct_names and entry not in method_entries
             )
             method_entries.sort(key=lambda item: item[0])
-        buffer_element_types = self._collect_buffer_element_types(
-            code, all_struct_spans
-        )
-        local_variable_types = self._collect_local_variable_types(
-            code, all_struct_spans
-        )
+        buffer_element_types = self._collect_buffer_element_types(code, scan_skip_spans)
+        local_variable_types = self._collect_local_variable_types(code, scan_skip_spans)
         for name, entries in field_variable_types.items():
             local_entries = local_variable_types.setdefault(name, [])
             for entry in entries:
@@ -9346,7 +10320,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # inferable.
         self._collect_function_parameter_types(
             code,
-            all_struct_spans,
+            scan_skip_spans,
             buffer_element_types,
             local_variable_types,
         )
@@ -9355,7 +10329,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # tracked struct set for construction / functor-call initializers).
         self._collect_auto_local_variable_types(
             code,
-            all_struct_spans,
+            scan_skip_spans,
             buffer_element_types,
             local_variable_types,
             field_structs_by_name,
@@ -9413,6 +10387,137 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             i += 1
         return replacements
+
+    def _try_rewrite_implicit_conversion_call(
+        self,
+        code: str,
+        ident_start: int,
+        target_type: str,
+        arg_open: int,
+        buffer_element_types: _MetalPositionedBufferTypes,
+        local_variable_types: Dict[str, List[Tuple[int, str]]],
+        field_variable_types: Dict[str, List[Tuple[int, str]]],
+        field_structs_by_name: Dict[str, _MetalStructDefinition],
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        local_integral_constants: Optional[
+            Dict[str, List[_MetalIntegralConstantBinding]]
+        ] = None,
+    ) -> Optional[Tuple[int, str]]:
+        if target_type not in self._METAL_SCALAR_VECTOR_TYPES:
+            return None
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        arguments = [
+            argument.strip()
+            for argument in self._split_top_level_commas(code[arg_open + 1 : arg_close])
+            if argument.strip()
+        ]
+        if len(arguments) != 1:
+            return None
+        argument = arguments[0]
+        source_type = self._infer_argument_type(
+            argument,
+            self._flatten_types_at(buffer_element_types, arg_open),
+            self._flatten_types_at(local_variable_types, arg_open),
+            self._struct_field_types_at(
+                field_variable_types,
+                field_structs_by_name,
+                arg_open,
+            ),
+            field_structs_by_name,
+        )
+        if source_type is None and type_aliases:
+            constructor = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(", argument)
+            if constructor is not None:
+                constructor_open = argument.find("(", constructor.end("name"))
+                constructor_close = self._find_matching_delimiter(
+                    argument, constructor_open, "(", ")"
+                )
+                if constructor_close == len(argument) - 1:
+                    source_type = self._canonicalize_type_aliases_at(
+                        constructor.group("name"),
+                        type_aliases,
+                        arg_open,
+                    )
+                    conditional = str(source_type or "").strip()
+                    type_accessor = conditional.endswith("::type")
+                    if type_accessor:
+                        conditional = conditional[: -len("::type")].strip()
+                    angle_open = conditional.find("<")
+                    angle_close = (
+                        self._find_matching_angle(conditional, angle_open)
+                        if angle_open >= 0
+                        else None
+                    )
+                    conditional_name = re.sub(
+                        r"^(?:::)?(?:metal::)?", "", conditional[:angle_open]
+                    ).strip()
+                    if (
+                        angle_open > 0
+                        and angle_close == len(conditional) - 1
+                        and conditional_name in {"conditional_t", "conditional"}
+                        and (conditional_name == "conditional_t" or type_accessor)
+                    ):
+                        conditional_args = self._split_top_level_commas(
+                            conditional[angle_open + 1 : angle_close]
+                        )
+                        if len(conditional_args) == 3:
+                            visible_constants = self._local_integral_constants_at(
+                                local_integral_constants or {},
+                                arg_open,
+                                names=set(IDENTIFIER_RE.findall(conditional_args[0])),
+                            )
+                            condition = (
+                                self._substitute_template_argument_static_constants(
+                                    conditional_args[0], visible_constants
+                                )
+                            )
+                            folded, value = self._evaluate_static_integral_expression(
+                                condition
+                            )
+                            if folded and value is not None:
+                                selected = conditional_args[1 if value else 2]
+                                source_type = self._canonicalize_type_aliases_at(
+                                    selected,
+                                    type_aliases,
+                                    arg_open,
+                                )
+        source_type = self._normalize_inferred_type(source_type or "")
+        struct = field_structs_by_name.get(source_type)
+        if struct is None:
+            return None
+        normalized_target = self._normalize_inferred_type(target_type)
+        candidates = [
+            method
+            for method in struct.methods
+            if method.is_conversion_operator
+            and self._normalize_inferred_type(method.return_type) == normalized_target
+        ]
+        if len(candidates) != 1:
+            return None
+        method = candidates[0]
+        if not self._conversion_operator_receiver_is_readonly(struct, method) and (
+            IDENTIFIER_RE.fullmatch(argument) is None
+        ):
+            raise MetalStructMethodError(
+                "Cannot lower a mutating conversion operator on a temporary "
+                f"'{source_type}' value.",
+                struct_name=source_type,
+                method_name=method.name,
+                requested_signature=f"{target_type}({argument})",
+                suggested_action=(
+                    "materialize the source aggregate in a named local or make "
+                    "the conversion operator receiver read-only"
+                ),
+                source_location=self._source_location_for_offsets(
+                    code, ident_start, arg_close + 1
+                ),
+                missing_capabilities=("metal.conversion-operator-temporary",),
+                reason="conversion-temporary-receiver-mutation-unsupported",
+                receiver_type=source_type,
+            )
+        return arg_close + 1, f"{method.free_name}({argument})"
 
     def _try_rewrite_call_at(
         self,
@@ -9480,6 +10585,22 @@ class MetalPreprocessor(HLSLPreprocessor):
             j += 1
         if j >= len(code):
             return None
+
+        if code[j] == "(":
+            conversion = self._try_rewrite_implicit_conversion_call(
+                code,
+                ident_start,
+                ident,
+                j,
+                buffer_element_types,
+                local_variable_types,
+                field_variable_types,
+                field_structs_by_name,
+                type_aliases,
+                local_integral_constants,
+            )
+            if conversion is not None:
+                return conversion
 
         # Qualified static call: `S::m(args)` -> `S__m(args)`. A local alias may
         # name the concrete materialized struct, so bind it to the nearest alias
@@ -15968,6 +17089,27 @@ class MetalPreprocessor(HLSLPreprocessor):
                             expr[angle_start + 1 : angle_end]
                         )
 
+        # Dereference of one explicit C-style pointer cast has the cast's
+        # pointee type: `*(thread Value*)(&bits)` -> `Value`. This is deliberately
+        # narrower than general pointer-expression inference; offsets, nested
+        # casts, and side-effecting tails remain unresolved.
+        if expr.startswith("*"):
+            cast = expr[1:].lstrip()
+            if cast.startswith("("):
+                cast_close = self._find_matching_delimiter(cast, 0, "(", ")")
+                if cast_close is not None:
+                    cast_type = cast[1:cast_close].strip()
+                    value = cast[cast_close + 1 :].strip()
+                    if cast_type.endswith("*") and value:
+                        pointee = cast_type[:-1].strip()
+                        pointee = re.sub(
+                            r"^(?:(?:const|volatile|thread|private|function)\s+)+",
+                            "",
+                            pointee,
+                        ).strip()
+                        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_:]*", pointee):
+                            return self._normalize_inferred_type(pointee)
+
         # Literal types.
         literal_type = self._infer_literal_type(expr)
         if literal_type is not None:
@@ -15992,6 +17134,23 @@ class MetalPreprocessor(HLSLPreprocessor):
         construction = self._infer_braced_construction_type(expr, structs_by_name)
         if construction is not None:
             return construction
+
+        # Parenthesized construction of a tracked struct, `T(args...)`, has type
+        # T when one balanced argument group spans the whole expression.  Keep
+        # this narrower than generic function-call inference: an untracked name,
+        # qualified tail, or second call group remains unresolved.  This admits
+        # implicit scalar conversion from a temporary such as
+        # `float(fp8_e8m0(scale))` without guessing arbitrary call return types.
+        functional_construction = re.match(
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(", expr
+        )
+        if functional_construction is not None and structs_by_name is not None:
+            type_name = functional_construction.group("name")
+            paren_start = expr.find("(", functional_construction.end("name"))
+            paren_end = self._find_matching_delimiter(expr, paren_start, "(", ")")
+            resolved_type = self._inferred_aggregate_type(type_name, structs_by_name)
+            if paren_end == len(expr) - 1 and resolved_type is not None:
+                return resolved_type
 
         # Subscript access `base[expr]` -> element type of `base`. `base` may be a
         # bare buffer/array name (`buf[i]`, `totals[i]`) OR a member-access into a
@@ -16232,6 +17391,37 @@ class MetalPreprocessor(HLSLPreprocessor):
             left_expr, buffer_element_types
         ) or self._contains_bare_pointer_operand(right_expr, buffer_element_types)
 
+    def _inferred_aggregate_type(
+        self,
+        type_name: str,
+        structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],
+    ) -> Optional[str]:
+        """Resolve one aggregate spelling without guessing across alias scopes.
+
+        Selected-entry preprocessing materializes aliases such as MLX's
+        ``complex64_t = complex_t<float>`` to a concrete struct name before
+        member-call rewriting. An ``auto`` initializer can still retain the
+        source alias spelling, however. Admit that spelling only when every
+        collected binding resolves to the same concrete retained struct; local
+        shadowing with different targets therefore remains fail-closed.
+        """
+
+        if not structs_by_name:
+            return None
+        normalized = self._normalize_inferred_type(type_name)
+        if normalized in structs_by_name:
+            return normalized
+        bindings = getattr(self, "_source_type_alias_bindings", {}).get(normalized, ())
+        targets = {
+            self._normalize_inferred_type(binding.target)
+            for binding in bindings
+            if getattr(binding, "target", None)
+        }
+        if len(targets) != 1:
+            return None
+        target = next(iter(targets))
+        return target if target in structs_by_name else None
+
     def _infer_braced_construction_type(
         self,
         expr: str,
@@ -16266,10 +17456,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         if is_template_id:
             return type_name
-        if type_name in self._METAL_SCALAR_VECTOR_TYPES or (
-            structs_by_name is not None and type_name in structs_by_name
-        ):
+        if type_name in self._METAL_SCALAR_VECTOR_TYPES:
             return self._normalize_inferred_type(type_name)
+        aggregate_type = self._inferred_aggregate_type(type_name, structs_by_name)
+        if aggregate_type is not None:
+            return aggregate_type
         return None
 
     def _infer_functor_construction_call_type(
@@ -17587,6 +18778,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             code,
             local_binding_owner_spans,
         )
+        source_type_aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+        )
+        explicit_free_specializations = (
+            self._find_explicit_template_function_specializations(code)
+        )
         constexpr_functions = self._materialization_constexpr_function_index(code)
         local_integral_constants = self._collect_local_integral_constant_bindings(
             code,
@@ -17663,6 +18861,91 @@ class MetalPreprocessor(HLSLPreprocessor):
                     callee_template=function_name,
                     requested_arguments=tuple(resolved_arguments),
                 )
+            template = templates_by_name[function_name]
+            canonical_call_arguments = (
+                self._canonicalize_template_function_arguments_at(
+                    template,
+                    resolved_arguments,
+                    source_type_aliases,
+                    span[0],
+                )
+            )
+            if canonical_call_arguments is None:
+                requested_signature = self._template_specialization_signature(
+                    function_name,
+                    resolved_arguments,
+                )
+                suggested_action = (
+                    "declare every call-site type alias before use and remove "
+                    "cyclic alias declarations"
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal function template materialization cannot determine "
+                    f"whether '{requested_signature}' has an explicit "
+                    "specialization because a call-site type alias is unresolved "
+                    "at its lexical position. Suggested action: "
+                    f"{suggested_action}.",
+                    requested_signature=requested_signature,
+                    suggested_action=suggested_action,
+                    source_location=self._source_location_for_offsets(
+                        code,
+                        span[0],
+                        span[1],
+                    ),
+                    callee_template=function_name,
+                    requested_arguments=tuple(resolved_arguments),
+                )
+
+            alias_equivalent_specialization = False
+            for specialization in explicit_free_specializations.values():
+                if specialization["name"] != function_name:
+                    continue
+                if not specialization["templateArgumentsExplicit"]:
+                    # `template <> R f(P)` and `template <> R f<>(P)` deduce
+                    # their template arguments from the concrete function type.
+                    # Only the project-level exact-signature selector has enough
+                    # type information to decide which overload owns the body.
+                    alias_equivalent_specialization = True
+                    break
+                specialization_position = int(specialization["span"][0])
+                canonical_specialization_arguments = (
+                    self._canonicalize_template_function_arguments_at(
+                        template,
+                        specialization["arguments"],
+                        source_type_aliases,
+                        specialization_position,
+                    )
+                )
+                if canonical_specialization_arguments is None:
+                    requested_signature = self._template_specialization_signature(
+                        function_name,
+                        resolved_arguments,
+                    )
+                    suggested_action = (
+                        "declare every specialization type alias before use and "
+                        "remove cyclic alias declarations"
+                    )
+                    raise MetalTemplateSpecializationError(
+                        "Metal function template materialization cannot determine "
+                        f"whether '{requested_signature}' has an explicit "
+                        "specialization because a specialization type alias is "
+                        "unresolved at its lexical position. Suggested action: "
+                        f"{suggested_action}.",
+                        requested_signature=requested_signature,
+                        suggested_action=suggested_action,
+                        source_location=specialization.get("sourceLocation"),
+                        callee_template=function_name,
+                        requested_arguments=tuple(resolved_arguments),
+                    )
+                if canonical_specialization_arguments == canonical_call_arguments:
+                    alias_equivalent_specialization = True
+                    break
+            if alias_equivalent_specialization:
+                # Leave this call for the project-level full-signature selector.
+                # Another overload may own the explicit body, in which case that
+                # selector safely materializes the chosen primary instead.
+                continue
+
             resolved_key = self._template_specialization_key(
                 function_name,
                 resolved_arguments,
@@ -19126,30 +20409,594 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not functions:
             return None
 
-        roots = {function.name for function in functions if function.is_entry}
+        roots = [function for function in functions if function.is_entry]
         if not roots:
             return None
 
         by_name: Dict[str, List[_MetalFunctionDefinition]] = {}
+        qualified_functions = [
+            function
+            for function in functions
+            if self._qualified_function_owner(
+                code[function.span[0] : function.body_span[0] - 1]
+            )
+            is not None
+        ]
+        structs = (
+            self._find_concrete_struct_definitions(code) if qualified_functions else []
+        )
+        struct_names = {struct.name for struct in structs}
+        by_owner: Dict[str, List[_MetalOutOfLineMemberDefinition]] = {}
         for function in functions:
             by_name.setdefault(function.name, []).append(function)
+        for function in qualified_functions:
+            member = self._out_of_line_member_definition(
+                code,
+                function,
+                struct_names,
+            )
+            if member is not None:
+                by_owner.setdefault(member.owner_name, []).append(member)
 
         known_names = set(by_name)
-        reachable = set(roots)
+        known_owners = set(by_owner)
+        member_type_context: Optional[_MetalReachabilityTypeContext] = None
+        reachable: Set[Tuple[int, int]] = set()
         pending = list(roots)
         while pending:
-            name = pending.pop()
-            for function in by_name.get(name, ()):
-                body_start, body_end = function.body_span
-                for referenced in self._find_function_references(
-                    code[body_start:body_end],
-                    known_names,
-                ):
-                    if referenced not in reachable:
-                        reachable.add(referenced)
-                        pending.append(referenced)
+            function = pending.pop()
+            if function.span in reachable:
+                continue
+            reachable.add(function.span)
+            body_start, body_end = function.body_span
+            for referenced in self._find_function_references(
+                code[body_start:body_end],
+                known_names,
+                known_owners,
+            ):
+                pending.extend(by_name.get(referenced, ()))
+            function_source = code[function.span[0] : function.span[1]]
+            for owner in self._find_identifier_references(
+                function_source,
+                known_owners,
+            ):
+                if member_type_context is None:
+                    member_type_context = self._reachability_type_context(
+                        code,
+                        excluded_spans,
+                        structs,
+                    )
+                candidates = by_owner.get(owner, ())
+                selected = self._reachable_out_of_line_member_functions(
+                    code,
+                    function,
+                    owner,
+                    candidates,
+                    member_type_context,
+                )
+                pending.extend(candidate.function for candidate in selected)
 
-        return [function.span for function in functions if function.name in reachable]
+        return [function.span for function in functions if function.span in reachable]
+
+    def _out_of_line_member_definition(
+        self,
+        code: str,
+        function: _MetalFunctionDefinition,
+        struct_names: Set[str],
+    ) -> Optional[_MetalOutOfLineMemberDefinition]:
+        header = code[function.span[0] : function.body_span[0] - 1]
+        owner = self._qualified_function_owner(header)
+        if owner is None:
+            return None
+        owner_name = owner.rsplit("::", 1)[-1]
+        if owner_name not in struct_names:
+            return None
+
+        parameter_span = self._function_parameter_list_span(header)
+        if parameter_span is None:
+            return None
+        operator_call = re.search(r"\boperator\s*\(\s*\)", header)
+        if operator_call is not None:
+            method_start = operator_call.start()
+        else:
+            method_match = re.search(
+                r"[A-Za-z_][A-Za-z0-9_]*\s*$",
+                header[: parameter_span[0]],
+            )
+            if method_match is None:
+                return None
+            method_start = method_match.start()
+
+        scope_end = method_start
+        while scope_end > 0 and header[scope_end - 1].isspace():
+            scope_end -= 1
+        if scope_end < 2 or header[scope_end - 2 : scope_end] != "::":
+            return None
+        owner_end = scope_end - 2
+        owner_match = re.search(
+            r"(?P<owner>[A-Za-z_][A-Za-z0-9_]*"
+            r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*$",
+            header[:owner_end],
+        )
+        if owner_match is None:
+            return None
+        parsed_owner = re.sub(r"\s*::\s*", "::", owner_match.group("owner"))
+        if parsed_owner != owner:
+            return None
+
+        dequalified_header = header[: owner_match.start("owner")] + header[scope_end:]
+        body_start = function.body_span[0] - 1
+        method_source = dequalified_header + code[body_start : function.span[1]]
+        method = self._parse_struct_method(
+            owner_name,
+            method_source,
+            0,
+            len(dequalified_header),
+        )
+        if method is None:
+            return None
+        method.span = function.span
+        return _MetalOutOfLineMemberDefinition(
+            function=function,
+            owner_name=owner_name,
+            method=method,
+        )
+
+    def _reachability_type_context(
+        self,
+        code: str,
+        excluded_spans: List[Tuple[int, int]],
+        structs: Sequence[_MetalStructDefinition],
+    ) -> _MetalReachabilityTypeContext:
+        structs_by_name = {struct.name: struct for struct in structs}
+        struct_names = set(structs_by_name)
+        scan_skip_spans = sorted(
+            set(excluded_spans + [struct.span for struct in structs])
+        )
+        struct_type_aliases = self._collect_struct_type_aliases(
+            code,
+            struct_names,
+            scan_skip_spans,
+            structs_by_name,
+        )
+        source_type_aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+            skip_spans=excluded_spans,
+        )
+        receiver_variable_types = self._collect_struct_variable_types(
+            code,
+            struct_names,
+            scan_skip_spans,
+            include_indirect=True,
+        )
+        aliased_variable_types = self._collect_aliased_struct_variable_types(
+            code,
+            struct_type_aliases,
+            scan_skip_spans,
+        )
+        for name, entries in aliased_variable_types.items():
+            existing = receiver_variable_types.setdefault(name, [])
+            existing.extend(entry for entry in entries if entry not in existing)
+            existing.sort(key=lambda item: item[0])
+
+        buffer_element_types = self._collect_buffer_element_types(
+            code,
+            scan_skip_spans,
+        )
+        local_variable_types = self._collect_local_variable_types(
+            code,
+            scan_skip_spans,
+        )
+        for name, entries in receiver_variable_types.items():
+            existing = local_variable_types.setdefault(name, [])
+            existing.extend(entry for entry in entries if entry not in existing)
+            existing.sort(key=lambda item: item[0])
+        self._collect_function_parameter_types(
+            code,
+            scan_skip_spans,
+            buffer_element_types,
+            local_variable_types,
+        )
+        self._collect_auto_local_variable_types(
+            code,
+            scan_skip_spans,
+            buffer_element_types,
+            local_variable_types,
+            structs_by_name,
+        )
+        return _MetalReachabilityTypeContext(
+            buffer_element_types=buffer_element_types,
+            local_variable_types=local_variable_types,
+            receiver_variable_types=receiver_variable_types,
+            structs_by_name=structs_by_name,
+            struct_type_aliases=struct_type_aliases,
+            source_type_aliases=source_type_aliases,
+        )
+
+    def _reachable_out_of_line_member_functions(
+        self,
+        code: str,
+        function: _MetalFunctionDefinition,
+        owner_name: str,
+        candidates: Sequence[_MetalOutOfLineMemberDefinition],
+        context: _MetalReachabilityTypeContext,
+    ) -> List[_MetalOutOfLineMemberDefinition]:
+        call_sites = self._out_of_line_member_call_sites(
+            code,
+            function,
+            owner_name,
+            context,
+        )
+        if not call_sites:
+            return []
+
+        owner = context.structs_by_name.get(owner_name)
+        selected: Dict[Tuple[int, int], _MetalOutOfLineMemberDefinition] = {}
+        for call_site in call_sites:
+            method_candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.method.name == call_site.method_name
+            ]
+            if not method_candidates:
+                continue
+            receiver_candidates = [
+                candidate
+                for candidate in method_candidates
+                if call_site.receiver_contract is None
+                or not self._receiver_candidate_mismatches(
+                    candidate.method,
+                    call_site.receiver_contract,
+                )
+            ]
+            if not receiver_candidates:
+                continue
+            argument_types = self._reachable_member_call_argument_types(
+                code,
+                call_site.argument_open,
+                context,
+            )
+            if argument_types is None:
+                for candidate in receiver_candidates:
+                    selected[candidate.function.span] = candidate
+                continue
+
+            exact_matches = [
+                candidate
+                for candidate in receiver_candidates
+                if self._concrete_method_matches_call(
+                    candidate.method,
+                    code,
+                    call_site.argument_open,
+                    context.buffer_element_types,
+                    context.local_variable_types,
+                    context.receiver_variable_types,
+                    context.structs_by_name,
+                )
+            ]
+            if len(exact_matches) > 1 and call_site.receiver_contract is not None:
+                ranked = [
+                    (
+                        self._receiver_candidate_preference_rank(
+                            candidate.method,
+                            call_site.receiver_contract,
+                        ),
+                        candidate,
+                    )
+                    for candidate in exact_matches
+                ]
+                best_rank = min(rank for rank, _candidate in ranked)
+                exact_matches = [
+                    candidate for rank, candidate in ranked if rank == best_rank
+                ]
+            if exact_matches:
+                for candidate in exact_matches:
+                    selected[candidate.function.span] = candidate
+                continue
+
+            template_fallback = owner is not None and any(
+                method.name == call_site.method_name
+                and self._callable_accepts_argument_count(
+                    method.parameters,
+                    len(argument_types),
+                )
+                for method in owner.template_methods
+            )
+            for candidate in receiver_candidates:
+                if not self._callable_accepts_argument_count(
+                    candidate.method.parameters,
+                    len(argument_types),
+                ):
+                    continue
+                if template_fallback and self._out_of_line_member_mismatch_is_proven(
+                    candidate.method,
+                    argument_types,
+                    call_site.argument_open,
+                    context,
+                ):
+                    continue
+                selected[candidate.function.span] = candidate
+
+        return list(selected.values())
+
+    def _out_of_line_member_mismatch_is_proven(
+        self,
+        method: _MetalStructMethod,
+        argument_types: Sequence[str],
+        argument_position: int,
+        context: _MetalReachabilityTypeContext,
+    ) -> bool:
+        parameters = [
+            parameter
+            for parameter in self._split_top_level_commas(method.parameters)
+            if parameter.strip()
+            and parameter.strip() != "void"
+            and "..." not in parameter
+        ]
+        if len(argument_types) > len(parameters):
+            return True
+
+        declared_types = [
+            self._function_parameter_value_type(parameter)
+            for parameter in parameters[: len(argument_types)]
+        ]
+        canonical_declared = [
+            self._canonicalize_type_aliases_at(
+                declared_type,
+                context.source_type_aliases,
+                method.span[0],
+            )
+            or declared_type
+            for declared_type in declared_types
+        ]
+        canonical_arguments = [
+            self._canonicalize_type_aliases_at(
+                argument_type,
+                context.source_type_aliases,
+                argument_position,
+            )
+            or argument_type
+            for argument_type in argument_types
+        ]
+        known_struct_types = set(context.structs_by_name)
+        known_struct_types.update(
+            struct.qualified_name
+            for struct in context.structs_by_name.values()
+            if struct.qualified_name
+        )
+
+        def is_known_value_type(type_name: str) -> bool:
+            normalized = self._normalize_inferred_type(type_name)
+            return self._is_metal_scalar_or_vector_type(normalized) or (
+                normalized in known_struct_types
+            )
+
+        if not all(
+            is_known_value_type(type_name)
+            for type_name in (*canonical_declared, *canonical_arguments)
+        ):
+            return False
+        return [
+            self._normalize_inferred_type(type_name) for type_name in canonical_declared
+        ] != [
+            self._normalize_inferred_type(type_name)
+            for type_name in canonical_arguments
+        ]
+
+    def _out_of_line_member_call_sites(
+        self,
+        code: str,
+        function: _MetalFunctionDefinition,
+        owner_name: str,
+        context: _MetalReachabilityTypeContext,
+    ) -> List[_MetalOutOfLineMemberCallSite]:
+        call_sites: Dict[
+            Tuple[str, int],
+            _MetalOutOfLineMemberCallSite,
+        ] = {}
+        body_start, body_end = function.body_span
+        cursor = body_start
+        while cursor < body_end:
+            if code[cursor] in "\"'":
+                _literal, consumed = self._read_string(code, cursor)
+                cursor += consumed
+                continue
+            if code.startswith("//", cursor):
+                line_end = code.find("\n", cursor, body_end)
+                cursor = body_end if line_end == -1 else line_end + 1
+                continue
+            if code.startswith("/*", cursor):
+                comment_end = code.find("*/", cursor + 2, body_end)
+                cursor = body_end if comment_end == -1 else comment_end + 2
+                continue
+            if not (code[cursor].isalpha() or code[cursor] == "_"):
+                cursor += 1
+                continue
+
+            ident, consumed = self._read_identifier(code, cursor)
+            ident_end = cursor + consumed
+            after = ident_end
+            while after < body_end and code[after].isspace():
+                after += 1
+
+            if ident == owner_name:
+                temporary = self._temporary_functor_call(code, after)
+                if (
+                    temporary is not None
+                    and temporary.argument_close < body_end
+                    and self._temporary_functor_is_candidate(
+                        code,
+                        cursor,
+                        temporary,
+                    )
+                ):
+                    call_sites[("operator()", temporary.argument_open)] = (
+                        _MetalOutOfLineMemberCallSite(
+                            method_name="operator()",
+                            argument_open=temporary.argument_open,
+                            receiver_contract=_MetalReceiverContract(
+                                struct_name=owner_name,
+                                value_category="rvalue",
+                                source_type=f"thread {owner_name}",
+                            ),
+                        )
+                    )
+                elif code[after : after + 2] == "::":
+                    member_start = after + 2
+                    while member_start < body_end and code[member_start].isspace():
+                        member_start += 1
+                    member, member_length = self._read_identifier(code, member_start)
+                    if member:
+                        suffix = self._member_template_call_suffix(
+                            code,
+                            member_start + member_length,
+                        )
+                        if suffix is not None and suffix[0] < body_end:
+                            call_sites[(member, suffix[0])] = (
+                                _MetalOutOfLineMemberCallSite(
+                                    method_name=member,
+                                    argument_open=suffix[0],
+                                    receiver_contract=None,
+                                )
+                            )
+
+            declaration, receiver_type = self._receiver_struct_type_at(
+                code,
+                ident,
+                cursor,
+                set(context.structs_by_name),
+                context.struct_type_aliases,
+            )
+            if receiver_type is None:
+                inferred_receiver_type = self._resolve_declared_type_at(
+                    context.local_variable_types,
+                    ident,
+                    cursor,
+                )
+                if inferred_receiver_type in context.structs_by_name:
+                    receiver_type = inferred_receiver_type
+            if receiver_type == owner_name:
+                receiver_contract = (
+                    self._receiver_contract_from_type_text(
+                        declaration.raw_type_text,
+                        owner_name,
+                    )
+                    if declaration is not None
+                    else _MetalReceiverContract(
+                        struct_name=owner_name,
+                        source_type=f"thread {owner_name}",
+                    )
+                )
+                if after < body_end and code[after] == "(":
+                    call_sites[("operator()", after)] = _MetalOutOfLineMemberCallSite(
+                        method_name="operator()",
+                        argument_open=after,
+                        receiver_contract=receiver_contract,
+                    )
+                elif after < body_end and (
+                    code[after] == "." or code[after : after + 2] == "->"
+                ):
+                    member_start = after + (2 if code[after] == "-" else 1)
+                    while member_start < body_end and code[member_start].isspace():
+                        member_start += 1
+                    member, member_length = self._read_identifier(code, member_start)
+                    if member:
+                        suffix = self._member_template_call_suffix(
+                            code,
+                            member_start + member_length,
+                        )
+                        if suffix is not None and suffix[0] < body_end:
+                            call_sites[(member, suffix[0])] = (
+                                _MetalOutOfLineMemberCallSite(
+                                    method_name=member,
+                                    argument_open=suffix[0],
+                                    receiver_contract=receiver_contract,
+                                )
+                            )
+
+            cursor = ident_end
+        return list(call_sites.values())
+
+    def _reachable_member_call_argument_types(
+        self,
+        code: str,
+        arg_open: int,
+        context: _MetalReachabilityTypeContext,
+    ) -> Optional[List[str]]:
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        arguments = [
+            argument
+            for argument in self._split_top_level_commas(code[arg_open + 1 : arg_close])
+            if argument.strip()
+        ]
+        buffer_view = self._flatten_types_at(
+            context.buffer_element_types,
+            arg_open,
+        )
+        local_view = self._flatten_types_at(
+            context.local_variable_types,
+            arg_open,
+        )
+        field_types = self._struct_field_types_at(
+            context.receiver_variable_types,
+            context.structs_by_name,
+            arg_open,
+        )
+        inferred_types: List[str] = []
+        for argument in arguments:
+            inferred = self._infer_argument_type(
+                argument,
+                buffer_view,
+                local_view,
+                field_types,
+                context.structs_by_name,
+            )
+            if inferred is None:
+                return None
+            inferred_types.append(self._normalize_inferred_type(inferred))
+        return inferred_types
+
+    def _qualified_function_owner(self, header: str) -> Optional[str]:
+        parameter_span = self._function_parameter_list_span(header)
+        if parameter_span is None:
+            return None
+        before_parameters = header[: parameter_span[0]].rstrip()
+        operator_call = re.search(
+            r"(?P<owner>[A-Za-z_][A-Za-z0-9_]*"
+            r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)"
+            r"\s*::\s*operator\s*\(\s*\)\s*$",
+            before_parameters,
+        )
+        if operator_call is not None:
+            return re.sub(r"\s+", "", operator_call.group("owner"))
+        method = re.search(
+            r"(?P<owner>[A-Za-z_][A-Za-z0-9_]*"
+            r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)"
+            r"\s*::\s*(?:~?[A-Za-z_][A-Za-z0-9_]*|operator\s*[^\s]+)\s*$",
+            before_parameters,
+        )
+        if method is None:
+            return None
+        return re.sub(r"\s+", "", method.group("owner"))
+
+    def _unreachable_function_spans(
+        self,
+        code: str,
+        excluded_spans: List[Tuple[int, int]],
+    ) -> List[Tuple[int, int]]:
+        functions = self._find_non_template_function_definitions(code, excluded_spans)
+        reachable = self._reachable_function_spans(code, excluded_spans)
+        if reachable is None:
+            return []
+        reachable_set = set(reachable)
+        return [
+            function.span
+            for function in functions
+            if function.span not in reachable_set
+        ]
 
     def _find_non_template_function_definitions(
         self,
@@ -19225,7 +21072,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         return -1
 
     def _find_function_references(
-        self, code: str, function_names: Set[str]
+        self,
+        code: str,
+        function_names: Set[str],
+        member_owner_names: Optional[Set[str]] = None,
     ) -> Set[str]:
         references: Set[str] = set()
         i = 0
@@ -19251,7 +21101,75 @@ class MetalPreprocessor(HLSLPreprocessor):
                 j = i + consumed
                 while j < len(code) and code[j].isspace():
                     j += 1
-                if ident in function_names and j < len(code) and code[j] == "(":
+                if (
+                    ident in function_names
+                    and j < len(code)
+                    and code[j] == "("
+                    and not self._function_reference_is_member_call(
+                        code,
+                        i,
+                        member_owner_names or set(),
+                    )
+                ):
+                    references.add(ident)
+                i += consumed
+                continue
+            i += 1
+        return references
+
+    def _function_reference_is_member_call(
+        self,
+        code: str,
+        identifier_start: int,
+        member_owner_names: Set[str],
+    ) -> bool:
+        previous = identifier_start - 1
+        while previous >= 0 and code[previous].isspace():
+            previous -= 1
+        if previous < 0:
+            return False
+        if code[previous] == ".":
+            return True
+        if previous >= 1 and code[previous - 1 : previous + 1] == "->":
+            return True
+        if previous < 1 or code[previous - 1 : previous + 1] != "::":
+            return False
+
+        owner_end = previous - 1
+        owner_start = owner_end
+        while owner_start > 0 and (
+            code[owner_start - 1].isalnum() or code[owner_start - 1] == "_"
+        ):
+            owner_start -= 1
+        return code[owner_start:owner_end] in member_owner_names
+
+    def _find_identifier_references(
+        self,
+        code: str,
+        identifiers: Set[str],
+    ) -> Set[str]:
+        references: Set[str] = set()
+        i = 0
+        while i < len(code):
+            if code[i] in "\"'":
+                _literal, consumed = self._read_string(code, i)
+                i += consumed
+                continue
+            if code.startswith("//", i):
+                end = code.find("\n", i)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if code.startswith("/*", i):
+                end = code.find("*/", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            if code[i].isalpha() or code[i] == "_":
+                ident, consumed = self._read_identifier(code, i)
+                if ident in identifiers:
                     references.add(ident)
                 i += consumed
                 continue
@@ -19297,6 +21215,154 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             pos = declaration_start
         return spans
+
+    def _find_explicit_template_function_specializations(self, code: str) -> Dict[
+        Tuple[str, Tuple[str, ...], Tuple[str, ...]],
+        Dict[str, object],
+    ]:
+        """Return exact global free-function specializations with concrete bodies.
+
+        Direct Metal preprocessing intentionally preserves explicit specializations
+        as source C++. Entry-scoped project translation targets template-hostile
+        backends, however, and must select the exact body once call-site inference
+        supplies all template arguments. Only unqualified declarations at global
+        scope are admitted here. Namespaced declarations and out-of-line member
+        specializations retain owner semantics that this free-function materializer
+        cannot preserve, so they remain available to their owner-aware paths.
+
+        C++ permits distinct overloaded primaries to have explicit specializations
+        with the same template arguments. The concrete parameter signature is
+        therefore part of the identity; keying only by template arguments can bind
+        a valid body to the wrong overload or reject two valid specializations.
+        """
+        specializations: Dict[
+            Tuple[str, Tuple[str, ...], Tuple[str, ...]],
+            Dict[str, object],
+        ] = {}
+        masked_code = self._mask_comments_and_literals(code)
+        scope_cursor = 0
+        scope_depth = 0
+        for match in re.finditer(r"\btemplate\s*<\s*>\s*", masked_code):
+            for character in masked_code[scope_cursor : match.start()]:
+                if character == "{":
+                    scope_depth += 1
+                elif character == "}":
+                    scope_depth = max(0, scope_depth - 1)
+            scope_cursor = match.start()
+            if scope_depth != 0:
+                continue
+
+            declaration_start = match.end()
+            body_start = self._find_next_top_level_char(
+                masked_code, declaration_start, "{"
+            )
+            semicolon = self._find_next_top_level_char(
+                masked_code, declaration_start, ";"
+            )
+            if body_start is None or (semicolon is not None and semicolon < body_start):
+                continue
+            body_end = self._find_matching_brace(code, body_start)
+            if body_end is None:
+                continue
+
+            header = masked_code[declaration_start:body_start]
+            paren_index = self._function_parameter_start(header)
+            if paren_index is None:
+                continue
+            before_params = header[:paren_index].rstrip()
+            angle_end: Optional[int] = None
+            angle_start: Optional[int] = None
+            if before_params.endswith(">"):
+                angle_end = len(before_params) - 1
+                angle_start = self._matching_open_angle(before_params, angle_end)
+            if angle_start is not None and angle_end is not None:
+                name_source = before_params[:angle_start]
+                arguments = self._split_top_level_commas(
+                    before_params[angle_start + 1 : angle_end]
+                )
+                relative_name_end = angle_end + 1
+            else:
+                # Standard C++ permits an explicit function specialization to
+                # omit its template argument list when all arguments can be
+                # deduced from the concrete function type.
+                name_source = before_params
+                arguments = []
+                relative_name_end = -1
+            name_match = re.search(
+                r"([A-Za-z_][A-Za-z0-9_:]*)\s*$",
+                name_source,
+            )
+            if name_match is None:
+                continue
+            qualified_name = re.sub(r"\s*::\s*", "::", name_match.group(1))
+            name_prefix = before_params[: name_match.start(1)].rstrip()
+            if "::" in qualified_name or name_prefix.endswith("::"):
+                continue
+            function_name = qualified_name
+            if relative_name_end < 0:
+                relative_name_end = name_match.end(1)
+            specialization_key = self._template_specialization_key(
+                function_name,
+                arguments,
+            )
+            parameter_types = tuple(self._function_parameter_type_texts(header))
+            key = (
+                specialization_key[0],
+                tuple(specialization_key[1]),
+                parameter_types,
+            )
+            source_location = self._source_location_for_offsets(
+                code,
+                match.start(),
+                body_end,
+            )
+            if key in specializations:
+                requested_signature = self._template_specialization_signature(
+                    function_name,
+                    list(specialization_key[1]),
+                )
+                concrete_signature = (
+                    f"{requested_signature}({', '.join(parameter_types)})"
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal explicit free-function template specialization is "
+                    f"defined more than once for '{concrete_signature}'",
+                    requested_signature=requested_signature,
+                    source_location=source_location,
+                    callee_template=function_name,
+                    requested_arguments=tuple(specialization_key[1]),
+                )
+
+            source = code[declaration_start:body_end]
+            relative_name_start = name_match.start(1)
+            specializations[key] = {
+                "name": function_name,
+                "arguments": tuple(specialization_key[1]),
+                "templateArgumentsExplicit": bool(arguments),
+                "parameterTypes": parameter_types,
+                "header": header,
+                "span": (match.start(), body_end),
+                "sourceLocation": source_location,
+                "source": source,
+                "nameSpan": (relative_name_start, relative_name_end),
+            }
+        return specializations
+
+    def _materialize_explicit_template_function_specialization(
+        self,
+        specialization: Dict[str, object],
+        function_identifier: str,
+    ) -> str:
+        """Render one parsed explicit specialization as a concrete function."""
+        source = str(specialization["source"])
+        name_start, name_end = specialization["nameSpan"]
+        materialized = (
+            source[: int(name_start)] + function_identifier + source[int(name_end) :]
+        )
+        if not materialized.endswith("\n"):
+            materialized += "\n"
+        self._materialized_function_names.add(function_identifier)
+        return materialized
 
     def _find_explicit_template_specialization_keys(
         self, code: str
@@ -20797,9 +22863,32 @@ class MetalPreprocessor(HLSLPreprocessor):
             return False
         if text[previous] == ".":
             return True
-        if previous >= 1 and text[previous - 1 : previous + 1] == "::":
+        if previous >= 1 and text[previous - 1 : previous + 1] in {"::", "->"}:
             return True
-        return previous >= 1 and text[previous - 1 : previous + 1] == "->"
+
+        # A dependent member-template call uses a disambiguating ``template``
+        # token between its object/scope qualifier and member name, for example
+        # ``value.template convert<T>()`` or ``pointer->template convert<T>()``.
+        # Treat the selected identifier as a member in those forms too; otherwise
+        # free-template materialization and alias replacement can claim it by
+        # basename when an unrelated free function has the same name.
+        word_end = previous + 1
+        word_start = word_end
+        while word_start > 0 and (
+            text[word_start - 1].isalnum() or text[word_start - 1] == "_"
+        ):
+            word_start -= 1
+        if text[word_start:word_end] != "template":
+            return False
+        qualifier_end = word_start
+        while qualifier_end > 0 and text[qualifier_end - 1].isspace():
+            qualifier_end -= 1
+        if qualifier_end > 0 and text[qualifier_end - 1] == ".":
+            return True
+        return qualifier_end >= 2 and text[qualifier_end - 2 : qualifier_end] in {
+            "::",
+            "->",
+        }
 
     def _find_matching_angle(self, code: str, start: int) -> Optional[int]:
         return self._find_matching_delimiter(code, start, "<", ">")

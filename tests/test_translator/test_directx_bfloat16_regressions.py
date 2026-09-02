@@ -48,9 +48,22 @@ def test_directx_bfloat16_builtin_decodes_and_preserves_return_contract():
 @pytest.mark.parametrize(
     ("source_name", "target_name"),
     [
+        ("acos", "acos"),
+        ("asin", "asin"),
+        ("atan", "atan"),
+        ("cos", "cos"),
+        ("cosh", "cosh"),
         ("exp", "exp"),
+        ("log", "log"),
         ("log10", "log10"),
+        ("log2", "log2"),
         ("rint", "round"),
+        ("rsqrt", "rsqrt"),
+        ("sin", "sin"),
+        ("sinh", "sinh"),
+        ("sqrt", "sqrt"),
+        ("tan", "tan"),
+        ("tanh", "tanh"),
     ],
 )
 def test_directx_bfloat16_transcendental_builtin_rounds_back_to_bfloat(
@@ -73,11 +86,33 @@ def test_directx_bfloat16_transcendental_builtin_rounds_back_to_bfloat(
     ) in generated
 
 
+@pytest.mark.parametrize("source_name", ["acosh", "asinh", "atanh"])
+def test_directx_bfloat16_inverse_hyperbolic_uses_float_helper_and_rounds_back(
+    source_name,
+):
+    shader = f"""
+    shader ExactBFloatInverseHyperbolic {{
+        bfloat16_t transform(bfloat16_t value) {{
+            return {source_name}(value);
+        }}
+    }}
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    decoded = "__crossgl_bfloat16_to_float(uint(value))"
+    helper_name = f"__crossgl_{source_name}_float"
+    assert f"float {helper_name}(float value)" in generated
+    assert (
+        "return __crossgl_bfloat16_from_float(float(" f"{helper_name}({decoded})));"
+    ) in generated
+
+
 def test_directx_bfloat16_unknown_builtin_still_fails_closed():
     shader = """
     shader UnknownBFloatBuiltin {
         bfloat16_t transform(bfloat16_t value) {
-            return sin(value);
+            return cospi(value);
         }
     }
     """
@@ -85,7 +120,7 @@ def test_directx_bfloat16_unknown_builtin_still_fails_closed():
     with pytest.raises(DirectXBFloat16UnsupportedError) as exc_info:
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert exc_info.value.operation == "sin"
+    assert exc_info.value.operation == "cospi"
     assert exc_info.value.reason == "unsupported-bfloat16-builtin"
 
 

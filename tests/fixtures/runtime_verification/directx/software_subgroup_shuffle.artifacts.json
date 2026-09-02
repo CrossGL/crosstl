@@ -1,0 +1,67 @@
+{
+  "kind": "crosstl-runtime-artifact-manifest",
+  "project": {
+    "root": ".",
+    "targets": [
+      "directx"
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "directx|tests/fixtures/runtime_verification/directx/software_subgroup_shuffle.cgl|logical-width-32",
+      "source": "tests/fixtures/runtime_verification/directx/software_subgroup_shuffle.cgl",
+      "path": "out/directx/software_subgroup_shuffle.hlsl",
+      "target": "directx",
+      "sourceBackend": "cgl",
+      "stage": "compute",
+      "variant": "logical-width-32",
+      "status": "translated",
+      "entryPoints": [
+        {
+          "name": "CSMain",
+          "stage": "compute",
+          "executionConfig": {
+            "numthreads": [
+              32,
+              2,
+              1
+            ],
+            "subgroupWidth": 32
+          },
+          "workgroupSize": [
+            32,
+            2,
+            1
+          ]
+        }
+      ],
+      "resourceBindings": [
+        {
+          "id": "buffer|0|output",
+          "name": "output",
+          "kind": "buffer",
+          "type": "RWStructuredBuffer<uint>",
+          "set": 0,
+          "binding": 0,
+          "access": "write"
+        }
+      ],
+      "dispatch": {
+        "status": "available",
+        "workgroups": [
+          {
+            "entryPoint": "CSMain",
+            "stage": "compute",
+            "workgroupSize": [
+              32,
+              2,
+              1
+            ],
+            "source": "fixture"
+          }
+        ],
+        "diagnostics": []
+      }
+    }
+  ]
+}

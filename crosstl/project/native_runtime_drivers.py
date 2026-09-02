@@ -3251,6 +3251,8 @@ def _directx_hlsl_element_stride(type_name: str) -> int | None:
         "int32_t": 4,
         "uint": 4,
         "uint32_t": 4,
+        "int64_t": 8,
+        "uint64_t": 8,
     }
     if type_name in scalar_sizes:
         return scalar_sizes[type_name]
@@ -4182,6 +4184,8 @@ def _scalar_block_size(
         "float32": "float",
         "int32": "int",
         "uint32": "uint",
+        "int64": "int64_t",
+        "uint64": "uint64_t",
     }[dtype]
     if vector_width != 1:
         expected_physical_type = f"{expected_physical_type}{vector_width}"
@@ -4421,21 +4425,35 @@ def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
         "float32_t": "float32",
         "uint": "uint32",
         "u32": "uint32",
+        "uint32_t": "uint32",
         "int": "int32",
         "i32": "int32",
+        "int32_t": "int32",
+        "i64": "int64",
+        "int64_t": "int64",
+        "long": "int64",
+        "u64": "uint64",
+        "uint64_t": "uint64",
+        "ulong": "uint64",
     }
     normalized = str(dtype or "").strip().lower()
     value = aliases.get(normalized, normalized)
-    if value not in {"float32", "uint32", "int32"}:
+    if value not in {"float32", "uint32", "int32", "uint64", "int64"}:
         raise RuntimeExecutorUnavailable(
-            f"{target} compute runtime supports float32, uint32, and int32 buffers, "
-            f"not {dtype!r}."
+            f"{target} compute runtime supports float32, uint32, int32, uint64, "
+            f"and int64 buffers, not {dtype!r}."
         )
     return value
 
 
 def _dtype_format(dtype: str) -> str:
-    return {"float32": "f", "uint32": "I", "int32": "i"}[dtype]
+    return {
+        "float32": "f",
+        "uint32": "I",
+        "int32": "i",
+        "uint64": "Q",
+        "int64": "q",
+    }[dtype]
 
 
 def _dtype_size(dtype: str) -> int:

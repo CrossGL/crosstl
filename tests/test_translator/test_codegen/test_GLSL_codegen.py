@@ -44,6 +44,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLBooleanCompoundAssignmentError,
     OpenGLBooleanOrderedIntrinsicError,
     OpenGLCompileTimeGlobalError,
+    OpenGLComplexArithmeticError,
     OpenGLCompoundAssignmentError,
     OpenGLCooperativeMatrixError,
     OpenGLCopySignError,
@@ -52,11 +53,14 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLForInIterableError,
     OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
+    OpenGLIsFiniteError,
     OpenGLMappedOverloadError,
     OpenGLPrivatePointerParameterError,
     OpenGLReferenceParameterError,
     OpenGLResourceMemoryQualifierError,
     OpenGLScalarConversionError,
+    OpenGLSignBitError,
+    OpenGLSoftwareSubgroupError,
     OpenGLSpecializationConstantError,
     OpenGLStoragePointerError,
     OpenGLStructConstructionError,
@@ -507,6 +511,62 @@ def test_glsl_rint_lowers_to_round_even(tmp_path):
     )
 
 
+def test_glsl_log10_lowers_through_log2_and_validates(tmp_path):
+    source = """
+    shader BaseTenLog {
+        StructuredBuffer<vec4> input_values @ binding(0);
+        RWStructuredBuffer<vec4> output_values @ binding(1);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                vec4 values = input_values[0];
+                output_values[0] = metal_u3a_u3alog10(values)
+                    + vec4(log10(values.x));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+
+    assert generated.count("log2(") == 2
+    assert "(log2(values) * 0.3010299956639812)" in generated
+    assert "(log2(values.x) * 0.3010299956639812)" in generated
+    assert "log10(" not in generated
+    assert "metal_u3a_u3alog10(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "base_ten_log",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_user_defined_log10_remains_an_ordinary_call():
+    source = """
+    shader UserBaseTenLog {
+        float log10(float value) {
+            return value + 10.0;
+        }
+
+        float apply(float value) {
+            return log10(value);
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "float log10(float value)" in generated
+    assert "return log10(value);" in generated
+    assert "0.3010299956639812" not in generated
+
+
 def test_glsl_copysign_preserves_ieee_payload_bits_and_validates(tmp_path):
     source = """
     shader ExactCopySign {
@@ -665,6 +725,115 @@ def test_glsl_user_defined_qualified_copysign_name_remains_an_ordinary_call():
     assert "return metal_u3a_u3acopysign(value, (-1.0));" in generated
     assert "0x7fffffffu" not in generated
     assert "0x80000000u" not in generated
+
+
+def test_glsl_signbit_preserves_negative_zero_and_nan_sign_and_validates(tmp_path):
+    source = """
+    shader ExactSignBit {
+        RWStructuredBuffer<uvec4> output_bits @ binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                vec4 values = asfloat(uvec4(
+                    0u, 2147483648u, 2143363909u, 4290847557u
+                ));
+                bvec4 flags4 = metal_u3a_u3asignbit(values);
+                bvec2 flags2 = signbit(values.xy);
+                bvec3 flags3 = metal_u3a_u3asignbit(values.xyz);
+                if (metal_u3a_u3asignbit(values.x)
+                    || flags2.x || flags3.x || flags4.x) {
+                    output_bits[0] = uvec4(1u);
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+
+    assert (
+        "bvec4 flags4 = notEqual((floatBitsToUint(values) & "
+        "uvec4(0x80000000u)), uvec4(0u));"
+    ) in generated
+    assert (
+        "bvec2 flags2 = notEqual((floatBitsToUint(values.xy) & "
+        "uvec2(0x80000000u)), uvec2(0u));"
+    ) in generated
+    assert (
+        "bvec3 flags3 = notEqual((floatBitsToUint(values.xyz) & "
+        "uvec3(0x80000000u)), uvec3(0u));"
+    ) in generated
+    assert "((floatBitsToUint(values.x) & 0x80000000u) != 0u)" in generated
+    assert "signbit(" not in generated
+    assert "metal_u3a_u3asignbit(" not in generated
+    assert [
+        bool(bits & 0x80000000)
+        for bits in (
+            0x00000000,
+            0x80000000,
+            0x7FC12345,
+            0xFFC12345,
+        )
+    ] == [False, True, False, True]
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "exact_signbit",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_signbit_rejects_non_float32_operand_with_metadata():
+    source = """
+    shader InvalidSignBit {
+        bool invalid(double value) {
+            return metal_u3a_u3asignbit(value);
+        }
+    }
+    """
+    ast = crosstl.translator.parse(source)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(OpenGLSignBitError) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-signbit-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.signbit-lowering",)
+    assert diagnostic.operation == "signbit"
+    assert diagnostic.operand_type == "double"
+    assert diagnostic.target_profile == "glsl-460"
+    assert diagnostic.reason == "unsupported-operand-type"
+    assert diagnostic.source_location == source_location
+
+
+def test_glsl_user_defined_qualified_signbit_remains_an_ordinary_call():
+    source = """
+    shader UserSignBit {
+        bool metal_u3a_u3asignbit(float value) {
+            return value > 0.0;
+        }
+
+        bool apply(float value) {
+            return metal_u3a_u3asignbit(value);
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "bool metal_u3a_u3asignbit(float value)" in generated
+    assert "return metal_u3a_u3asignbit(value);" in generated
+    assert "floatBitsToUint(value)" not in generated
 
 
 def test_glsl_reserved_identifiers_are_sanitized_consistently():
@@ -3439,6 +3608,132 @@ def test_opengl_statically_null_unreachable_workgroup_pointer_is_elided(tmp_path
     assert f"{helper.group(1)}();" in generated
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "statically_null_unused_workgroup_pointer"
+    )
+
+
+def test_opengl_emits_every_overloaded_resource_specialization_body(tmp_path):
+    shader = """
+    shader OverloadedStoragePointerSpecializations {
+        void writeValue(device float* values) {
+            values[0] = 1.0;
+        }
+
+        void writeValue(device float* values, float scale) {
+            values[1] = scale;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @binding(0)) {
+                writeValue(output);
+                writeValue(output, 2.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    definitions = re.findall(
+        r"\bvoid\s+(writeValue_glsl_[A-Za-z0-9_]+)\s*\([^;]*\)\s*\{",
+        generated,
+    )
+    assert len(definitions) == 2, generated
+    assert len(set(definitions)) == 2, generated
+    assert any(name.endswith("_2") for name in definitions), generated
+    for name in definitions:
+        assert len(re.findall(rf"\b{re.escape(name)}\s*\(", generated)) >= 3
+    assert "output_[values_offset] = 1.0;" in generated
+    assert "output_[(values_offset + 1)] = scale;" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "overloaded_resource_specialization_bodies",
+    )
+
+
+def test_glsl_decodes_encoded_materialized_generic_vector_constructor():
+    ast = ShaderNode(
+        "EncodedGenericVectorConstructor",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "make_pair",
+                VectorType(PrimitiveType("float"), 2),
+                [
+                    ParameterNode("x", PrimitiveType("float")),
+                    ParameterNode("y", PrimitiveType("float")),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("vec_u3cfloat_u2c2_u3e"),
+                                [IdentifierNode("x"), IdentifierNode("y")],
+                            )
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "return vec2(x, y);" in generated
+    assert "vec_u3cfloat_u2c2_u3e" not in generated
+
+
+def test_opengl_statically_null_unused_storage_pointer_can_share_specialization_with_workgroup_pointer(
+    tmp_path,
+):
+    shader = """
+    shader NullUnusedStoragePointerAlongsideWorkgroup {
+        void ignoreOptional(device float* optionalValues) {
+            if (false) {
+                optionalValues[0] = 9.0;
+            }
+        }
+
+        void maybeWrite(
+            threadgroup float* sharedValues,
+            device float* optionalValues
+        ) {
+            sharedValues[0] = 1.0;
+            ignoreOptional(optionalValues);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                maybeWrite(storage, nullptr);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "nullptr" not in generated
+    assert "optionalValues[" not in generated
+    assert re.search(
+        r"\bmain_storage\s*\[[A-Za-z_]\w*\]\s*=\s*1\.0\s*;",
+        generated,
+    ), generated
+    helper = re.search(
+        r"void\s+([A-Za-z_]\w*)\s*\(\s*int\s+[A-Za-z_]\w*\s*\)",
+        generated,
+    )
+    assert helper is not None, generated
+    assert f"{helper.group(1)}(int(0));" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "statically_null_unused_storage_with_workgroup_pointer",
     )
 
 
@@ -7589,6 +7884,40 @@ def test_glsl_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
     )
 
 
+def test_glsl_storage_pointer_reinterpret_reads_float_vectors(tmp_path):
+    code = """
+    shader StorageVectorPointerReinterpret {
+        compute {
+            @stage_entry
+            void loadVector(
+                StructuredBuffer<float> values @binding(0),
+                RWStructuredBuffer<float> output @binding(1),
+                uint base @binding(2)
+            ) {
+                float4 packed = *((float4*)(values + base));
+                buffer_store(
+                    output,
+                    0,
+                    packed.x + packed.y + packed.z + packed.w
+                );
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "vec4 packed = vec4(" in generated
+    assert generated.count("uintBitsToFloat(floatBitsToUint(values[int(") == 4
+    assert "_Args_base * 4" in generated
+    assert "* 16" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "float4*" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "storage_vector_pointer_reinterpret"
+    )
+
+
 def test_opengl_same_view_storage_pointer_cast_preserves_forwarded_offset(tmp_path):
     code = """
     shader ReinterpretedStoragePointerForwarding {
@@ -7769,6 +8098,121 @@ def test_opengl_storage_helper_specializes_direct_and_reinterpreted_views(tmp_pa
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "mixed_storage_pointer_views"
     )
+
+
+def test_glsl_metal_private_scalar_struct_view_materializes_exact_value(tmp_path):
+    metal_source = tmp_path / "private_scalar_struct_view.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct ByteView { uint8_t bits; };
+
+        inline uint consume(ByteView value) {
+            return uint(value.bits);
+        }
+
+        kernel void private_scalar_struct_view(
+            device uint* output [[buffer(0)]]) {
+            uint8_t byte = 0xff;
+            ByteView direct = *(thread ByteView*)(&byte);
+            output[0] = uint(direct.bits);
+            output[1] = consume(*(thread ByteView*)(&byte));
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "ByteView direct = ByteView((byte & 0xffu));" in generated
+    assert "consume(ByteView((byte & 0xffu)))" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "&byte" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "private_scalar_struct_view",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_type", "struct_body", "statement", "reason"),
+    [
+        pytest.param(
+            "uint8_t",
+            "uint8_t bits; uint8_t extra;",
+            "View value = *(thread View*)(&source);",
+            "unsupported-private-scalar-struct-layout",
+            id="multiple-members",
+        ),
+        pytest.param(
+            "uint8_t",
+            "uint8_t bits[1];",
+            "View value = *(thread View*)(&source);",
+            "unsupported-private-scalar-struct-layout",
+            id="array-member",
+        ),
+        pytest.param(
+            "uint16_t",
+            "uint8_t bits;",
+            "View value = *(thread View*)(&source);",
+            "private-scalar-struct-layout-mismatch",
+            id="layout-mismatch",
+        ),
+        pytest.param(
+            "uint8_t",
+            "uint8_t bits;",
+            "View value; *(thread View*)(&source) = value;",
+            "private-scalar-struct-view-write-unsupported",
+            id="write",
+        ),
+    ],
+)
+def test_glsl_metal_private_scalar_struct_view_fails_closed(
+    tmp_path,
+    source_type,
+    struct_body,
+    statement,
+    reason,
+):
+    metal_source = tmp_path / f"private_scalar_struct_{reason}.metal"
+    metal_source.write_text(
+        f"""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct View {{ {struct_body} }};
+
+        kernel void rejected_private_scalar_struct(
+            device uint* output [[buffer(0)]]) {{
+            {source_type} source = 1;
+            {statement}
+            output[0] = uint(source);
+        }}
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        crosstl.translate(
+            str(metal_source),
+            backend="opengl",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == reason
+    assert diagnostic.target_type == "View"
+    assert diagnostic.address_space == "thread"
 
 
 def test_glsl_metal_private_struct_byte_view_reads_packed_words(tmp_path):
@@ -9995,6 +10439,106 @@ def test_glsl_stage_interface_interpolation_precision_qualifiers():
     assert (
         "layout(location = 0) invariant precise noperspective sample "
         "out mediump vec4 fragColor;" in generated_code
+    )
+
+
+def test_glsl_precise_function_returns_lower_through_precise_locals(tmp_path):
+    code = """
+    shader PreciseArithmetic {
+        @precise
+        float stableProduct(float left, float right) {
+            float product @precise = left * right;
+            return product + left;
+        }
+
+        float relaxedProduct(float left, float right) {
+            float product = left * right;
+            return product + left;
+        }
+
+        compute {
+            void main() {
+                float stable = stableProduct(2.0, 3.0);
+                float relaxed = relaxedProduct(2.0, 3.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float stableProduct(float left, float right);" in generated_code
+    assert "float stableProduct(float left, float right) {" in generated_code
+    assert "precise float stableProduct" not in generated_code
+    assert "precise float product = (left * right);" in generated_code
+    assert (
+        "precise float crossglPreciseReturn = (product + left);\n"
+        "    return crossglPreciseReturn;"
+    ) in generated_code
+    assert "float relaxedProduct(float left, float right) {" in generated_code
+    assert "precise float relaxedProduct" not in generated_code
+    assert "return (product + left);" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "precise-arithmetic",
+        validate_spirv=True,
+    )
+    spirv_dis = shutil.which("spirv-dis")
+    spirv_path = tmp_path / "precise-arithmetic.spv"
+    if spirv_dis is not None and spirv_path.is_file():
+        disassembly = subprocess.run(
+            [spirv_dis, str(spirv_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert disassembly.returncode == 0, disassembly.stderr
+        assert "NoContraction" in disassembly.stdout
+
+
+def test_glsl_precise_function_multiple_returns_use_collision_safe_locals(tmp_path):
+    code = """
+    shader PreciseReturnNames {
+        @precise
+        float selectProduct(float left, float right) {
+            float crossglPreciseReturn = left;
+            if (left < 0.0) {
+                return left * right;
+            }
+            if (right < 0.0) {
+                return left + right;
+            }
+            return crossglPreciseReturn;
+        }
+
+        compute {
+            void main() {
+                float selected = selectProduct(2.0, 3.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "precise float selectProduct" not in generated_code
+    assert "float crossglPreciseReturn = left;" in generated_code
+    assert generated_code.count("precise float crossglPreciseReturn_") == 3
+    assert "precise float crossglPreciseReturn_2 = (left * right);" in generated_code
+    assert "precise float crossglPreciseReturn_3 = (left + right);" in generated_code
+    assert (
+        "precise float crossglPreciseReturn_4 = crossglPreciseReturn;" in generated_code
+    )
+    assert "return crossglPreciseReturn_2;" in generated_code
+    assert "return crossglPreciseReturn_3;" in generated_code
+    assert "return crossglPreciseReturn_4;" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "precise-return-names",
+        validate_spirv=True,
     )
 
 
@@ -13850,6 +14394,149 @@ def test_opengl_explicit_complex64_to_scalar_uses_real_component(tmp_path):
         tmp_path,
         "complex64_scalar_conversion",
     )
+
+
+def test_opengl_registered_complex64_representation_to_scalar_uses_real_component(
+    tmp_path,
+):
+    shader = """
+    shader RegisteredComplex64RepresentationConversion {
+        struct complex_t_float {
+            float real;
+            float imag;
+        };
+
+        StructuredBuffer<complex_t_float> source @ binding(0);
+
+        float projectFloat(complex_t_float value) {
+            return float(value);
+        }
+
+        int projectInt(complex_t_float value) {
+            return int(value);
+        }
+
+        uint projectUint(complex_t_float value) {
+            return uint(value);
+        }
+
+        bool projectBool(complex_t_float value) {
+            return bool(value);
+        }
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main(uint3 dispatchId @ SV_DispatchThreadID) {
+                complex_t_float value = buffer_load(source, dispatchId.x);
+                float asFloat = projectFloat(value);
+                int asInt = projectInt(value);
+                uint asUint = projectUint(value);
+                bool asBool = projectBool(value);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return (value).real;" in generated
+    assert "return int((value).real);" in generated
+    assert "return uint((value).real);" in generated
+    assert "return ((value).real != 0.0);" in generated
+    for invalid in (
+        "return float(value);",
+        "return int(value);",
+        "return uint(value);",
+        "return bool(value);",
+    ):
+        assert invalid not in generated
+    assert "complex64_t" not in generated
+    assert "crossgl_complex64_" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "registered_complex64_representation_to_scalar",
+        spirv_target="spirv1.3",
+    )
+
+
+@pytest.mark.parametrize("imag_type", ["float", "int"])
+@pytest.mark.parametrize(
+    ("body", "operator", "operand_types"),
+    [
+        ("return -left;", "-", ("complex_t_float",)),
+        (
+            "return left + right;",
+            "+",
+            ("complex_t_float", "complex_t_float"),
+        ),
+        (
+            "left += right;\n            return left;",
+            "+=",
+            ("complex_t_float", "complex_t_float"),
+        ),
+    ],
+    ids=("unary", "binary", "compound"),
+)
+def test_opengl_registered_complex64_representation_arithmetic_fails_closed(
+    imag_type,
+    body,
+    operator,
+    operand_types,
+):
+    shader = f"""
+    shader RegisteredComplex64RepresentationArithmetic {{
+        struct complex_t_float {{
+            float real;
+            {imag_type} imag;
+        }};
+
+        complex_t_float invalid(
+            complex_t_float left,
+            complex_t_float right
+        ) {{
+            {body}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLComplexArithmeticError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-complex-arithmetic-unsupported"
+    )
+    assert diagnostic.operator == operator
+    assert diagnostic.operand_types == operand_types
+    assert diagnostic.reason == ("registered-representation-arithmetic-unsupported")
+
+
+def test_opengl_registered_complex64_representation_rejects_shape_mismatch():
+    shader = """
+    shader InvalidRegisteredComplex64Representation {
+        struct complex_t_float {
+            int real;
+            float imag;
+        };
+
+        float project(complex_t_float value) {
+            return float(value);
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStructConstructionError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-struct-construction-unsupported"
+    )
+    assert diagnostic.destination_type == "complex_t_float"
+    assert diagnostic.source_type == "complex_t_float"
+    assert diagnostic.conversion_kind == "value-conversion"
+    assert diagnostic.reason == "destination-shape-mismatch"
 
 
 def test_opengl_contextual_scalar_to_complex_return_conversion(tmp_path):
@@ -20001,6 +20688,1366 @@ def test_glsl_exact_subgroup_width_rejects_invalid_contracts(stage, attribute, r
         generate_code(parse_code(tokenize_code(code)))
 
     assert raised.value.reason == reason
+
+
+def test_glsl_software_subgroup_constructor_rejects_invalid_widths():
+    for value, exception_type in (
+        (True, TypeError),
+        (32.0, TypeError),
+        ("32", TypeError),
+        (0, ValueError),
+        (16, ValueError),
+        (64, ValueError),
+    ):
+        with pytest.raises(exception_type):
+            GLSLCodeGen(software_subgroup_width=value)
+
+
+def test_glsl_software_subgroup_lowers_affine_operation_set_without_khr_subgroups(
+    tmp_path,
+):
+    code = """
+    shader GLSLSoftwareSubgroupAffineOps {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = float(gl_LocalInvocationID.x);
+                float sum = WaveActiveSum(value);
+                float minimum = WaveActiveMin(value);
+                float maximum = WaveActiveMax(value);
+                uint shuffled = WaveShuffleDown(uint(gl_LocalInvocationID.x), 1);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert generated.count("#define CROSSTL_SOFTWARE_SUBGROUP_WIDTH 32u") == 1
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert "CROSSTL_REQUIRED_SUBGROUP_WIDTH" not in generated
+    assert "gl_Subgroup" not in generated
+    assert "subgroupAdd" not in generated
+    assert "subgroupMin" not in generated
+    assert "subgroupMax" not in generated
+    assert "subgroupShuffleDown" not in generated
+    assert "shared float crossglSoftwareSubgroupScratchFloat[32];" in generated
+    assert "shared uint crossglSoftwareSubgroupScratchUint[32];" in generated
+    assert "float crossglSoftwareSubgroupSumFloat(float value)" in generated
+    assert "float crossglSoftwareSubgroupMinFloat(float value)" in generated
+    assert "float crossglSoftwareSubgroupMaxFloat(float value)" in generated
+    assert (
+        "uint crossglSoftwareSubgroupShuffleDownUint(uint value, uint delta)"
+        in generated
+    )
+    assert "for (uint stride = 16u; stride > 0u; stride >>= 1u)" in generated
+    assert "barrier();" in generated
+    assert "float sum = crossglSoftwareSubgroupSumFloat(value);" in generated
+    assert "float minimum = crossglSoftwareSubgroupMinFloat(value);" in generated
+    assert "float maximum = crossglSoftwareSubgroupMaxFloat(value);" in generated
+    assert (
+        "uint shuffled = crossglSoftwareSubgroupShuffleDownUint("
+        "uint(gl_LocalInvocationID.x), uint(1));"
+    ) in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_affine_ops",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_lowers_multiple_subgroups_and_masked_sum(
+    tmp_path,
+):
+    code = """
+    shader GLSLSoftwareMultiSubgroupSum {
+        compute {
+            layout(local_size_x = 32, local_size_y = 2, local_size_z = 1) in;
+            void main(
+                uint lane @ gl_SubgroupInvocationID,
+                uint group @ gl_SubgroupID,
+                uint groupCount @ gl_NumSubgroups) {
+                float sum = WaveActiveSum(float(lane + group));
+                if (gl_LocalInvocationIndex < 16u) {
+                    sum = WaveActiveSum(sum);
+                    if (gl_LocalInvocationID.x == 0u) {
+                        uint contract = groupCount;
+                    }
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "shared float crossglSoftwareSubgroupScratchFloat[64];" in generated
+    assert "uint invocation = gl_LocalInvocationIndex;" in generated
+    assert "uint lane = invocation % CROSSTL_SOFTWARE_SUBGROUP_WIDTH;" in generated
+    assert "uint subgroupBase = invocation - lane;" in generated
+    assert (
+        "crossglSoftwareSubgroupScratchFloat[subgroupBase + lane + stride]" in generated
+    )
+    assert "gl_LocalInvocationIndex % CROSSTL_SOFTWARE_SUBGROUP_WIDTH" in generated
+    assert "(gl_LocalInvocationIndex / CROSSTL_SOFTWARE_SUBGROUP_WIDTH)" in generated
+    assert "uint contract = 2u;" in generated
+    assert (
+        "bool crossglSoftwareSubgroupActive = (gl_LocalInvocationIndex < 16u);"
+        in generated
+    )
+    assert "float crossglSoftwareSubgroupInput = 0.0;" in generated
+    assert "crossglSoftwareSubgroupSumFloat(crossglSoftwareSubgroupInput)" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert "gl_Subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_multi_subgroup_masked_sum",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("operation", "value_type", "value_expression", "identity", "helper"),
+    [
+        (
+            "WaveActiveMin",
+            "float",
+            "float(gl_LocalInvocationID.x)",
+            "uintBitsToFloat(0x7f800000u)",
+            "crossglSoftwareSubgroupMinFloat",
+        ),
+        (
+            "WaveActiveMax",
+            "float",
+            "float(gl_LocalInvocationID.x)",
+            "uintBitsToFloat(0xff800000u)",
+            "crossglSoftwareSubgroupMaxFloat",
+        ),
+        (
+            "WaveActiveMin",
+            "int",
+            "int(gl_LocalInvocationID.x) - 7",
+            "2147483647",
+            "crossglSoftwareSubgroupMinInt",
+        ),
+        (
+            "WaveActiveMax",
+            "int",
+            "int(gl_LocalInvocationID.x) - 7",
+            "(-2147483647 - 1)",
+            "crossglSoftwareSubgroupMaxInt",
+        ),
+        (
+            "WaveActiveMin",
+            "uint",
+            "gl_LocalInvocationID.x",
+            "0xffffffffu",
+            "crossglSoftwareSubgroupMinUint",
+        ),
+        (
+            "WaveActiveMax",
+            "uint",
+            "gl_LocalInvocationID.x",
+            "0u",
+            "crossglSoftwareSubgroupMaxUint",
+        ),
+    ],
+)
+def test_glsl_software_subgroup_lowers_masked_min_max_collectives(
+    operation,
+    value_type,
+    value_expression,
+    identity,
+    helper,
+    tmp_path,
+):
+    code = f"""
+    shader GLSLSoftwareMaskedReduction {{
+        compute {{
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {value_type} value = {value_expression};
+                if (gl_LocalInvocationID.x < 16u) {{
+                    value = {operation}(value);
+                }}
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert (
+        "bool crossglSoftwareSubgroupActive = " "(gl_LocalInvocationID.x < 16u);"
+    ) in generated
+    assert f"{value_type} crossglSoftwareSubgroupInput = {identity};" in generated
+    assert f"{helper}(crossglSoftwareSubgroupInput)" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert "gl_Subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"software_masked_{operation}_{value_type}",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_lowers_subgroup_strided_masked_reduction_rounds(
+    tmp_path,
+):
+    code = """
+    shader GLSLSoftwareSubgroupStridedReduction {
+        cbuffer Params {
+            int N;
+        }
+
+        compute {
+            layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+            void main(uint group @ gl_SubgroupID) {
+                const int groupCount = 32;
+                float accumulator = 0.0;
+                for (int i = int(group); i < N; i += groupCount) {
+                    float payload = 0.0;
+                    payload += float(i);
+                    if (i < N) {
+                        float score = payload + 1.0;
+                        score = WaveActiveSum(score);
+                        payload = score;
+                    }
+                    accumulator += payload;
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "shared float crossglSoftwareSubgroupScratchFloat[1024];" in generated
+    assert "for (int crossglSoftwareSubgroupBase = 0;" in generated
+    assert "crossglSoftwareSubgroupBase += 32" in generated
+    assert "int i = (crossglSoftwareSubgroupBase + int(" in generated
+    assert "bool crossglSoftwareSubgroupLoopActive = (i < N);" in generated
+    assert "if (crossglSoftwareSubgroupLoopActive)" in generated
+    assert (
+        "bool crossglSoftwareSubgroupActive = "
+        "(crossglSoftwareSubgroupLoopActive && ((i < N)));"
+    ) in generated
+    assert "float score = (payload + 1.0);" in generated
+    assert "crossglSoftwareSubgroupSumFloat(crossglSoftwareSubgroupInput)" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert "gl_Subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_strided_masked_reduction",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("initializer", "stride", "prefix", "tail"),
+    [
+        ("int(group)", "31", "float payload = 0.0;", ""),
+        ("int(lane)", "32", "float payload = 0.0;", ""),
+        ("int(group)", "32", "float payload = float(i);", ""),
+        ("int(group)", "32", "float payload = 0.0; i += 1;", ""),
+        ("int(group)", "32", "float payload = 0.0; N = 0;", ""),
+        (
+            "int(group)",
+            "32",
+            "float payload = 0.0;",
+            "payload = WaveActiveSum(payload);",
+        ),
+    ],
+)
+def test_glsl_software_subgroup_rejects_unproven_subgroup_strided_loops(
+    initializer,
+    stride,
+    prefix,
+    tail,
+):
+    code = f"""
+    shader GLSLSoftwareSubgroupStridedInvalid {{
+        cbuffer Params {{
+            int N;
+        }}
+
+        compute {{
+            layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+            void main(
+                uint group @ gl_SubgroupID,
+                uint lane @ gl_SubgroupInvocationID) {{
+                for (int i = {initializer}; i < N; i += {stride}) {{
+                    {prefix}
+                    if (i < N) {{
+                        float score = payload + 1.0;
+                        score = WaveActiveSum(score);
+                        payload = score;
+                        {tail}
+                    }}
+                }}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveSum"
+
+
+def test_glsl_software_subgroup_rejects_strided_masked_resource_declaration_hoist():
+    code = """
+    shader GLSLSoftwareSubgroupStridedUnsafeResourceRead {
+        cbuffer Params {
+            int N;
+        }
+        StructuredBuffer<float> values;
+
+        compute {
+            layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+            void main(uint group @ gl_SubgroupID) {
+                for (int i = int(group); i < N; i += 32) {
+                    if (i < N) {
+                        float score = values[i];
+                        score = WaveActiveSum(score);
+                    }
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveSum"
+
+
+def test_glsl_software_subgroup_rejects_masked_shuffle():
+    code = """
+    shader GLSLSoftwareMaskedShuffle {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint value = gl_LocalInvocationID.x;
+                if (gl_LocalInvocationID.x < 16u) {
+                    value = WaveShuffleDown(value, 1u);
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveShuffleDown"
+
+
+@pytest.mark.parametrize(
+    "conditional",
+    [
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            float local = value;
+            value = WaveActiveSum(local);
+        }
+        """,
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            value += WaveActiveSum(value);
+        }
+        """,
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            float reduced = WaveActiveSum(value);
+        }
+        """,
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            value = WaveActiveSum(value);
+        } else {
+            value = 0.0;
+        }
+        """,
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            value = WaveActiveSum(value);
+            return;
+        }
+        """,
+        """
+        if (gl_LocalInvocationIndex < 16u) {
+            values[index++] = WaveActiveSum(value);
+        }
+        """,
+    ],
+)
+def test_glsl_software_subgroup_rejects_unproven_masked_sum_shapes(conditional):
+    code = f"""
+    shader GLSLSoftwareMaskedSumInvalid {{
+        compute {{
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                float value = float(gl_LocalInvocationIndex);
+                float values[64];
+                uint index = 0u;
+                {conditional}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveSum"
+
+
+def test_glsl_software_subgroup_rejects_masked_sum_target_type_mismatch():
+    code = """
+    shader GLSLSoftwareMaskedSumTypeMismatch {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = float(gl_LocalInvocationIndex);
+                int result = 0;
+                if (gl_LocalInvocationIndex < 16u) {
+                    result = WaveActiveSum(value);
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "value-type-unsupported"
+    assert raised.value.operation == "WaveActiveSum"
+
+
+def test_glsl_software_subgroup_generated_names_are_collision_safe(tmp_path):
+    code = """
+    shader GLSLSoftwareSubgroupNameCollision {
+        const float crossglSoftwareSubgroupScratchFloat = 0.0;
+
+        float crossglSoftwareSubgroupMinFloat(float value) {
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = float(gl_LocalInvocationID.x);
+                float minimum = WaveActiveMin(value);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "shared float crossglSoftwareSubgroupScratchFloat_2[32];" in generated
+    assert "float crossglSoftwareSubgroupMinFloat_2(float value)" in generated
+    assert "float minimum = crossglSoftwareSubgroupMinFloat_2(value);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_name_collision",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "local_size", "attribute", "reason"),
+    [
+        (
+            "float value = WaveActiveMin(1.0);",
+            (16, 1, 1),
+            "",
+            "workgroup-size-mismatch",
+        ),
+        (
+            "float value = WaveActiveMin(1.0);",
+            (48, 1, 1),
+            "",
+            "workgroup-size-mismatch",
+        ),
+        (
+            "float value = WaveActiveMin(1.0);",
+            (32, 0, 1),
+            "",
+            "workgroup-size-mismatch",
+        ),
+        (
+            "float value = WaveActiveMin(1.0);",
+            (1024, 2, 1),
+            "",
+            "workgroup-size-mismatch",
+        ),
+        (
+            "float value = WaveActiveMin(1.0);",
+            (32, 1, 1),
+            " @ WaveSize(32)",
+            "hardware-contract-conflict",
+        ),
+        (
+            "uint value = gl_LocalInvocationID.x;",
+            (32, 1, 1),
+            "",
+            "operation-set-empty",
+        ),
+        (
+            "uint value = WaveActiveProduct(gl_LocalInvocationID.x);",
+            (32, 1, 1),
+            "",
+            "operation-unsupported",
+        ),
+    ],
+)
+def test_glsl_software_subgroup_rejects_invalid_execution_contracts(
+    body, local_size, attribute, reason
+):
+    x, y, z = local_size
+    code = f"""
+    shader GLSLInvalidSoftwareSubgroup {{
+        compute {{
+            layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;
+            void main(){attribute} {{
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == reason
+    assert raised.value.software_subgroup_width == 32
+
+
+def test_glsl_software_subgroup_rejects_multiple_or_non_compute_entries():
+    multiple_compute = """
+    shader GLSLMultipleSoftwareSubgroupEntries {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void first() { float value = WaveActiveMin(1.0); }
+        }
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void second() { float value = WaveActiveMax(1.0); }
+        }
+    }
+    """
+    mixed_stages = """
+    shader GLSLMixedSoftwareSubgroupEntries {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() { float value = WaveActiveMin(1.0); }
+        }
+        fragment {
+            vec4 main() @ SV_Target { return vec4(1.0); }
+        }
+    }
+    """
+
+    for code in (multiple_compute, mixed_stages):
+        with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+            GLSLCodeGen(software_subgroup_width=32).generate(
+                parse_code(tokenize_code(code))
+            )
+        assert raised.value.reason == "entry-point-contract-invalid"
+
+
+@pytest.mark.parametrize(
+    ("declaration", "operation", "reason"),
+    [
+        (
+            "vec2 result = WaveActiveMin(vec2(1.0));",
+            "WaveActiveMin",
+            "value-type-unsupported",
+        ),
+        (
+            "double source = double(1.0); double result = WaveActiveMax(source);",
+            "WaveActiveMax",
+            "value-type-unsupported",
+        ),
+        (
+            "bool result = WaveShuffleDown(true, 1);",
+            "WaveShuffleDown",
+            "value-type-unsupported",
+        ),
+    ],
+)
+def test_glsl_software_subgroup_rejects_unsupported_payload_types(
+    declaration, operation, reason
+):
+    code = f"""
+    shader GLSLSoftwareSubgroupInvalidType {{
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{ {declaration} }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == reason
+    assert raised.value.operation == operation
+
+
+def test_glsl_software_subgroup_accepts_uniform_top_level_helper_calls(tmp_path):
+    code = """
+    shader GLSLSoftwareSubgroupHelperCall {
+        float reduceValue(float value) {
+            return WaveActiveMin(value);
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = reduceValue(float(gl_LocalInvocationID.x));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "float crossglSoftwareSubgroupMinFloat(float value)" in generated
+    assert "return crossglSoftwareSubgroupMinFloat(value);" in generated
+    assert "float value = reduceValue(float(gl_LocalInvocationID.x));" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_uniform_helper",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        pytest.param("offset > 0u", id="positive"),
+        pytest.param("offset >= 1u", id="at-least-one"),
+    ],
+)
+@pytest.mark.parametrize(
+    "update",
+    [pytest.param("/= 2u", id="divide"), pytest.param(">>= 1u", id="shift")],
+)
+def test_glsl_software_subgroup_accepts_helper_calls_in_uniform_halving_loop(
+    condition,
+    update,
+    tmp_path,
+):
+    code = f"""
+    shader GLSLSoftwareSubgroupUniformHalvingHelper {{
+        float shuffleValue(float value, uint offset) {{
+            return WaveShuffleDown(value, offset);
+        }}
+
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                float value = float(gl_LocalInvocationID.x);
+                uint width = 32u;
+                for (
+                    uint offset = width / 2u;
+                    {condition};
+                    offset {update}
+                ) {{
+                    float neighbor = shuffleValue(value, offset);
+                    value += neighbor;
+                }}
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert (
+        "return crossglSoftwareSubgroupShuffleDownFloat(value, uint(offset));"
+        in generated
+    )
+    assert "float neighbor = shuffleValue(value, offset);" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_uniform_halving_helper_"
+        + ("positive" if condition.endswith("0u") else "at_least_one")
+        + "_"
+        + ("divide" if update.startswith("/") else "shift"),
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("initial", "condition", "update", "loop_body", "reason"),
+    [
+        (
+            "gl_LocalInvocationID.x / 2u",
+            "offset > 0u",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > gl_LocalInvocationID.x",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 1u",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset /= 1u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset >>= 0u",
+            "float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset /= 2u",
+            "offset--; float neighbor = shuffleValue(value, offset);",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset); break;",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset /= 2u",
+            "float neighbor = shuffleValue(value, offset); return;",
+            "potentially-divergent-control-flow",
+        ),
+        (
+            "width / 2u",
+            "offset > 0u",
+            "offset /= 2u",
+            "float neighbor = 1.0 + shuffleValue(value, offset);",
+            "helper-call-not-uniform",
+        ),
+    ],
+)
+def test_glsl_software_subgroup_halving_helper_loop_fails_closed(
+    initial,
+    condition,
+    update,
+    loop_body,
+    reason,
+):
+    code = f"""
+    shader GLSLSoftwareSubgroupUnsafeHalvingHelper {{
+        float shuffleValue(float value, uint offset) {{
+            return WaveShuffleDown(value, offset);
+        }}
+
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                float value = float(gl_LocalInvocationID.x);
+                uint width = 32u;
+                for (uint offset = {initial}; {condition}; {update}) {{
+                    {loop_body}
+                    value += 1.0;
+                }}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason in {reason, "helper-call-not-uniform"}
+    assert raised.value.operation == "WaveShuffleDown"
+
+
+@pytest.mark.parametrize(
+    "entry_body",
+    [
+        """
+        float value = 0.0;
+        if (gl_LocalInvocationID.x == 0u) {
+            value = reduceValue(float(gl_LocalInvocationID.x));
+        }
+        """,
+        """
+        float value = 1.0 + reduceValue(float(gl_LocalInvocationID.x));
+        """,
+    ],
+)
+def test_glsl_software_subgroup_rejects_non_top_level_helper_calls(entry_body):
+    code = f"""
+    shader GLSLSoftwareSubgroupUnsafeHelperCall {{
+        float reduceValue(float value) {{
+            return WaveActiveMin(value);
+        }}
+
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {entry_body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "helper-call-not-uniform"
+    assert raised.value.operation == "WaveActiveMin"
+
+
+def test_glsl_software_subgroup_rejects_indirect_helper_calls():
+    code = """
+    shader GLSLSoftwareSubgroupIndirectHelperCall {
+        float reduceValue(float value) {
+            return WaveActiveMin(value);
+        }
+
+        float callReduce(float value) {
+            return reduceValue(value);
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = callReduce(float(gl_LocalInvocationID.x));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "helper-call-not-uniform"
+    assert raised.value.operation == "WaveActiveMin"
+
+
+def test_glsl_software_subgroup_rejects_overloaded_helper_identity():
+    code = """
+    shader GLSLSoftwareSubgroupOverloadedHelper {
+        float reduceValue(float value) {
+            return WaveActiveMin(value);
+        }
+
+        int reduceValue(int value) {
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = reduceValue(float(gl_LocalInvocationID.x));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "helper-identity-ambiguous"
+    assert raised.value.operation == "WaveActiveMin"
+
+
+def test_glsl_software_subgroup_rejects_divergent_flow_inside_approved_helper():
+    code = """
+    shader GLSLSoftwareSubgroupDivergentHelper {
+        float reduceValue(float value) {
+            if (value > 0.0) {
+                return WaveActiveMin(value);
+            }
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float value = reduceValue(float(gl_LocalInvocationID.x));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveMin"
+
+
+def _glsl_workgroup_specialization_key(lower: int, upper: int):
+    return (
+        "threadgroup_sum_1",
+        ("float", "threadgroup float*", "ushort"),
+        (
+            (0, "workgroup-pointer", "local_buffer", "float", 32),
+            (
+                "workgroup-proof-intervals",
+                (("simd_group_id", (lower, upper)),),
+            ),
+        ),
+    )
+
+
+def test_glsl_workgroup_specialization_reuses_broader_proof(monkeypatch):
+    generator = GLSLCodeGen(software_subgroup_width=32)
+    requested_key = _glsl_workgroup_specialization_key(0, 0)
+    broader_key = _glsl_workgroup_specialization_key(0, 31)
+    specialization = object()
+    generator.glsl_resource_function_specializations = {broader_key: specialization}
+    monkeypatch.setattr(
+        generator,
+        "glsl_resource_function_specialization_key",
+        lambda *_args, **_kwargs: (requested_key, {}),
+    )
+
+    assert (
+        generator.glsl_resource_function_call_specialization("threadgroup_sum_1", [])
+        is specialization
+    )
+
+
+def test_glsl_workgroup_specialization_rejects_narrower_proof(monkeypatch):
+    generator = GLSLCodeGen(software_subgroup_width=32)
+    requested_key = _glsl_workgroup_specialization_key(0, 31)
+    narrower_key = _glsl_workgroup_specialization_key(0, 0)
+    generator.glsl_resource_function_specializations = {narrower_key: object()}
+    monkeypatch.setattr(
+        generator,
+        "glsl_resource_function_specialization_key",
+        lambda *_args, **_kwargs: (requested_key, {}),
+    )
+
+    assert (
+        generator.glsl_resource_function_call_specialization("threadgroup_sum_1", [])
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        """
+        if ((gl_LocalInvocationID.x & 1u) != 0u) {
+            float result = WaveActiveMin(1.0);
+        }
+        """,
+        """
+        while (gl_LocalInvocationID.x < 4u) {
+            uint result = WaveShuffleDown(gl_LocalInvocationID.x, 1);
+            break;
+        }
+        """,
+        """
+        float result = ((gl_LocalInvocationID.x & 1u) != 0u)
+            ? WaveActiveMin(1.0) : 0.0;
+        """,
+        """
+        for (uint i = 0u; i < gl_LocalInvocationID.x; i++) {
+            uint result = WaveShuffleDown(gl_LocalInvocationID.x, 1);
+        }
+        """,
+        """
+        do {
+            float result = WaveActiveMin(1.0);
+        } while (gl_LocalInvocationID.x != 0u);
+        """,
+        """
+        loop {
+            uint result = WaveShuffleDown(gl_LocalInvocationID.x, 1);
+        }
+        """,
+        """
+        for delta in 2 {
+            uint result = WaveShuffleDown(gl_LocalInvocationID.x, delta);
+        }
+        """,
+        """
+        switch (gl_LocalInvocationID.x) {
+            case 0:
+                float result = WaveActiveMin(1.0);
+                break;
+            default:
+                break;
+        }
+        """,
+        """
+        match gl_LocalInvocationID.x {
+            0 => { float result = WaveActiveMin(1.0); }
+            _ => {}
+        }
+        """,
+        """
+        bool result = ((gl_LocalInvocationID.x & 1u) != 0u)
+            && (WaveActiveMin(1.0) > 0.0);
+        """,
+    ],
+)
+def test_glsl_software_subgroup_rejects_potentially_divergent_calls(statement):
+    code = f"""
+    shader GLSLSoftwareSubgroupDivergence {{
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation in {
+        "WaveActiveMin",
+        "WaveShuffleDown",
+    }
+
+
+def test_glsl_software_subgroup_accepts_local_const_bool_static_if(tmp_path):
+    code = """
+    shader GLSLSoftwareSubgroupLocalConstBool {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                const bool useScale = (32 == 32);
+                float value = float(gl_LocalInvocationID.x);
+                if (useScale) {
+                    value = WaveActiveMax(value);
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "const bool useScale = (32 == 32);" in generated
+    assert "if (useScale)" not in generated
+    assert "value = crossglSoftwareSubgroupMaxFloat(value);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_local_const_bool_static_if",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_accepts_static_if_and_uniform_constant_loop(
+    tmp_path,
+):
+    code = """
+    shader GLSLSoftwareSubgroupUniformFlow {
+        const int ITERATIONS = 2;
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint value = gl_LocalInvocationID.x;
+                if (ITERATIONS > 1) {
+                    for (int delta = 1; delta <= ITERATIONS; delta++) {
+                        value = WaveShuffleDown(value, delta);
+                    }
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "if ((ITERATIONS > 1))" not in generated
+    assert "for (int delta = 1; (delta <= ITERATIONS); (delta++))" in generated
+    assert "crossglSoftwareSubgroupShuffleDownUint(value, uint(delta))" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_uniform_flow",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_accepts_workgroup_uniform_runtime_loop(
+    tmp_path,
+):
+    code = """
+    shader GLSLSoftwareSubgroupWorkgroupUniformLoop {
+        cbuffer Dispatch @binding(0) {
+            uint nRows;
+            uint rowsPerGroup;
+        };
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main(uint3 group @ gl_WorkGroupID) {
+                uint rowEnd = group.x * rowsPerGroup + rowsPerGroup;
+                if (rowEnd > nRows) {
+                    rowEnd = nRows;
+                }
+                for (
+                    uint row = group.x * rowsPerGroup;
+                    row < rowEnd;
+                    row++
+                ) {
+                    float value = WaveActiveSum(
+                        float(row + gl_LocalInvocationID.x)
+                    );
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "if ((rowEnd > nRows))" in generated
+    assert (
+        "for (uint row = (gl_WorkGroupID.x * rowsPerGroup); " "(row < rowEnd); (row++))"
+    ) in generated
+    assert "crossglSoftwareSubgroupSumFloat(" in generated
+    assert "GL_KHR_shader_subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_workgroup_uniform_runtime_loop",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("loop_setup", "loop_initial", "loop_bound", "loop_body_prefix"),
+    [
+        (
+            """
+            uint rowEnd = nRows;
+            if (gl_LocalInvocationID.x == 0u) {
+                rowEnd = 0u;
+            }
+            """,
+            "0u",
+            "rowEnd",
+            "",
+        ),
+        ("uint rowEnd = nRows;", "0u", "rowEnd", "rowEnd--;"),
+        (
+            "uint rowEnd = nRows;",
+            "gl_LocalInvocationID.x",
+            "rowEnd",
+            "",
+        ),
+        (
+            "uint rowEnd = nRows;",
+            "0u",
+            "gl_LocalInvocationID.x",
+            "",
+        ),
+        ("uint rowEnd = nRows;", "0u", "rowEnd", "break;"),
+        ("uint rowEnd = nRows;", "0u", "rowEnd", "continue;"),
+        ("uint rowEnd = nRows;", "0u", "rowEnd", "return;"),
+    ],
+)
+def test_glsl_software_subgroup_runtime_loop_proof_fails_closed(
+    loop_setup,
+    loop_initial,
+    loop_bound,
+    loop_body_prefix,
+):
+    code = f"""
+    shader GLSLSoftwareSubgroupUnsafeRuntimeLoop {{
+        cbuffer Dispatch @binding(0) {{
+            uint nRows;
+        }};
+
+        compute {{
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {loop_setup}
+                for (uint row = {loop_initial}; row < {loop_bound}; row++) {{
+                    {loop_body_prefix}
+                    float value = WaveActiveSum(float(gl_LocalInvocationID.x));
+                }}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "potentially-divergent-control-flow"
+    assert raised.value.operation == "WaveActiveSum"
+
+
+def test_glsl_software_subgroup_lowers_one_subgroup_builtin_semantics(tmp_path):
+    code = """
+    shader GLSLSoftwareSubgroupBuiltinSemantics {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main(
+                uint lane @ gl_SubgroupInvocationID,
+                uint group @ gl_SubgroupID,
+                uint width @ gl_SubgroupSize,
+                uint groupCount @ gl_NumSubgroups) {
+                if (group == 0) {
+                    float value = WaveActiveSum(float(lane));
+                    uint contract = width + groupCount;
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "if ((group == 0))" not in generated
+    assert "float value = crossglSoftwareSubgroupSumFloat(" in generated
+    assert "float(gl_LocalInvocationIndex)" in generated
+    assert "uint contract = (CROSSTL_SOFTWARE_SUBGROUP_WIDTH + 1u);" in generated
+    assert "gl_Subgroup" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "software_subgroup_builtin_semantics",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_software_subgroup_rejects_raw_subgroup_builtins():
+    code = """
+    shader GLSLSoftwareSubgroupRawBuiltin {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint lane = gl_SubgroupInvocationID;
+                float value = WaveActiveMin(float(lane));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        GLSLCodeGen(software_subgroup_width=32).generate(
+            parse_code(tokenize_code(code))
+        )
+
+    assert raised.value.reason == "subgroup-builtin-unsupported"
+
+
+def test_glsl_default_hardware_subgroup_path_is_unchanged():
+    code = """
+    shader GLSLDefaultHardwareSubgroup {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() @ WaveSize(32) {
+                float minimum = WaveActiveMin(float(gl_LocalInvocationID.x));
+                uint shuffled = WaveShuffleDown(gl_LocalInvocationID.x, 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = GLSLCodeGen().generate(ast)
+
+    assert "#define CROSSTL_REQUIRED_SUBGROUP_WIDTH 32u" in generated
+    assert "#define CROSSTL_SOFTWARE_SUBGROUP_WIDTH" not in generated
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_shuffle_relative : require" in generated
+    assert "subgroupMin(float(gl_LocalInvocationID.x))" in generated
+    assert "subgroupShuffleDown(gl_LocalInvocationID.x, 1)" in generated
 
 
 def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
@@ -34016,6 +36063,98 @@ def test_opengl_int64_upgrades_legacy_desktop_profile_to_extension_minimum():
     assert "uint64_t increment(uint64_t value)" in generated_code
 
 
+def test_opengl_widened_float16_as_type_preserves_binary16_payloads(tmp_path):
+    shader = """
+    shader WidenedFloat16Bitcasts {
+        float decodeUnsigned(uint16_t bits) {
+            return as_type<float16_t>(bits);
+        }
+
+        float decodeSigned(int16_t bits) {
+            return as_type<half>(bits);
+        }
+
+        uint16_t encodeUnsigned(float16_t value) {
+            return as_type<uint16_t>(value);
+        }
+
+        int16_t encodeSigned(half value) {
+            return as_type<int16_t>(value);
+        }
+
+        half2 decodePair(uint bits) {
+            return as_type<half2>(bits);
+        }
+
+        uint encodePair(half2 value) {
+            return as_type<uint>(value);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return unpackHalf2x16((bits & 0xffffu)).x;" in generated_code
+    assert "return unpackHalf2x16((uint(bits) & 0xffffu)).x;" in generated_code
+    assert "packHalf2x16(vec2(value, 0.0))" in generated_code
+    assert "return unpackHalf2x16(bits);" in generated_code
+    assert "return packHalf2x16(value);" in generated_code
+    assert "uintBitsToFloat(bits)" not in generated_code
+    assert "floatBitsToUint(value)" not in generated_code
+    assert "float16_t" not in generated_code
+    assert "half " not in generated_code
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        return
+    source_path = tmp_path / "widened_float16.comp"
+    output_path = tmp_path / "widened_float16.spv"
+    source_path.write_text(generated_code, encoding="utf-8")
+    result = subprocess.run(
+        [
+            glslang,
+            "-G",
+            "-S",
+            "comp",
+            str(source_path),
+            "-o",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    diagnostics = "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+    assert result.returncode == 0, diagnostics
+    assert output_path.is_file()
+
+
+def test_opengl_widened_float16_as_type_rejects_non_16_bit_scalar_payload():
+    shader = """
+    shader InvalidWidenedFloat16Bitcast {
+        float decode(uint bits) {
+            return as_type<float16_t>(bits);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL as_type<float16_t> cannot bitcast from uint: binary16 "
+            "requires one exact 16-bit integer payload"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_opengl_bfloat16_asuint_alias_lowers_to_uint_payload():
     shader = """
     shader BFloat16BitcastAlias {
@@ -39475,3 +41614,101 @@ def test_opengl_boolean_min_max_reports_unrepresentable_operand_shapes():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_glsl_isfinite_uses_exact_exponent_mask_and_evaluates_once(tmp_path):
+    source = """
+    shader ExactIsFinite {
+        RWStructuredBuffer<uvec4> output_bits @ binding(0);
+
+        float next_value(float value) {
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                vec4 values = asfloat(uvec4(
+                    0u, 2139095040u, 2143289345u, 2147483648u
+                ));
+                bvec4 finite = metal_u3a_u3aisfinite(values);
+                bool scalar = isfinite(next_value(values.x));
+                if (scalar && finite.x && !finite.y && !finite.z && finite.w) {
+                    output_bits[0] = uvec4(1u);
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+
+    assert (
+        "bvec4 finite = notEqual((floatBitsToUint(values) & "
+        "uvec4(0x7f800000u)), uvec4(0x7f800000u));"
+    ) in generated
+    assert (
+        "bool scalar = ((floatBitsToUint(next_value(values.x)) & "
+        "0x7f800000u) != 0x7f800000u);"
+    ) in generated
+    assert generated.count("next_value(values.x)") == 1
+    assert "isfinite(" not in generated
+    assert "metal_u3a_u3aisfinite(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "exact_isfinite",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_isfinite_rejects_non_float32_operand_with_metadata():
+    source = """
+    shader InvalidIsFinite {
+        bool invalid(double value) {
+            return isfinite(value);
+        }
+    }
+    """
+    ast = crosstl.translator.parse(source)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(OpenGLIsFiniteError) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-isfinite-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.isfinite-lowering",)
+    assert diagnostic.operation == "isfinite"
+    assert diagnostic.operand_type == "double"
+    assert diagnostic.target_profile == "glsl-460"
+    assert diagnostic.reason == "unsupported-operand-type"
+    assert diagnostic.source_location == source_location
+
+
+def test_glsl_user_defined_qualified_isfinite_remains_an_ordinary_call():
+    source = """
+    shader UserIsFinite {
+        bool metal_u3a_u3aisfinite(float value) {
+            return value > 0.0;
+        }
+
+        bool apply(float value) {
+            return metal_u3a_u3aisfinite(value);
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "bool metal_u3a_u3aisfinite(float value)" in generated
+    assert "return metal_u3a_u3aisfinite(value);" in generated
+    assert "0x7f800000u" not in generated

@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 451,
+        "unsupported_marker_count": 464,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1388
+        "test_count": 1425
       },
       "translator_codegen": {
         "exists": true,
@@ -152,7 +152,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 289,
+        "unsupported_marker_count": 308,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -248,7 +248,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1534
+        "test_count": 1586
       },
       "translator_codegen": {
         "exists": true,
@@ -526,7 +526,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 565,
+        "unsupported_marker_count": 575,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -619,7 +619,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1673
+        "test_count": 1740
       },
       "translator_codegen": {
         "exists": true,
@@ -6246,9 +6246,17 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_shuffle_and_fill_up_lowers_scalar_vector_and_bool",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_match_and_multiprefix_forms_lower_to_helpers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_lowers_affine_operation_set_without_khr_subgroups",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_lowers_multiple_subgroups_and_masked_sum",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_lowers_masked_min_max_collectives",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_rejects_masked_shuffle",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_accepts_helper_calls_in_uniform_halving_loop",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_software_subgroup_halving_helper_loop_fails_closed",
+            "tests/test_translator/test_mlx_gemv_native_loader.py::def test_current_mlx_gemv_executes_with_opengl_software_subgroups",
+            "tests/test_translator/test_mlx_softmax_native_loader.py::def test_pinned_mlx_softmax_translates_to_software_subgroup_opengl",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang"
           ],
-          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, shuffle-and-fill, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations, deterministic arity/type diagnostics, and glslang validation coverage.",
+          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, shuffle-and-fill, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations, deterministic arity/type diagnostics, and glslang validation coverage. Explicit width-32 software mode additionally lowers supported scalar sum, minimum, maximum, and shuffle-down operations across bounded one- or multi-subgroup workgroups with subgroup-partitioned shared scratch, uniform barriers, canonical workgroup-uniform positive-to-zero halving loops using value > 0 or the integral-equivalent value >= 1, and a narrow typed-identity-masked divergent sum, minimum, and maximum contract; wider halving bounds, conditional shuffle, and ambiguous masked control flow fail closed.",
           "status": "supported"
         },
         "rust": {

@@ -453,7 +453,7 @@ source entries by adding a repository-relative selector table to
    [project]
    include = ["kernels/arange.metal"]
    include_dirs = ["."]
-   targets = ["directx", "opengl"]
+   targets = ["directx", "metal", "opengl"]
    output_dir = "crosstl-out"
 
    [project.entry_points]
@@ -472,10 +472,17 @@ and execution contract. Explicit registers and spaces remain unchanged, while
 runtime-loader metadata records the selected ``cs_6_0`` entry profile.
 
 For OpenGL compute output, the same selection produces one ``.glsl`` artifact
-per entry with target entry ``main``. For both targets, the portability report
-records every source entry, target entry, and reflected stage; embedded
-validation records carry the same identities. Runtime artifact manifests then
-reflect only the selected stage interface from each standalone output.
+per entry with target entry ``main``. For Metal compute output, it produces one
+``.metal`` artifact per entry and retains only the selected kernel, reachable
+helpers, referenced declarations, and recursively referenced struct families.
+The emitted Metal entry name is recorded exactly rather than normalized to a
+fixed ``main``. Runtime manifests reflect the standalone Metal source and keep
+``buffer``, ``texture``, and ``sampler`` index spaces independent.
+
+For all three targets, the portability report records every source entry,
+target entry, and reflected stage; embedded validation records carry the same
+identities. Runtime artifact manifests then reflect only the selected stage
+interface from each standalone output.
 
 Selection is exact after source materialization. Missing or ambiguous entries
 fail with structured diagnostics and no target file. Targets that do not yet
@@ -486,6 +493,344 @@ translation keeps the existing aggregate output path and behavior.
 Entry selection scopes shader or kernel translation; it does not infer host
 dispatch dimensions, runtime bindings, or backend integration. Record those
 requirements through the corresponding dispatch and runtime contracts.
+
+The current-pinned MLX integration exercises entry-scoped translation for all
+877 discovered entries from the include-expanded ``unary.metal`` source. The
+finite split is 183 each for ``v_``, ``v2_``, ``gn1_``, and ``gn4large_``, plus
+145 ``vn_`` entries, spanning 37 operators, 20 concrete input/output type pairs,
+and 16 semantic families. ``v_`` uses explicit ``N=1``; ``v2_`` and ``vn_``
+retain ``N=WorkPerThread<T>::n`` from the source default; ``gn1_`` uses
+``N=1, IdxT=int``; and ``gn4large_`` uses ``N=4`` plus the source-default
+``IdxT=int64_t``.
+
+Every independently translated artifact has one selected operator implementation
+and one kernel. Vector shapes materialize one specialization and reflect input,
+output, and size resources. Gather shapes additionally materialize the reachable
+``elem_to_loc<int>`` or ``elem_to_loc<int64_t>`` helper and reflect constant
+shape/stride buffers plus a read-only device dimension binding. The resulting
+877 artifacts contain 1,243 exact materializations, preserve a host-owned
+``[1, 1, 1]`` workgroup contract, and reject residual templates, ``decltype``,
+call operators, unsupported placeholders, and non-selected operator bodies.
+
+Required macOS CI compiles all 877 exact artifacts with
+``xcrun -sdk macosx metal -Werror -c`` and requires a non-empty AIR output from
+each with no warning exemption. The generic path resolves source typedef chains
+and bfloat reconstruction, materializes source-compatible constrained free
+operators, infers aggregate aliases, recognizes branch-complete returns,
+preserves narrow ``as_type`` storage, and admits only a proven read-only
+immediate scalar-parameter view as a matching thread-local single-field
+aggregate. The non-scalar path also retains
+constant-resource provenance, const-device references, postfix update position,
+and native Metal union aliasing while ambiguous address spaces and unsupported
+reinterpretation continue to fail closed. This complete discovered-unary
+selected-entry proof does not claim Metal numerical execution, host-runtime
+redirection, or the MLX test suite.
+
+The same entry-scoped pipeline now translates all 877 current-pinned unary
+entries to standalone OpenGL ``main`` artifacts. The schema-v2
+``unary.opengl-translation.json`` contract preserves the same five-shape,
+37-operator, 20-type-pair classification and all 1,243 exact materializations,
+while pinning 4,060,696 generated GLSL bytes and all 3,363 target-reflected
+resources. Vector artifacts expose read-only input, read-write output, and an
+entry-scoped size uniform block. Gather artifacts expose input, output, shape,
+stride, and the read-only ``ndimBuffer`` storage resource; scalar uses of the
+source ``device const int& ndim`` alias element zero without changing expression
+typing.
+
+OpenGL's 32-bit index profile cannot represent every source 64-bit index
+implicitly. The complete contract therefore records explicit host/runtime
+bounds of ``[0, 2147483647]`` for ``offset + i``, ``out_idx++``, and ``idx``.
+These are declared portability preconditions, not inferred facts or generated
+runtime checks; absent proof continues to fail closed. GLSL also has no native
+``log10`` overload, so reachable Metal base-ten logarithms lower through a
+single evaluation of ``log2(value) * 0.3010299956639812`` while user-defined
+``log10`` functions remain ordinary calls.
+
+Required CI partitions the family across five disjoint Linux shards. Each shard
+retranslates its exact entries, verifies generated identity, materialization,
+``main`` workgroup metadata, and reflected ABI, compiles with
+``glslangValidator --target-env opengl --target-env spirv1.3 -S comp``, validates
+with ``spirv-val --target-env spv1.3``, and requires every SPIR-V module to be
+non-empty. This closes whole-family OpenGL translation, reflection, and native
+compiler coverage; it does not claim OpenGL numerical execution, MLX host
+runtime redirection, or MLX test-suite parity.
+
+The same entry-scoped pipeline now translates all 877 current-pinned unary
+entries to standalone DirectX ``CSMain`` artifacts. The schema-v2
+``unary.directx-translation.json`` contract retains the exact five-shape,
+37-operator, 20-type-pair classification and 1,243 materializations. ``v_`` and
+``vn_`` artifacts reflect input, output, and entry-scoped size resources;
+``v2_`` artifacts additionally reflect the generated ``CrossGLDispatchInfo``
+workgroup-count cbuffer at ``b3``. Gather artifacts reflect input, output,
+shape, stride, and read-only ``ndim`` structured buffers plus their generated
+``CrossGLDispatchInfo`` cbuffer at ``b0``, for 3,912 reflected HLSL resources
+in total. Source scalar uses of
+``device const int& ndim`` alias ``ndim[0]`` and source ``out_idx++`` remains a
+postfix update.
+
+DirectX bfloat support covers every unary intrinsic required by the family.
+The inverse-hyperbolic ``acosh``, ``asinh``, and ``atanh`` paths decode bfloat
+to float, invoke their portable float helpers, and round back to the exact
+bfloat payload representation. Explicit contextual HLSL constructors preserve
+float-to-native-16 return and initializer narrowing without ``-Wconversion``
+diagnostics when warnings are fatal. All artifacts derive
+``-enable-16bit-types`` from retained native 16-bit declarations and target
+shader model ``cs_6_2``. As with OpenGL, explicit host/runtime bounds of
+``[0, 2147483647]`` for ``offset + i``, ``out_idx++``, and ``idx`` remain
+portability preconditions rather than inferred or generated checks.
+
+Required CI partitions the family across five disjoint Windows shards. Each
+shard retranslates its exact entries, verifies deterministic identity,
+materialization, ``CSMain`` workgroup metadata, and reflected ABI, then compiles
+with pinned DXC using ``-enable-16bit-types -WX -T cs_6_2 -E CSMain`` and
+requires non-empty DXIL modules. Together, the DirectX and OpenGL contracts
+close complete discovered-unary translation, reflection, and native compiler
+coverage on both targets; they do not claim numerical execution, MLX host
+runtime redirection, or MLX test-suite parity.
+
+The current-pinned MLX copy integration proves all 2,496 discovered entries
+from ``copy.metal`` through Metal-to-CrossGL-to-Metal translation. The family
+covers 30 shapes, 16 concrete templates, 13 input and output types, and all 169
+conversion pairs. Its schema-v2 contract pins every artifact and shape ABI,
+including source/default parameter provenance. The 2,496 artifacts contain
+6,566 exact materializations and 8,684 reflected resources. Every artifact has
+one exact ``cast_to`` materialization; only the 14 complex-to-Boolean entries
+add the nested ``cast_to<bool, float>`` body, so materialization accounting is
+explicitly data-dependent rather than a false fixed per-shape count.
+
+The generic lowering preserves MLX's float and bfloat16 Boolean bit tests,
+recovers native ``ushort`` width after frontend ``uint16_t`` normalization, and
+projects registered ``complex64_t`` values only after validating the ordered
+``real``/``imag`` float representation. Wrong registered shapes fail closed and
+unregistered lookalikes remain untouched. Reflected interfaces contain three to
+eight exact resources and retain host-owned ``[1, 1, 1]`` workgroup metadata.
+Required macOS CI uses 24 disjoint 104-entry shards and compiles all 2,496 exact
+artifacts with ``xcrun -sdk macosx metal -Werror -c``, requiring a non-empty AIR
+object for each. This proves translation, reflection, and native compiler
+acceptance; it does not claim Metal numerical execution, MLX host-runtime
+redirection, or MLX test-suite parity.
+
+The same selected-entry pipeline translates all 2,496 copy entries to
+standalone OpenGL ``main`` artifacts. The schema-v2
+``copy.opengl-translation.json`` contract preserves all 30 shapes, 16 concrete
+kernel templates, 13 input/output types, all 169 conversion pairs, 6,566 exact
+materializations, and 8,684 reflected target resources. Scalar and vector forms
+expose source and destination storage buffers plus an entry-scoped size block;
+fixed generalized forms add scalar stride blocks or stride storage buffers;
+rank-generic forms expose shape and stride buffers plus an entry-scoped rank
+block; dynamic forms add exact source and destination offset blocks.
+
+The generic registered-structure contract recognizes both canonical
+``complex64_t`` and its emitted ``complex_t_float`` representation. The 150
+complex-to-scalar entries project the real field only after validating the exact
+ordered ``real``/``imag`` float shape, evaluate the source once, and retain
+narrow target conversion semantics. A malformed registered representation
+fails closed rather than emitting an invalid GLSL constructor.
+
+OpenGL's 32-bit index profile cannot implicitly preserve every source 64-bit
+buffer index. The complete contract therefore declares explicit host/runtime
+bounds of ``[0, 2147483647]`` for ``offset + i``, ``src_idx``, ``dst_idx``,
+``dst_idx + i``, ``src_idx + src_offset``, ``dst_idx + dst_offset``, ``idx.x``,
+and ``idx.y``. These are portability preconditions rather than inferred facts
+or generated checks; absent proof continues to fail closed.
+
+Required Linux CI partitions the family into 24 disjoint 104-entry shards. Each
+shard retranslates its entries, verifies deterministic artifact identity,
+materialization provenance, standalone ``main`` workgroup metadata, and exact
+target reflection, compiles with
+``glslangValidator --target-env opengl --target-env spirv1.3 -S comp``, validates
+with ``spirv-val --target-env spv1.3``, and requires a non-empty SPIR-V module.
+Together with the Metal contract this closes complete discovered-copy
+translation, reflection, and native compiler coverage for those two targets; it
+does not claim numerical execution, MLX host-runtime redirection, or MLX
+test-suite parity.
+
+The DirectX path translates the same 2,496 entries to standalone ``CSMain``
+artifacts. Its compact schema-v2 ``copy.directx-translation.json`` contract
+preserves all 30 shapes, 16 concrete templates, 13 input/output types, all 169
+conversion pairs, and 6,566 exact materializations. Exact target reflection
+contains 10,036 resources. The ``g2``, ``g2large``, ``g3``, ``g3large``,
+``gn2``, ``gn4large``, ``s2``, and ``v2`` shapes additionally expose generated
+``CrossGLDispatchInfo`` metadata at their exact shape-specific ``b0``, ``b6``,
+or ``b3`` binding.
+
+The shared registered-structure conversion contract admits emitted
+``complex_t_float`` values only after validating their ordered ``real`` and
+``imag`` float fields. Exactly 150 complex-to-scalar entries project the real
+field, malformed registered representations fail closed with structured
+project diagnostics, and unregistered lookalikes remain untouched. Unlike the
+OpenGL lowering, this native HLSL path introduces no additional source-scoped
+32-bit index-range portability promise.
+
+Required Windows CI partitions the DirectX family into 24 disjoint 104-entry
+shards. Each shard retranslates its exact entries, verifies deterministic HLSL
+identity, materialization provenance, ``CSMain`` workgroup metadata, and exact
+reflected ABI, then compiles with checksum-pinned DXC using
+``-enable-16bit-types -WX -T cs_6_2 -E CSMain`` and requires a non-empty DXIL
+module. Together with the Metal and OpenGL contracts this closes complete
+discovered-copy translation, reflection, and native compiler coverage on all
+three targets; it does not claim numerical execution, MLX host-runtime
+redirection, or MLX test-suite parity.
+
+The current-pinned MLX binary integration independently proves all 4,122
+discovered entries from ``binary.metal``. Fifteen 238-entry base shapes and
+three 184-entry work-per-thread shapes span 18 shapes, 11 concrete kernel
+templates, 24 operators, and 25 input/output type pairs. Each selected artifact
+contains one operator implementation and one kernel, rejects residual templates,
+``decltype``, call operators, unsupported placeholders, and non-selected
+operator bodies, and preserves explicit or source-default template provenance.
+
+Scalar, size-bounded vector, fixed-dimensional generalized, and rank-generic
+forms reflect exact three-, four-, five-, or seven-resource interfaces. The
+generalized forms additionally materialize only their reachable
+``elem_to_loc_1``, ``elem_to_loc_2``, ``elem_to_loc_3``, or
+``elem_to_loc_2_nd`` helper for the exact 32- or 64-bit index type. In total,
+4,122 artifacts contain 6,026 exact materializations and 19,106 reflected
+resources while preserving a host-owned ``[1, 1, 1]`` workgroup contract. The
+238-entry scalar contract remains an exact subset of the complete contract.
+
+The generic path maps concrete signed and unsigned 64-bit vectors to native
+Metal vector types, rewrites dependent free operators only to already-emitted
+exact helpers, and applies known non-explicit contextual aggregate constructors
+without admitting explicit-only or ambiguous conversions. Bfloat minimum and
+maximum calls promote their arguments to float before typed reconstruction;
+discarded type constructors remain evaluated through unambiguous void casts;
+and scalar Boolean relational expressions receive explicit C++ integral
+promotion. Focused tests retain conservative rejection boundaries for each
+contextual operation.
+
+A schema-v2 hash-pinned contract records every identity, shape, template,
+classification, byte count, materialization, and resource ABI. Required macOS
+CI compiles all 4,122 exact artifacts in 24 disjoint shards with
+``xcrun -sdk macosx metal -Werror -c`` and requires non-empty AIR without a
+warning exemption. This closes discovered selected-entry translation,
+reflection, and native compiler coverage. It does not claim Metal numerical
+execution, host-runtime redirection, or MLX test-suite parity.
+
+The same selected-entry pipeline translates all 4,122 binary entries to
+standalone OpenGL ``main`` artifacts. The schema-v2
+``binary.opengl-translation.json`` contract preserves all 18 shapes, 11 kernel
+templates, 24 operators, 25 input/output type pairs, and 6,026 exact
+materializations. It pins 16,276,504 generated GLSL bytes
+and 19,106 reflected resources across exact three-, four-, five-, and
+seven-resource target interfaces. Scalar forms expose three storage buffers;
+size-bounded forms add an entry-scoped size uniform block; fixed generalized
+forms expose scalar stride blocks or stride storage buffers; and rank-generic
+forms expose shape and stride buffers plus an entry-scoped rank block.
+
+OpenGL's 32-bit index profile cannot implicitly preserve the source's runtime
+64-bit buffer indices. The complete contract therefore declares host/runtime
+bounds of ``[0, 2147483647]`` for ``offset + i``, ``a_idx``, ``b_idx``,
+``out_idx``, ``out_idx++``, ``idx.x``, and ``idx.y``. These are explicit
+portability preconditions, not inferred facts or generated runtime checks;
+unproven wide-index translation remains fail-closed.
+
+Required Linux CI partitions the family into 24 disjoint shards. Each shard
+retranslates its exact entries, checks deterministic identity, materialization
+provenance, standalone ``main`` workgroup metadata, and target reflection,
+compiles every artifact with
+``glslangValidator --target-env opengl --target-env spirv1.3 -S comp``, validates
+it with ``spirv-val --target-env spv1.3``, and requires a non-empty SPIR-V
+module. This closes complete discovered-binary OpenGL translation, reflection,
+and native compiler coverage; it does not claim numerical execution, MLX
+host-runtime redirection, or MLX test-suite parity.
+
+The same selected-entry pipeline translates all 4,122 binary entries to
+standalone DirectX ``CSMain`` artifacts. The schema-v2
+``binary.directx-translation.json`` contract preserves all 18 shapes, 11
+kernel templates, 24 operators, 25 input/output type pairs, 6,026 exact
+materializations, and the seven explicit index-range portability preconditions.
+DirectX resource namespaces preserve source buffer coordinates. The nine shapes
+that consume ``threads_per_grid`` add explicit ``CrossGLDispatchInfo``
+reflection, producing 21,248 resources across exact three- through
+eight-resource target interfaces.
+
+Computed-result bfloat ``ArcTan2``, ``LogAddExp``, and ``Power`` paths expand
+both operands to float, compute in float, and reconstruct the result with exact
+round-to-nearest-ties-to-even. ``Maximum`` and ``Minimum`` also expand for the
+comparison, but preserve and return the selected original low-16-bit bfloat
+payload without requantization. Unproven bfloat builtins remain fail-closed,
+and native 16-bit storage remains a Shader Model 6.2 requirement.
+
+Required Windows CI partitions the family into 24 disjoint shards. Each shard
+retranslates its exact entries, checks deterministic identity, materialization
+provenance, standalone ``CSMain`` workgroup metadata, and target reflection,
+then compiles every artifact with checksum-pinned DXC using
+``-enable-16bit-types -WX -T cs_6_2 -E CSMain`` and requires a non-empty DXIL
+module. This closes complete discovered-binary DirectX translation, reflection,
+and native compiler coverage; it does not claim numerical execution, MLX
+host-runtime redirection, or MLX test-suite parity.
+
+OpenGL Software Subgroup Specialization
+----------------------------------------
+
+Metal compute sources that require fixed 32-lane SIMD semantics can opt into
+a bounded OpenGL shared-memory lowering when the deployment device does not
+provide the KHR subgroup extensions:
+
+.. code-block:: toml
+
+   [project.entry_points]
+   "kernels/quantized.metal" = "affine_quantize_float_gs_32_b_2"
+
+   [project.entry_workgroup_size_rules."kernels/quantized.metal"]
+   affine_quantize_float_gs_32_b_2 = [32, 1, 1]
+
+   [project.source_options.metal.target_options.opengl]
+   software_subgroup_width = 32
+
+This option is target-scoped and explicit; it does not change Metal parsing or
+other target artifacts. The only accepted width is ``32``. The selected output
+must contain exactly one compute entry with concrete positive local dimensions,
+a local X dimension divisible by 32, and no more than 1,024 total invocations.
+CrossTL partitions the linear invocation range into an exact compile-time count
+of independent 32-lane software subgroups. Subgroup count, subgroup index,
+subgroup width, and lane index lower respectively to the workgroup invocation
+count divided by 32, ``gl_LocalInvocationIndex / 32``,
+``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``, and
+``gl_LocalInvocationIndex % 32``. The one-subgroup case retains the simpler
+``1u``, ``0u``, and ``gl_LocalInvocationIndex`` forms.
+
+The bounded mode supports scalar ``float``, ``int``, or ``uint`` sum, minimum,
+maximum, and shuffle-down operations. Shared scratch spans the complete
+workgroup, while every helper derives a subgroup-local lane and base so reads
+and reductions cannot cross a 32-lane boundary. Subgroup operations normally
+must execute in workgroup-uniform control flow. They may appear directly in the
+entry or in a uniquely identified helper only when every helper call is direct,
+unconditional, top-level, and owned by that sole entry. Compile-time branches,
+canonical constant loops, and canonical runtime loops whose integer bounds are
+proven workgroup-uniform remain valid.
+
+One narrow lane-dependent reduction form is also supported: a direct
+``WaveActiveSum``, ``WaveActiveMin``, or ``WaveActiveMax`` assignment in a
+top-level entry-owned ``if`` with no ``else``. The condition must be
+side-effect-free, the branch must contain exactly that one subgroup operation,
+declarations and escaping control flow cannot precede it, and the payload and
+target must be matching 32-bit numeric scalars. CrossTL evaluates the branch
+prefix only for active lanes, contributes a typed identity from inactive lanes,
+invokes the barriered subgroup helper uniformly across the workgroup, and
+exposes the result only to active lanes. Sum uses zero. Minimum uses positive
+infinity, ``INT_MAX``, or ``UINT_MAX``; maximum uses negative infinity,
+``INT_MIN``, or unsigned zero. Conditional shuffle, nested or multi-operation
+branches, and other unproven shapes continue to fail closed.
+
+Direct source references to raw ``gl_Subgroup*`` or ``subgroup*`` builtins,
+empty operation sets, unsupported payloads or operations, and unresolved helper
+ownership also fail closed. Successful lowering emits barriered ``shared``
+memory helpers and the marker ``CROSSTL_SOFTWARE_SUBGROUP_WIDTH``. It
+deliberately emits no ``GL_KHR_shader_subgroup*`` extension,
+``gl_Subgroup*`` use, ``CROSSTL_REQUIRED_SUBGROUP_WIDTH`` marker, or hardware
+``subgroupWidth`` execution metadata. This keeps the software execution
+contract distinct from the default hardware-subgroup path and its host
+preflight. When the option is absent, KHR subgroup generation and exact-width
+enforcement are unchanged.
+
+The lowering establishes shader semantics only for this constrained contract.
+It does not infer dispatch counts, prove arbitrary divergent control flow,
+rewrite an application's loader, or claim parity for other entries. Invalid
+requests fail with
+``project.translate.opengl-software-subgroup-invalid`` and include the width,
+workgroup size, operation, and reason available at the rejection site.
 
 Project Index-Range Assertions
 ------------------------------
@@ -1333,11 +1678,13 @@ Exact Scalar Physical Resource Layouts
 Source reflection records a ``scalarLayout`` only when the target-language
 resource has an exact physical representation covered by the project runtime
 contract. HLSL reflection supports ``StructuredBuffer`` and
-``RWStructuredBuffer`` resources whose element type is exactly ``float``,
-``int``, or ``uint``, together with ``cbuffer`` declarations containing one
-member of one of those types. GLSL reflection supports explicit ``std430``
-buffer blocks containing one scalar runtime-array member and explicit
-``std140`` uniform blocks containing one scalar member of those types.
+``RWStructuredBuffer`` resources whose element type is a scalar or up-to-four
+component vector of ``float``, ``int``, or ``uint``, plus scalar ``int64_t``
+and ``uint64_t`` elements. Single-member ``cbuffer`` declarations support the
+same types. GLSL reflection supports explicit ``std430`` buffer blocks
+containing one scalar runtime-array member and explicit ``std140`` uniform
+blocks containing one scalar member of type ``float``, ``int``, ``uint``,
+``int64_t``, or ``uint64_t``.
 
 The reflected layout records ``physicalType``, ``elementType``,
 ``elementSizeBytes``, ``elementStrideBytes``, ``alignmentBytes``,
@@ -1354,10 +1701,20 @@ uniform buffers require a fixed ``std140`` scalar block and zero-pad the upload
 to ``blockSizeBytes``; ``std430`` scalar runtime arrays retain their logical
 payload size for storage-buffer readback.
 
-Vectors, matrices, fixed arrays, aggregates, packed or widened scalar types,
-implicit GLSL block layouts, arbitrary member offsets, and multi-member blocks
-do not receive this layout metadata. Those shapes remain unresolved and fail
-closed when a native loader request requires a physical layout.
+Standard GLSL ``vec``, ``ivec``, ``uvec``, and ``bvec`` block members now
+receive exact component widths, vector widths, and ``std140``/``std430``
+alignment metadata; ``i64vec`` and ``u64vec`` use the supported 64-bit physical
+tables. Runtime ``vec2`` and ``vec4`` storage arrays remain tightly packed,
+while ``vec3`` records its logical element size and padded array stride
+separately. The current native loader rejects padded storage vectors rather
+than uploading a falsely tight layout. GLSL ``dvec`` values, HLSL 64-bit
+vectors, matrices, fixed arrays, aggregates, unsupported narrow or
+floating-point scalar widths, implicit GLSL block layouts, arbitrary member
+offsets, and multi-member blocks do not receive usable loader metadata. Those
+shapes remain unresolved or fail closed when a native loader request requires
+a physical layout. Native requests range-check signed and unsigned 64-bit
+values and preserve them with little-endian 8-byte packing; 64-bit
+specialization constants remain intentionally unsupported.
 
 At pinned MLX commit ``4367c73b60541ddd5a266ce4644fd93d20223b6e``, the
 ``arangeuint32`` entry from ``arange.metal`` is translated to DirectX and
@@ -1367,6 +1724,275 @@ and executed in Windows Direct3D and Linux EGL CI. With ``start = 3``,
 ``[3, 5, 7, 9]``. This is an end-to-end proof for one scalar kernel contract;
 it is not a claim of vector or aggregate layout support, full MLX runtime
 integration, or MLX test-suite parity.
+
+At current pinned MLX commit
+``846d176227a0ac13d2667e58d2bb68b322109ab0``, the selected
+``fft_mem_256_float2_float2`` entry also passes an entry-scoped OpenGL proof.
+Five unsigned index assertions and one 256-element workgroup-access assertion
+bound its host contract. Translation materializes 37 specializations from 42
+reachable records, prunes 2,120 candidates, and preserves 21 reachable
+function constants for deferred specialization. The deterministic GLSL is
+82,045 bytes with SHA-256
+``a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb``;
+``glslangValidator`` and ``spirv-val`` accept it, and its SPIR-V has 19 control
+barriers with no group-nonuniform instruction.
+
+The reflected ABI has two ``std430`` float32 ``vec2`` arrays at 8-byte size,
+stride, and alignment plus two 16-byte ``std140`` integer blocks. The runtime
+variant registry has no blocked keys and produces a verified deferred SPIR-V
+request for workgroup size ``[1, 1, 64]``. Linux Mesa llvmpipe executes one
+workgroup for an index-1 complex unit impulse and compares all 256 complex
+outputs with the analytical forward DFT at ``2e-4`` absolute and relative
+tolerance. The measured maximum absolute error is
+``9.264554161336758e-08``. This is one selected current-pinned workload; it does
+not redirect the MLX host runtime, cover other FFT plans or dtypes, prove a
+Metal round trip, or establish full backend parity.
+
+At the same current pin, a bounded GEMV proof selects
+``gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0`` for one contiguous
+float32 vector-matrix product with ``M=1``, ``N=32``, and ``K=32``. The
+host-derived contract fixes workgroup ``[32, 2, 1]``, subgroup width 32, and
+one dispatched workgroup. Entry-scoped translation materializes the selected
+GEMV and ``elem_to_loc_uint`` only. Its 8,188-byte HLSL has SHA-256
+``f300bbea75b2ed9e47c29313a56f882ed848cbb93858f1347fbc97a60e167223``
+and passes official DXC 1.9.2602.24 under ``cs_6_6``,
+``-enable-16bit-types``, and warnings as errors. DirectX explicitly enables a
+32-lane target-scoped software subgroup because physical waves need not contain
+contiguous flattened ``SV_GroupIndex`` values. Logical subgroup and lane IDs
+are ``SV_GroupIndex / 32`` and ``SV_GroupIndex % 32``. A 64-float
+``groupshared`` array carries each shuffle between two
+``GroupMemoryBarrierWithGroupSync`` calls; the source lane is validated before
+addition so an extreme unsigned delta cannot wrap the scratch index, and an
+out-of-range source returns the calling invocation's value. The HLSL contains
+no ``WaveReadLaneAt``, ``WaveGetLaneIndex``, or physical-wave atomic allocator.
+``[WaveSize(32)]`` remains the source/reflection contract without making the
+reduction depend on physical lane topology.
+
+The superseded 8,410-byte physical-wave artifact remains recorded as rejected
+evidence under SHA-256
+``f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d``.
+Windows workflow run 33268998061, job 99143984804 mismatched every output: the
+reduction replaced logical lanes 5 through 8 with physical lanes 21 through
+24, reaching maximum absolute error 1.90625. This exact substitution rules out
+a tolerance adjustment or merely guarding invalid high-lane reads.
+
+OpenGL uses two logical 32-lane software subgroups in the 64-thread workgroup.
+Both target-specific fail-closed analyses admit the source's
+``sm >= 1; sm >>= 1`` loop as the integral-equivalent positive-to-zero form of
+``sm > 0``. DirectX also requires one bounded compute entry, concrete
+width-compatible dimensions, explicit calling-invocation fallback, a supported
+scalar shuffle, unambiguous helper identity, logical invocation identity, and
+statically uniform control flow before artifact emission. OpenGL retains
+rejection for wider bounds, mutation, nontermination, escaping control flow,
+and indirect or nested helper calls. The 7,705-byte GLSL has SHA-256
+``f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562``;
+``glslangValidator`` and ``spirv-val`` accept it, and its SPIR-V contains three
+control barriers with no group-nonuniform instruction.
+
+The reflected DirectX and OpenGL ABIs each contain 15 resources, including
+signed 64-bit batch strides and seven scalar argument blocks. A deterministic
+binary-fraction workload compares all 32 output columns at ``1e-5`` absolute
+and relative tolerance. Linux Mesa llvmpipe executes the software-subgroup
+artifact in required mode, and Windows CI requires the same workload through
+Direct3D 12 WARP. This proof covers one host-valid current-corpus entry; gather,
+wide, batched, axpby, and remaining GEMV entries, MLX host redirection, selected
+Metal compilation, and the full MLX suite remain outside the claim. It does
+not change the separate historical 224-entry aggregate compiler gates.
+
+The same current pin has a bounded MXFP4 quantize/dequantize contract for
+``mxfp4_quantize_dequantize_float_gs_32_b_4_hgs_false``. Host provenance from
+``quantized.cpp`` and ``fp_quantized.h`` fixes float32 input, group size 32,
+four payload bits, no global scale, workgroup ``[32, 1, 1]``, and one dispatched
+workgroup. Entry-scoped translation materializes only that specialization. The
+9,123-byte HLSL has SHA-256
+``3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d`` and
+passes DXC under ``cs_6_6``, ``-enable-16bit-types``, and warnings as errors.
+Its 4,716-byte DXIL uses the explicit DirectX-only
+``project.source_options.metal.target_options.directx.widen_native_float16``
+mode. Source ``as_type<float16_t>(uint16_t)`` reconstructs its payload directly
+as float32 with integer IEEE-754 masks, while logical ``float16_t`` locals,
+parameters, and returns stay widened through arithmetic, sign application, and
+the consuming conversion. DXIL contains ``uitofp i32`` and ``fmul float`` but
+no ``LegacyF16ToF32``, ``half``, ``fptrunc``, or ``fpext``. The default native
+binary16 contract remains exact ``asfloat16``/``asint16``/``asuint16`` and is
+unchanged when this target-scoped option is absent.
+
+Four Windows failures bound this contract. The 7,809-byte HLSL under SHA-256
+``3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361``
+produced numeric ``uitofp i16 ... to half``; workflow run 33271117475, job
+99149649480 collapsed all 28 nonzero values to signed zero on WARP. Exact
+``bitcast i16 ... to half`` produced same-size HLSL under SHA-256
+``4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352``,
+but run 33272842347, job 99154326814 consumed the constructed subnormal in
+``fmul half`` and produced the same result. Moving arithmetic to float32
+produced 7,909-byte HLSL under SHA-256
+``938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627``;
+``dx.op.legacyF16ToF32`` still failed in run 33274360343, job 99158370210.
+Integer decoding produced 9,240-byte HLSL under SHA-256
+``936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625``,
+but the remaining ``fptrunc float to half``, half sign operation, and
+``fpext half to float`` returned the identical 28 signed zeros in run
+33275550062, job 99161501105. Removing every half instruction produced a
+9,118-byte artifact under SHA-256
+``7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a``,
+but run 33277494856, job 99166677942 still returned the same signed zeros.
+DXIL then exposed the actual remaining defect: absent Metal/C++ scalar integer
+promotion reduced ``uint16_t(bits) << 23`` to a 16-bit shift by 7 plus an
+``0xffff`` mask. The corrected HLSL emits ``int(uint16_t(bits)) << 23`` and
+DXIL shifts the 32-bit value by 23 before ``asfloat``, with no native-half
+operation anywhere in the selected path.
+
+The 9,571-byte explicit-software-subgroup GLSL has SHA-256
+``cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da``;
+``glslangValidator`` and ``spirv-val`` accept its three-barrier SPIR-V, which
+contains no group-nonuniform instruction. GLSL widens binary16 values to
+float32, so the same source bitcast preserves the exact low 16-bit payload
+through ``unpackHalf2x16`` rather than a float32 bitcast; inverse forms use
+``packHalf2x16`` with exact low-bit extraction.
+
+Exact scale semantics require the source ``fp8_e8m0(float)`` constructor
+factory before conversion back to float. Qualified ``metal::round`` maps to the
+portable math intrinsic, while OpenGL ``metal::isfinite`` and ``signbit`` use
+single-evaluation IEEE-754 bit tests. Read-only private scalar-to-struct views
+are accepted only for exact one-member layouts. Unsupported predicate types,
+receiver mutation, writes, and unresolved constructor branches remain
+fail-closed.
+
+The reflected data ABI is float32 input at binding 0, an inert declared
+``global_scale`` input at binding 1, and float32 read-write output at binding 2.
+DirectX also uses ``b0`` for generated dispatch input, legally distinct from
+``t0`` in the HLSL register namespaces. The real host omits ``global_scale``
+for this specialization; the generic loader allocates it because reflection
+retains the declaration, and the selected code contains no read. A 32-element
+workload uses only exactly representable FP4 E2M1 values with maximum magnitude
+6. The scale divisor is 6 and the MX scale is exactly 1, so Windows WARP and
+Linux Mesa required-mode tests demand bit-exact float32 readback at zero
+tolerance. Other quantized entries and parameter families, MLX host redirection,
+selected-entry Metal compilation, and full-suite parity remain outside this
+bounded proof.
+
+At current pinned MLX commit
+``846d176227a0ac13d2667e58d2bb68b322109ab0``, a bounded arg-reduce proof
+selects ``argmin_float32`` and ``argmax_float32`` for two axis-32 rows. The
+checked host dispatch formula produces workgroups ``[32, 1, 1]`` and dispatch
+``[1, 2, 1]`` with subgroup width 32. Signature-aware source instantiation
+materializes the scalar ``elem_to_loc<int64_t>`` helper rather than its
+``uint3`` overload. DirectX generation explicitly sets
+``project.source_options.metal.target_options.directx.relative_wave_shuffle_out_of_range``
+to ``"self"`` for these artifacts. Relative source lanes outside the wave then
+retain the calling lane's value; generated helpers select a proven in-range
+source before an unconditional ``WaveReadLaneAt``. This deterministically
+refines source undefined behavior without changing in-range shuffle semantics.
+The default policy remains ``"undefined"`` so unrelated project artifacts are
+unchanged. The generated HLSL artifacts pass official DXC 1.9.2602.24 under
+``cs_6_6`` with ``-enable-16bit-types`` and warnings as errors. OpenGL uses the
+explicit software subgroup and admits direct shuffle-helper calls only inside
+a proven canonical workgroup-uniform halving loop. Both GLSL modules pass
+``glslangValidator`` and ``spirv-val``, contain five control barriers, and
+contain no group-nonuniform SPIR-V instruction.
+
+The reflected runtime contract includes exact signed and unsigned 64-bit
+scalar resources: float32 input, uint32 output, int32 shape, int64 stride, and
+uint64 size buffers or scalar blocks. Linux arm64 Mesa EGL executes rows with
+tied extrema and reads back argmin indices ``[5, 7]`` and argmax indices
+``[3, 2]``, proving lowest-index tie behavior; Windows CI requires the same
+workloads through Direct3D 12 WARP. This bounded proof does not unblock the
+24-entry aggregate DirectX/OpenGL artifact, which remains fail-closed with
+``project.translate.workgroup-size-entry-ambiguous``. Other axis sizes,
+dtypes, and entries, MLX host redirection, and the full MLX test suite remain
+outside the claim. Entry-scoped Metal also remains unavailable because the
+per-entry workgroup specialization rule fails explicitly with
+``project.translate.workgroup-size-rule-unsupported-target``; this proof does
+not claim a Metal round trip.
+
+The same current pin now has a bounded one-pass scaled-attention proof for
+``sdpa_vector_float_64_64``. The checked host contract selects batch/head/query
+counts of one, key length 4, dimensions ``D=64`` and ``V=64``, scale ``0.125``,
+and no mask, causal mode, or sinks. It fixes ``[1024, 1, 1]`` with 32 logical
+subgroups and one dispatched workgroup. Function constants 20 through 25 are
+all false; two-pass-only ID 26 is not part of this artifact. The exact HLSL is
+8,721 bytes with SHA-256
+``003c8b9e85bad7363bae2e3d80380d979cbe0b8988d0d98751131c3acfbff6b6``
+and passes DXC 1.9.2602.24 under ``cs_6_6``, ``-enable-16bit-types``, and
+warnings as errors. Its 32 physical waves receive unique, wave-uniform IDs
+through the synchronized allocator; no lane-varying flattened-index quotient
+remains.
+
+OpenGL uses an explicit 32-lane software artifact across the full 1,024-thread
+workgroup. The subgroup-ID-strided runtime loop is synchronized round by round;
+inactive subgroups supply typed reduction identities so all barriers remain
+uniform. Its 12,089-byte GLSL has SHA-256
+``9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b``.
+The validated SPIR-V has nine control barriers, six false specialization
+constants, local size ``1024 1 1``, and no group-nonuniform instruction.
+
+The native-loader ABIs contain 19 DirectX and 18 OpenGL resources. Deferred
+optional resources receive placeholders, including uint32 physical storage for
+``bmask``. DirectX concretizes the six constants and executes through WARP;
+OpenGL builds a verified deferred compilation request, specializes the six
+constants, and executes through Mesa surfaceless EGL. Both compare all 64
+outputs with a stable CPU reference at ``2e-4`` absolute and relative
+tolerance. The local Mesa proof measured maximum absolute error
+``4.082320426146424e-08`` and maximum relative error
+``4.2163276126605175e-06``. Masked, causal, sinks, two-pass and full-attention
+paths, other dimensions and dtypes, MLX host redirection, selected Metal
+round-trip validation, and the full MLX suite remain outside this bounded
+claim. The historical 42-entry aggregate DirectX/OpenGL run remains fail-closed
+because it does not consume this entry-scoped contract; it is not evidence that
+a bounded attention runtime proof is absent.
+
+At current pinned MLX commit
+``846d176227a0ac13d2667e58d2bb68b322109ab0``, a bounded LayerNorm VJP proof
+selects ``vjp_layer_normfloat32`` for one axis-32 row with function constant
+``has_w=true``, workgroup and subgroup width 32, and eight reflected resources.
+DirectX materializes the constant and executes the generated HLSL through
+Direct3D 12 WARP. OpenGL retains constant ID 20 in GLSL, lowers the reductions
+to an explicit software subgroup, derives a verified deferred-compilation
+request, compiles to SPIR-V, specializes ``has_w=true``, and executes through
+Mesa EGL. Both paths compare all 32 input-gradient and 32 per-row
+weight-gradient values. The one-row boundary means the per-row weight-gradient
+temporary is also the final host-reduced result. This proof excludes the
+separate bias-gradient dispatch, multi-row weight reduction, other dtypes and
+axis sizes, MLX host redirection, and the full MLX test suite.
+
+The same current pin also has a bounded RMSNorm VJP proof for
+``vjp_rmsfloat32`` with one axis-32 row, ``has_w=true``, one 32-thread
+workgroup, and ten reflected resources. DirectX concretizes the function
+constant and executes HLSL through WARP. OpenGL retains constant ID 20, lowers
+four reductions through the explicit software subgroup, and admits the
+kernel's runtime row loop only after proving its initializer and bound
+workgroup-uniform. The deferred path compiles GLSL to SPIR-V, specializes the
+constant, verifies the interface, and executes through Mesa EGL. Both targets
+compare all 32 input-gradient and 32 one-group weight-gradient values. The
+one-row/one-group boundary makes the group-local weight gradient equal to the
+final host reduction; multi-row reduction, other dtypes and axes, MLX host
+redirection, and the full MLX test suite remain outside this proof.
+
+The current pin additionally has a bounded Softmax proof for
+``block_softmax_float32``. Its checked dispatch contract applies the pinned
+host formula ``32 * ceilDiv(ceilDiv(axisSize, 4), 32)`` to two rows of axis 32
+and one row of axis 2049, producing workgroups ``[32, 1, 1]`` and
+``[544, 1, 1]``. Both DirectX artifacts retain ``WaveSize(32)``. OpenGL keeps
+the default guarded hardware-subgroup artifacts and separately packages
+explicit 32-lane software-subgroup artifacts; the wide artifact partitions 544
+invocations into 17 logical subgroups and uses typed inactive-lane identities
+for masked maximum and sum reductions. Official DXC accepts both HLSL artifacts
+under ``cs_6_6`` with ``-enable-16bit-types`` and warnings as errors. The
+32-thread entry is provably one wave and retains the zero-ID quotient fast path;
+the 544-thread entry allocates one uniform ID for each physical wave through a
+workgroup-synchronized counter. Both software modules pass
+``glslangValidator`` and ``spirv-val``, contain 11 control barriers, and contain
+no group-nonuniform SPIR-V instruction.
+
+Windows CI requires both workloads to execute through Direct3D 12 WARP, and
+Linux CI requires both to execute through surfaceless Mesa EGL. Every output is
+compared with a stable float32 CPU Softmax reference at ``5e-5`` absolute and
+relative tolerance. This evidence covers only the two finite float32 block
+workloads: axis sizes above 4096, half and bfloat16 entries, MLX host
+redirection, and the full MLX test suite remain outside the claim. Selected
+entry-scoped Metal generation also remains unavailable and fails explicitly
+with ``project.translate.entry-point-target-unsupported``; this bounded proof
+does not claim a Metal round trip.
 
 Build a versioned native loader ABI descriptor and optional C declarations for
 one ready load unit:
@@ -1469,6 +2095,13 @@ canonical runtime variant keys to unit execution wrappers and retains the exact
 target, entry point, workgroup size, subgroup width, and specialization
 payloads selected during packaging. Packages containing targets without a
 reference adapter keep the JSON registry but mark the native header unavailable.
+A ready OpenGL GLSL-source variant that still carries specialization constants
+also keeps its JSON registry ready, copied artifact, and exact lookup key, but
+marks the native header unavailable with reason
+``specialization-requires-deferred-compilation``. The C++ header cannot express
+that compile-then-specialize step; callers instead derive and execute the
+verified deferred SPIR-V compilation request. Other registry-generation errors
+remain fatal and are not converted into this fallback.
 
 The same operations are available through the public project API:
 
@@ -2284,6 +2917,15 @@ entry pattern must match at least one host-named materialization. Missing entry
 coverage and stale patterns fail closed with
 ``project.translate.workgroup-size-entry-rule-unmatched``.
 
+Metal also consumes source-wide and entry-specific workgroup-size rules, but as
+host-dispatch contracts rather than source specialization. MSL does not encode
+a fixed ``numthreads`` or ``local_size`` attribute: the generated kernel keeps
+its exact emitted entry name, ``execution.entryPoints`` records each evaluated
+size, and report validation verifies that the reflected compute-entry identities
+match the contract. DirectX and OpenGL continue to encode the same canonical
+sizes in HLSL and GLSL respectively. This distinction prevents a host dispatch
+requirement from being mistaken for Metal source metadata.
+
 For DirectX and OpenGL project translation, a consumed Metal
 ``[[threads_per_threadgroup]]`` parameter requires this concrete configuration
 or equivalent concrete source execution metadata. Translation emits
@@ -2314,11 +2956,12 @@ unmatched host records also fail closed. A multi-entry OpenGL source is still
 packaged as separate runnable artifacts even when every entry uses the same
 size, and translation fails if the artifact model cannot represent that split.
 
-Targets that do not implement per-entry workgroup specialization reject a
-matching rule before source materialization or target generation. The failed
-artifact and structured ``execution-specialization`` diagnostic retain the
-selected rule, target, and supported target set so the configuration cannot be
-silently ignored.
+Targets outside DirectX, Metal, and OpenGL reject a matching workgroup-size
+rule before source materialization or target generation. Metal accepts the rule
+as host-dispatch metadata; DirectX and OpenGL additionally specialize target
+source dimensions. A failed artifact and structured
+``execution-specialization`` diagnostic retain the selected rule, target, and
+supported target set so the configuration cannot be silently ignored.
 
 Successful artifact records include an ``execution`` object with the canonical
 ``workgroupSize``, affected ``sourceEntryPoints``, configuration or source
@@ -2399,10 +3042,25 @@ then compiles a reflected compute entry from each generated HLSL artifact with
 DXC on Windows. Its current OpenGL proof leaves the subgroup rule unconfigured,
 checks deferred ``layout(constant_id = 20)`` emission, and validates generated
 OpenGL SPIR-V on Linux. The separate bounded LogSumExp proof exercises the
-OpenGL exact-width contract. These checks prove translation and native
-compilation only; they do not claim RMSNorm numerical runtime parity or full MLX
-test-suite support. Numerical execution also requires host dispatch values to
-match each compiled artifact's workgroup-size and subgroup-width contracts.
+OpenGL exact-width contract. These checks prove translation and native compilation only; they do not claim
+RMSNorm numerical runtime parity or full MLX test-suite support. Numerical
+execution also requires host dispatch values to match each compiled artifact's
+workgroup-size and subgroup-width contracts.
+
+A separate current-corpus proof pins ``rms_norm.metal`` at commit
+``846d176227a0ac13d2667e58d2bb68b322109ab0`` and selects the forward
+``rmsfloat32`` entry for an axis-size-32, two-row workload. Entry-scoped runtime
+reflection excludes the unreachable VJP-only function constant ``has_w`` while
+preserving constants used by selected entries. The proof packages the same six
+resources for HLSL and GLSL, requires ``WaveSize(32)`` on DirectX, and uses the
+explicit target-scoped 32-lane software subgroup on OpenGL. Windows CI executes
+the package with Direct3D 12 WARP; Linux CI validates the GLSL through
+``glslangValidator`` and ``spirv-val`` and executes it with surfaceless Mesa
+EGL. Both compare 64 float32 outputs against the independent RMSNorm formula at
+``3e-5`` absolute and relative tolerance. This evidence covers only the
+selected forward float32 workload; VJP, looped, half-precision, other axis-size,
+host-runtime redirection, and full MLX test-suite coverage remain outside its
+claim.
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Project

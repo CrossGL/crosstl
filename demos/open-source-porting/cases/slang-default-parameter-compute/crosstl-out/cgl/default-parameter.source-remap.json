@@ -71,34 +71,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 197,
-        "file": "crosstl-out/cgl/default-parameter.cgl",
-        "length": 47,
-        "line": 8,
-        "offset": 150
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 16,
-        "endOffset": 426,
-        "file": "default-parameter.slang",
-        "length": 43,
-        "line": 15,
-        "offset": 383
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
         "endLine": 13,
-        "endOffset": 291,
+        "endOffset": 295,
         "file": "crosstl-out/cgl/default-parameter.cgl",
         "length": 73,
         "line": 12,
-        "offset": 218
+        "offset": 222
       },
       "original": {
         "column": 1,
@@ -116,11 +94,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 14,
-        "endOffset": 379,
+        "endOffset": 383,
         "file": "crosstl-out/cgl/default-parameter.cgl",
         "length": 88,
         "line": 13,
-        "offset": 291
+        "offset": 295
       },
       "original": {
         "column": 1,
@@ -138,11 +116,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 15,
-        "endOffset": 424,
+        "endOffset": 428,
         "file": "crosstl-out/cgl/default-parameter.cgl",
         "length": 45,
         "line": 14,
-        "offset": 379
+        "offset": 383
       },
       "original": {
         "column": 1,
@@ -160,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 16,
-        "endOffset": 458,
+        "endOffset": 462,
         "file": "crosstl-out/cgl/default-parameter.cgl",
         "length": 34,
         "line": 15,
-        "offset": 424
+        "offset": 428
       },
       "original": {
         "column": 1,
@@ -182,11 +160,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 17,
-        "endOffset": 509,
+        "endOffset": 513,
         "file": "crosstl-out/cgl/default-parameter.cgl",
         "length": 51,
         "line": 16,
-        "offset": 458
+        "offset": 462
       },
       "original": {
         "column": 1,

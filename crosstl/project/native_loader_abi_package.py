@@ -274,6 +274,16 @@ def _generate_runtime_variant_registry(
     try:
         native_header = generate_native_runtime_variant_registry(registry, units)
     except NativeRuntimeVariantRegistryError as exc:
+        if (
+            exc.code.endswith(".specialization-mechanism-unsupported")
+            and exc.details.get("target") == "opengl"
+            and exc.details.get("artifactFormat") == "GLSL source"
+        ):
+            result["nativeHeader"] = {
+                "available": False,
+                "reason": "specialization-requires-deferred-compilation",
+            }
+            return result
         raise NativeLoaderABIError(
             "native-runtime-variant-registry-generation-failed",
             "Runtime variant registry could not form a native execution header.",

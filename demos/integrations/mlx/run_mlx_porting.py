@@ -104,6 +104,18 @@ MLX_LOGSUMEXP_DISPATCH_NORMALIZED_SHA256 = (
 MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY = (
     "sha256:db762a188e05786e206d9aa5a340b6f9095a8a3e938b85a7c04836f300e97c95"
 )
+MLX_LOGSUMEXP_NATIVE_LOADER_DISPATCH_CONTRACT_SOURCE = (
+    Path(__file__).resolve().parent
+    / "contracts"
+    / "logsumexp.native-loader.dispatch.json"
+)
+MLX_LOGSUMEXP_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:3cfc400f25cf49cb16d028fdba59ebe8b56b729ade919f711de4b8b67bfa5ab4"
+)
+MLX_LOGSUMEXP_SOFTWARE_OPENGL_ARTIFACT = {
+    "sha256": "813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5",
+    "size_bytes": 4676,
+}
 MLX_LOGSUMEXP_DISPATCH_VARIANTS = {
     "block-float32-axis-32": {
         "entryPoint": "block_logsumexp_float32",
@@ -363,6 +375,110 @@ MLX_RMS_NORM_DISPATCH_VARIANTS = {
         "workgroupSize": [1024, 1, 1],
         "dispatchWorkgroupCount": [4, 1, 1],
         "specializationConstants": {"20": True},
+    },
+}
+MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS = {
+    "layer_norm": {
+        "layer_normfloat32": {
+            "sha256": (
+                "0627a3f57ddbd58ac203f688d2f067303f96a59f978e66d98eea43d0d74efb8d"
+            ),
+            "sizeBytes": 5691,
+        },
+        "vjp_layer_normfloat32": {
+            "sha256": (
+                "fc8b26f2348c12cb4e8edbfdfd32d41bcf103736406cfa5b1ce84d399bbf3ffe"
+            ),
+            "sizeBytes": 7980,
+        },
+    },
+    "logsumexp": {
+        "block-float32-axis-1025": {
+            "sha256": (
+                "c2661aa96eb66ef6bcd6bce64299bc1ceafdc0d656ae695f0722e5f076602622"
+            ),
+            "sizeBytes": 3703,
+        },
+        "block-float32-axis-32": {
+            "sha256": (
+                "c5f579cd873273517f26d443ea70046e09a451b5b57cef576604d9e8d6f9daf2"
+            ),
+            "sizeBytes": 3132,
+        },
+    },
+    "rms_norm": {
+        "forward-bfloat16-axis-32": {
+            "sha256": (
+                "47f8acc88e9cf567664124f7aa52cfd3c8dc8769c2a150ee029a21896fe60753"
+            ),
+            "sizeBytes": 4390,
+        },
+        "forward-float16-axis-32": {
+            "sha256": (
+                "33fb3742f48e7173a300ea0fc11650fc31c47e38e9971d311cb39b81494c918c"
+            ),
+            "sizeBytes": 3410,
+        },
+        "forward-float32-axis-256": {
+            "sha256": (
+                "1476cfab5a469e1bfb6f450c22823059062ab478f014b6b0402bc200653840ef"
+            ),
+            "sizeBytes": 3960,
+        },
+        "forward-float32-axis-32": {
+            "sha256": (
+                "adb0aded42e2ca73dd1e8c9d9be51da2e9be028447ad13ab3cdd2d3c5f8f4f7d"
+            ),
+            "sizeBytes": 3390,
+        },
+        "forward-float32-axis-4099": {
+            "sha256": (
+                "21f1fbf886b22654e5d6e5cc5b14d307c73ce47ac3799ac294c5d200e27f863b"
+            ),
+            "sizeBytes": 4528,
+        },
+        "forward-float32-axis-512": {
+            "sha256": (
+                "d0f9d159033fdc4141aa43efc600f7da1258017921caa4671b39e073ad91a808"
+            ),
+            "sizeBytes": 3961,
+        },
+        "vjp-float32-axis-256-has-w-false": {
+            "sha256": (
+                "514871184dee936b6a5121950f0da577cff347fa26476a3ed7a8d005f7359bac"
+            ),
+            "sizeBytes": 5784,
+        },
+        "vjp-float32-axis-256-has-w-true": {
+            "sha256": (
+                "285dee4b0e785cb9cbe7ba1ab369fbeee6b21d3fdaaf1fb988e1745adb23beee"
+            ),
+            "sizeBytes": 5783,
+        },
+        "vjp-float32-axis-32-has-w-false": {
+            "sha256": (
+                "eedb61f42919cb25961c10337d79d0f334720a6bb22ed09f2eec00d0229f6be6"
+            ),
+            "sizeBytes": 5214,
+        },
+        "vjp-float32-axis-32-has-w-true": {
+            "sha256": (
+                "2c87f1ab0e08287a64d2ced5c7c51405dfccf787205e00223aa46bf385a39d04"
+            ),
+            "sizeBytes": 5213,
+        },
+        "vjp-float32-axis-8192-has-w-false": {
+            "sha256": (
+                "395806efa2e24b61886f2d42bfb052435e90580b58144908ef732fa4081c8559"
+            ),
+            "sizeBytes": 6683,
+        },
+        "vjp-float32-axis-8192-has-w-true": {
+            "sha256": (
+                "2bac0249e35a6215a3246a01e7654e5d8e2e235096a77d4c9e281d6d53996ee0"
+            ),
+            "sizeBytes": 6682,
+        },
     },
 }
 MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
@@ -671,7 +787,7 @@ MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE = (
 )
 MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
     MLX_ARG_REDUCE_SOURCE: {
-        "specializationCount": 51,
+        "specializationCount": 39,
         "hostSource": "mlx/backend/metal/primitives.cpp",
         "hostLines": "117-132",
         "dispatchFormulas": [
@@ -761,7 +877,7 @@ MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
         "materializationParameters": ["D", "T", "V"],
     },
     MLX_SOFTMAX_SOURCE: {
-        "specializationCount": 17,
+        "specializationCount": 14,
         "hostSource": "mlx/backend/metal/softmax.cpp",
         "hostLines": "46-83",
         "dispatchFormulas": [
@@ -839,7 +955,7 @@ FULL_CORPUS_JOB_TIMEOUT_SECONDS = 120
 FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900
 GEMV_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
-GEMV_EXPECTED_SPECIALIZATION_COUNT = 225
+GEMV_EXPECTED_SPECIALIZATION_COUNT = 226
 GEMV_EXPECTED_ENTRY_POINT_COUNT = 224
 GEMV_DIRECTX_TRANSLATION_TIMEOUT_SECONDS = 900
 GEMV_DIRECTX_ENTRY_PROFILE = "cs_6_0"
@@ -947,9 +1063,9 @@ FFT_DIRECTX_TRANSLATION_TIMEOUT_SECONDS = 300
 FFT_DIRECTX_EXPECTED_SPECIALIZATION_COUNT = 24
 FFT_DIRECTX_EXPECTED_FUNCTION_CONSTANT_COUNT = 21
 FFT_DIRECTX_GENERATED_SHA256 = (
-    "07f9300c2e4860077b344610fbfaa2eadb330e1f9723cb519794f91272bd2289"
+    "d5fa5d6e088743cc00a4a3f4b604c0704d33a8697a570f11a61cf99cb8d8d6fb"
 )
-FFT_DIRECTX_GENERATED_SIZE_BYTES = 116160
+FFT_DIRECTX_GENERATED_SIZE_BYTES = 116260
 FFT_DIRECTX_SPECIALIZATION_CONSTANTS = {
     "0": False,
     "1": True,
@@ -1019,7 +1135,7 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
     "translation_diagnostic_count": 0,
     "required_capabilities": [],
     "generated_hlsl": {
-        "sha256": "52569209d98f1bf2ae7fa645f2e4858a420f3920368e14aecb98c2ba9939ac8f",
+        "sha256": "a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438",
         "size_bytes": 4357,
     },
     "materialization": {
@@ -1139,8 +1255,8 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "b7d6251d27fcdafc003c85975bf5c5774a1fca0a3d4602b9e9ea5ef62673f76e",
-        "size_bytes": 15835,
+        "sha256": "c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de",
+        "size_bytes": 16359,
     },
     "compiler_validation": {
         "compiler": "dxc",
@@ -1163,9 +1279,10 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
     "numerical_parity_claimed": False,
 }
 MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
-    "status": "translated-glslang-spirv-val-validated",
-    "commit": MLX_COMMIT,
+    "status": "translated-toolchain-validated-native-loader-executed",
+    "commit": MLX_CORPUS_COMMIT,
     "source": MLX_QUANTIZED_SOURCE,
+    "source_sha256": "292aab5a98e3fc047b8ed91343fc10b66e5a92e12c258cde168929520ab2abfd",
     "target": "opengl",
     "selected_entry_point": MLX_QUANTIZED_SELECTED_ENTRY_POINT,
     "project_translation": {
@@ -1175,11 +1292,22 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
         "failed_count": 0,
         "emitted_target_file_count": 1,
         "project_diagnostic_count": 0,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width_rule_configured": False,
+        "max_template_specializations": 128,
+        "max_template_materialization_work": 4096,
     },
     "materialization": {
-        "reachable_specialization_count": 6,
+        "reachable_specialization_count": 9,
         "concrete_specialization_count": 3,
-        "pruned_candidate_count": 110861,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 104702,
+        "selected_parameters": {
+            "T": "float",
+            "bits": 2,
+            "group_size": 32,
+            "has_global_scale": False,
+        },
     },
     "index_range_assertion_evidence": {
         "assertion_count": len(MLX_OPENGL_QUANTIZED_INDEX_RANGE_ASSERTIONS),
@@ -1194,9 +1322,29 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
         "inferred": False,
         "runtime_enforced": False,
     },
+    "software_subgroup": {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "operations": [
+            "WaveActiveMin(float)",
+            "WaveActiveMax(float)",
+            "WaveShuffleDown(uint,int)",
+        ],
+        "artifact_marker": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+        "control_barrier_instruction_count": 8,
+        "group_non_uniform_instruction_count": 0,
+        "hardware_subgroup_extensions_emitted": False,
+        "hardware_subgroup_marker_emitted": False,
+        "hardware_subgroup_execution_metadata_emitted": False,
+        "unsupported_contract_behavior": "reject-before-artifact-emission",
+    },
     "generated_glsl": {
-        "sha256": "7808f9f35bab56c1f415dea1a669225c68447cb32f9147ab1c4b04b975543aa3",
-        "size_bytes": 5107,
+        "sha256": "e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb",
+        "size_bytes": 6642,
     },
     "required_capabilities": [],
     "artifact_emitted": True,
@@ -1210,9 +1358,1057 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
         "status": "passed",
         "observed_failure_count": 0,
     },
+    "runtime_package": {
+        "artifact_count": 1,
+        "ready_load_unit_count": 1,
+        "blocked_load_unit_count": 0,
+        "resources": [
+            {"name": "wBuffer", "binding": 0, "access": "read"},
+            {"name": "out_Buffer", "binding": 1, "access": "read_write"},
+            {"name": "scalesBuffer", "binding": 2, "access": "read_write"},
+            {"name": "biasesBuffer", "binding": 3, "access": "read_write"},
+        ],
+    },
+    "runtime_execution": {
+        "platform": "Linux Mesa software OpenGL",
+        "context": "EGL surfaceless",
+        "adapter": "OpenGLRuntimeParityAdapter",
+        "runtime": "OpenGLComputeRuntime",
+        "workgroup_count": [1, 1, 1],
+        "global_size": [32, 1, 1],
+        "input": {
+            "dtype": "float32",
+            "shape": [32],
+            "values": "[0.0,1.0,2.0,3.0] repeated 8 times",
+        },
+        "outputs": {
+            "out_Buffer": {
+                "dtype": "uint32",
+                "shape": [8],
+                "values": [27, 27, 27, 27, 27, 27, 27, 27],
+            },
+            "scalesBuffer": {
+                "dtype": "float32",
+                "shape": [1],
+                "values": [-1.0],
+            },
+            "biasesBuffer": {
+                "dtype": "float32",
+                "shape": [1],
+                "values": [3.0],
+            },
+        },
+        "status": "passed",
+    },
     "resolved_by": [OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE],
-    "runtime_execution_attempted": False,
+    "tracked_issues": ["https://github.com/CrossGL/crosstl/issues/1894"],
+    "runtime_execution_attempted": True,
+    "runtime_integration_included": True,
+    "mlx_host_runtime_integration_included": False,
+    "numerical_parity_claimed": True,
+    "runtime_parity_claimed": True,
+    "parity_scope": "one deterministic affine_quantize_float_gs_32_b_2 workload",
+}
+MLX_OPENGL_LOGSUMEXP_SOFTWARE_RUNTIME_EVIDENCE = {
+    "status": "translated-toolchain-validated-native-loader-required",
+    "commit": MLX_CORPUS_COMMIT,
+    "source": MLX_LOGSUMEXP_SOURCE,
+    "source_sha256": MLX_LOGSUMEXP_SHA256,
+    "selected_entry_point": "block_logsumexp_float32",
+    "selected_workload": "block-float32-axis-32",
+    "dispatch_contract": {
+        "path": (
+            "demos/integrations/mlx/contracts/" "logsumexp.native-loader.dispatch.json"
+        ),
+        "content_identity": MLX_LOGSUMEXP_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY,
+        "artifact_id": MLX_LOGSUMEXP_DISPATCH_VARIANTS["block-float32-axis-32"][
+            "artifactId"
+        ],
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width": 32,
+        "dispatch_workgroup_count": [1, 1, 1],
+    },
+    "project_translation": {
+        "unit_count": 1,
+        "artifact_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "subgroup_width_rule_configured": False,
+    },
+    "materialization": {
+        "concrete_specialization_count": 1,
+        "reachable_specialization_count": 4,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 76,
+        "selected_parameters": {"AccT": "float", "N_READS": "4", "T": "float"},
+    },
+    "software_subgroup": {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "operations": ["WaveActiveMax(float)", "WaveActiveSum(float)"],
+        "builtin_substitutions": {
+            "gl_NumSubgroups": "1u",
+            "gl_SubgroupID": "0u",
+            "gl_SubgroupSize": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+            "gl_SubgroupInvocationID": "gl_LocalInvocationIndex",
+        },
+        "artifact_marker": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+        "control_barrier_instruction_count": 10,
+        "group_non_uniform_instruction_count": 0,
+        "hardware_subgroup_extensions_emitted": False,
+        "hardware_subgroup_marker_emitted": False,
+        "hardware_subgroup_execution_metadata_emitted": False,
+        "unsupported_contract_behavior": "reject-before-artifact-emission",
+    },
+    "generated_glsl": dict(MLX_LOGSUMEXP_SOFTWARE_OPENGL_ARTIFACT),
+    "toolchain_validation": {
+        "compiler": "glslangValidator",
+        "compiler_target": "OpenGL/SPIR-V 1.3",
+        "validator": "spirv-val",
+        "validator_target": "SPIR-V 1.3",
+        "status": "passed",
+        "observed_failure_count": 0,
+    },
+    "runtime_package": {
+        "artifact_count": 1,
+        "ready_load_unit_count": 1,
+        "blocked_load_unit_count": 0,
+        "resources": [
+            {
+                "name": "in_Buffer",
+                "binding": 0,
+                "access": "read",
+                "layout": "std430-float32",
+            },
+            {
+                "name": "out_Buffer",
+                "binding": 1,
+                "access": "read_write",
+                "layout": "std430-float32",
+            },
+            {
+                "name": "block_logsumexp_float32_axis_size_Args",
+                "binding": 2,
+                "access": "read",
+                "layout": "std140-int32-16-byte-block",
+            },
+        ],
+    },
+    "workload": {
+        "axis_size": 32,
+        "input_dtype": "float32",
+        "input_shape": [32],
+        "input_values": "[(index - 16) / 8.0 for index in range(32)]",
+        "expected_output": 3.9978051379373145,
+        "absolute_tolerance": 0.00005,
+        "relative_tolerance": 0.00005,
+    },
+    "runtime_execution": {
+        "platform": "ubuntu-latest",
+        "runtime": "Mesa headless EGL software OpenGL",
+        "adapter": "OpenGLRuntimeParityAdapter",
+        "workgroup_count": [1, 1, 1],
+        "global_size": [32, 1, 1],
+        "status": "required-on-ci",
+        "test": (
+            "tests/test_translator/test_mlx_logsumexp_native_loader.py::"
+            "test_pinned_mlx_logsumexp_executes_through_opengl_native_loader"
+        ),
+    },
+    "remaining_scope": {
+        "workload": "block-float32-axis-1025",
+        "axis_size": 1025,
+        "workgroup_size": [288, 1, 1],
+        "status": "hardware-subgroup-only",
+        "reason": "software-mode-requires-exactly-one-32-thread-subgroup",
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1894",
+    },
+    "runtime_execution_attempted": True,
+    "runtime_integration_included": True,
+    "mlx_host_runtime_integration_included": False,
+    "selected_workload_numerical_parity_verified": True,
+    "full_mlx_test_suite_included": False,
     "numerical_parity_claimed": False,
+    "runtime_parity_claimed": False,
+}
+MLX_CURRENT_ARG_REDUCE_SHA256 = (
+    "3d413c4d7eb5a6c397a52487721f445e08ba206a997a90fddcb7e51bf126d1f2"
+)
+MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:9c9a196f8bf4c12264422136921d2c6cbf02e1f524e1791ef277406144df1c62"
+)
+MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_VARIANTS = {
+    "argmin-float32-axis-32-two-rows": {
+        "artifact_id": (
+            "sha256:3e7aebfb8869a3c9169b5941a5457b582cc72a098ba3bfd1aec8e4f73c4f8e25"
+        ),
+        "dispatch_variant_id": (
+            "sha256:c000ab737f30b46a98bd1354ccffe502ed0b1460a77b8ba7940469d266d71ae3"
+        ),
+        "entry_point": "argmin_float32",
+        "inputs": {
+            "argMax": False,
+            "axisSize": 32,
+            "dtype": "float32",
+            "nRows": 2,
+        },
+        "workgroup_size": [32, 1, 1],
+        "dispatch_workgroup_count": [1, 2, 1],
+    },
+    "argmax-float32-axis-32-two-rows": {
+        "artifact_id": (
+            "sha256:1281be909c51f5c74d898e4c1e9992de3572d0135abc42e6bb8ad8308332fa82"
+        ),
+        "dispatch_variant_id": (
+            "sha256:5f6dbeea6ab134cc1d25a3914e643600b4c6eb474eae60a1dac869e1c79b1f06"
+        ),
+        "entry_point": "argmax_float32",
+        "inputs": {
+            "argMax": True,
+            "axisSize": 32,
+            "dtype": "float32",
+            "nRows": 2,
+        },
+        "workgroup_size": [32, 1, 1],
+        "dispatch_workgroup_count": [1, 2, 1],
+    },
+}
+MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE = {
+    "status": "translated-packaged-and-cross-target-native-runtime-required",
+    "commit": MLX_CORPUS_COMMIT,
+    "source": MLX_ARG_REDUCE_SOURCE,
+    "source_sha256": MLX_CURRENT_ARG_REDUCE_SHA256,
+    "selected_entry_points": ["argmin_float32", "argmax_float32"],
+    "dispatch_contract": {
+        "path": (
+            "demos/integrations/mlx/contracts/" "arg_reduce.native-loader.dispatch.json"
+        ),
+        "content_identity": MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY,
+        "workload_count": len(MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_VARIANTS),
+        "host_formula": (
+            "roundUp(min(ceilDiv(axisSize, 4), " "maxThreadsPerWorkgroup), simdWidth)"
+        ),
+        "bounded_axis_size": 32,
+        "subgroup_width": 32,
+        "variants": MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_VARIANTS,
+    },
+    "project_translation": {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 2, "opengl": 2},
+        "translated_count_by_target": {"directx": 2, "opengl": 2},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+    },
+    "materialization": {
+        "concrete_specialization_count": 5,
+        "reachable_specialization_count": 10,
+        "dependency_discovery_work_count": 76,
+        "pruned_candidate_count": 274,
+        "selected_parameters_by_entry": {
+            "argmin_float32": {
+                "N_READS": "4",
+                "Op": "ArgMin<float>",
+                "T": "float",
+            },
+            "argmax_float32": {
+                "N_READS": "4",
+                "Op": "ArgMax<float>",
+                "T": "float",
+            },
+        },
+        "overloaded_helper_selection": {
+            "source_name": "elem_to_loc",
+            "materialized_name": "elem_to_loc_int64_t",
+            "selected_first_parameter": "int64_t",
+            "rejected_first_parameter": "uint3",
+            "resolution": "signature-aware-call-site-materialization",
+        },
+    },
+    "artifacts": {
+        "directx": {
+            "argmin_float32": {
+                "sha256": (
+                    "e3f7392023bbb6457eb03398a766bdaa128ed709d66ce814c7209cd13de7e896"
+                ),
+                "size_bytes": 6655,
+            },
+            "argmax_float32": {
+                "sha256": (
+                    "ef67c5d24ae7c7492a6676a35e0604800c1d18e4113c411fffaa2070090a92c3"
+                ),
+                "size_bytes": 6657,
+            },
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "compiler": "dxc",
+            "compiler_version": "1.9.2602.24",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types", "-WX"],
+            "compiler_validation_status": "passed",
+        },
+        "opengl": {
+            "argmin_float32": {
+                "sha256": (
+                    "b74534a5120665ad07755141af2a73702cb5ea504a0526b92306eabedfed4765"
+                ),
+                "size_bytes": 7581,
+            },
+            "argmax_float32": {
+                "sha256": (
+                    "d90e758132832490b7f356c6750d4deb2bdb3341f053a921228a9f24ce8d27d8"
+                ),
+                "size_bytes": 7587,
+            },
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "compiler": "glslangValidator",
+            "compiler_target": "OpenGL/SPIR-V 1.3",
+            "validator": "spirv-val",
+            "control_barrier_instruction_count": 5,
+            "group_non_uniform_instruction_count": 0,
+            "compiler_validation_status": "passed",
+        },
+    },
+    "directx_relative_shuffle": {
+        "configuration": (
+            "project.source_options.metal.target_options.directx."
+            "relative_wave_shuffle_out_of_range"
+        ),
+        "policy": "self",
+        "default_policy": "undefined",
+        "activation": "explicit-target-scoped",
+        "selected_value_types": ["float", "uint"],
+        "invalid_source_lane_result": "calling-lane-value",
+        "invalid_source_lane_reads_emitted": False,
+        "source_lane_bounds": {
+            "down_valid_when": "delta < laneCount - lane",
+            "read_lane": "valid ? lane + delta : lane",
+        },
+        "wave_read_control_flow": "single-unconditional-selected-lane-read",
+    },
+    "software_subgroup": {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "selected_kernel_operations": [
+            "WaveShuffleDown(float, uint)",
+            "WaveShuffleDown(uint, uint)",
+        ],
+        "uniform_loop_contract": {
+            "condition": "offset > 0",
+            "updates": ["offset /= constant>=2", "offset >>= constant>=1"],
+            "helper_call_form": "direct-top-level-statement",
+            "unsafe_loop_behavior": "reject-before-artifact-emission",
+        },
+        "hardware_subgroup_extensions_emitted": False,
+        "group_non_uniform_instruction_count": 0,
+    },
+    "runtime_package": {
+        "artifact_count_per_variant_and_target": 1,
+        "ready_load_unit_count_per_variant_and_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count_by_target": {"directx": 9, "opengl": 8},
+        "resource_element_types": [
+            "float32",
+            "uint32",
+            "int32",
+            "int64",
+            "uint64",
+        ],
+        "directx_generated_dispatch_binding": "CrossGLDispatchInfo",
+        "scalar_64_bit_layout_reflected": True,
+    },
+    "workloads": {
+        "input_shape": [2, 32],
+        "input_values": (
+            "deterministic float32 rows with repeated extrema at distinct indices"
+        ),
+        "argmin_expected_indices": [5, 7],
+        "argmax_expected_indices": [3, 2],
+        "tie_behavior": "lowest index",
+        "output_dtype": "uint32",
+    },
+    "native_runtime": {
+        "directx": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_arg_reduce_native_loader.py::"
+                "test_pinned_mlx_arg_reduce_executes_through_directx_native_loader"
+            ),
+        },
+        "opengl": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-headless-egl-software-opengl",
+            "status": "required-on-ci",
+            "local_linux_arm64_validation": "passed",
+            "test": (
+                "tests/test_translator/test_mlx_arg_reduce_native_loader.py::"
+                "test_pinned_mlx_arg_reduce_executes_through_opengl_native_loader"
+            ),
+        },
+    },
+    "metal_roundtrip_boundary": {
+        "status": "entry-workgroup-specialization-target-unsupported",
+        "diagnostic": "project.translate.workgroup-size-rule-unsupported-target",
+        "missing_capability": "execution.workgroup-size-specialization",
+    },
+    "remaining_scope": {
+        "other_axis_sizes_included": False,
+        "other_dtypes_included": False,
+        "remaining_host_named_entries_included": False,
+        "aggregate_directx_opengl_translation_unblocked": False,
+        "mlx_host_runtime_integration_included": False,
+        "full_mlx_test_suite_included": False,
+    },
+    "runtime_execution_attempted": True,
+    "runtime_integration_included": True,
+    "selected_workloads_numerical_parity_verified": True,
+    "complete_runtime_coverage_claimed": False,
+    "full_mlx_test_suite_included": False,
+    "numerical_parity_claimed": False,
+    "runtime_parity_claimed": False,
+}
+MLX_CURRENT_SCALED_DOT_PRODUCT_ATTENTION_SHA256 = (
+    "f6fefad1d91b01f05c12095e69f248e255f880d65b5ae9e9d8bc2714da56fb41"
+)
+MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:97e5ebb69af8da3a0082776015787456f23b8bfdb0cff757f5364db2cfef8d2c"
+)
+MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_VARIANTS = {
+    "vector-float32-b1-h1-q1-k4-d64-v64-nomask": {
+        "artifact_id": (
+            "sha256:dd0138695bd82e1f8ea49bd667052b484420ee96cb2849c6eed20ba5eae39a89"
+        ),
+        "dispatch_variant_id": (
+            "sha256:8b2abb9f7179e051530697fb8d1956d0ff03a324e7acaa5fcdf4f4dd9f1befbb"
+        ),
+        "entry_point": "sdpa_vector_float_64_64",
+        "inputs": {
+            "batchSize": 1,
+            "boolMask": False,
+            "doCausal": False,
+            "dtype": "float32",
+            "floatMask": False,
+            "hasMask": False,
+            "hasSinks": False,
+            "keyLength": 4,
+            "kvHeads": 1,
+            "queryDimension": 64,
+            "queryHeads": 1,
+            "queryLength": 1,
+            "queryTransposed": False,
+            "valueDimension": 64,
+        },
+        "workgroup_size": [1024, 1, 1],
+        "dispatch_workgroup_count": [1, 1, 1],
+        "specialization_constants": {
+            "20": False,
+            "21": False,
+            "22": False,
+            "23": False,
+            "24": False,
+            "25": False,
+        },
+    }
+}
+MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_RUNTIME_EVIDENCE = {
+    "status": "translated-packaged-and-cross-target-native-runtime-required",
+    "commit": MLX_CORPUS_COMMIT,
+    "source": MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+    "source_sha256": MLX_CURRENT_SCALED_DOT_PRODUCT_ATTENTION_SHA256,
+    "selected_entry_point": "sdpa_vector_float_64_64",
+    "selected_workload": "vector-float32-b1-h1-q1-k4-d64-v64-nomask",
+    "dispatch_contract": {
+        "path": (
+            "demos/integrations/mlx/contracts/"
+            "scaled_dot_product_attention.native-loader.dispatch.json"
+        ),
+        "content_identity": (
+            MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY
+        ),
+        "workload_count": len(
+            MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_VARIANTS
+        ),
+        "host_selection": "one-pass-vector",
+        "host_source": "mlx/backend/metal/scaled_dot_product_attention.cpp",
+        "implementation_source": "mlx/backend/metal/kernels/sdpa_vector.h",
+        "subgroup_width": 32,
+        "variants": MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_VARIANTS,
+    },
+    "project_translation": {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 1, "opengl": 1},
+        "translated_count_by_target": {"directx": 1, "opengl": 1},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+    },
+    "materialization": {
+        "concrete_specialization_count": 1,
+        "reachable_specialization_count": 4,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 753,
+        "selected_parameters": {"D": "64", "T": "float", "V": "64"},
+    },
+    "specialization_constants": {
+        "20": {"name": "has_mask", "value": False},
+        "21": {"name": "query_transposed", "value": False},
+        "22": {"name": "do_causal", "value": False},
+        "23": {"name": "bool_mask", "value": False},
+        "24": {"name": "float_mask", "value": False},
+        "25": {"name": "has_sinks", "value": False},
+    },
+    "artifacts": {
+        "directx": {
+            "target_entry_point": "CSMain",
+            "sha256": (
+                "003c8b9e85bad7363bae2e3d80380d979cbe0b8988d0d98751131c3acfbff6b6"
+            ),
+            "size_bytes": 8721,
+            "workgroup_size": [1024, 1, 1],
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
+            "compiler": "dxc",
+            "compiler_version": "1.9.2602.24",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types", "-WX"],
+            "compiled_dxil_size_bytes": 9000,
+            "compiler_validation_status": "passed",
+            "specialization_materialization": "concrete",
+        },
+        "opengl": {
+            "target_entry_point": "main",
+            "sha256": (
+                "9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b"
+            ),
+            "size_bytes": 12089,
+            "workgroup_size": [1024, 1, 1],
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "compiler": "glslangValidator",
+            "compiler_target": "OpenGL/SPIR-V 1.3",
+            "validator": "spirv-val",
+            "control_barrier_instruction_count": 9,
+            "group_non_uniform_instruction_count": 0,
+            "specialization_constant_false_count": 6,
+            "compiler_validation_status": "passed",
+            "specialization_materialization": "deferred",
+        },
+    },
+    "software_subgroup": {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "logical_subgroup_count": 32,
+        "activation": "explicit-target-scoped",
+        "selected_kernel_operations": [
+            "WaveActiveMax(float)",
+            "WaveActiveSum(float)",
+        ],
+        "synchronized_subgroup_strided_loop_contract": {
+            "initializer": "subgroup-id-semantic",
+            "bound": "workgroup-uniform-runtime-value",
+            "stride": 32,
+            "collective_count_per_loop": 1,
+            "inactive_lane_behavior": "typed-collective-identity",
+            "unsafe_loop_behavior": "reject-before-artifact-emission",
+        },
+        "hardware_subgroup_extensions_emitted": False,
+        "group_non_uniform_instruction_count": 0,
+    },
+    "runtime_package": {
+        "artifact_count_per_target": 1,
+        "ready_load_unit_count_per_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count_by_target": {"directx": 19, "opengl": 18},
+        "specialization_constant_count": 6,
+        "resource_element_types": ["float32", "int32", "uint32", "uint64"],
+        "stored_bool_physical_type": "uint32",
+        "optional_placeholder_resources": ["bmask", "fmask", "sinks"],
+        "directx_generated_dispatch_binding": "CrossGLDispatchInfo",
+        "opengl_deferred_variant_registry": "ready",
+        "opengl_native_registry_header": {
+            "available": False,
+            "reason": "specialization-requires-deferred-compilation",
+        },
+    },
+    "workload": {
+        "batch_size": 1,
+        "query_heads": 1,
+        "kv_heads": 1,
+        "query_length": 1,
+        "key_length": 4,
+        "query_dimension": 64,
+        "value_dimension": 64,
+        "scale": 0.125,
+        "mask": "none",
+        "causal": False,
+        "sinks": False,
+        "output_element_count": 64,
+        "reference": "stable-float32-scaled-dot-product-attention",
+        "absolute_tolerance": 0.0002,
+        "relative_tolerance": 0.0002,
+    },
+    "native_runtime": {
+        "directx": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/"
+                "test_mlx_scaled_dot_product_attention_native_loader.py::"
+                "test_pinned_mlx_attention_executes_through_directx_native_loader"
+            ),
+        },
+        "opengl": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-headless-egl-software-opengl",
+            "status": "required-on-ci",
+            "local_linux_mesa_validation": "passed",
+            "local_max_absolute_error": 4.082320426146424e-08,
+            "local_max_relative_error": 4.2163276126605175e-06,
+            "test": (
+                "tests/test_translator/"
+                "test_mlx_scaled_dot_product_attention_native_loader.py::"
+                "test_pinned_mlx_attention_executes_through_opengl_native_loader"
+            ),
+        },
+    },
+    "metal_roundtrip_boundary": {
+        "status": "outside-selected-native-loader-proof",
+        "aggregate_native_baseline": "separate",
+        "selected_entry_compiler_validation_included": False,
+    },
+    "remaining_scope": {
+        "masked_attention_included": False,
+        "causal_attention_included": False,
+        "sinks_included": False,
+        "two_pass_attention_included": False,
+        "full_attention_path_included": False,
+        "other_dimensions_included": False,
+        "other_dtypes_included": False,
+        "remaining_host_named_entries_included": False,
+        "aggregate_directx_opengl_translation_unblocked": False,
+        "mlx_host_runtime_integration_included": False,
+        "full_mlx_test_suite_included": False,
+    },
+    "runtime_execution_attempted": True,
+    "runtime_integration_included": True,
+    "selected_workload_numerical_parity_verified": True,
+    "complete_runtime_coverage_claimed": False,
+    "full_mlx_test_suite_included": False,
+    "numerical_parity_claimed": False,
+    "runtime_parity_claimed": False,
+}
+MLX_CURRENT_SOFTMAX_SHA256 = (
+    "d19231c66973edc3944f12529d1cc393029e7f7262b914907c710ef9dbcb39e2"
+)
+MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:1ef1b663b0ff87dbd193bf73dded4dd1c8008e03dcd9c7e8d9ff8aaad832b006"
+)
+MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_VARIANTS = {
+    "block-float32-axis-32-two-rows": {
+        "artifact_id": (
+            "sha256:fa3eb57ad31078c7300855a29c8d67d5f6ac9595e33b651085a9e5fcf3883ea2"
+        ),
+        "dispatch_variant_id": (
+            "sha256:59a3029f50afad7ed80bd0533849cf33f1cdd8d2e5586b6b17b82d0e979119e8"
+        ),
+        "inputs": {"axisSize": 32, "dtype": "float32", "nRows": 2},
+        "workgroup_size": [32, 1, 1],
+        "dispatch_workgroup_count": [2, 1, 1],
+    },
+    "block-float32-axis-2049": {
+        "artifact_id": (
+            "sha256:956659b706f518421d9f99b08d028ec0a9ceeb359a556a7777c565dfb8e5df37"
+        ),
+        "dispatch_variant_id": (
+            "sha256:fa751ebed377b5371cb0a4f91c38eaf8ac95e6430f03ac4a21ef4bddcda91a0d"
+        ),
+        "inputs": {"axisSize": 2049, "dtype": "float32", "nRows": 1},
+        "workgroup_size": [544, 1, 1],
+        "dispatch_workgroup_count": [1, 1, 1],
+    },
+}
+MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
+    "status": "translated-packaged-and-cross-target-native-runtime-required",
+    "commit": MLX_CORPUS_COMMIT,
+    "source": MLX_SOFTMAX_SOURCE,
+    "source_sha256": MLX_CURRENT_SOFTMAX_SHA256,
+    "selected_entry_point": "block_softmax_float32",
+    "dispatch_contract": {
+        "path": (
+            "demos/integrations/mlx/contracts/" "softmax.native-loader.dispatch.json"
+        ),
+        "content_identity": MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY,
+        "workload_count": len(MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_VARIANTS),
+        "host_formula": "32 * ceilDiv(ceilDiv(axisSize, 4), 32)",
+        "block_limit": 4096,
+        "subgroup_width": 32,
+        "variants": MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_VARIANTS,
+    },
+    "project_translation": {
+        "unit_count": 1,
+        "guarded_artifact_count_by_target": {"directx": 2, "opengl": 2},
+        "software_opengl_artifact_count": 2,
+        "translated_count_by_target": {"directx": 2, "opengl": 2},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+    },
+    "materialization": {
+        "concrete_specialization_count": 2,
+        "reachable_specialization_count": 5,
+        "dependency_discovery_work_count": 11,
+        "pruned_candidate_count": 131,
+        "selected_parameters": {
+            "AccT": "float",
+            "N_READS": "SOFTMAX_N_READS",
+            "T": "float",
+        },
+    },
+    "guarded_artifacts": {
+        "directx": {
+            "block-float32-axis-32-two-rows": {
+                "sha256": (
+                    "8b5540acc90669bc8b4a75985b42ee34c9e45258c63889f703f140b1330337ee"
+                ),
+                "size_bytes": 4213,
+                "subgroup_id_lowering": "fixed-single-wave-group-index-quotient",
+            },
+            "block-float32-axis-2049": {
+                "sha256": (
+                    "1c20679115f29d981762165f7c9e1ecd57a641ceff376b2f8d13f33520857f05"
+                ),
+                "size_bytes": 4784,
+                "subgroup_id_lowering": (
+                    "workgroup-synchronized-physical-wave-allocation"
+                ),
+            },
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "compiler": "dxc",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types"],
+            "warnings_as_errors": True,
+            "compiler_validation_status": "passed",
+        },
+        "opengl": {
+            "block-float32-axis-32-two-rows": {
+                "sha256": (
+                    "5a1da27d4acc858937ddbfc73aed27b2270c9b17e02d6cf9ebb920980dbc5a51"
+                ),
+                "size_bytes": 4663,
+            },
+            "block-float32-axis-2049": {
+                "sha256": (
+                    "9d185604faa31f5dd013b2e009683658c063f0105f516fb02891ea3ab2b5485f"
+                ),
+                "size_bytes": 4664,
+            },
+            "subgroup_enforcement": "glsl-subgroup-size-guard",
+            "compiler": "glslangValidator",
+            "validator": "spirv-val",
+        },
+    },
+    "software_opengl_artifacts": {
+        "block-float32-axis-32-two-rows": {
+            "sha256": (
+                "f69dad597cefc34f7908799aaf0ba2eac47a0dcdd91e5f2bf3d7247172fa84b9"
+            ),
+            "size_bytes": 5585,
+            "workgroup_size": [32, 1, 1],
+            "logical_subgroup_count": 1,
+            "masked_collective_count": 0,
+            "control_barrier_instruction_count": 11,
+            "group_non_uniform_instruction_count": 0,
+        },
+        "block-float32-axis-2049": {
+            "sha256": (
+                "eb195e15089f4e7bade380af55e8b7e167c4b89f80b2f25675eb71196a5468ce"
+            ),
+            "size_bytes": 7204,
+            "workgroup_size": [544, 1, 1],
+            "logical_subgroup_count": 17,
+            "masked_collective_count": 2,
+            "control_barrier_instruction_count": 11,
+            "group_non_uniform_instruction_count": 0,
+        },
+        "compiler": "glslangValidator",
+        "compiler_target": "OpenGL/SPIR-V 1.3",
+        "validator": "spirv-val",
+        "validator_target": "SPIR-V 1.3",
+        "status": "passed",
+    },
+    "software_subgroup": {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "selected_kernel_operations": [
+            "WaveActiveMax(float)",
+            "WaveActiveSum(float)",
+        ],
+        "masked_reduction_operations": [
+            "WaveActiveSum",
+            "WaveActiveMin",
+            "WaveActiveMax",
+        ],
+        "typed_mask_identities": {
+            "WaveActiveSum": {"float": "0.0", "int": "0", "uint": "0u"},
+            "WaveActiveMin": {
+                "float": "+infinity",
+                "int": "INT_MAX",
+                "uint": "UINT_MAX",
+            },
+            "WaveActiveMax": {
+                "float": "-infinity",
+                "int": "INT_MIN",
+                "uint": "0u",
+            },
+        },
+        "masked_shuffle_supported": False,
+        "artifact_marker": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+        "hardware_subgroup_extensions_emitted": False,
+        "hardware_subgroup_marker_emitted": False,
+        "hardware_subgroup_execution_metadata_emitted": False,
+        "unsupported_contract_behavior": "reject-before-artifact-emission",
+    },
+    "runtime_package": {
+        "artifact_count_per_variant_and_target": 1,
+        "ready_load_unit_count_per_variant_and_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count": 3,
+        "resources": [
+            {"binding": 0, "role": "input", "dtype": "float32"},
+            {"binding": 1, "role": "output", "dtype": "float32"},
+            {"binding": 2, "role": "axis_size", "dtype": "int32"},
+        ],
+    },
+    "workloads": {
+        "block-float32-axis-32-two-rows": {
+            "input_shape": [2, 32],
+            "input_values": "row0=(index-16)/8; row1=(((index*7)%19)-9)/5",
+            "reference": "row-wise stable exp(x-max)/sum(exp(x-max))",
+            "output_element_count": 64,
+        },
+        "block-float32-axis-2049": {
+            "input_shape": [2049],
+            "input_values": "(((index*13)%37)-18)/7",
+            "reference": "stable exp(x-max)/sum(exp(x-max))",
+            "output_element_count": 2049,
+        },
+        "absolute_tolerance": 0.00005,
+        "relative_tolerance": 0.00005,
+    },
+    "native_runtime": {
+        "directx": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_softmax_native_loader.py::"
+                "test_pinned_mlx_softmax_executes_through_directx_native_loader"
+            ),
+        },
+        "opengl": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-headless-egl-software-opengl",
+            "status": "required-on-ci",
+            "local_linux_arm64_validation": "passed",
+            "test": (
+                "tests/test_translator/test_mlx_softmax_native_loader.py::"
+                "test_pinned_mlx_softmax_executes_through_opengl_native_loader"
+            ),
+        },
+    },
+    "metal_roundtrip_boundary": {
+        "status": "entry-scoped-target-unsupported",
+        "diagnostic": "project.translate.entry-point-target-unsupported",
+        "missing_capability": "artifact.entry-point-selection",
+    },
+    "remaining_scope": {
+        "looped_axis_sizes_above_4096_included": False,
+        "float16_and_bfloat16_included": False,
+        "precise_half_and_bfloat16_entries_included": False,
+        "other_axis_sizes_included": False,
+        "mlx_host_runtime_integration_included": False,
+        "full_mlx_test_suite_included": False,
+    },
+    "runtime_execution_attempted": True,
+    "runtime_integration_included": True,
+    "selected_workload_numerical_parity_verified": True,
+    "complete_runtime_coverage_claimed": False,
+    "full_mlx_test_suite_included": False,
+    "numerical_parity_claimed": False,
+    "runtime_parity_claimed": False,
+}
+MLX_CURRENT_RMS_NORM_SHA256 = (
+    "b2e04e377fdad1d645581f9beeaf9cbb06d1ad32926161e06cbc15240caf12bf"
+)
+MLX_RMS_NORM_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY = (
+    "sha256:f733849c0ded2be96de6b5b6df6df662751c733fa13c2036baf9a834db3981c5"
+)
+MLX_RMS_NORM_NATIVE_RUNTIME_EVIDENCE = {
+    "status": "translated-packaged-and-native-runtime-required",
+    "commit": MLX_CORPUS_COMMIT,
+    "source": MLX_RMS_NORM_SOURCE,
+    "source_sha256": MLX_CURRENT_RMS_NORM_SHA256,
+    "selected_entry_point": "rmsfloat32",
+    "selected_workload": "forward-float32-axis-32",
+    "dispatch_contract": {
+        "path": (
+            "demos/integrations/mlx/contracts/" "rms_norm.native-loader.dispatch.json"
+        ),
+        "content_identity": MLX_RMS_NORM_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY,
+        "artifact_id": (
+            "sha256:00c05fccf276cf11f3fb9b617b8fe0bb3c5f8766c0e4ca1ed990c093e700422e"
+        ),
+        "workload_count": 1,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width": 32,
+        "dispatch_workgroup_count": [2, 1, 1],
+        "function_constants": {},
+    },
+    "entry_scoped_specialization_ownership": {
+        "constant_name": "has_w",
+        "constant_id": 20,
+        "reachable_from_selected_entry": False,
+        "artifact_specialization_constant_count": 0,
+        "runtime_manifest_specialization_constant_count": 0,
+        "reachable_vjp_constants_preserved": True,
+        "resolved_issue": "https://github.com/CrossGL/crosstl/issues/1795",
+    },
+    "project_translation": {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 1, "opengl": 1},
+        "translated_count_by_target": {"directx": 1, "opengl": 1},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+        "workgroup_size": [32, 1, 1],
+        "directx_subgroup_width": 32,
+        "opengl_subgroup_width_rule_configured": False,
+    },
+    "materialization": {
+        "concrete_specialization_count": 1,
+        "reachable_specialization_count": 4,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 168,
+        "selected_parameters": {"N_READS": "RMS_N_READS", "T": "float"},
+    },
+    "artifacts": {
+        "directx": {
+            "target_entry_point": "CSMain",
+            "sha256": (
+                "f03d8c3c1df2256e5c867bfd235e57b66d68a1c6e3c3c04701a581d8ef7b3e67"
+            ),
+            "size_bytes": 3486,
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "compiler": "dxc",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types"],
+            "native_runtime": {
+                "platform": "windows-latest",
+                "runtime": "direct3d-12-warp",
+                "status": "required-on-ci",
+                "test": (
+                    "tests/test_translator/test_mlx_rms_norm_native_loader.py::"
+                    "test_pinned_mlx_rms_norm_executes_through_directx_native_loader"
+                ),
+            },
+        },
+        "opengl": {
+            "target_entry_point": "main",
+            "sha256": (
+                "3180aba83b64add0ae3c2d471b9297eb5bada4c4ff2bd5c91a3db3698cf0df78"
+            ),
+            "size_bytes": 4393,
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "compiler": "glslangValidator",
+            "validator": "spirv-val",
+            "control_barrier_instruction_count": 6,
+            "group_non_uniform_instruction_count": 0,
+            "native_runtime": {
+                "platform": "ubuntu-latest",
+                "runtime": "mesa-headless-egl-software-opengl",
+                "status": "required-on-ci",
+                "test": (
+                    "tests/test_translator/test_mlx_rms_norm_native_loader.py::"
+                    "test_pinned_mlx_rms_norm_executes_through_opengl_native_loader"
+                ),
+            },
+        },
+    },
+    "software_subgroup": {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "operations": ["WaveActiveSum(float)"],
+        "artifact_marker": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+        "control_barrier_instruction_count": 6,
+        "group_non_uniform_instruction_count": 0,
+        "hardware_subgroup_extensions_emitted": False,
+        "hardware_subgroup_marker_emitted": False,
+        "hardware_subgroup_execution_metadata_emitted": False,
+        "unsupported_contract_behavior": "reject-before-artifact-emission",
+    },
+    "runtime_package": {
+        "artifact_count_by_target": {"directx": 1, "opengl": 1},
+        "ready_load_unit_count_by_target": {"directx": 1, "opengl": 1},
+        "blocked_load_unit_count_by_target": {"directx": 0, "opengl": 0},
+        "resource_count": 6,
+        "resources": [
+            {"binding": 0, "role": "input", "dtype": "float32"},
+            {"binding": 1, "role": "weight", "dtype": "float32"},
+            {"binding": 2, "role": "output", "dtype": "float32"},
+            {"binding": 3, "role": "epsilon", "dtype": "float32"},
+            {"binding": 4, "role": "axis_size", "dtype": "uint32"},
+            {"binding": 5, "role": "weight_stride", "dtype": "uint32"},
+        ],
+    },
+    "workload": {
+        "dtype": "float32",
+        "shape": [2, 32],
+        "axis_size": 32,
+        "row_count": 2,
+        "weight_shape": [32],
+        "epsilon": 0.00001,
+        "weight_stride": 1,
+        "input_values": "row0=(index-16)/8; row1=((index%9)-4)*0.3125",
+        "weight_values": "0.5+(index%5)*0.125",
+        "reference": "x*w*rsqrt(mean(x*x)+epsilon)",
+        "output_element_count": 64,
+        "absolute_tolerance": 0.00003,
+        "relative_tolerance": 0.00003,
+    },
+    "remaining_scope": {
+        "forward_entries_other_than_rmsfloat32_included": False,
+        "vjp_entries_included": False,
+        "float16_and_bfloat16_included": False,
+        "looped_entries_included": False,
+        "other_axis_sizes_included": False,
+        "historical_compiler_dispatch_record_count": 12,
+        "mlx_host_runtime_integration_included": False,
+    },
+    "runtime_execution_attempted": True,
+    "runtime_integration_included": True,
+    "selected_workload_numerical_parity_verified": True,
+    "complete_runtime_coverage_claimed": False,
+    "full_mlx_test_suite_included": False,
+    "numerical_parity_claimed": False,
+    "runtime_parity_claimed": False,
+    "resolved_by": ["https://github.com/CrossGL/crosstl/issues/1795"],
 }
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
@@ -4052,6 +5248,31 @@ def _require_clean_frontier_report(
     return artifacts_by_source
 
 
+def _require_directx_dispatch_generated_artifacts(
+    family: str,
+    variants: Mapping[str, Mapping[str, Any]],
+    *,
+    hash_field: str,
+) -> None:
+    observed: dict[str, dict[str, Any]] = {}
+    for name, variant in variants.items():
+        generated = variant.get("generatedHlsl")
+        _require(
+            isinstance(generated, Mapping)
+            and isinstance(generated.get(hash_field), str)
+            and isinstance(generated.get("sizeBytes"), int),
+            f"{family} generated HLSL identity is incomplete for {name}",
+        )
+        observed[name] = {
+            "sha256": generated[hash_field],
+            "sizeBytes": generated["sizeBytes"],
+        }
+    _require(
+        observed == MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS[family],
+        f"{family} generated HLSL identities changed",
+    )
+
+
 def _require_layer_norm_dispatch_frontier_report(
     mlx_root: Path,
     output_dir: Path,
@@ -4335,6 +5556,12 @@ def _require_layer_norm_dispatch_frontier_report(
             and all(run.get("status") == "ok" for run in toolchain_runs),
             "LayerNorm dispatch DXC did not validate both artifacts",
         )
+
+    _require_directx_dispatch_generated_artifacts(
+        "layer_norm",
+        generated_evidence,
+        hash_field="sha256",
+    )
 
     evidence = {
         "status": "translated-dxc-validated" if validated else "translated",
@@ -4666,6 +5893,12 @@ def _require_logsumexp_dispatch_frontier_report(
             and {run.get("path") for run in toolchain_runs} == artifact_paths,
             "LogSumExp dispatch DXC did not validate every artifact",
         )
+
+    _require_directx_dispatch_generated_artifacts(
+        "logsumexp",
+        generated_evidence,
+        hash_field="normalizedSha256",
+    )
 
     evidence = {
         "status": "translated-dxc-validated" if validated else "translated",
@@ -5022,6 +6255,12 @@ def _require_rms_norm_dispatch_frontier_report(
             "RMSNorm dispatch DXC did not validate every artifact",
         )
 
+    _require_directx_dispatch_generated_artifacts(
+        "rms_norm",
+        generated_evidence,
+        hash_field="normalizedSha256",
+    )
+
     evidence = {
         "status": "translated-dxc-validated" if validated else "translated",
         "source": MLX_RMS_NORM_SOURCE,
@@ -5348,6 +6587,9 @@ def _run_frontier_project(
         index_range_assertions=index_range_assertions,
         dispatch_contracts=dispatch_contracts,
     )
+    # Exact project artifacts must not depend on the host's optional
+    # clang-format version. Keep these evidence-producing translations on the
+    # code generator's deterministic bytes; native compilers validate them below.
     command = [
         python,
         "-m",
@@ -5358,6 +6600,7 @@ def _run_frontier_project(
         str(config_path),
         "--report",
         str(report_path),
+        "--no-format",
     ]
     if validate:
         command.append("--validate")

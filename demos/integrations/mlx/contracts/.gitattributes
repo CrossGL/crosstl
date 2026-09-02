@@ -1,0 +1,3 @@
+# MLX contract identities are SHA-256 hashes of checked-in bytes.  Keep their
+# canonical LF representation on Windows so raw-byte verification is portable.
+* text=auto eol=lf

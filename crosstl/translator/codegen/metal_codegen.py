@@ -2,6 +2,7 @@
 
 import ast as py_ast
 import re
+from copy import deepcopy
 from hashlib import sha1
 
 from ...backend.common_ast import AssignmentNode as BackendAssignmentNode
@@ -31,6 +32,7 @@ from ..ast import (
     MemberAccessNode,
     MeshOpNode,
     PointerAccessNode,
+    PointerReinterpretNode,
     PointerType,
     PreprocessorNode,
     RangeNode,
@@ -38,6 +40,7 @@ from ..ast import (
     RayTracingOpNode,
     ReferenceType,
     ReturnNode,
+    StageMap,
     StructNode,
     SwitchNode,
     TernaryOpNode,
@@ -45,6 +48,11 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
     WhileNode,
+)
+from ..structure_conversions import (
+    StructureConversionKind,
+    StructureFieldValue,
+    registered_structure_conversion_for_identity,
 )
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
@@ -304,6 +312,10 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .pointer_reinterpret import (
+    metal_local_single_field_reinterpret_contract,
+    validate_pointer_reinterpretation_target,
+)
 from .resource_arrays import collect_resource_array_size_hints
 from .stage_utils import (
     assign_stage_entry_names,
@@ -347,6 +359,54 @@ class UnsupportedMetalFeatureError(ValueError):
         self.missing_capabilities = tuple(missing_capabilities)
         self.operation = operation
         self.reason = reason
+        self.source_location = source_location
+
+
+class MetalStructConversionError(ValueError):
+    """Raised when a registered source structure conversion is not faithful."""
+
+    project_diagnostic_code = "project.translate.metal-struct-construction-unsupported"
+    missing_capabilities = ("metal.struct-conversion-construction",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        destination_type=None,
+        source_type=None,
+        conversion_kind=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.destination_type = destination_type
+        self.source_type = source_type
+        self.conversion_kind = conversion_kind
+        self.reason = reason
+        self.source_location = source_location
+
+
+class MetalEntryPointSelectionError(ValueError):
+    """Raised when a requested standalone Metal entry cannot be selected."""
+
+    project_diagnostic_code = "project.translate.metal-entry-point-unavailable"
+    missing_capabilities = ("artifact.entry-point-selection",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        entry_point=None,
+        available_entry_points=None,
+        reason=None,
+        stage=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.entry_point = entry_point
+        self.available_entry_points = tuple(available_entry_points or ())
+        self.reason = reason
+        self.stage = stage
         self.source_location = source_location
 
 
@@ -463,6 +523,11 @@ class MetalCodeGen:
         "ddy": "dfdy",
         "dFdy": "dfdy",
     }
+    # Metal's native `abs` overload set does not accept bfloat directly: the
+    # simultaneous half/float/integer conversions are ambiguous.  Promote only
+    # the source bfloat arguments for operations with this proven native gap;
+    # do not make half/float -> bfloat a general implicit conversion.
+    METAL_BFLOAT_ARGUMENT_PROMOTED_FUNCTIONS = {"abs", "max", "min"}
     METAL_STDLIB_BUILTIN_FUNCTIONS = {
         "abs",
         "acos",
@@ -769,6 +834,7 @@ class MetalCodeGen:
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
         self.metal_lowered_program_scope_groupshared_global_ids = set()
         self.metal_program_scope_value_global_types = {}
+        self.metal_type_aliases = {}
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
         self.cbuffer_parameter_names = {}
@@ -822,6 +888,7 @@ class MetalCodeGen:
         self.struct_member_address_spaces = {}
         self.structs_by_name = {}
         self.metal_generated_struct_names = set()
+        self.metal_union_layouts = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
         self.generic_function_definitions = {}
@@ -902,8 +969,12 @@ class MetalCodeGen:
             "float": "float",
             "half": "half",
             "float16": "half",
+            "float16_t": "half",
             "min16float": "half",
             "min10float": "half",
+            "bfloat": "bfloat",
+            "bfloat16": "bfloat",
+            "bfloat16_t": "bfloat",
             "i8": "int",
             "u8": "uint",
             "i16": "int",
@@ -966,12 +1037,21 @@ class MetalCodeGen:
             "vec2<u32>": "uint2",
             "vec3<u32>": "uint3",
             "vec4<u32>": "uint4",
+            "vec2<i64>": "long2",
+            "vec3<i64>": "long3",
+            "vec4<i64>": "long4",
+            "vec2<u64>": "ulong2",
+            "vec3<u64>": "ulong3",
+            "vec4<u64>": "ulong4",
             "vec2<bool>": "bool2",
             "vec3<bool>": "bool3",
             "vec4<bool>": "bool4",
             "ivec2": "int2",
             "ivec3": "int3",
             "ivec4": "int4",
+            "i64vec2": "long2",
+            "i64vec3": "long3",
+            "i64vec4": "long4",
             "short2": "int2",
             "short3": "int3",
             "short4": "int4",
@@ -1005,6 +1085,9 @@ class MetalCodeGen:
             "uvec2": "uint2",
             "uvec3": "uint3",
             "uvec4": "uint4",
+            "u64vec2": "ulong2",
+            "u64vec3": "ulong3",
+            "u64vec4": "ulong4",
             "float2": "float2",
             "float3": "float3",
             "float4": "float4",
@@ -1333,6 +1416,366 @@ class MetalCodeGen:
         """Generate complete Metal Shading Language source for a CrossGL AST."""
         return self.generate_program(ast)
 
+    def generate_entry(self, ast, entry_point):
+        """Generate one independently loadable Metal compute entry artifact."""
+        scoped_ast = self.entry_scoped_ast(ast, entry_point)
+        return self.generate_program(scoped_ast)
+
+    def entry_scoped_ast(self, ast, entry_point):
+        if not isinstance(entry_point, str) or not entry_point.strip():
+            raise MetalEntryPointSelectionError(
+                "Metal entry-point selection requires a non-empty source entry name",
+                entry_point=entry_point,
+                reason="invalid-name",
+            )
+        entry_point = entry_point.strip()
+        stage_entry_types = self.stage_entry_types()
+        entries = collect_stage_entry_records(ast, None, stage_entry_types)
+        available = sorted(
+            {
+                str(getattr(function, "name", ""))
+                for _entry_id, _stage_name, function in entries
+                if getattr(function, "name", None)
+            }
+        )
+        matches = [
+            (entry_id, stage_name, function)
+            for entry_id, stage_name, function in entries
+            if getattr(function, "name", None) == entry_point
+        ]
+        if not matches:
+            raise MetalEntryPointSelectionError(
+                f"Metal source entry point '{entry_point}' was not found",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="not-found",
+            )
+        if len(matches) != 1:
+            raise MetalEntryPointSelectionError(
+                f"Metal source entry point '{entry_point}' is ambiguous",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="ambiguous",
+            )
+
+        _selected_id, selected_stage_name, selected_function = matches[0]
+        selected_stage_name = normalize_stage_name(selected_stage_name)
+        if selected_stage_name != "compute":
+            raise MetalEntryPointSelectionError(
+                f"Metal standalone entry point '{entry_point}' must be a compute "
+                f"entry; found stage '{selected_stage_name}'",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="unsupported-stage",
+                stage=selected_stage_name,
+                source_location=getattr(selected_function, "source_location", None),
+            )
+        selected_stage = next(
+            (
+                (stage_type, stage)
+                for stage_type, stage in getattr(ast, "stages", {}).items()
+                if getattr(stage, "entry_point", None) is selected_function
+            ),
+            None,
+        )
+        scoped_ast = deepcopy(ast)
+        selected_copy_function = None
+        scoped_ast.functions = [
+            function
+            for function in getattr(scoped_ast, "functions", []) or []
+            if function_stage_name(function) not in stage_entry_types
+            or (
+                selected_stage is None
+                and function_stage_name(function) == selected_stage_name
+                and getattr(function, "name", None) == entry_point
+            )
+        ]
+        selected_stages = StageMap()
+        if selected_stage is not None:
+            stage_type, stage = selected_stage
+            selected_stage_copy = deepcopy(stage)
+            selected_stages.append(stage_type, selected_stage_copy)
+            selected_copy_function = selected_stage_copy.entry_point
+        else:
+            selected_copy_function = next(
+                (
+                    function
+                    for function in scoped_ast.functions
+                    if function_stage_name(function) == selected_stage_name
+                    and getattr(function, "name", None) == entry_point
+                ),
+                None,
+            )
+        scoped_ast.stages = selected_stages
+        if selected_copy_function is None:
+            raise MetalEntryPointSelectionError(
+                f"Metal source entry point '{entry_point}' could not be copied",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="copy-failed",
+            )
+
+        reachable_names = self.entry_reachable_function_names(
+            scoped_ast,
+            selected_copy_function,
+        )
+        scoped_ast.functions = [
+            function
+            for function in getattr(scoped_ast, "functions", []) or []
+            if function is selected_copy_function
+            or getattr(function, "name", None) in reachable_names
+        ]
+        for _stage_type, stage in scoped_ast.stages.items():
+            stage.local_functions = [
+                function
+                for function in getattr(stage, "local_functions", []) or []
+                if getattr(function, "name", None) in reachable_names
+            ]
+        self.prune_entry_scoped_declarations(scoped_ast, selected_copy_function)
+        self.prune_entry_scoped_structs(scoped_ast, selected_copy_function)
+        return scoped_ast
+
+    def entry_scoped_functions(self, ast, entry_function):
+        functions = list(getattr(ast, "functions", []) or [])
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            functions.extend(getattr(stage, "local_functions", []) or [])
+        functions.append(entry_function)
+        return functions
+
+    def prune_entry_scoped_declarations(self, ast, entry_function):
+        """Retain only module declarations reachable from one compute entry."""
+        functions = self.entry_scoped_functions(ast, entry_function)
+        function_names = {
+            getattr(function, "name", None)
+            for function in functions
+            if getattr(function, "name", None)
+        }
+        referenced_names = set()
+        for function in functions:
+            local_names = {
+                getattr(parameter, "name", None)
+                for parameter in (
+                    getattr(
+                        function,
+                        "parameters",
+                        getattr(function, "params", []),
+                    )
+                    or []
+                )
+                if getattr(parameter, "name", None)
+            }
+            local_names.update(
+                getattr(node, "name", None)
+                for node in self.entry_ast_nodes(getattr(function, "body", None))
+                if isinstance(node, VariableNode) and getattr(node, "name", None)
+            )
+            referenced_names.update(
+                self.entry_identifier_references(function) - local_names
+            )
+        referenced_names.difference_update(function_names)
+
+        declaration_groups = [
+            (ast, "global_variables", False),
+            (ast, "constants", False),
+            (ast, "cbuffers", True),
+        ]
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            declaration_groups.extend(
+                (
+                    (stage, "local_variables", False),
+                    (stage, "local_cbuffers", True),
+                )
+            )
+
+        declarations = []
+        for owner, attribute, include_members in declaration_groups:
+            for declaration in getattr(owner, attribute, []) or []:
+                names = self.entry_declaration_names(
+                    declaration,
+                    include_members=include_members,
+                )
+                declarations.append((declaration, names))
+
+        retained_ids = set()
+        changed = True
+        while changed:
+            changed = False
+            for declaration, names in declarations:
+                declaration_id = id(declaration)
+                if declaration_id in retained_ids or not names & referenced_names:
+                    continue
+                retained_ids.add(declaration_id)
+                referenced_names.update(
+                    self.entry_identifier_references(declaration) - names
+                )
+                changed = True
+
+        for owner, attribute, _include_members in declaration_groups:
+            setattr(
+                owner,
+                attribute,
+                [
+                    declaration
+                    for declaration in getattr(owner, attribute, []) or []
+                    if id(declaration) in retained_ids
+                ],
+            )
+
+    def prune_entry_scoped_structs(self, ast, entry_function):
+        """Retain struct families referenced by the selected entry closure."""
+        declaration_groups = [(ast, "structs")]
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            declaration_groups.append((stage, "local_structs"))
+        declarations = [
+            declaration
+            for owner, attribute in declaration_groups
+            for declaration in getattr(owner, attribute, []) or []
+        ]
+        struct_names = {
+            str(declaration.name)
+            for declaration in declarations
+            if getattr(declaration, "name", None)
+        }
+        if not struct_names:
+            return
+
+        roots = self.entry_scoped_functions(ast, entry_function)
+        roots.extend(getattr(ast, "global_variables", []) or [])
+        roots.extend(getattr(ast, "constants", []) or [])
+        roots.extend(getattr(ast, "cbuffers", []) or [])
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            roots.extend(getattr(stage, "local_variables", []) or [])
+            roots.extend(getattr(stage, "local_cbuffers", []) or [])
+
+        retained_names = set()
+        pending_names = set()
+        for root in roots:
+            pending_names.update(self.entry_struct_references(root, struct_names))
+        while pending_names:
+            name = pending_names.pop()
+            if name in retained_names:
+                continue
+            retained_names.add(name)
+            for declaration in declarations:
+                if getattr(declaration, "name", None) == name:
+                    pending_names.update(
+                        self.entry_struct_references(declaration, struct_names)
+                        - retained_names
+                    )
+
+        for owner, attribute in declaration_groups:
+            setattr(
+                owner,
+                attribute,
+                [
+                    declaration
+                    for declaration in getattr(owner, attribute, []) or []
+                    if getattr(declaration, "name", None) in retained_names
+                ],
+            )
+
+    def entry_struct_references(self, root, struct_names):
+        references = set()
+        type_attributes = (
+            "return_type",
+            "param_type",
+            "var_type",
+            "vtype",
+            "member_type",
+            "const_type",
+            "constructor_type",
+            "element_type",
+            "referenced_type",
+            "pointee_type",
+        )
+        for node in self.entry_ast_nodes(root):
+            if isinstance(node, IdentifierNode):
+                name = getattr(node, "name", None)
+                if name in struct_names:
+                    references.add(str(name))
+            for attribute in type_attributes:
+                type_value = getattr(node, attribute, None)
+                if type_value is None:
+                    continue
+                try:
+                    type_text = self.type_name_string(type_value)
+                except (AttributeError, TypeError, ValueError):
+                    type_text = str(type_value)
+                for name in struct_names:
+                    if re.search(
+                        rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])",
+                        str(type_text),
+                    ):
+                        references.add(name)
+            for inherited in getattr(node, "inheritance", []) or []:
+                inherited_text = str(inherited)
+                for name in struct_names:
+                    if re.search(
+                        rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])",
+                        inherited_text,
+                    ):
+                        references.add(name)
+        return references
+
+    def entry_ast_nodes(self, root):
+        if root is None:
+            return ()
+        walk = getattr(root, "walk", None)
+        return walk() if callable(walk) else self.iter_ast_nodes(root)
+
+    def entry_identifier_references(self, root):
+        return {
+            str(node.name)
+            for node in self.entry_ast_nodes(root)
+            if isinstance(node, IdentifierNode) and getattr(node, "name", None)
+        }
+
+    def entry_declaration_names(self, declaration, *, include_members):
+        name = getattr(
+            declaration,
+            "name",
+            getattr(declaration, "variable_name", None),
+        )
+        names = {str(name)} if name else set()
+        if include_members:
+            names.update(
+                str(member.name)
+                for member in getattr(declaration, "members", []) or []
+                if getattr(member, "name", None)
+            )
+        return names
+
+    def entry_reachable_function_names(self, ast, entry_function):
+        functions = list(getattr(ast, "functions", []) or [])
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            functions.extend(getattr(stage, "local_functions", []) or [])
+        functions_by_name = {}
+        for function in functions:
+            name = getattr(function, "name", None)
+            if name:
+                functions_by_name.setdefault(name, []).append(function)
+
+        reachable_names = set()
+        pending = [entry_function]
+        visited = set()
+        while pending:
+            function = pending.pop()
+            if id(function) in visited:
+                continue
+            visited.add(id(function))
+            for node in self.iter_ast_nodes(getattr(function, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                name = self.function_call_name(node)
+                if not name or name in reachable_names:
+                    continue
+                candidates = functions_by_name.get(name, ())
+                if not candidates:
+                    continue
+                reachable_names.add(name)
+                pending.extend(candidates)
+        return reachable_names
+
     def generate_stage(self, ast, shader_type):
         """Generate Metal source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
@@ -1340,7 +1783,9 @@ class MetalCodeGen:
     def generate_program(self, ast, target_stage=None):
         """Render an AST to Metal, optionally filtering stage entry points."""
         target_stage = normalize_stage_name(target_stage)
+        validate_pointer_reinterpretation_target(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
+        self.metal_type_aliases = self.collect_metal_type_aliases(ast)
 
         self.texture_variables = []
         self.acceleration_structure_variables = []
@@ -1496,6 +1941,11 @@ class MetalCodeGen:
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)
         }
+        self.metal_union_layouts = {}
+        for node in structs:
+            layout = self.metal_union_layout_contract(node)
+            if layout is not None:
+                self.metal_union_layouts[node.name] = layout
         self.metal_generated_struct_names = set()
         self.metal_vertex_entry_input_struct_names = (
             self.collect_metal_stage_entry_parameter_struct_names(
@@ -1580,7 +2030,11 @@ class MetalCodeGen:
             )
         )
         global_vars = deduplicate_named_declarations(
-            list(getattr(ast, "global_variables", []) or [])
+            [
+                node
+                for node in list(getattr(ast, "global_variables", []) or [])
+                if not self.is_metal_type_alias_declaration(node)
+            ]
             + stage_local_resource_variables,
             "Metal resource",
         )
@@ -2355,7 +2809,13 @@ class MetalCodeGen:
 
         stage_entry_names = self.stage_entry_names(ast, target_stage)
 
-        functions = getattr(ast, "functions", [])
+        functions = order_functions_by_dependencies(
+            getattr(ast, "functions", []),
+            self.iter_ast_nodes,
+            self.function_call_name,
+            FunctionCallNode,
+            include_overloads=True,
+        )
         functions_code = ""
         for func in functions:
             qualifier_name = function_stage_name(func)
@@ -2748,6 +3208,153 @@ class MetalCodeGen:
     def is_metal_struct_member_abi_attribute(self, attr):
         return self.normalized_metal_abi_attribute_name(attr) == "id"
 
+    def metal_union_layout_error(self, node, reason, detail, member=None):
+        union_name = getattr(node, "name", "<anonymous>")
+        member_name = getattr(member, "name", None)
+        subject = (
+            f"member '{member_name}' of Metal union '{union_name}'"
+            if member_name
+            else f"Metal union '{union_name}'"
+        )
+        return UnsupportedMetalFeatureError(
+            "union-layout-contract",
+            f"Metal codegen cannot reconstruct {subject}: {detail}",
+            missing_capabilities=("metal.union-layout-contract",),
+            operation=union_name,
+            reason=reason,
+            source_location=getattr(member or node, "source_location", None),
+        )
+
+    def metal_union_layout_attribute(self, node, name):
+        return [
+            attr
+            for attr in getattr(node, "attributes", []) or []
+            if self.normalized_metal_abi_attribute_name(attr) == name
+        ]
+
+    def metal_union_layout_integer(self, node, attribute, index, member=None):
+        arguments = list(getattr(attribute, "arguments", []) or [])
+        if index >= len(arguments):
+            return None
+        value = self.binding_index_value(arguments[index])
+        if value is None:
+            raise self.metal_union_layout_error(
+                node,
+                "non-literal-layout",
+                "layout sizes, alignments, and offsets must be integer literals",
+                member,
+            )
+        return value
+
+    def metal_union_layout_contract(self, node):
+        if not isinstance(node, StructNode):
+            return None
+        attributes = self.metal_union_layout_attribute(node, "union_layout")
+        if not attributes:
+            return None
+        if len(attributes) != 1:
+            raise self.metal_union_layout_error(
+                node,
+                "duplicate-layout",
+                "exactly one @union_layout attribute is required",
+            )
+        attribute = attributes[0]
+        arguments = list(getattr(attribute, "arguments", []) or [])
+        if len(arguments) != 4:
+            raise self.metal_union_layout_error(
+                node,
+                "malformed-layout",
+                "@union_layout requires size, alignment, byte order, and source ABI",
+            )
+        size = self.metal_union_layout_integer(node, attribute, 0)
+        alignment = self.metal_union_layout_integer(node, attribute, 1)
+        byte_order = self.attribute_value_to_string(arguments[2]).strip().lower()
+        source_abi = self.attribute_value_to_string(arguments[3]).strip().lower()
+        if size <= 0 or alignment <= 0:
+            raise self.metal_union_layout_error(
+                node,
+                "invalid-layout-size",
+                "aggregate size and alignment must be positive",
+            )
+        if byte_order != "little_endian":
+            raise self.metal_union_layout_error(
+                node,
+                "byte-order-unsupported",
+                f"byte order '{byte_order or '<missing>'}' is not a Metal ABI contract",
+            )
+        if source_abi not in {"metal", "msl"}:
+            raise self.metal_union_layout_error(
+                node,
+                "source-abi-unsupported",
+                f"source ABI '{source_abi or '<missing>'}' cannot be reconstructed natively",
+            )
+
+        member_layouts = {}
+        for member in getattr(node, "members", []) or []:
+            member_attributes = self.metal_union_layout_attribute(
+                member, "union_member_layout"
+            )
+            if len(member_attributes) != 1:
+                raise self.metal_union_layout_error(
+                    node,
+                    "member-layout-missing",
+                    "exactly one @union_member_layout attribute is required",
+                    member,
+                )
+            member_attribute = member_attributes[0]
+            member_arguments = list(getattr(member_attribute, "arguments", []) or [])
+            if len(member_arguments) != 3:
+                raise self.metal_union_layout_error(
+                    node,
+                    "malformed-member-layout",
+                    "@union_member_layout requires offset, size, and alignment",
+                    member,
+                )
+            offset = self.metal_union_layout_integer(node, member_attribute, 0, member)
+            member_size = self.metal_union_layout_integer(
+                node, member_attribute, 1, member
+            )
+            member_alignment = self.metal_union_layout_integer(
+                node, member_attribute, 2, member
+            )
+            if offset != 0:
+                raise self.metal_union_layout_error(
+                    node,
+                    "member-offset-unsupported",
+                    f"member offset {offset!r} does not alias byte zero",
+                    member,
+                )
+            if (
+                member_size <= 0
+                or member_alignment <= 0
+                or member_size > size
+                or member_alignment > alignment
+            ):
+                raise self.metal_union_layout_error(
+                    node,
+                    "member-layout-out-of-range",
+                    "member size or alignment exceeds the aggregate layout",
+                    member,
+                )
+            member_layouts[getattr(member, "name", "")] = {
+                "offset": offset,
+                "size": member_size,
+                "alignment": member_alignment,
+            }
+        if not member_layouts:
+            raise self.metal_union_layout_error(
+                node,
+                "empty-union-unsupported",
+                "at least one instance member is required",
+            )
+        return {
+            "size": size,
+            "alignment": alignment,
+            "byte_order": byte_order,
+            "source_abi": source_abi,
+            "members": member_layouts,
+        }
+
     def is_metal_argument_buffer_global(self, node):
         attributes = getattr(node, "attributes", []) or []
         return any(
@@ -3102,8 +3709,11 @@ class MetalCodeGen:
             )
             return {"name": node.name, "dependencies": set(), "code": code}
 
-        self.validate_struct_member_semantic_types(node)
-        code = f"struct {node.name} {{\n"
+        is_union = node.name in self.metal_union_layouts
+        if not is_union:
+            self.validate_struct_member_semantic_types(node)
+        declaration_kind = "union" if is_union else "struct"
+        code = f"{declaration_kind} {node.name} {{\n"
         dependencies = set()
         default_member_semantics = self.metal_default_struct_member_semantics(node)
         for member in getattr(node, "members", []) or []:
@@ -4379,6 +4989,11 @@ class MetalCodeGen:
             return code
 
         body = getattr(func, "body", None)
+        precise_arithmetic = (
+            body is not None and self.metal_function_requires_no_contraction(func)
+        )
+        if precise_arithmetic:
+            code += "#pragma clang fp contract(off)\n"
         if shader_type is None and body is None:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
@@ -4850,21 +5465,43 @@ class MetalCodeGen:
             previous_metal_compute_builtin_parameter_names
         )
 
-        code += "}\n\n"
+        code += "}\n"
+        if precise_arithmetic:
+            code += "#pragma clang fp contract(fast)\n"
+        code += "\n"
         return code
 
     def metal_needs_fallback_return(self, body, return_type):
         if return_type == "void":
             return False
+        return not self.metal_statement_sequence_guarantees_return(body)
+
+    def metal_statement_sequence_guarantees_return(self, body):
         if hasattr(body, "statements"):
             statements = list(getattr(body, "statements", []) or [])
         elif isinstance(body, list):
             statements = body
-        else:
+        elif body is None:
             statements = []
-        if not statements:
+        else:
+            statements = [body]
+        return any(self.metal_statement_guarantees_return(stmt) for stmt in statements)
+
+    def metal_statement_guarantees_return(self, statement):
+        if isinstance(statement, (ReturnNode, BackendReturnNode)):
             return True
-        return not isinstance(statements[-1], (ReturnNode, BackendReturnNode))
+        if isinstance(statement, BlockNode):
+            return self.metal_statement_sequence_guarantees_return(statement)
+        if not isinstance(statement, IfNode):
+            return False
+        then_branch = getattr(
+            statement, "then_branch", getattr(statement, "if_body", None)
+        )
+        else_branch = getattr(statement, "else_branch", None)
+        return else_branch is not None and (
+            self.metal_statement_sequence_guarantees_return(then_branch)
+            and self.metal_statement_sequence_guarantees_return(else_branch)
+        )
 
     def compute_builtin_parameter_specs(self):
         return [
@@ -6082,7 +6719,7 @@ class MetalCodeGen:
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_structured_buffer_parameter(
-                    buffer_type, buffer_name, array_size
+                    buffer_type, buffer_name, array_size, buffer_variable
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.structured_buffer_length_variables:
@@ -6336,7 +6973,7 @@ class MetalCodeGen:
             if buffer_name:
                 resource_params.append(
                     self.format_structured_buffer_parameter(
-                        buffer_type, buffer_name, array_size
+                        buffer_type, buffer_name, array_size, buffer_variable
                     )
                 )
                 if self.structured_buffer_requires_length(buffer_name):
@@ -7705,11 +8342,158 @@ class MetalCodeGen:
 
     def generate_expression_with_expected(self, expr, expected_type):
         previous_expected_type = self.current_expression_expected_type
-        self.current_expression_expected_type = self.type_name_string(expected_type)
+        expected_type_name = self.type_name_string(expected_type)
+        self.current_expression_expected_type = expected_type_name
         try:
-            return self.generate_expression(expr)
+            rendered = self.generate_expression(expr)
         finally:
             self.current_expression_expected_type = previous_expected_type
+        # Native Metal math on bfloat produces float/half values and Metal does
+        # not implicitly convert those values back to bfloat.  Expected-type
+        # boundaries are the source-language conversion point, so preserve the
+        # source semantics with an explicit native construction.  Applying this
+        # uniformly also covers ternaries/arithmetic without guessing their
+        # target overload result; an existing bfloat construction is idempotent
+        # and is left intact to keep output stable.
+        if self.map_type(expected_type_name) == "bfloat" and not re.match(
+            r"^\s*bfloat\s*[({]", rendered
+        ):
+            return f"bfloat({rendered})"
+        return rendered
+
+    def generate_metal_bfloat_promoted_argument(self, argument):
+        rendered = self.generate_expression(argument)
+        argument_type = self.expression_result_type(argument)
+        if self.map_type(argument_type) == "bfloat":
+            return f"float({rendered})"
+        return rendered
+
+    def metal_registered_structure_scalar_conversion(
+        self,
+        expr,
+        destination_type,
+        arguments,
+    ):
+        """Lower a registered structure-to-scalar value conversion exactly.
+
+        CrossGL intentionally carries structure fields rather than source C++
+        conversion operators.  A round trip may therefore reconstruct a scalar
+        constructor call whose source operand is a registered structure-backed
+        value.  Admit only the exact registered destination identity and field
+        shape, and evaluate the source expression once through its designated
+        converted field.
+        """
+        arguments = list(arguments or [])
+        if (
+            not isinstance(destination_type, str)
+            or destination_type in getattr(self, "user_function_names", set())
+            or len(arguments) != 1
+        ):
+            return None
+
+        mapped_destination = self.map_type(destination_type)
+        if mapped_destination not in {
+            "bool",
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "int64_t",
+            "uint64_t",
+            "half",
+            "float",
+            "double",
+            "bfloat",
+        }:
+            return None
+
+        argument = arguments[0]
+        source_type = self.expression_result_type(argument)
+        source_type_name = self.type_name_string(source_type)
+        if not source_type_name:
+            return None
+
+        mapped_source = self.map_type(source_type_name)
+        source_struct_name = self.resolve_metal_type_alias(source_type_name)
+        source_identities = {
+            source_type_name,
+            source_struct_name,
+            mapped_source,
+        }
+        matching_contracts = {
+            contract
+            for identity in source_identities
+            if (contract := registered_structure_conversion_for_identity(identity))
+            is not None
+        }
+        if not matching_contracts:
+            return None
+        if len(matching_contracts) != 1:
+            raise MetalStructConversionError(
+                "Metal structure value conversion source identity is ambiguous: "
+                f"'{source_type_name}'",
+                destination_type=destination_type,
+                source_type=source_type_name,
+                conversion_kind=StructureConversionKind.VALUE_CONVERSION.value,
+                reason="source-identity-ambiguous",
+                source_location=getattr(expr, "source_location", None),
+            )
+        contract = next(iter(matching_contracts))
+
+        member_types = self.struct_member_types.get(source_struct_name)
+        if member_types is None:
+            member_types = self.struct_member_types.get(mapped_source)
+        actual_shape = (
+            None
+            if member_types is None
+            else tuple(
+                (name, self.map_type(member_type))
+                for name, member_type in member_types.items()
+            )
+        )
+        expected_shape = tuple(
+            (field.name, self.map_type(field.type_name)) for field in contract.fields
+        )
+        if actual_shape != expected_shape:
+            reason = (
+                "source-shape-unknown"
+                if actual_shape is None
+                else "source-shape-mismatch"
+            )
+            raise MetalStructConversionError(
+                "Metal cannot preserve registered structure value conversion "
+                f"from '{source_type_name}' to '{destination_type}': "
+                f"{reason.replace('-', ' ')}",
+                destination_type=destination_type,
+                source_type=source_type_name,
+                conversion_kind=StructureConversionKind.VALUE_CONVERSION.value,
+                reason=reason,
+                source_location=getattr(expr, "source_location", None),
+            )
+
+        converted_fields = [
+            field
+            for field in contract.fields
+            if field.scalar_value is StructureFieldValue.CONVERTED_SOURCE
+        ]
+        if len(converted_fields) != 1:
+            raise MetalStructConversionError(
+                "Metal registered structure value conversion requires exactly "
+                "one converted source field",
+                destination_type=destination_type,
+                source_type=source_type_name,
+                conversion_kind=StructureConversionKind.VALUE_CONVERSION.value,
+                reason="source-single-evaluation-unsupported",
+                source_location=getattr(expr, "source_location", None),
+            )
+
+        rendered = self.generate_expression_with_expected(argument, None)
+        source_field = converted_fields[0].name
+        return f"{mapped_destination}(({rendered}).{source_field})"
 
     def is_scalar_value_type(self, vtype):
         vtype = self.type_name_string(vtype)
@@ -7864,6 +8648,8 @@ class MetalCodeGen:
             if left_type == "float" or right_type == "float":
                 return "float"
             return left_type or right_type
+        if isinstance(expr, PointerReinterpretNode):
+            return getattr(expr, "target_type", None)
         if isinstance(expr, UnaryOpNode):
             operand_type = self.expression_result_type(expr.operand)
             if getattr(expr, "operator", None) == "*":
@@ -8024,6 +8810,9 @@ class MetalCodeGen:
                 and func_name not in self.user_function_names
             ):
                 return self.expression_result_type(args[0])
+            explicit_as_type = self.metal_explicit_as_type_target(func_name, args)
+            if explicit_as_type is not None:
+                return explicit_as_type
             bitcast_result_type = self.metal_bitcast_result_type(func_name, args)
             if bitcast_result_type is not None:
                 return bitcast_result_type
@@ -8138,15 +8927,27 @@ class MetalCodeGen:
                 "vec2<u32>",
                 "vec3<u32>",
                 "vec4<u32>",
+                "vec2<i64>",
+                "vec3<i64>",
+                "vec4<i64>",
+                "vec2<u64>",
+                "vec3<u64>",
+                "vec4<u64>",
                 "vec2<bool>",
                 "vec3<bool>",
                 "vec4<bool>",
                 "ivec2",
                 "ivec3",
                 "ivec4",
+                "i64vec2",
+                "i64vec3",
+                "i64vec4",
                 "uvec2",
                 "uvec3",
                 "uvec4",
+                "u64vec2",
+                "u64vec3",
+                "u64vec4",
                 "bvec2",
                 "bvec3",
                 "bvec4",
@@ -8316,9 +9117,21 @@ class MetalCodeGen:
             if isinstance(stmt.expression, (AssignmentNode, BackendAssignmentNode)):
                 return self.generate_assignment(stmt.expression)
             expr = self.generate_expression(stmt.expression)
+            if self.is_discarded_metal_type_constructor(stmt.expression):
+                return f"(void)({expr})"
             return expr
         else:
             return self.generate_expression(stmt)
+
+    def is_discarded_metal_type_constructor(self, expr):
+        if not isinstance(expr, FunctionCallNode):
+            return False
+        function = getattr(expr, "function", None) or getattr(expr, "name", None)
+        function_name = getattr(function, "name", function)
+        return isinstance(function_name, str) and (
+            function_name in self.type_mapping
+            or function_name in self.metal_type_aliases
+        )
 
     def generate_fragment_discard_statement(self, expr):
         """Lower CrossGL/HLSL fragment-kill expressions to Metal syntax."""
@@ -9013,6 +9826,11 @@ class MetalCodeGen:
             operator = self.map_operator(expr.op)
             left = self.generate_binary_operand(expr.left, operator)
             right = self.generate_binary_operand(expr.right, operator, True)
+            if operator in {"<", ">", "<=", ">="}:
+                if self.map_type(self.expression_result_type(expr.left)) == "bool":
+                    left = f"int({left})"
+                if self.map_type(self.expression_result_type(expr.right)) == "bool":
+                    right = f"int({right})"
             if operator in {"+", "-", "*", "/", "%"}:
                 expected_type = self.current_expression_expected_type
                 expression_width = self.vector_value_width(
@@ -9038,8 +9856,14 @@ class MetalCodeGen:
             )
             return f"{{{elements}}}"
         elif isinstance(expr, UnaryOpNode):
+            local_reinterpret = self.generate_metal_local_reinterpret_read(expr)
+            if local_reinterpret is not None:
+                return local_reinterpret
             operand = self.generate_unary_operand(expr.operand)
-            return f"{self.map_operator(expr.op)}{operand}"
+            operator = self.map_operator(expr.op)
+            if getattr(expr, "is_postfix", False):
+                return f"{operand}{operator}"
+            return f"{operator}{operand}"
         elif isinstance(expr, CooperativeMatrixOpNode):
             return self.generate_cooperative_matrix_operation(expr)
         elif isinstance(expr, WaveOpNode):
@@ -9082,6 +9906,13 @@ class MetalCodeGen:
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
+            registered_conversion = self.metal_registered_structure_scalar_conversion(
+                expr,
+                getattr(expr, "constructor_type", None),
+                getattr(expr, "arguments", []),
+            )
+            if registered_conversion is not None:
+                return registered_conversion
             enum_constructor = generate_enum_constructor_expression(self, expr)
             if enum_constructor is not None:
                 return enum_constructor
@@ -9318,6 +10149,11 @@ class MetalCodeGen:
                     else derivative_name
                 )
                 return f"{derivative_call_name}({arg})"
+            explicit_as_type = self.generate_metal_explicit_as_type_call(
+                func_name, expr.args
+            )
+            if explicit_as_type is not None:
+                return explicit_as_type
             bitcast_call = self.generate_metal_bitcast_call(func_name, expr.args)
             if bitcast_call is not None:
                 return bitcast_call
@@ -9330,235 +10166,273 @@ class MetalCodeGen:
                 func_name in self.METAL_STDLIB_BUILTIN_FUNCTIONS
                 and func_name not in self.user_function_names
             ):
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                if func_name in self.METAL_BFLOAT_ARGUMENT_PROMOTED_FUNCTIONS:
+                    args = ", ".join(
+                        self.generate_metal_bfloat_promoted_argument(arg)
+                        for arg in expr.args
+                    )
+                else:
+                    args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 call_name = (
                     f"metal::{func_name}"
                     if self.metal_function_name_is_shadowed(func_name)
                     else func_name
                 )
                 return f"{call_name}({args})"
-            if func_name in [
-                "float",
-                "half",
-                "float16",
-                "min16float",
-                "min10float",
-                "double",
-                "f16",
-                "f32",
-                "f64",
-                "int",
-                "i8",
-                "i16",
-                "i32",
-                "char",
-                "signed char",
-                "int8",
-                "int16",
-                "int8_t",
-                "int16_t",
-                "int32_t",
-                "int64",
-                "int64_t",
-                "long",
-                "signed long",
-                "ptrdiff_t",
-                "min16int",
-                "min12int",
-                "uint",
-                "u8",
-                "u16",
-                "u32",
-                "uchar",
-                "unsigned char",
-                "uint8",
-                "uint16",
-                "uint8_t",
-                "uint16_t",
-                "uint32_t",
-                "uint64",
-                "uint64_t",
-                "ulong",
-                "unsigned long",
-                "size_t",
-                "min16uint",
-                "short",
-                "signed short",
-                "ushort",
-                "unsigned short",
-                "bool",
-                "vec2",
-                "vec3",
-                "vec4",
-                "vec2<f16>",
-                "vec3<f16>",
-                "vec4<f16>",
-                "vec2<f32>",
-                "vec3<f32>",
-                "vec4<f32>",
-                "vec2<f64>",
-                "vec3<f64>",
-                "vec4<f64>",
-                "vec2<i8>",
-                "vec3<i8>",
-                "vec4<i8>",
-                "vec2<u8>",
-                "vec3<u8>",
-                "vec4<u8>",
-                "vec2<i16>",
-                "vec3<i16>",
-                "vec4<i16>",
-                "vec2<u16>",
-                "vec3<u16>",
-                "vec4<u16>",
-                "vec2<i32>",
-                "vec3<i32>",
-                "vec4<i32>",
-                "vec2<u32>",
-                "vec3<u32>",
-                "vec4<u32>",
-                "vec2<bool>",
-                "vec3<bool>",
-                "vec4<bool>",
-                "ivec2",
-                "ivec3",
-                "ivec4",
-                "uvec2",
-                "uvec3",
-                "uvec4",
-                "bvec2",
-                "bvec3",
-                "bvec4",
-                "packed_float2",
-                "packed_float3",
-                "packed_float4",
-                "simd_float2",
-                "simd_float3",
-                "simd_float4",
-                "half2",
-                "half3",
-                "half4",
-                "packed_half2",
-                "packed_half3",
-                "packed_half4",
-                "simd_half2",
-                "simd_half3",
-                "simd_half4",
-                "f16vec2",
-                "f16vec3",
-                "f16vec4",
-                "mat2",
-                "mat3",
-                "mat4",
-                "mat2x2",
-                "mat2x3",
-                "mat2x4",
-                "mat3x2",
-                "mat3x3",
-                "mat3x4",
-                "mat4x2",
-                "mat4x3",
-                "mat4x4",
-                "f16mat2",
-                "f16mat3",
-                "f16mat4",
-                "f16mat2x2",
-                "f16mat2x3",
-                "f16mat2x4",
-                "f16mat3x2",
-                "f16mat3x3",
-                "f16mat3x4",
-                "f16mat4x2",
-                "f16mat4x3",
-                "f16mat4x4",
-                "char2",
-                "char3",
-                "char4",
-                "uchar2",
-                "uchar3",
-                "uchar4",
-                "packed_int2",
-                "packed_int3",
-                "packed_int4",
-                "packed_uint2",
-                "packed_uint3",
-                "packed_uint4",
-                "simd_int2",
-                "simd_int3",
-                "simd_int4",
-                "simd_uint2",
-                "simd_uint3",
-                "simd_uint4",
-                "simd_float2x2",
-                "simd_float2x3",
-                "simd_float2x4",
-                "simd_float3x2",
-                "simd_float3x3",
-                "simd_float3x4",
-                "simd_float4x2",
-                "simd_float4x3",
-                "simd_float4x4",
-                "simd_half2x2",
-                "simd_half2x3",
-                "simd_half2x4",
-                "simd_half3x2",
-                "simd_half3x3",
-                "simd_half3x4",
-                "simd_half4x2",
-                "simd_half4x3",
-                "simd_half4x4",
-                "i8vec2",
-                "i8vec3",
-                "i8vec4",
-                "u8vec2",
-                "u8vec3",
-                "u8vec4",
-                "short2",
-                "short3",
-                "short4",
-                "ushort2",
-                "ushort3",
-                "ushort4",
-                "i16vec2",
-                "i16vec3",
-                "i16vec4",
-                "u16vec2",
-                "u16vec3",
-                "u16vec4",
-                "min16float2",
-                "min16float3",
-                "min16float4",
-                "min10float2",
-                "min10float3",
-                "min10float4",
-                "min16int2",
-                "min16int3",
-                "min16int4",
-                "min12int2",
-                "min12int3",
-                "min12int4",
-                "min16uint2",
-                "min16uint3",
-                "min16uint4",
-                "min16float2x2",
-                "min16float2x3",
-                "min16float2x4",
-                "min16float3x2",
-                "min16float3x3",
-                "min16float3x4",
-                "min16float4x2",
-                "min16float4x3",
-                "min16float4x4",
-                "min10float2x2",
-                "min10float2x3",
-                "min10float2x4",
-                "min10float3x2",
-                "min10float3x3",
-                "min10float3x4",
-                "min10float4x2",
-                "min10float4x3",
-                "min10float4x4",
-            ]:
+            registered_conversion = self.metal_registered_structure_scalar_conversion(
+                expr,
+                func_name,
+                expr.args,
+            )
+            if registered_conversion is not None:
+                return registered_conversion
+            if (
+                func_name in self.metal_type_aliases
+                or re.fullmatch(
+                    r"(?:u?int(?:8|16|32|64)(?:_t)?|"
+                    r"(?:float(?:16|32|64)|bfloat16)(?:_t)?)[234]",
+                    str(func_name),
+                )
+                is not None
+                or func_name
+                in [
+                    "float",
+                    "half",
+                    "float16",
+                    "min16float",
+                    "min10float",
+                    "double",
+                    "f16",
+                    "f32",
+                    "f64",
+                    "bfloat",
+                    "bfloat16",
+                    "bfloat16_t",
+                    "int",
+                    "i8",
+                    "i16",
+                    "i32",
+                    "char",
+                    "signed char",
+                    "int8",
+                    "int16",
+                    "int8_t",
+                    "int16_t",
+                    "int32_t",
+                    "int64",
+                    "int64_t",
+                    "long",
+                    "signed long",
+                    "ptrdiff_t",
+                    "min16int",
+                    "min12int",
+                    "uint",
+                    "u8",
+                    "u16",
+                    "u32",
+                    "uchar",
+                    "unsigned char",
+                    "uint8",
+                    "uint16",
+                    "uint8_t",
+                    "uint16_t",
+                    "uint32_t",
+                    "uint64",
+                    "uint64_t",
+                    "ulong",
+                    "unsigned long",
+                    "size_t",
+                    "min16uint",
+                    "short",
+                    "signed short",
+                    "ushort",
+                    "unsigned short",
+                    "bool",
+                    "vec2",
+                    "vec3",
+                    "vec4",
+                    "vec2<f16>",
+                    "vec3<f16>",
+                    "vec4<f16>",
+                    "vec2<f32>",
+                    "vec3<f32>",
+                    "vec4<f32>",
+                    "vec2<f64>",
+                    "vec3<f64>",
+                    "vec4<f64>",
+                    "vec2<i8>",
+                    "vec3<i8>",
+                    "vec4<i8>",
+                    "vec2<u8>",
+                    "vec3<u8>",
+                    "vec4<u8>",
+                    "vec2<i16>",
+                    "vec3<i16>",
+                    "vec4<i16>",
+                    "vec2<u16>",
+                    "vec3<u16>",
+                    "vec4<u16>",
+                    "vec2<i32>",
+                    "vec3<i32>",
+                    "vec4<i32>",
+                    "vec2<u32>",
+                    "vec3<u32>",
+                    "vec4<u32>",
+                    "vec2<i64>",
+                    "vec3<i64>",
+                    "vec4<i64>",
+                    "vec2<u64>",
+                    "vec3<u64>",
+                    "vec4<u64>",
+                    "vec2<bool>",
+                    "vec3<bool>",
+                    "vec4<bool>",
+                    "ivec2",
+                    "ivec3",
+                    "ivec4",
+                    "i64vec2",
+                    "i64vec3",
+                    "i64vec4",
+                    "uvec2",
+                    "uvec3",
+                    "uvec4",
+                    "u64vec2",
+                    "u64vec3",
+                    "u64vec4",
+                    "bvec2",
+                    "bvec3",
+                    "bvec4",
+                    "packed_float2",
+                    "packed_float3",
+                    "packed_float4",
+                    "simd_float2",
+                    "simd_float3",
+                    "simd_float4",
+                    "half2",
+                    "half3",
+                    "half4",
+                    "packed_half2",
+                    "packed_half3",
+                    "packed_half4",
+                    "simd_half2",
+                    "simd_half3",
+                    "simd_half4",
+                    "f16vec2",
+                    "f16vec3",
+                    "f16vec4",
+                    "mat2",
+                    "mat3",
+                    "mat4",
+                    "mat2x2",
+                    "mat2x3",
+                    "mat2x4",
+                    "mat3x2",
+                    "mat3x3",
+                    "mat3x4",
+                    "mat4x2",
+                    "mat4x3",
+                    "mat4x4",
+                    "f16mat2",
+                    "f16mat3",
+                    "f16mat4",
+                    "f16mat2x2",
+                    "f16mat2x3",
+                    "f16mat2x4",
+                    "f16mat3x2",
+                    "f16mat3x3",
+                    "f16mat3x4",
+                    "f16mat4x2",
+                    "f16mat4x3",
+                    "f16mat4x4",
+                    "char2",
+                    "char3",
+                    "char4",
+                    "uchar2",
+                    "uchar3",
+                    "uchar4",
+                    "packed_int2",
+                    "packed_int3",
+                    "packed_int4",
+                    "packed_uint2",
+                    "packed_uint3",
+                    "packed_uint4",
+                    "simd_int2",
+                    "simd_int3",
+                    "simd_int4",
+                    "simd_uint2",
+                    "simd_uint3",
+                    "simd_uint4",
+                    "simd_float2x2",
+                    "simd_float2x3",
+                    "simd_float2x4",
+                    "simd_float3x2",
+                    "simd_float3x3",
+                    "simd_float3x4",
+                    "simd_float4x2",
+                    "simd_float4x3",
+                    "simd_float4x4",
+                    "simd_half2x2",
+                    "simd_half2x3",
+                    "simd_half2x4",
+                    "simd_half3x2",
+                    "simd_half3x3",
+                    "simd_half3x4",
+                    "simd_half4x2",
+                    "simd_half4x3",
+                    "simd_half4x4",
+                    "i8vec2",
+                    "i8vec3",
+                    "i8vec4",
+                    "u8vec2",
+                    "u8vec3",
+                    "u8vec4",
+                    "short2",
+                    "short3",
+                    "short4",
+                    "ushort2",
+                    "ushort3",
+                    "ushort4",
+                    "i16vec2",
+                    "i16vec3",
+                    "i16vec4",
+                    "u16vec2",
+                    "u16vec3",
+                    "u16vec4",
+                    "min16float2",
+                    "min16float3",
+                    "min16float4",
+                    "min10float2",
+                    "min10float3",
+                    "min10float4",
+                    "min16int2",
+                    "min16int3",
+                    "min16int4",
+                    "min12int2",
+                    "min12int3",
+                    "min12int4",
+                    "min16uint2",
+                    "min16uint3",
+                    "min16uint4",
+                    "min16float2x2",
+                    "min16float2x3",
+                    "min16float2x4",
+                    "min16float3x2",
+                    "min16float3x3",
+                    "min16float3x4",
+                    "min16float4x2",
+                    "min16float4x3",
+                    "min16float4x4",
+                    "min10float2x2",
+                    "min10float2x3",
+                    "min10float2x4",
+                    "min10float3x2",
+                    "min10float3x3",
+                    "min10float3x4",
+                    "min10float4x2",
+                    "min10float4x3",
+                    "min10float4x4",
+                ]
+            ):
                 metal_type = self.map_type(func_name)
                 matrix_resize = self.generate_metal_matrix_resize_constructor(
                     metal_type, expr.args
@@ -9712,6 +10586,217 @@ class MetalCodeGen:
             or func_name in self.user_function_names
         )
 
+    def metal_explicit_as_type_target(self, func_name, args):
+        if (
+            not isinstance(func_name, str)
+            or func_name in self.user_function_names
+            or len(args or []) != 1
+        ):
+            return None
+        match = re.fullmatch(r"(?:(?:metal)::)?as_type<(.+)>", func_name)
+        if match is None:
+            return None
+        target_type = match.group(1).strip()
+        packed_target = self.metal_explicit_packed_vector_type(target_type)
+        if packed_target is not None:
+            return packed_target
+        return self.metal_native_narrow_bitcast_storage_type(
+            target_type
+        ) or self.map_type(target_type)
+
+    def metal_explicit_packed_vector_type(self, value_type):
+        """Return an exact packed-vector identity that cannot be normalized."""
+        source_name = self.type_name_string(value_type)
+        raw_type = self.resolve_metal_type_alias(source_name)
+        normalized = re.sub(r"^(?:metal::)+", "", str(raw_type or "").strip())
+        if re.fullmatch(
+            r"packed_(?:char|uchar|short|ushort|int|uint|half|float)[234]",
+            normalized,
+        ) or re.fullmatch(
+            r"packed_(?:vector|vec)\s*<.+,\s*[234]\s*>",
+            normalized,
+        ):
+            return normalized
+        return None
+
+    def metal_explicit_bitcast_type_info(self, value_type):
+        """Return the exact native scalar/vector storage width for ``as_type``."""
+        source_name = self.type_name_string(value_type)
+        raw_type = self.resolve_metal_type_alias(source_name)
+        if self.metal_explicit_packed_vector_type(raw_type) is not None:
+            return None
+        mapped_type = self.metal_native_narrow_bitcast_storage_type(
+            raw_type
+        ) or self.map_type(raw_type)
+        normalized = re.sub(r"^(?:metal::)+", "", str(mapped_type or "").strip())
+        scalar_widths = {
+            "char": 8,
+            "uchar": 8,
+            "int8": 8,
+            "uint8": 8,
+            "int8_t": 8,
+            "uint8_t": 8,
+            "short": 16,
+            "ushort": 16,
+            "int16": 16,
+            "uint16": 16,
+            "int16_t": 16,
+            "uint16_t": 16,
+            "half": 16,
+            "float16": 16,
+            "float16_t": 16,
+            "bfloat": 16,
+            "bfloat16": 16,
+            "bfloat16_t": 16,
+            "int": 32,
+            "uint": 32,
+            "int32": 32,
+            "uint32": 32,
+            "int32_t": 32,
+            "uint32_t": 32,
+            "float": 32,
+            "long": 64,
+            "ulong": 64,
+            "int64": 64,
+            "uint64": 64,
+            "int64_t": 64,
+            "uint64_t": 64,
+            "double": 64,
+        }
+        component_type = normalized
+        lanes = 1
+        vector_match = re.fullmatch(r"(.+?)([234])", normalized)
+        if vector_match is not None and vector_match.group(1) in scalar_widths:
+            component_type = vector_match.group(1)
+            lanes = int(vector_match.group(2))
+        else:
+            generic_match = re.fullmatch(
+                r"(?:vector|vec)\s*<\s*(.+?)\s*,\s*([234])\s*>",
+                normalized,
+            )
+            if generic_match is not None:
+                component_type = re.sub(
+                    r"^(?:metal::)+", "", generic_match.group(1).strip()
+                )
+                lanes = int(generic_match.group(2))
+        component_width = scalar_widths.get(component_type)
+        if component_width is None:
+            return None
+        # Metal's ordinary three-component vectors have the same size and
+        # alignment as their four-component counterparts.  ``as_type`` is
+        # constrained by native object size, not by the number of semantic
+        # lanes, so uint3 <-> uint4 (and corresponding scalar families) is a
+        # valid 128-bit bitcast.  Packed vectors are rejected before mapping,
+        # because normalizing them to ordinary vectors would change storage.
+        storage_lanes = 4 if lanes == 3 else lanes
+        return {
+            "type": normalized,
+            "component": component_type,
+            "componentWidth": component_width,
+            "lanes": lanes,
+            "storageLanes": storage_lanes,
+            "totalWidth": component_width * storage_lanes,
+        }
+
+    def metal_native_narrow_bitcast_storage_type(self, value_type):
+        raw_type = self.resolve_metal_type_alias(self.type_name_string(value_type))
+        scalar_types = {
+            "char": "char",
+            "uchar": "uchar",
+            "short": "short",
+            "ushort": "ushort",
+            "int8": "char",
+            "int8_t": "char",
+            "i8": "char",
+            "uint8": "uchar",
+            "uint8_t": "uchar",
+            "u8": "uchar",
+            "int16": "short",
+            "int16_t": "short",
+            "i16": "short",
+            "uint16": "ushort",
+            "uint16_t": "ushort",
+            "u16": "ushort",
+        }
+        if raw_type in scalar_types:
+            return scalar_types[raw_type]
+        vector_match = re.fullmatch(
+            r"(?:(?P<prefix>[iu])(?P<bits>8|16)vec|"
+            r"(?P<word>char|uchar|short|ushort|u?int(?:8|16)(?:_t)?))"
+            r"(?P<width>[234])",
+            raw_type,
+        )
+        if vector_match is None:
+            generic_match = re.fullmatch(
+                r"vec(?P<width>[234])<(?P<component>[iu](?:8|16))>",
+                raw_type,
+            )
+            if generic_match is None:
+                return None
+            component = scalar_types.get(generic_match.group("component"))
+            return (
+                f"{component}{generic_match.group('width')}"
+                if component is not None
+                else None
+            )
+        component_name = vector_match.group("word")
+        if component_name is None:
+            component_name = (
+                "uint" if vector_match.group("prefix") == "u" else "int"
+            ) + vector_match.group("bits")
+        component = scalar_types.get(component_name)
+        return (
+            f"{component}{vector_match.group('width')}"
+            if component is not None
+            else None
+        )
+
+    def generate_metal_explicit_as_type_call(self, func_name, args):
+        target_type = self.metal_explicit_as_type_target(func_name, args)
+        if target_type is None:
+            return None
+        argument = args[0]
+        source_type = self.expression_result_type(argument)
+        source_value_type = (
+            self.reference_referent_type_name(source_type) or source_type
+        )
+        packed_target = self.metal_explicit_packed_vector_type(target_type)
+        packed_source = self.metal_explicit_packed_vector_type(source_value_type)
+        if packed_target is not None or packed_source is not None:
+            packed_roles = []
+            if packed_target is not None:
+                packed_roles.append(f"target {packed_target}")
+            if packed_source is not None:
+                packed_roles.append(f"source {packed_source}")
+            raise ValueError(
+                f"Metal as_type<{target_type}> cannot preserve packed vector "
+                f"storage for {', '.join(packed_roles)}"
+            )
+        target_info = self.metal_explicit_bitcast_type_info(target_type)
+        source_info = self.metal_explicit_bitcast_type_info(source_value_type)
+        if target_info is None or source_info is None:
+            source_display = self.type_name_string(source_type) or "<unknown>"
+            raise ValueError(
+                f"Metal as_type<{target_type}> requires statically known numeric "
+                f"scalar or vector storage types; inferred source type is "
+                f"{source_display}"
+            )
+        if target_info["totalWidth"] != source_info["totalWidth"]:
+            raise ValueError(
+                f"Metal as_type<{target_info['type']}> cannot bitcast from "
+                f"{source_info['type']}: total widths are "
+                f"{target_info['totalWidth']} and {source_info['totalWidth']} bits"
+            )
+        rendered = self.generate_expression(argument)
+        storage_type = self.metal_native_narrow_bitcast_storage_type(source_value_type)
+        if storage_type is not None:
+            rendered = f"{storage_type}({rendered})"
+        bitcast = f"as_type<{target_type}>({rendered})"
+        mapped_result_type = self.map_type(target_type)
+        if mapped_result_type != target_type:
+            return f"{mapped_result_type}({bitcast})"
+        return bitcast
+
     def metal_bitcast_result_type(self, func_name, args):
         if (
             func_name not in self.METAL_BITCAST_FUNCTION_TARGETS
@@ -9722,12 +10807,18 @@ class MetalCodeGen:
 
         argument_type = self.expression_result_type(args[0])
         mapped_argument_type = self.map_type(argument_type)
+        target_component = self.METAL_BITCAST_FUNCTION_TARGETS[func_name]
+        narrow_match = re.fullmatch(r"(?:half|bfloat)([234])?", mapped_argument_type)
+        if narrow_match is not None and target_component in {"int", "uint"}:
+            width = narrow_match.group(1) or ""
+            narrow_component = "short" if target_component == "int" else "ushort"
+            return f"{narrow_component}{width}"
         match = re.fullmatch(r"(?:float|int|uint)([234])?", mapped_argument_type)
         if match is None:
-            return self.METAL_BITCAST_FUNCTION_TARGETS[func_name]
+            return target_component
 
         width = match.group(1) or ""
-        return f"{self.METAL_BITCAST_FUNCTION_TARGETS[func_name]}{width}"
+        return f"{target_component}{width}"
 
     def generate_metal_bitcast_call(self, func_name, args):
         target_type = self.metal_bitcast_result_type(func_name, args)
@@ -9781,7 +10872,10 @@ class MetalCodeGen:
         if child_precedence < parent_precedence:
             return True
         if child_precedence > parent_precedence:
-            return False
+            # Clang intentionally warns on an unparenthesized additive child of a
+            # shift even though C++ precedence is unambiguous.  Retain explicit
+            # source grouping so warning-fatal native Metal builds stay portable.
+            return parent_operator in {"<<", ">>"} and child_operator in {"+", "-"}
         return is_right_child and (
             parent_operator not in self.ASSOCIATIVE_BINARY_OPS
             or child_operator != parent_operator
@@ -12582,7 +13676,23 @@ class MetalCodeGen:
         element_type = type_name.split("<", 1)[1][:-1].strip()
         return self.map_type(element_type)
 
-    def structured_buffer_address_space(self, vtype):
+    def structured_buffer_address_space(self, vtype, node=None):
+        qualifiers = self.parameter_qualifier_names(node)
+        explicit_spaces = qualifiers & {"constant", "device"}
+        if len(explicit_spaces) > 1:
+            name = getattr(node, "name", "<anonymous>")
+            raise ValueError(
+                f"Metal structured buffer '{name}' has conflicting address-space "
+                f"metadata: {', '.join(sorted(explicit_spaces))}"
+            )
+        if "constant" in explicit_spaces:
+            if self.structured_buffer_type_name(vtype) != "StructuredBuffer":
+                name = getattr(node, "name", "<anonymous>")
+                raise ValueError(
+                    f"Writable Metal structured buffer '{name}' cannot use the "
+                    "constant address space"
+                )
+            return "constant"
         if self.structured_buffer_type_name(vtype) == "StructuredBuffer":
             return "const device"
         return "device"
@@ -12591,7 +13701,7 @@ class MetalCodeGen:
         self, vtype, name, array_size=None, node=None
     ):
         element_type = self.structured_buffer_element_type(vtype)
-        address_space = self.structured_buffer_address_space(vtype)
+        address_space = self.structured_buffer_address_space(vtype, node)
         memory_qualifiers = self.resource_memory_qualifier_prefix(node, vtype)
         pointer_type = f"{memory_qualifiers}{address_space} {element_type}*"
         if array_size is not None:
@@ -13593,6 +14703,10 @@ class MetalCodeGen:
     def parameter_variable_address_space(
         self, raw_param_type, node=None, shader_type=None
     ):
+        if self.is_structured_buffer_type(raw_param_type):
+            return self.normalized_address_space(
+                self.structured_buffer_address_space(raw_param_type, node)
+            )
         if (
             self.is_array_type_node(raw_param_type)
             and self.resource_array_parameter(raw_param_type, node) is not None
@@ -13624,6 +14738,10 @@ class MetalCodeGen:
         ):
             return None
         qualifiers = self.parameter_qualifier_names(node)
+        if self.is_array_type_node(raw_param_type):
+            resource_type = self.resource_base_type(raw_param_type)
+            if self.structured_buffer_type_name(resource_type) == "StructuredBuffer":
+                return "read-only resource"
         if "const" in qualifiers:
             return "const-qualified"
         if "in" in qualifiers:
@@ -14868,6 +15986,11 @@ class MetalCodeGen:
         self, member, default_member_semantics, struct_name=None
     ):
         semantic = self.semantic_from_node(member)
+        if (
+            struct_name in self.metal_union_layouts
+            and semantic == "union_member_layout"
+        ):
+            semantic = None
         default_semantic = (default_member_semantics or {}).get(
             getattr(member, "name", None)
         )
@@ -17424,11 +18547,21 @@ class MetalCodeGen:
                     self.metal_buffer_resource_variables
                 )
             ]
+            structured_resources = [
+                (node, buffer_type)
+                for node, _, buffer_type, _ in self.structured_buffer_variables
+            ]
         else:
             resources = [
                 (node, buffer_type, address_space)
                 for node, buffer_type, _, address_space in (
                     self.required_function_metal_buffer_resources(func_name)
+                )
+            ]
+            structured_resources = [
+                (node, buffer_type)
+                for node, buffer_type, _ in self.required_function_structured_buffers(
+                    func_name
                 )
             ]
 
@@ -17442,6 +18575,20 @@ class MetalCodeGen:
                 self.current_readonly_metal_parameters.add(name)
                 self.current_readonly_metal_parameter_reasons[name] = (
                     "constant address space"
+                )
+
+        for node, buffer_type in structured_resources:
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            if not name:
+                continue
+            rendered_space = self.structured_buffer_address_space(buffer_type, node)
+            address_space = "constant" if rendered_space == "constant" else "device"
+            self.local_variable_types[name] = self.type_name_string(buffer_type)
+            self.current_address_space_variables[name] = address_space
+            if self.structured_buffer_type_name(buffer_type) == "StructuredBuffer":
+                self.current_readonly_metal_parameters.add(name)
+                self.current_readonly_metal_parameter_reasons[name] = (
+                    f"{address_space} read-only resource"
                 )
 
     def validate_global_resource_shadows(self, ast):
@@ -18621,7 +19768,33 @@ class MetalCodeGen:
         return None
 
     def is_precision_qualifier_attribute(self, attr):
-        return str(getattr(attr, "name", attr)).lower() in {"lowp", "mediump", "highp"}
+        return str(getattr(attr, "name", attr)).lower() in {
+            "lowp",
+            "mediump",
+            "highp",
+            "precise",
+        }
+
+    @staticmethod
+    def metal_has_precise_qualifier(node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "precise" in qualifiers:
+            return True
+        return any(
+            str(getattr(attribute, "name", "")).lower() == "precise"
+            for attribute in getattr(node, "attributes", []) or []
+        )
+
+    def metal_function_requires_no_contraction(self, func):
+        if self.metal_has_precise_qualifier(func):
+            return True
+        return any(
+            self.metal_has_precise_qualifier(node)
+            for node in self.iter_ast_nodes(getattr(func, "body", None))
+        )
 
     def is_metal_address_space_attribute(self, attr):
         name = str(getattr(attr, "name", "")).lower()
@@ -23380,7 +24553,10 @@ class MetalCodeGen:
             operand = self.safe_expression_to_string_with_precedence(
                 expr.operand, self.expression_precedence("unary")
             )
-            return f"{self.map_operator(expr.op)}{operand}"
+            operator = self.map_operator(expr.op)
+            if getattr(expr, "is_postfix", False):
+                return f"{operand}{operator}"
+            return f"{operator}{operand}"
         else:
             # Fallback - avoid calling generate_expression to prevent infinite recursion
             return str(expr)
@@ -23412,6 +24588,31 @@ class MetalCodeGen:
         """Convert an expression node to a string representation."""
         return self.safe_expression_to_string(expr)
 
+    def collect_metal_type_aliases(self, ast):
+        return {
+            node.name: getattr(node, "var_type", None)
+            for node in getattr(ast, "global_variables", []) or []
+            if self.is_metal_type_alias_declaration(node)
+        }
+
+    @staticmethod
+    def is_metal_type_alias_declaration(node):
+        return isinstance(node, VariableNode) and bool(
+            getattr(node, "is_type_alias", False)
+        )
+
+    def resolve_metal_type_alias(self, type_name):
+        aliases = getattr(self, "metal_type_aliases", {})
+        resolved = type_name
+        seen = []
+        while resolved in aliases:
+            if resolved in seen:
+                cycle = " -> ".join([*seen, resolved])
+                raise ValueError(f"Cyclic Metal type alias: {cycle}")
+            seen.append(resolved)
+            resolved = self.type_name_string(aliases[resolved])
+        return resolved
+
     def map_type(self, vtype):
         """Map types to Metal equivalents, handling both strings and TypeNode objects."""
         if vtype is None:
@@ -23429,6 +24630,10 @@ class MetalCodeGen:
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
+
+        resolved_alias = self.resolve_metal_type_alias(vtype_str)
+        if resolved_alias != vtype_str:
+            return self.map_type(resolved_alias)
 
         tessellation_patch_type = self.metal_tessellation_patch_mapped_type(vtype)
         if tessellation_patch_type is not None:
@@ -23474,6 +24679,35 @@ class MetalCodeGen:
 
         if vtype_str in getattr(self, "enum_struct_type_names", set()):
             return vtype_str
+
+        fixed_width_vector = re.fullmatch(
+            r"(?P<unsigned>u?)int(?P<bits>8|16|32|64)(?:_t)?(?P<lanes>[234])",
+            vtype_str,
+        )
+        if fixed_width_vector is not None:
+            bits = fixed_width_vector.group("bits")
+            unsigned = bool(fixed_width_vector.group("unsigned"))
+            if bits == "64":
+                component = "ulong" if unsigned else "long"
+            else:
+                component = "uint" if unsigned else "int"
+            return f"{component}{fixed_width_vector.group('lanes')}"
+
+        fixed_float_vector = re.fullmatch(
+            r"(?P<component>(?:float(?:16|32|64)|bfloat16)(?:_t)?)" r"(?P<lanes>[234])",
+            vtype_str,
+        )
+        if fixed_float_vector is not None:
+            component_name = fixed_float_vector.group("component")
+            if component_name.startswith("bfloat"):
+                component = "bfloat"
+            elif "16" in component_name:
+                component = "half"
+            elif "64" in component_name:
+                component = "double"
+            else:
+                component = "float"
+            return f"{component}{fixed_float_vector.group('lanes')}"
 
         return self.type_mapping.get(vtype_str, vtype_str)
 
@@ -23721,6 +24955,22 @@ class MetalCodeGen:
         if patch_type is None:
             return None
         return f"thread const {patch_type}& {name}"
+
+    def generate_metal_local_reinterpret_read(self, expression):
+        if getattr(expression, "operator", getattr(expression, "op", None)) != "*":
+            return None
+        reinterpret = getattr(expression, "operand", None)
+        if not isinstance(reinterpret, PointerReinterpretNode):
+            return None
+        contract = metal_local_single_field_reinterpret_contract(reinterpret)
+        if contract is None:
+            return None
+        address = getattr(reinterpret, "expression", None)
+        source = getattr(address, "operand", None)
+        if source is None:
+            return None
+        target_type = self.map_type(contract["targetType"])
+        return f"{target_type}{{{self.generate_expression(source)}}}"
 
     def map_operator(self, op):
         op_map = {

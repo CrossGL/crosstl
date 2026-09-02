@@ -78,6 +78,9 @@ from crosstl.translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
+from crosstl.translator.codegen.entry_selection import prepare_entry_scoped_target
+from crosstl.translator.codegen.GLSL_codegen import OpenGLSoftwareSubgroupError
 from crosstl.translator.codegen.index_range_contracts import (
     IndexRangeAssertion,
     parse_index_range_assertions,
@@ -1525,6 +1528,11 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 )
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
+SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
+DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION = (
+    "relative_wave_shuffle_out_of_range"
+)
+DIRECTX_WIDEN_NATIVE_FLOAT16_SOURCE_OPTION = "widen_native_float16"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
 SOURCE_SPECIALIZATION_CONSTANTS_CONFIG_KEY = "source_specialization_constants"
@@ -1533,6 +1541,7 @@ WORKGROUP_SIZE_RULES_CONFIG_KEY = "workgroup_size_rules"
 ENTRY_WORKGROUP_SIZE_RULES_CONFIG_KEY = "entry_workgroup_size_rules"
 WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY = "execution.workgroup-size-specialization"
 WORKGROUP_SIZE_SPECIALIZATION_TARGETS = frozenset(("directx", "opengl"))
+WORKGROUP_SIZE_RULE_TARGETS = frozenset(("directx", "metal", "opengl"))
 SUBGROUP_WIDTH_RULES_CONFIG_KEY = "subgroup_width_rules"
 SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY = "execution.subgroup-width-specialization"
 DIRECTX_EXACT_SUBGROUP_WIDTHS = frozenset((4, 8, 16, 32, 64, 128))
@@ -6167,6 +6176,8 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
         not in {
             TEMPLATE_VARIANTS_SOURCE_OPTION,
             TARGET_SOURCE_OPTIONS_KEY,
+            SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
+            DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
             METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
             METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
         }
@@ -11762,7 +11773,7 @@ def _unsupported_workgroup_size_rule_target_error(
     unit: ProjectTranslationUnit,
     target: str,
 ) -> ProjectWorkgroupSizeError | None:
-    if target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS:
+    if target in WORKGROUP_SIZE_RULE_TARGETS:
         return None
     configured = _configured_workgroup_size_rule(config, unit.relative_path)
     configured_entries = _configured_entry_workgroup_size_rules(
@@ -11781,7 +11792,7 @@ def _unsupported_workgroup_size_rule_target_error(
                 for entry_pattern, components in sorted(entry_rules.items())
             },
             "target": target,
-            "supportedTargets": sorted(WORKGROUP_SIZE_SPECIALIZATION_TARGETS),
+            "supportedTargets": sorted(WORKGROUP_SIZE_RULE_TARGETS),
         }
     elif configured is not None:
         pattern, components, provenance = configured
@@ -11790,7 +11801,7 @@ def _unsupported_workgroup_size_rule_target_error(
             "sourcePattern": pattern,
             "components": list(components),
             "target": target,
-            "supportedTargets": sorted(WORKGROUP_SIZE_SPECIALIZATION_TARGETS),
+            "supportedTargets": sorted(WORKGROUP_SIZE_RULE_TARGETS),
         }
     return ProjectWorkgroupSizeError(
         f"Per-entry workgroup-size rules are not supported for target '{target}'.",
@@ -11995,7 +12006,7 @@ def _target_entry_points_for_crossgl_stages(
             str(getattr(getattr(stage, "entry_point", None), "name", "main")): "main"
             for stage in stages
         }
-    if target != "directx":
+    if target not in {"directx", "metal"}:
         return {}
     codegen = get_codegen(target)
     stage_entry_names = {} if entry_scoped else codegen.stage_entry_names(ast)
@@ -14035,6 +14046,421 @@ def _template_parameter_values_from_arguments(
     return parameters
 
 
+def _explicit_template_function_specialization_for_selected_overload(
+    *,
+    preprocessor: Any,
+    explicit_specializations: Mapping[
+        tuple[str, tuple[str, ...], tuple[str, ...]],
+        Mapping[str, Any],
+    ],
+    template: Any,
+    function_name: str,
+    arguments: Sequence[str],
+    parameter_declarations: Sequence[tuple[str, str, bool]],
+    declaration_source: str,
+    declaration_type_aliases: Mapping[str, Sequence[Any]],
+    argument_alias_contexts: Sequence[
+        tuple[Mapping[str, Sequence[Any]], int, str]
+    ] = (),
+) -> Mapping[str, Any] | None:
+    """Select an explicit body only when its concrete overload is proven exact.
+
+    Metal/C++ overload identity is based on canonical types, not the source
+    spelling of a visible ``typedef``/``using`` alias.  Resolve each spelling at
+    the position where it occurs: call arguments at their call site, the primary
+    signature at its declaration, and every explicit signature at its own
+    declaration.  An unresolved forward/cyclic alias must fail closed instead of
+    making a valid explicit body look absent and silently selecting the primary.
+    """
+    from crosstl.backend.Metal.preprocessor import (
+        MetalTemplateSpecializationError,
+    )
+
+    specialization_key = preprocessor._template_specialization_key(
+        function_name,
+        arguments,
+    )
+    requested_signature = preprocessor._template_specialization_signature(
+        function_name,
+        list(specialization_key[1]),
+    )
+    named_candidates = [
+        specialization
+        for (
+            name,
+            _template_arguments,
+            _signature,
+        ), specialization in explicit_specializations.items()
+        if name == specialization_key[0]
+    ]
+    if not named_candidates:
+        return None
+
+    def source_location(source: str, position: int, text: str) -> Any:
+        return preprocessor._source_location_for_offsets(
+            source,
+            position,
+            min(len(source), position + max(len(text), 1)),
+        )
+
+    def canonical_type(
+        type_text: str,
+        *,
+        aliases: Mapping[str, Sequence[Any]],
+        position: int,
+        source: str,
+        context: str,
+        location: Any = None,
+        excluded_aliases: set[str] | None = None,
+    ) -> str:
+        canonical = preprocessor._canonicalize_type_aliases_at(
+            type_text,
+            aliases,
+            position,
+            excluded_aliases=excluded_aliases,
+        )
+        if canonical is not None:
+            return _normalize_metal_type_text(canonical)
+
+        suggested_action = (
+            "declare every type alias before the specialization use, remove "
+            "cyclic aliases, and keep each concrete overload signature unique"
+        )
+        raise MetalTemplateSpecializationError(
+            "Metal explicit free-function specialization cannot be selected "
+            f"safely for overload '{requested_signature}': {context} "
+            f"'{_normalize_metal_type_text(type_text)}' has type aliases that "
+            "cannot be resolved with declaration-order and lexical-scope "
+            f"fidelity. Suggested action: {suggested_action}.",
+            requested_signature=requested_signature,
+            suggested_action=suggested_action,
+            source_location=(
+                location
+                if location is not None
+                else source_location(source, position, type_text)
+            ),
+            callee_template=function_name,
+            requested_arguments=tuple(specialization_key[1]),
+        )
+
+    def canonical_template_arguments(
+        values: Sequence[str],
+        *,
+        alias_contexts: Sequence[tuple[Mapping[str, Sequence[Any]], int, str]],
+        context: str,
+        location: Any = None,
+    ) -> tuple[str, ...]:
+        canonical = [
+            preprocessor._normalize_template_argument_text(value) for value in values
+        ]
+        template_parameters = list(getattr(template, "template_parameters", ()) or ())
+        non_type_parameters = set(
+            (getattr(template, "template_parameter_types", {}) or {}).keys()
+        )
+        variadic_parameters = set(
+            getattr(template, "variadic_template_parameters", ()) or ()
+        )
+        argument_index = 0
+        for parameter_index, parameter in enumerate(template_parameters):
+            if parameter in variadic_parameters:
+                remaining_fixed = len(template_parameters) - parameter_index - 1
+                argument_count = max(
+                    0,
+                    len(canonical) - argument_index - remaining_fixed,
+                )
+            else:
+                argument_count = int(argument_index < len(canonical))
+            if parameter not in non_type_parameters:
+                for index in range(
+                    argument_index,
+                    min(argument_index + argument_count, len(canonical)),
+                ):
+                    for aliases, position, source in alias_contexts:
+                        canonical[index] = canonical_type(
+                            canonical[index],
+                            aliases=aliases,
+                            position=position,
+                            source=source,
+                            context=context,
+                            location=location,
+                        )
+            argument_index += argument_count
+        return tuple(canonical)
+
+    selected_alias_contexts = tuple(argument_alias_contexts) or (
+        (
+            declaration_type_aliases,
+            int(template.span[0]),
+            declaration_source,
+        ),
+    )
+    selected_arguments = canonical_template_arguments(
+        specialization_key[1],
+        alias_contexts=selected_alias_contexts,
+        context="selected template argument",
+    )
+
+    candidates: list[Mapping[str, Any]] = []
+    for specialization in named_candidates:
+        if not specialization["templateArgumentsExplicit"]:
+            # Omitted or empty argument lists are deduced from the concrete
+            # function type. Exact parameter-signature matching below decides
+            # whether this selected primary owns the specialization body.
+            candidates.append(specialization)
+            continue
+        specialization_position = int(specialization["span"][0])
+        candidate_arguments = canonical_template_arguments(
+            specialization["arguments"],
+            alias_contexts=(
+                (
+                    declaration_type_aliases,
+                    specialization_position,
+                    declaration_source,
+                ),
+            ),
+            context="explicit specialization template argument",
+            location=specialization.get("sourceLocation"),
+        )
+        if candidate_arguments == selected_arguments:
+            candidates.append(specialization)
+    if not candidates:
+        return None
+
+    parameters = _template_parameter_values_from_arguments(
+        preprocessor,
+        template,
+        list(selected_arguments),
+    )
+
+    def concrete_signature(
+        declarations: Sequence[tuple[str, str, bool]],
+        *,
+        aliases: Mapping[str, Sequence[Any]],
+        position: int,
+        source: str,
+        context: str,
+        substitute: bool,
+        location: Any = None,
+    ) -> tuple[str, ...]:
+        signature = []
+        for type_text, _name, variadic in declarations:
+            resolved = (
+                preprocessor._replace_identifiers(type_text, parameters)
+                if substitute
+                else type_text
+            )
+            normalized = canonical_type(
+                resolved,
+                aliases=aliases,
+                position=position,
+                source=source,
+                context=context,
+                location=location,
+                excluded_aliases=(
+                    set(getattr(template, "template_parameters", ()) or ())
+                    if substitute
+                    else None
+                ),
+            )
+            signature.append(f"{normalized}..." if variadic else normalized)
+        return tuple(signature)
+
+    template_position = int(template.span[0])
+    selected_signature = concrete_signature(
+        parameter_declarations,
+        aliases=declaration_type_aliases,
+        position=template_position,
+        source=declaration_source,
+        context="selected primary parameter type",
+        substitute=True,
+    )
+    matches = []
+    for specialization in candidates:
+        specialization_declarations = _metal_function_parameter_declarations(
+            preprocessor,
+            str(specialization["header"]),
+        )
+        specialization_signature = concrete_signature(
+            specialization_declarations,
+            aliases=declaration_type_aliases,
+            position=int(specialization["span"][0]),
+            source=declaration_source,
+            context="explicit specialization parameter type",
+            substitute=False,
+            location=specialization.get("sourceLocation"),
+        )
+        if selected_signature == specialization_signature:
+            matches.append(specialization)
+
+    if not matches:
+        # Another overload alone may be explicitly specialized for the same
+        # canonical template arguments. It must not replace or invalidate this
+        # overload; materialize the selected primary body instead.
+        return None
+
+    if len(matches) > 1:
+        raise MetalTemplateSpecializationError(
+            "Metal explicit free-function specialization cannot be selected safely "
+            f"for overload '{requested_signature}' with canonical parameter "
+            f"signature {selected_signature!r}: more than one explicit body matches",
+            requested_signature=requested_signature,
+            suggested_action=(
+                "keep one exact explicit specialization for each canonical "
+                "concrete overload signature"
+            ),
+            source_location=matches[0].get("sourceLocation"),
+            callee_template=function_name,
+            requested_arguments=tuple(selected_arguments),
+        )
+
+    specialization = matches[0]
+    specialization_position = int(specialization["span"][0])
+    specialization_source = str(specialization["source"])
+    specialization_header = str(specialization["header"])
+    # The scanner masks comments/literals without changing length, so the raw
+    # source header ends at the same offset as the stored masked header.
+    raw_header = specialization_source[: len(specialization_header)]
+    name_start, name_end = (int(value) for value in specialization["nameSpan"])
+    open_paren = preprocessor._function_parameter_start(raw_header)
+    close_paren = (
+        preprocessor._find_matching_delimiter(raw_header, open_paren, "(", ")")
+        if open_paren is not None
+        else None
+    )
+    if open_paren is None or close_paren is None:
+        suggested_action = (
+            "keep the selected explicit specialization as a concrete function "
+            "declaration with a parseable parameter list"
+        )
+        raise MetalTemplateSpecializationError(
+            "Metal explicit free-function specialization cannot be materialized "
+            f"safely for overload '{requested_signature}': its concrete "
+            f"parameter list cannot be reconstructed. Suggested action: "
+            f"{suggested_action}.",
+            requested_signature=requested_signature,
+            suggested_action=suggested_action,
+            source_location=specialization.get("sourceLocation"),
+            callee_template=function_name,
+            requested_arguments=tuple(selected_arguments),
+        )
+
+    def canonical_alias_fragment(fragment: str, context: str) -> str:
+        canonical = preprocessor._canonicalize_type_aliases_at(
+            fragment,
+            declaration_type_aliases,
+            specialization_position,
+        )
+        if canonical is None:
+            # Reuse the structured alias failure contract above.
+            canonical_type(
+                fragment,
+                aliases=declaration_type_aliases,
+                position=specialization_position,
+                source=declaration_source,
+                context=context,
+                location=specialization.get("sourceLocation"),
+            )
+            raise AssertionError("unreachable")
+        return canonical
+
+    return_prefix = canonical_alias_fragment(
+        raw_header[:name_start],
+        "explicit specialization return type",
+    ).rstrip()
+    if return_prefix:
+        return_prefix += " "
+
+    raw_parameters = preprocessor._split_top_level_commas(
+        raw_header[open_paren + 1 : close_paren]
+    )
+    parsed_parameters = _metal_function_parameter_declarations(
+        preprocessor,
+        raw_header,
+    )
+    concrete_parameters = [
+        parameter for parameter in raw_parameters if parameter.strip() != "void"
+    ]
+    if len(concrete_parameters) != len(parsed_parameters):
+        suggested_action = (
+            "use ordinary named or unnamed concrete parameters in the explicit "
+            "specialization"
+        )
+        raise MetalTemplateSpecializationError(
+            "Metal explicit free-function specialization cannot be materialized "
+            f"safely for overload '{requested_signature}': its parameter "
+            f"declarators are ambiguous. Suggested action: {suggested_action}.",
+            requested_signature=requested_signature,
+            suggested_action=suggested_action,
+            source_location=specialization.get("sourceLocation"),
+            callee_template=function_name,
+            requested_arguments=tuple(selected_arguments),
+        )
+
+    canonical_parameters: list[str] = []
+    parsed_index = 0
+    for raw_parameter in raw_parameters:
+        if raw_parameter.strip() == "void":
+            canonical_parameters.append("void")
+            continue
+        _type_text, parameter_name, _variadic = parsed_parameters[parsed_index]
+        parsed_index += 1
+        if not parameter_name:
+            canonical_parameters.append(
+                canonical_alias_fragment(
+                    raw_parameter,
+                    "explicit specialization parameter type",
+                )
+            )
+            continue
+        name_matches = list(
+            re.finditer(rf"\b{re.escape(parameter_name)}\b", raw_parameter)
+        )
+        if not name_matches:
+            suggested_action = (
+                "use a concrete parameter declarator whose name can be retained "
+                "during alias canonicalization"
+            )
+            raise MetalTemplateSpecializationError(
+                "Metal explicit free-function specialization cannot be "
+                f"materialized safely for overload '{requested_signature}': "
+                f"parameter '{parameter_name}' cannot be located in its "
+                f"declarator. Suggested action: {suggested_action}.",
+                requested_signature=requested_signature,
+                suggested_action=suggested_action,
+                source_location=specialization.get("sourceLocation"),
+                callee_template=function_name,
+                requested_arguments=tuple(selected_arguments),
+            )
+        name_match = name_matches[-1]
+        canonical_prefix = canonical_alias_fragment(
+            raw_parameter[: name_match.start()],
+            "explicit specialization parameter type",
+        ).rstrip()
+        declarator_suffix = raw_parameter[name_match.start() :].lstrip()
+        canonical_parameters.append(f"{canonical_prefix} {declarator_suffix}".strip())
+
+    canonical_header = (
+        return_prefix
+        + raw_header[name_start:name_end]
+        + raw_header[name_end : open_paren + 1]
+        + ", ".join(canonical_parameters)
+        + raw_header[close_paren:]
+    )
+    canonical_specialization = dict(specialization)
+    canonical_specialization["header"] = canonical_header
+    canonical_specialization["source"] = (
+        canonical_header + specialization_source[len(raw_header) :]
+    )
+    canonical_specialization["nameSpan"] = (
+        len(return_prefix),
+        len(return_prefix) + name_end - name_start,
+    )
+    canonical_specialization["parameterTypes"] = tuple(
+        value[:-3] if value.endswith("...") else value for value in selected_signature
+    )
+    return canonical_specialization
+
+
 def _template_parameter_sources_from_arguments(
     template: Any,
     arguments: Sequence[str],
@@ -14391,6 +14817,10 @@ def _materialize_inherited_source_template_helpers(
     existing_materialized_names: Mapping[tuple[str, tuple[str, ...]], str],
 ) -> _InheritedTemplateMaterialization:
     template_names = set(templates_by_name)
+    template_name_counts = Counter(
+        template.name
+        for template in preprocessor._find_template_functions(materialized)
+    )
     generated: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
     generated_order: list[tuple[str, tuple[str, ...]]] = []
     specialization_records: list[dict[str, Any]] = []
@@ -14406,7 +14836,15 @@ def _materialize_inherited_source_template_helpers(
         inherited_parameter_sources: Mapping[str, str],
     ) -> str | None:
         template = templates_by_name.get(name)
-        if template is None or _is_metal_entry_template(template):
+        if (
+            template is None
+            or template_name_counts.get(name, 0) != 1
+            or _is_metal_entry_template(template)
+        ):
+            # Name-only inherited bindings cannot identify one declaration from
+            # an overload set. Leave that call untouched for the later
+            # signature-aware plain-helper pass rather than materializing an
+            # arbitrary overload with otherwise valid defaults.
             return None
         inherited = _inherited_template_arguments(
             preprocessor,
@@ -15039,6 +15477,13 @@ def _materialize_implicit_template_function_calls(
 ) -> _ImplicitTemplateMaterialization:
     known_materializations = known_materializations or {}
     templates = preprocessor._find_template_functions(materialized)
+    explicit_specializations = (
+        preprocessor._find_explicit_template_function_specializations(materialized)
+    )
+    materialized_type_aliases = preprocessor._collect_local_type_alias_bindings(
+        materialized,
+        [(0, len(materialized))],
+    )
     templates_by_name: dict[str, Any] = {}
     overloaded_template_names: set[str] = set()
     for template in templates:
@@ -15160,12 +15605,35 @@ def _materialize_implicit_template_function_calls(
         )
         if key in known_materializations:
             continue
-        materialized_source = preprocessor._materialize_template_function_with_name(
-            template,
-            arguments,
-            materialized_name,
-            host_name=None,
+        explicit_specialization = (
+            _explicit_template_function_specialization_for_selected_overload(
+                preprocessor=preprocessor,
+                explicit_specializations=explicit_specializations,
+                template=template,
+                function_name=function_name,
+                arguments=list(key[1]),
+                parameter_declarations=parameter_declarations,
+                declaration_source=materialized,
+                declaration_type_aliases=materialized_type_aliases,
+                argument_alias_contexts=(
+                    (materialized_type_aliases, span[0], materialized),
+                ),
+            )
         )
+        if explicit_specialization is not None:
+            materialized_source = (
+                preprocessor._materialize_explicit_template_function_specialization(
+                    explicit_specialization,
+                    materialized_name,
+                )
+            )
+        else:
+            materialized_source = preprocessor._materialize_template_function_with_name(
+                template,
+                arguments,
+                materialized_name,
+                host_name=None,
+            )
         if materialized_source:
             implicit_materializations.append(
                 (function_name, tuple(key[1]), materialized_source)
@@ -17850,19 +18318,102 @@ def _infer_plain_template_helper_matches(
     explicit_template_arguments: Sequence[str],
     template_structs_by_name: Mapping[str, Any],
     static_values: Mapping[str, str] | None = None,
+    template_argument_alias_contexts: Sequence[
+        tuple[Mapping[str, Sequence[Any]], int, str]
+    ] = (),
 ) -> list[tuple[Any, list[str], list[tuple[str, str, bool]]]]:
     matches: list[tuple[Any, list[str], list[tuple[str, str, bool]]]] = []
     for template in candidate_templates:
-        arguments = _infer_plain_template_helper_arguments(
-            preprocessor,
-            template,
-            call_arguments,
-            type_environment,
-            return_types,
-            explicit_template_arguments,
-            template_structs_by_name,
-            static_values,
+        source_explicit_arguments = tuple(explicit_template_arguments)
+        canonical_explicit_arguments = source_explicit_arguments
+        materialization_explicit_arguments = source_explicit_arguments
+        aliases_visible_at_materialization = True
+        for aliases, position, source in template_argument_alias_contexts:
+            resolved_arguments = (
+                preprocessor._canonicalize_template_function_arguments_at(
+                    template,
+                    canonical_explicit_arguments,
+                    aliases,
+                    position,
+                )
+            )
+            if resolved_arguments is None:
+                from crosstl.backend.Metal.preprocessor import (
+                    MetalTemplateSpecializationError,
+                )
+
+                requested_signature = preprocessor._template_specialization_signature(
+                    template.name,
+                    list(canonical_explicit_arguments),
+                )
+                suggested_action = (
+                    "declare every call-site type alias before use and remove "
+                    "cyclic alias declarations"
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal template helper overload inference cannot resolve "
+                    f"type aliases in '{requested_signature}' at the call site. "
+                    f"Suggested action: {suggested_action}.",
+                    requested_signature=requested_signature,
+                    suggested_action=suggested_action,
+                    source_location=preprocessor._source_location_for_offsets(
+                        source,
+                        position,
+                        min(len(source), position + max(len(template.name), 1)),
+                    ),
+                    callee_template=template.name,
+                    requested_arguments=tuple(canonical_explicit_arguments),
+                )
+            canonical_explicit_arguments = resolved_arguments
+
+            materialization_arguments = (
+                preprocessor._canonicalize_template_function_arguments_at(
+                    template,
+                    materialization_explicit_arguments,
+                    aliases,
+                    max(len(source) - 1, 0),
+                )
+            )
+            if materialization_arguments is None:
+                aliases_visible_at_materialization = False
+            else:
+                materialization_explicit_arguments = materialization_arguments
+
+        # Preserve source-level aliases when they remain visible where generated
+        # helpers are appended.  Besides producing stable provenance, this keeps
+        # domain identities such as MLX's bfloat16_t and complex64_t distinct
+        # from their target representation spellings.  Function-local aliases
+        # cannot escape their scope, so use the canonical arguments for those.
+        preferred_explicit_arguments = (
+            source_explicit_arguments
+            if aliases_visible_at_materialization
+            and materialization_explicit_arguments == canonical_explicit_arguments
+            else canonical_explicit_arguments
         )
+
+        def infer(arguments_to_use: Sequence[str]) -> list[str] | None:
+            return _infer_plain_template_helper_arguments(
+                preprocessor,
+                template,
+                call_arguments,
+                type_environment,
+                return_types,
+                arguments_to_use,
+                template_structs_by_name,
+                static_values,
+            )
+
+        arguments = infer(preferred_explicit_arguments)
+        if (
+            not arguments
+            or not preprocessor._template_arguments_satisfy_parameters(
+                template,
+                arguments,
+            )
+        ) and preferred_explicit_arguments != canonical_explicit_arguments:
+            # A visible alias can still require canonicalization to prove that a
+            # concrete call argument satisfies an explicitly bound parameter.
+            arguments = infer(canonical_explicit_arguments)
         if not arguments or not preprocessor._template_arguments_satisfy_parameters(
             template,
             arguments,
@@ -17957,6 +18508,9 @@ def _materialize_plain_template_helper_calls(
                 materialized_template_names,
                 materialized_names,
             )
+        explicit_specializations = (
+            preprocessor._find_explicit_template_function_specializations(working)
+        )
         templates_by_name: dict[str, list[Any]] = {}
         for template in templates:
             templates_by_name.setdefault(template.name, []).append(template)
@@ -18015,6 +18569,9 @@ def _materialize_plain_template_helper_calls(
             template: Any,
             arguments: Sequence[str],
             parameter_declarations: Sequence[tuple[str, str, bool]],
+            argument_alias_contexts: Sequence[
+                tuple[Mapping[str, Sequence[Any]], int, str]
+            ],
         ) -> str:
             specialization_key = preprocessor._template_specialization_key(
                 function_name,
@@ -18095,12 +18652,33 @@ def _materialize_plain_template_helper_calls(
             )
             materialized_template_names.add(function_name)
 
-            materialized = preprocessor._materialize_template_function_with_name(
-                template,
-                list(key[1]),
-                materialized_name,
-                host_name=None,
+            explicit_specialization = (
+                _explicit_template_function_specialization_for_selected_overload(
+                    preprocessor=preprocessor,
+                    explicit_specializations=explicit_specializations,
+                    template=template,
+                    function_name=function_name,
+                    arguments=list(specialization_key[1]),
+                    parameter_declarations=parameter_declarations,
+                    declaration_source=working,
+                    declaration_type_aliases=local_constant_type_aliases,
+                    argument_alias_contexts=argument_alias_contexts,
+                )
             )
+            if explicit_specialization is not None:
+                materialized = (
+                    preprocessor._materialize_explicit_template_function_specialization(
+                        explicit_specialization,
+                        materialized_name,
+                    )
+                )
+            else:
+                materialized = preprocessor._materialize_template_function_with_name(
+                    template,
+                    list(key[1]),
+                    materialized_name,
+                    host_name=None,
+                )
             if not materialized:
                 return materialized_name
 
@@ -18183,6 +18761,18 @@ def _materialize_plain_template_helper_calls(
                             work_budget=work_budget,
                             include_struct_members=include_struct_members,
                         )
+                        child_alias_contexts = (
+                            (
+                                materialized_constant_type_aliases,
+                                child_span[0],
+                                materialized,
+                            ),
+                            (
+                                local_constant_type_aliases,
+                                int(template.span[0]),
+                                working,
+                            ),
+                        )
                         inferred_matches = _infer_plain_template_helper_matches(
                             preprocessor,
                             child_templates,
@@ -18195,6 +18785,7 @@ def _materialize_plain_template_helper_calls(
                                 materialized_integral_constants,
                                 child_span[0],
                             ),
+                            template_argument_alias_contexts=child_alias_contexts,
                         )
                         if len(inferred_matches) != 1:
                             if (
@@ -18213,6 +18804,7 @@ def _materialize_plain_template_helper_calls(
                             child_template,
                             child_arguments,
                             child_parameter_declarations,
+                            child_alias_contexts,
                         )
                         child_replacements.append(
                             (
@@ -18265,6 +18857,7 @@ def _materialize_plain_template_helper_calls(
                     work_budget=work_budget,
                     include_struct_members=include_struct_members,
                 )
+                call_alias_contexts = ((local_constant_type_aliases, span[0], working),)
                 inferred_matches = _infer_plain_template_helper_matches(
                     preprocessor,
                     candidate_templates,
@@ -18277,6 +18870,7 @@ def _materialize_plain_template_helper_calls(
                         local_integral_constants,
                         span[0],
                     ),
+                    template_argument_alias_contexts=call_alias_contexts,
                 )
                 if len(inferred_matches) != 1:
                     if inferred_matches or function_name not in concrete_function_names:
@@ -18288,6 +18882,7 @@ def _materialize_plain_template_helper_calls(
                     template,
                     arguments,
                     parameter_declarations,
+                    call_alias_contexts,
                 )
                 replacements.append((span[0], span[1], materialized_name))
 
@@ -20003,9 +20598,16 @@ def _template_materialization_unsupported_message(
             ):
                 declaration_text = f"{file_name}:{line}:{column}"
         signature = record.get("requiredSignature", name)
+        reason = str(record.get("reason") or "missing-template-arguments")
         if missing:
             details.append(
                 f"{name} missing {missing_text} "
+                f"(declaration {declaration_text}, target {target}, "
+                f"required {signature})"
+            )
+        elif reason == "unmaterialized-template-function-call":
+            details.append(
+                f"{name} has an unmaterialized reachable template function call "
                 f"(declaration {declaration_text}, target {target}, "
                 f"required {signature})"
             )
@@ -20836,6 +21438,74 @@ def _post_materialization_unresolved_metal_template_type_records(
     ]
 
 
+def _post_materialization_unresolved_metal_template_function_records(
+    *,
+    preprocessor: Any,
+    unit: ProjectTranslationUnit,
+    source: str,
+    target: str,
+    template_names: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Report reachable explicit user-template calls left after materialization."""
+    names = sorted({str(name) for name in template_names if str(name)})
+    if not names:
+        return []
+
+    template_spans = preprocessor._find_template_declaration_spans(source)
+    reachable_function_spans = preprocessor._reachable_function_spans(
+        source,
+        template_spans,
+    )
+    if not reachable_function_spans:
+        return []
+
+    call_sites = [
+        call_site
+        for call_site in _explicit_template_call_replacements(
+            preprocessor,
+            source,
+            {name: name for name in names},
+            template_spans,
+            reachable_function_spans,
+        )
+        # A member template can legitimately share a basename with a source free
+        # template. Keep namespace-qualified free calls, but do not diagnose
+        # object or pointer member calls as unresolved free-template calls.
+        if not preprocessor._is_member_identifier_context(source, call_site[0])
+    ]
+    records: list[dict[str, Any]] = []
+    seen_records: set[tuple[str, str]] = set()
+    for start, end, name in call_sites:
+        required_signature = source[start:end].strip()
+        key = (name, required_signature)
+        if key in seen_records:
+            continue
+        seen_records.add(key)
+        location = _source_location_at_offset(
+            unit,
+            source,
+            start,
+            max(end - start, 0),
+        )
+        records.append(
+            {
+                "name": name,
+                "parameters": [],
+                "missingParameters": [],
+                "reason": "unmaterialized-template-function-call",
+                "sourceDeclaration": {
+                    "file": location.file,
+                    "line": location.line,
+                    "column": location.column,
+                    "name": name,
+                },
+                "target": target,
+                "requiredSignature": required_signature,
+            }
+        )
+    return records
+
+
 def _unmaterialized_metal_template_functor_records(
     *,
     preprocessor: Any,
@@ -21266,6 +21936,9 @@ def _project_template_materialization_for_artifact(
     )
     if stripped_diagnostic_helpers:
         templates = preprocessor._find_template_functions(preprocessed)
+    source_template_function_names = {
+        str(template.name) for template in templates if str(template.name)
+    }
 
     # Candidate accounting mirrors the retired eager planner: every parsed source
     # instantiation was paired with every remaining template-function declaration.
@@ -21626,6 +22299,7 @@ def _project_template_materialization_for_artifact(
         work_budget=explicit_work_budget,
     )
     materialized = preprocessor._evaluate_static_assertions(materialized)
+    materialized = preprocessor._materialize_free_operator_overloads(materialized)
     materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
     discovered_struct_specializations = (
         set(preprocessor._materialized_struct_specializations)
@@ -21932,14 +22606,21 @@ def _project_template_materialization_for_artifact(
     materialized = preprocessor._substitute_local_integral_constant_array_extents(
         materialized
     )
-    post_materialization_unsupported = (
-        _post_materialization_unresolved_metal_template_type_records(
+    post_materialization_unsupported = [
+        *_post_materialization_unresolved_metal_template_type_records(
             preprocessor=preprocessor,
             unit=unit,
             source=materialized,
             target=target,
-        )
-    )
+        ),
+        *_post_materialization_unresolved_metal_template_function_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=materialized,
+            target=target,
+            template_names=source_template_function_names,
+        ),
+    ]
     unsupported.extend(post_materialization_unsupported)
     if not post_materialization_unsupported:
         materialized = preprocessor._prune_unreferenced_template_struct_declarations(
@@ -22867,12 +23548,14 @@ def _math_intrinsic_failure_details(
     return dict(sorted(details.items()))
 
 
-def _opengl_struct_construction_failure_details(
+def _struct_construction_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
     artifact_path: str | None,
 ) -> dict[str, Any]:
     if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-struct-construction-unsupported",
+        "project.translate.metal-struct-construction-unsupported",
         "project.translate.opengl-struct-construction-unsupported",
         "project.translate.webgl-struct-construction-unsupported",
     }:
@@ -23721,6 +24404,8 @@ def _workgroup_size_failure_details(
         "project.translate.subgroup-width-invalid",
         "project.translate.subgroup-width-rule-invalid",
         "project.translate.subgroup-width-materialization-invalid",
+        "project.translate.opengl-software-subgroup-invalid",
+        "project.translate.directx-software-subgroup-invalid",
     }:
         return {}
     execution: dict[str, Any] = {
@@ -23731,6 +24416,8 @@ def _workgroup_size_failure_details(
             if getattr(exc, "workgroup_size", None) is not None
             else None
         ),
+        "softwareSubgroupWidth": getattr(exc, "software_subgroup_width", None),
+        "operation": getattr(exc, "operation", None),
         "sourceWorkgroupSize": (
             list(getattr(exc, "source_workgroup_size"))
             if getattr(exc, "source_workgroup_size", None) is not None
@@ -23758,14 +24445,16 @@ def _workgroup_size_failure_details(
     }
 
 
-def _directx_entry_point_failure_details(
+def _entry_point_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
     artifact_path: str | None,
 ) -> dict[str, Any]:
-    if _translation_failure_diagnostic_code(exc) != (
-        "project.translate.directx-entry-point-unavailable"
-    ):
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-entry-point-unavailable",
+        "project.translate.metal-entry-point-unavailable",
+        "project.translate.opengl-entry-point-unavailable",
+    }:
         return {}
 
     selection = {
@@ -23803,7 +24492,7 @@ def _translation_failure_details(
         **_compile_time_global_failure_details(exc, unit, artifact_path),
         **_boolean_ordered_intrinsic_failure_details(exc, unit, artifact_path),
         **_math_intrinsic_failure_details(exc, unit, artifact_path),
-        **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
+        **_struct_construction_failure_details(exc, unit, artifact_path),
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
         **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
         **_directx_private_pointer_failure_details(exc, unit, artifact_path),
@@ -23835,7 +24524,7 @@ def _translation_failure_details(
         **_metal_callable_alias_failure_details(exc, unit, artifact_path),
         **_template_materialization_failure_details(exc),
         **_workgroup_size_failure_details(exc, unit, artifact_path),
-        **_directx_entry_point_failure_details(exc, unit, artifact_path),
+        **_entry_point_failure_details(exc, unit, artifact_path),
     }
 
 
@@ -25789,7 +26478,7 @@ def _crossgl_ast_for_project_target(
     else:
         source = input_path.read_text(encoding="utf-8", errors="replace")
         parser_defines = defines
-        parser_options = source_options
+        parser_options = _frontend_source_options(source_options)
         if source_backend == "metal" and not source_is_materialized:
             materialized = materialize_metal_source_for_target(
                 source=source,
@@ -25802,7 +26491,7 @@ def _crossgl_ast_for_project_target(
             if materialized is not None:
                 source = materialized.text
                 parser_defines = materialized.defines
-                parser_options = materialized.source_options
+                parser_options = _frontend_source_options(materialized.source_options)
         source_ast = source_spec.parse(
             source,
             file_path=str(input_path),
@@ -26025,6 +26714,54 @@ def _project_workgroup_execution_metadata(
     }
 
 
+def _project_software_subgroup_width(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> Any | None:
+    if SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION not in source_options:
+        return None
+    width = source_options[SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION]
+    if target not in {"directx", "opengl"}:
+        raise OpenGLSoftwareSubgroupError(
+            "software_subgroup_width is supported only by the DirectX and "
+            "OpenGL targets",
+            software_subgroup_width=width,
+            reason="target-not-supported",
+        )
+    return width
+
+
+def _project_directx_relative_wave_shuffle_out_of_range(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> Any | None:
+    option = DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    policy = source_options[option]
+    if target != "directx":
+        raise ValueError(
+            "relative_wave_shuffle_out_of_range is supported only by the "
+            "DirectX target"
+        )
+    return policy
+
+
+def _project_directx_widen_native_float16(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> Any | None:
+    option = DIRECTX_WIDEN_NATIVE_FLOAT16_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    enabled = source_options[option]
+    if target != "directx":
+        raise ValueError("widen_native_float16 is supported only by the DirectX target")
+    if not isinstance(enabled, bool):
+        raise TypeError("widen_native_float16 must be a boolean")
+    return enabled
+
+
 def _generate_project_target_from_crossgl_ast(
     *,
     ast: Any,
@@ -26034,8 +26771,49 @@ def _generate_project_target_from_crossgl_ast(
     format_output: bool,
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
+    software_subgroup_width: Any | None = None,
+    directx_relative_wave_shuffle_out_of_range: Any | None = None,
+    directx_widen_native_float16: Any | None = None,
 ) -> str:
     codegen = get_codegen(target)
+    if directx_widen_native_float16 is not None:
+        configure_float16_widening = getattr(codegen, "set_widen_native_float16", None)
+        if not callable(configure_float16_widening):
+            raise ValueError(f"Target '{target}' does not consume widen_native_float16")
+        configure_float16_widening(directx_widen_native_float16)
+    if directx_relative_wave_shuffle_out_of_range is not None:
+        configure_relative_shuffle = getattr(
+            codegen, "set_relative_wave_shuffle_out_of_range", None
+        )
+        if not callable(configure_relative_shuffle):
+            raise ValueError(
+                f"Target '{target}' does not consume "
+                "relative_wave_shuffle_out_of_range"
+            )
+        configure_relative_shuffle(directx_relative_wave_shuffle_out_of_range)
+    if software_subgroup_width is not None:
+        software_subgroup_error = (
+            DirectXSoftwareSubgroupError
+            if target == "directx"
+            else OpenGLSoftwareSubgroupError
+        )
+        configure_software_subgroup = getattr(
+            codegen, "set_software_subgroup_width", None
+        )
+        if not callable(configure_software_subgroup):
+            raise software_subgroup_error(
+                f"Target '{target}' does not consume software_subgroup_width",
+                software_subgroup_width=software_subgroup_width,
+                reason="target-not-supported",
+            )
+        try:
+            configure_software_subgroup(software_subgroup_width)
+        except (TypeError, ValueError) as exc:
+            raise software_subgroup_error(
+                "software_subgroup_width must be the integer 32",
+                software_subgroup_width=software_subgroup_width,
+                reason="configured-width-invalid",
+            ) from exc
     if index_range_assertions:
         configure_index_ranges = getattr(codegen, "set_index_range_assertions", None)
         if not callable(configure_index_ranges):
@@ -26053,9 +26831,12 @@ def _generate_project_target_from_crossgl_ast(
             )
         configure_workgroup_accesses(workgroup_access_assertions)
     lower_default_arguments(ast)
-    validate_pointer_reinterpretation_target(ast, target)
-    if entry_point is None:
-        generated = codegen.generate(ast)
+    selected_ast, remaining_entry_point = prepare_entry_scoped_target(
+        codegen, ast, entry_point
+    )
+    validate_pointer_reinterpretation_target(selected_ast, target)
+    if remaining_entry_point is None:
+        generated = codegen.generate(selected_ast)
     else:
         generate_entry = getattr(codegen, "generate_entry", None)
         if not callable(generate_entry):
@@ -26063,7 +26844,7 @@ def _generate_project_target_from_crossgl_ast(
                 "Entry-scoped artifact generation is not supported for the "
                 "requested target backend"
             )
-        generated = generate_entry(ast, entry_point)
+        generated = generate_entry(selected_ast, remaining_entry_point)
     if format_output:
         try:
             from crosstl.formatter import format_shader_code
@@ -26136,6 +26917,31 @@ def _validate_project_workgroup_target_output(
             for entry in execution_entries
             if _is_non_empty_string(entry.get("targetEntryPoint"))
         }
+        if target == "metal":
+            reflected = reflect_target_host_interface(output_path, target=target)
+            reflected_names = [
+                str(entry_point["name"])
+                for entry_point in _record_sequence(reflected.get("entryPoints"))
+                if isinstance(entry_point, Mapping)
+                and entry_point.get("stage") == "compute"
+                and _is_non_empty_string(entry_point.get("name"))
+            ]
+            if len(reflected_names) != len(set(reflected_names)) or set(
+                reflected_names
+            ) != set(expected_by_target):
+                raise ProjectWorkgroupSizeError(
+                    "Generated Metal entries do not match the host-dispatch "
+                    "workgroup contract.",
+                    code=("project.translate.workgroup-size-materialization-invalid"),
+                    reason="target-entry-identity-mismatch",
+                    source_entry_points=execution.get("sourceEntryPoints", ()),
+                    materialization_details={
+                        "expectedTargetEntryPoints": sorted(expected_by_target),
+                        "reflectedTargetEntryPoints": sorted(reflected_names),
+                        "workgroupSizeOwnership": "host-dispatch",
+                    },
+                )
+            return
         reflected_entries = _project_target_workgroup_entries(output_path, target)
         reflected_by_target = dict(reflected_entries)
         reflected_names = [name for name, _size in reflected_entries]
@@ -27004,7 +27810,26 @@ def _translate_project_impl(
                     if target == "opengl"
                     else ()
                 )
+                software_subgroup_width = None
+                directx_relative_wave_shuffle_out_of_range = None
+                directx_widen_native_float16 = None
                 try:
+                    software_subgroup_width = _project_software_subgroup_width(
+                        target,
+                        source_options,
+                    )
+                    directx_relative_wave_shuffle_out_of_range = (
+                        _project_directx_relative_wave_shuffle_out_of_range(
+                            target,
+                            source_options,
+                        )
+                    )
+                    directx_widen_native_float16 = (
+                        _project_directx_widen_native_float16(
+                            target,
+                            source_options,
+                        )
+                    )
                     unsupported_rule_target = (
                         _unsupported_workgroup_size_rule_target_error(
                             config,
@@ -27250,19 +28075,35 @@ def _translate_project_impl(
                         translate_kwargs["source_options"] = translation_source_options
                     generated_source = None
                     crossgl_ast = None
-                    requires_workgroup_specialization = (
-                        target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS
-                        and (
-                            unit.source_backend == "metal"
-                            or translation_source_backend in {"cgl", "crossgl"}
+                    configured_workgroup_rule = (
+                        _configured_workgroup_size_rule(config, unit.relative_path)
+                        is not None
+                        or _configured_entry_workgroup_size_rules(
+                            config, unit.relative_path
                         )
-                        and _project_input_requires_workgroup_specialization(
-                            input_path=translation_input_path,
-                            source_backend=translation_source_backend,
-                            config=config,
-                            variant=variant,
-                            project_relative_path=unit.relative_path,
-                            configured_workgroup=(translation_job.configured_workgroup),
+                        is not None
+                    )
+                    workgroup_input_supported = (
+                        unit.source_backend == "metal"
+                        or translation_source_backend in {"cgl", "crossgl"}
+                    )
+                    requires_workgroup_specialization = workgroup_input_supported and (
+                        (
+                            target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS
+                            and _project_input_requires_workgroup_specialization(
+                                input_path=translation_input_path,
+                                source_backend=translation_source_backend,
+                                config=config,
+                                variant=variant,
+                                project_relative_path=unit.relative_path,
+                                configured_workgroup=(
+                                    translation_job.configured_workgroup
+                                ),
+                            )
+                        )
+                        or (
+                            target in WORKGROUP_SIZE_RULE_TARGETS
+                            and configured_workgroup_rule
                         )
                     )
                     configured_subgroup = translation_job.configured_subgroup
@@ -27279,6 +28120,9 @@ def _translate_project_impl(
                     if (
                         requires_workgroup_specialization
                         or requires_subgroup_specialization
+                        or software_subgroup_width is not None
+                        or directx_relative_wave_shuffle_out_of_range is not None
+                        or directx_widen_native_float16 is not None
                     ):
                         crossgl_ast = _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -27427,20 +28271,27 @@ def _translate_project_impl(
                                     )
                                     split_artifact["execution"] = split_execution
                                     try:
-                                        split_source = (
-                                            _generate_project_target_from_crossgl_ast(
-                                                ast=crossgl_ast,
-                                                target=target,
-                                                output_path=split_output_path,
-                                                entry_point=materialized_entry,
-                                                format_output=format_output,
-                                                index_range_assertions=(
-                                                    index_range_assertions
-                                                ),
-                                                workgroup_access_assertions=(
-                                                    workgroup_access_assertions
-                                                ),
-                                            )
+                                        split_source = _generate_project_target_from_crossgl_ast(
+                                            ast=crossgl_ast,
+                                            target=target,
+                                            output_path=split_output_path,
+                                            entry_point=materialized_entry,
+                                            format_output=format_output,
+                                            index_range_assertions=(
+                                                index_range_assertions
+                                            ),
+                                            workgroup_access_assertions=(
+                                                workgroup_access_assertions
+                                            ),
+                                            software_subgroup_width=(
+                                                software_subgroup_width
+                                            ),
+                                            directx_relative_wave_shuffle_out_of_range=(
+                                                directx_relative_wave_shuffle_out_of_range
+                                            ),
+                                            directx_widen_native_float16=(
+                                                directx_widen_native_float16
+                                            ),
                                         )
                                     except Exception as exc:
                                         if getattr(
@@ -27494,20 +28345,25 @@ def _translate_project_impl(
                             else:
                                 artifact["execution"] = execution
                                 try:
-                                    generated_source = (
-                                        _generate_project_target_from_crossgl_ast(
-                                            ast=crossgl_ast,
-                                            target=target,
-                                            output_path=output_path,
-                                            entry_point=selected_entry_point,
-                                            format_output=format_output,
-                                            index_range_assertions=(
-                                                index_range_assertions
-                                            ),
-                                            workgroup_access_assertions=(
-                                                workgroup_access_assertions
-                                            ),
-                                        )
+                                    generated_source = _generate_project_target_from_crossgl_ast(
+                                        ast=crossgl_ast,
+                                        target=target,
+                                        output_path=output_path,
+                                        entry_point=selected_entry_point,
+                                        format_output=format_output,
+                                        index_range_assertions=(index_range_assertions),
+                                        workgroup_access_assertions=(
+                                            workgroup_access_assertions
+                                        ),
+                                        software_subgroup_width=(
+                                            software_subgroup_width
+                                        ),
+                                        directx_relative_wave_shuffle_out_of_range=(
+                                            directx_relative_wave_shuffle_out_of_range
+                                        ),
+                                        directx_widen_native_float16=(
+                                            directx_widen_native_float16
+                                        ),
                                     )
                                 except Exception as exc:
                                     if getattr(
@@ -27530,7 +28386,11 @@ def _translate_project_impl(
                                     execution=execution,
                                 )
                     if generated_source is None and (
-                        index_range_assertions or workgroup_access_assertions
+                        index_range_assertions
+                        or workgroup_access_assertions
+                        or software_subgroup_width is not None
+                        or directx_relative_wave_shuffle_out_of_range is not None
+                        or directx_widen_native_float16 is not None
                     ):
                         crossgl_ast = crossgl_ast or _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -27552,6 +28412,11 @@ def _translate_project_impl(
                             format_output=format_output,
                             index_range_assertions=index_range_assertions,
                             workgroup_access_assertions=(workgroup_access_assertions),
+                            software_subgroup_width=software_subgroup_width,
+                            directx_relative_wave_shuffle_out_of_range=(
+                                directx_relative_wave_shuffle_out_of_range
+                            ),
+                            directx_widen_native_float16=directx_widen_native_float16,
                         )
                     if generated_source is None:
                         generated_source = translate(
@@ -30275,7 +31140,13 @@ def _runtime_manifest_reflected_host_interface(
     ):
         return None
     normalized_target = _normalized_targets([str(target)])[0]
-    if normalized_target not in {"directx", "opengl", "webgl", "vulkan"}:
+    if normalized_target not in {
+        "directx",
+        "metal",
+        "opengl",
+        "webgl",
+        "vulkan",
+    }:
         return None
     artifact_path = (root_path / str(path)).resolve()
     if not _is_relative_to(artifact_path, root_path) or not artifact_path.is_file():
@@ -30367,6 +31238,21 @@ def _runtime_manifest_merge_specialization_constants(
         for constant in _record_sequence(artifact.get("specializationConstants"))
         if isinstance(constant, Mapping)
     ]
+    # Source reflection is intentionally source-wide. Entry-scoped project artifacts
+    # already carry the constants reachable from the selected entry, so do not
+    # restore unrelated declarations (for example MLX RMSNorm's VJP-only `has_w`).
+    if isinstance(artifact.get("entryPoint"), Mapping):
+        scoped_identities = {
+            identity
+            for constant in (*reflected_constants, *artifact_constants)
+            if (identity := _runtime_specialization_constant_identity(constant))
+            is not None
+        }
+        source_constants = [
+            constant
+            for constant in source_constants
+            if _runtime_specialization_constant_identity(constant) in scoped_identities
+        ]
     specialization_constants = _runtime_merge_specialization_constant_records(
         reflected_constants,
         source_constants,
@@ -46497,6 +47383,8 @@ def _artifact_subgroup_rule_execution_contract_reasons(
                 provenance=shadow_provenance,
             )
         shadow_project = dict(project or {})
+        shadow_project.pop("entryWorkgroupSizeRules", None)
+        shadow_project.pop("entryWorkgroupSizeRuleCount", None)
         shadow_project["workgroupSizeRules"] = {
             pattern: [expression, "1", "1"]
             for pattern, expression in normalized_rules.items()

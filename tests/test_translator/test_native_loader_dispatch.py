@@ -282,22 +282,33 @@ def test_builds_preflighted_native_runtime_request(
     ]
 
 
-def test_builds_directx_vector_resource_request(tmp_path):
-    descriptor = _write_descriptor(tmp_path)
+@pytest.mark.parametrize(
+    ("target", "storage_layout", "alignment_bytes"),
+    [
+        ("directx", "hlsl-structured-buffer", 4),
+        ("opengl", "std430", 8),
+    ],
+)
+def test_builds_vector_resource_request(
+    tmp_path, target, storage_layout, alignment_bytes
+):
+    descriptor = _write_descriptor(tmp_path, target)
     vector_layout = {
         "physicalType": "float2",
         "elementType": "float32",
         "elementSizeBytes": 8,
         "elementStrideBytes": 8,
-        "alignmentBytes": 4,
+        "alignmentBytes": alignment_bytes,
         "memberOffsetBytes": 0,
-        "storageLayout": "hlsl-structured-buffer",
+        "storageLayout": storage_layout,
         "runtimeSized": True,
         "vectorWidth": 2,
     }
     for index in range(2):
         descriptor["bindings"][index]["type"] = (
-            "StructuredBuffer<float2>" if index == 0 else "RWStructuredBuffer<float2>"
+            ("StructuredBuffer<float2>" if index == 0 else "RWStructuredBuffer<float2>")
+            if target == "directx"
+            else "vec2[]"
         )
         descriptor["bindings"][index]["scalarLayout"] = copy.deepcopy(vector_layout)
         descriptor["scalarLayout"]["bindings"][index]["layout"] = copy.deepcopy(
@@ -307,6 +318,7 @@ def test_builds_directx_vector_resource_request(tmp_path):
     values = [1.0, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0]
     request = _build(
         tmp_path,
+        target,
         descriptor=descriptor,
         input_values={
             "input_values": {
@@ -338,6 +350,88 @@ def test_builds_directx_vector_resource_request(tmp_path):
     assert allocations["input_values"].allocation_byte_length == 32
     assert allocations["output_values"].byte_length == 32
     assert allocations["output_values"].allocation_byte_length == 32
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize(
+    ("dtype", "physical_type", "values"),
+    [
+        ("int64", "int64_t", [-(1 << 63), -1, 0, (1 << 63) - 1]),
+        ("uint64", "uint64_t", [0, 1, 1 << 63, (1 << 64) - 1]),
+    ],
+)
+def test_builds_64_bit_scalar_resource_request(
+    tmp_path,
+    target,
+    dtype,
+    physical_type,
+    values,
+):
+    descriptor = _write_descriptor(tmp_path, target)
+    scalar_layout = {
+        "physicalType": physical_type,
+        "elementType": dtype,
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 8,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer" if target == "directx" else "std430",
+        "runtimeSized": True,
+    }
+    for index, binding in enumerate(descriptor["bindings"]):
+        binding["scalarLayout"] = copy.deepcopy(scalar_layout)
+        descriptor["scalarLayout"]["bindings"][index]["layout"] = copy.deepcopy(
+            scalar_layout
+        )
+
+    request = _build(
+        tmp_path,
+        target,
+        descriptor=descriptor,
+        input_values={
+            "input_values": {
+                "dtype": dtype,
+                "shape": [4],
+                "values": values,
+            }
+        },
+        output_values={
+            "output_values": {
+                "dtype": dtype,
+                "shape": [4],
+                "values": values,
+            }
+        },
+    )
+
+    bindings = request.adapter_contract.resource_bindings
+    assert [binding.metadata["byteStride"] for binding in bindings] == [8, 8]
+    assert [binding.metadata["scalarLayout"] for binding in bindings] == [
+        scalar_layout,
+        scalar_layout,
+    ]
+    assert [
+        item.allocation.byte_length for item in request.execution_plan.resource_bindings
+    ] == [32, 32]
+
+
+@pytest.mark.parametrize(
+    ("dtype", "value"),
+    [("int64", 1 << 63), ("uint64", -1), ("uint64", 1 << 64)],
+)
+def test_rejects_out_of_range_64_bit_runtime_values(tmp_path, dtype, value):
+    inputs = {
+        "input_values": {
+            "dtype": dtype,
+            "shape": [1],
+            "values": [value],
+        }
+    }
+
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, input_values=inputs)
+
+    assert caught.value.code.endswith(".value-data-invalid")
 
 
 def test_builds_directx_vector_constant_buffer_request(tmp_path):

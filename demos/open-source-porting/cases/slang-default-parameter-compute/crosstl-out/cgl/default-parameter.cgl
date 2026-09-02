@@ -5,7 +5,7 @@ shader main {
     }
 
        int test(int val) {
-        return helper(val) + helper(val, 256);
+        return helper(val, 16) + helper(val, 256);
     }
 
     compute {

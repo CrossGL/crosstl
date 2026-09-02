@@ -25,7 +25,7 @@ from crosstl.project import (
     translate_project,
 )
 
-MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 REQUIRE_PROOF_ENVS = {
     "directx": "CROSTL_REQUIRE_MLX_ARANGE_DIRECTX_NATIVE_LOADER",

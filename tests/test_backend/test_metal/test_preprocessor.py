@@ -2017,6 +2017,174 @@ def test_preprocessor_preserves_explicit_template_specialization_calls():
     assert "uint convert_type_uint(float value)" not in output
 
 
+def test_preprocessor_parses_explicit_free_specialization_for_project_materialization():
+    code = """
+    template <typename T, typename U>
+    T cast_to(U value) {
+        return T(value);
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return (as_type<uint>(value) & 0x7FFFFFFF) != 0;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+
+    specializations = preprocessor._find_explicit_template_function_specializations(
+        code
+    )
+
+    specialization = specializations[("cast_to", ("bool", "float"), ("float",))]
+    assert specialization["arguments"] == ("bool", "float")
+    assert "0x7FFFFFFF" in specialization["source"]
+    materialized = preprocessor._materialize_explicit_template_function_specialization(
+        specialization,
+        "cast_to_bool_float",
+    )
+    assert "bool cast_to_bool_float(float value)" in materialized
+    assert "return (as_type<uint>(value) & 0x7FFFFFFF) != 0;" in materialized
+    assert "template <>" not in materialized
+
+
+def test_preprocessor_explicit_free_specialization_scan_ignores_comments_and_literals():
+    code = r"""
+    // template <> bool cast_to<bool, float>(float value) { return false; }
+    constant char* description =
+        "template <> bool cast_to<bool, float>(float value) { return false; }";
+
+    template <typename U, typename T>
+    U cast_to(T value) {
+        return U(value);
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return value != 0.0f;
+    }
+    """
+
+    specializations = (
+        MetalPreprocessor()._find_explicit_template_function_specializations(code)
+    )
+
+    assert list(specializations) == [("cast_to", ("bool", "float"), ("float",))]
+    assert "return value != 0.0f;" in next(iter(specializations.values()))["source"]
+
+
+def test_preprocessor_explicit_free_specialization_scan_excludes_owned_scopes():
+    code = """
+    struct Box {
+        template <typename U, typename T>
+        static U cast_to(T value);
+    };
+
+    template <>
+    bool Box::cast_to<bool, float>(float value) {
+        return value > 1.0f;
+    }
+
+    namespace hidden {
+    template <typename U, typename T>
+    U cast_to(T value) {
+        return U(value);
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return value < -1.0f;
+    }
+    }
+
+    template <typename U, typename T>
+    U cast_to(T value) {
+        return U(value);
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return value != 0.0f;
+    }
+    """
+
+    specializations = (
+        MetalPreprocessor()._find_explicit_template_function_specializations(code)
+    )
+
+    assert list(specializations) == [("cast_to", ("bool", "float"), ("float",))]
+    specialization = specializations[("cast_to", ("bool", "float"), ("float",))]
+    assert specialization["parameterTypes"] == ("float",)
+    assert "return value != 0.0f;" in specialization["source"]
+    assert "Box::cast_to" not in specialization["source"]
+    assert "value < -1.0f" not in specialization["source"]
+
+
+def test_preprocessor_rejects_duplicate_explicit_free_specializations():
+    code = """
+    template <typename T, typename U>
+    T cast_to(U value) {
+        return T(value);
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return value != 0.0f;
+    }
+
+    template <>
+    bool cast_to<bool, float>(float value) {
+        return value > 0.0f;
+    }
+    """
+
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match="explicit free-function template specialization is defined more than once",
+    ):
+        MetalPreprocessor()._find_explicit_template_function_specializations(code)
+
+
+def test_preprocessor_distinguishes_explicit_free_specialization_overloads():
+    code = """
+    template <typename T>
+    T choose(T value) {
+        return value;
+    }
+
+    template <typename T>
+    T choose(device T* value) {
+        return value[0];
+    }
+
+    template <>
+    int choose<int>(int value) {
+        return value + 10;
+    }
+
+    template <>
+    int choose<int>(device int* value) {
+        return value[0] + 20;
+    }
+    """
+
+    specializations = (
+        MetalPreprocessor()._find_explicit_template_function_specializations(code)
+    )
+
+    assert list(specializations) == [
+        ("choose", ("int",), ("int",)),
+        ("choose", ("int",), ("device int*",)),
+    ]
+    assert (
+        "return value + 10;"
+        in specializations[("choose", ("int",), ("int",))]["source"]
+    )
+    assert (
+        "return value[0] + 20;"
+        in specializations[("choose", ("int",), ("device int*",))]["source"]
+    )
+
+
 def test_preprocessor_preserves_explicit_specialization_called_through_local_alias():
     code = """
     template <typename T>
@@ -2040,6 +2208,125 @@ def test_preprocessor_preserves_explicit_specialization_called_through_local_ali
     assert "convert_type_uint(1.0)" not in output
     assert "uint convert_type<uint>(float value)" in output
     assert "uint convert_type_uint(float value)" not in output
+
+
+def test_preprocessor_preserves_alias_equivalent_explicit_specialization_call():
+    code = """
+    typedef uint Word;
+
+    template <typename T>
+    T choose(T value) {
+        return value;
+    }
+
+    template <>
+    uint choose<Word>(Word value) {
+        return value + 1u;
+    }
+
+    kernel void chosen(
+        device uint* dst [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        using LocalWord = uint;
+        dst[gid] = choose<LocalWord>(gid);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "choose<LocalWord>(gid)" in output
+    assert "uint choose<Word>(Word value)" in output
+    assert "choose_LocalWord" not in output
+
+
+@pytest.mark.parametrize("specialized_name", ["choose", "choose<>"])
+def test_preprocessor_preserves_deduced_explicit_free_specialization(
+    specialized_name,
+):
+    code = f"""
+    template <typename T>
+    T choose(T value) {{
+        return value;
+    }}
+
+    template <>
+    uint {specialized_name}(uint value) {{
+        return value + 1u;
+    }}
+
+    kernel void chosen(device uint* dst [[buffer(0)]]) {{
+        dst[0] = choose<uint>(0u);
+    }}
+    """
+    preprocessor = MetalPreprocessor()
+
+    specializations = preprocessor._find_explicit_template_function_specializations(
+        code
+    )
+    output = preprocessor.preprocess(code)
+
+    assert list(specializations) == [("choose", (), ("uint",))]
+    specialization = specializations[("choose", (), ("uint",))]
+    assert specialization["templateArgumentsExplicit"] is False
+    assert "return value + 1u;" in specialization["source"]
+    assert "choose<uint>(0u)" in output
+    assert "choose_uint(0u)" not in output
+
+
+def test_preprocessor_canonicalizes_namespace_qualified_type_aliases():
+    code = """
+    namespace types {
+    using BaseWord = uint;
+    using Word = BaseWord;
+    void local_owner() { using LocalWord = uint; }
+    struct Owner { using MemberWord = uint; };
+    }
+
+    ::types::Word value;
+    """
+    preprocessor = MetalPreprocessor()
+    aliases = preprocessor._collect_local_type_alias_bindings(
+        code,
+        [(0, len(code))],
+    )
+    use_position = code.index("::types::Word")
+
+    assert "types::BaseWord" in aliases
+    assert "types::Word" in aliases
+    assert "types::LocalWord" not in aliases
+    assert "types::MemberWord" not in aliases
+    assert (
+        preprocessor._canonicalize_type_aliases_at(
+            "::types::Word",
+            aliases,
+            use_position,
+        )
+        == "uint"
+    )
+
+
+def test_preprocessor_qualified_type_alias_resolution_obeys_declaration_order():
+    code = """
+    types::Word value;
+
+    namespace types {
+    using Word = uint;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    aliases = preprocessor._collect_local_type_alias_bindings(
+        code,
+        [(0, len(code))],
+    )
+
+    assert (
+        preprocessor._canonicalize_type_aliases_at(
+            "types::Word",
+            aliases,
+            code.index("types::Word"),
+        )
+        is None
+    )
 
 
 def test_preprocessor_reports_explicit_template_specialization_limit():
@@ -5116,6 +5403,120 @@ def test_preprocessor_keeps_unlowered_member_local_call_operator_with_owner_type
     assert "uint Outer__ordinary(thread Outer& self)" in output
 
 
+def test_preprocessor_lowers_readonly_conversion_operator_chain():
+    code = """
+    struct ByteView {
+        operator float16_t() thread {
+            float16_t converted = float16_t(bits);
+            return (bits ? -converted : converted);
+        }
+
+        operator float() thread {
+            return static_cast<float>(this->operator float16_t());
+        }
+
+        uint8_t bits;
+    };
+
+    float decode(uint8_t x) {
+        return float(*(thread ByteView*)(&x));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "operator float" not in output
+    assert (
+        "float16_t ByteView__operator_float16_t("
+        "thread const ByteView& self)" in output
+    )
+    assert "float16_t converted = float16_t(self.bits);" in output
+    assert "return (self.bits ? -converted : converted);" in output
+    assert "float ByteView__operator_float(thread const ByteView& self)" in output
+    assert "return static_cast<float>(ByteView__operator_float16_t(self));" in output
+    assert "return ByteView__operator_float(*(thread ByteView*)(&x));" in output
+
+
+def test_preprocessor_rewrites_readonly_conditional_alias_temporary_conversion():
+    code = """
+    struct Scale {
+        operator float() thread {
+            uint32_t out = bits == 0 ? 0x400000 : (bits << 23);
+            return as_type<float>(out);
+        }
+        uint32_t bits;
+    };
+
+    float decode(float x) {
+        constexpr bool use_scale = 32 == 32;
+        using ScaleType = metal::conditional_t<use_scale, Scale, Scale>;
+        return float(ScaleType(x));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float Scale__operator_float(thread const Scale& self)" in output
+    assert "self.bits == 0" in output
+    assert "return Scale__operator_float(ScaleType(x));" in output
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "bits += 1; return float(bits);",
+        "mutate(bits); return float(bits);",
+        "touch(); return float(bits);",
+        "thread uint& alias = bits; alias += 1; return float(alias);",
+    ],
+)
+def test_preprocessor_rejects_mutating_conversion_on_temporary(body):
+    code = f"""
+    void mutate(thread uint& value);
+
+    struct Value {{
+        void touch() thread;
+        operator float() thread {{ {body} }}
+        uint bits;
+    }};
+
+    float decode(uint x) {{
+        return float(Value(x));
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as exc_info:
+        MetalPreprocessor().preprocess(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == ("conversion-temporary-receiver-mutation-unsupported")
+    assert diagnostic.missing_capabilities == ("metal.conversion-operator-temporary",)
+    assert diagnostic.struct_name == "Value"
+
+
+def test_preprocessor_preserves_mutating_conversion_on_named_receiver():
+    code = """
+    struct Value {
+        operator float() thread {
+            bits += 1;
+            return float(bits);
+        }
+        uint bits;
+    };
+
+    float decode() {
+        Value value;
+        return float(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float Value__operator_float(thread Value& self)" in output
+    assert "self.bits += 1;" in output
+    assert "return Value__operator_float(value);" in output
+
+
 def test_preprocessor_lowers_materialized_template_functor():
     # After the struct-template materializer produces a concrete `Sum_float`, the
     # member-function lowering pass lowers its `operator()` and rewrites the call.
@@ -7338,6 +7739,237 @@ def test_preprocessor_lowers_temporary_functor_call_with_arithmetic_and_functor_
     assert "complex64_t Sqrt__operator_call(thread Sqrt& self, complex64_t x)" in output
 
 
+def test_preprocessor_materializes_boolean_constrained_free_operator():
+    code = """
+    template <typename T> struct Box { T value; };
+    template <typename T>
+    static constexpr constant bool is_box_v = false;
+    template <typename T>
+    static constexpr constant bool is_box_v<Box<T>> = true;
+    template <typename From, typename To>
+    static constexpr constant bool is_lane_convertible_v =
+        is_convertible_v<From, To> ||
+        (is_same_v<To, bfloat16_t> && is_convertible_v<From, float>);
+
+    template <
+        typename T,
+        typename U,
+        enable_if_t<!is_box_v<U> && is_lane_convertible_v<U, T>, bool> = true>
+    constexpr Box<T> operator+(U scalar, Box<T> value) {
+      return {static_cast<T>(scalar) + value.value};
+    }
+
+    kernel void add_scalar(device float* out [[buffer(0)]], float scalar) {
+      Box<float> value{1.0f};
+      auto result = scalar + value;
+      out[0] = result.value;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "Box_float crosstl_metal_operator_add__float__Box_float("
+        "float scalar, Box_float value)" in output
+    )
+    assert "return {static_cast<float>(scalar) + value.value};" in output
+    assert "auto result = scalar + value;" in output
+    assert output.count("crosstl_metal_operator_add__float__Box_float") == 1
+
+
+def test_preprocessor_materializes_dependent_free_operator_call():
+    code = """
+    template <typename T> struct Box { T real; T imag; };
+
+    template <typename T>
+    constexpr bool operator>(Box<T> a, Box<T> b) {
+      return a.real > b.real || (a.real == b.real && a.imag > b.imag);
+    }
+
+    template <typename T>
+    constexpr bool operator<(Box<T> a, Box<T> b) {
+      return operator>(b, a);
+    }
+
+    kernel void compare_boxes(device bool* out [[buffer(0)]]) {
+      Box<float> left{1.0f, 2.0f};
+      Box<float> right{2.0f, 1.0f};
+      out[0] = left < right;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    greater = "crosstl_metal_operator_greater__Box_float__Box_float"
+    less = "crosstl_metal_operator_less__Box_float__Box_float"
+    assert f"bool {greater}(Box_float a, Box_float b)" in output
+    assert f"bool {less}(Box_float a, Box_float b)" in output
+    assert f"return {greater}(b, a);" in output
+    assert "return operator>(b, a);" not in output
+
+
+def test_preprocessor_infers_materialized_aggregate_alias_for_auto_functor_call():
+    code = """
+    template <typename T> struct Box { T value; };
+    using BoxAlias = Box<float>;
+
+    struct Identity {
+      BoxAlias operator()(BoxAlias value) { return value; }
+    };
+
+    kernel void use_alias(device float* out [[buffer(0)]]) {
+      auto value = BoxAlias{1.0f};
+      auto result = Identity{}(value);
+      out[0] = result.value;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "using BoxAlias = Box_float;" in output
+    assert "auto value = BoxAlias{1.0f};" in output
+    assert "auto result = Identity__operator_call__temporary(value);" in output
+    assert "BoxAlias Identity__operator_call__temporary(BoxAlias value)" in output
+    assert "Identity{}(value)" not in output
+
+
+def test_preprocessor_prunes_unselected_out_of_line_member_overload():
+    code = """
+    struct complex64_t { float real; float imag; };
+
+    complex64_t opaque(complex64_t value) { return value; }
+
+    struct Log {
+      template <typename T>
+      T operator()(T value) thread { return value; }
+    };
+
+    struct ArcCos {
+      template <typename T>
+      T operator()(T value) thread { return value; }
+      complex64_t operator()(complex64_t value) thread;
+    };
+
+    complex64_t ArcCos::operator()(complex64_t value) thread {
+      return Log{}(opaque(value));
+    }
+
+    float apply_arccos(float value) {
+      return ArcCos{}(value);
+    }
+
+    [[kernel]] void selected(
+        device const float* in [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      out[0] = apply_arccos(in[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "ArcCos__operator_call__float__temporary(value)" in output
+    assert "out[0] = apply_arccos(in[0]);" in output
+    assert "return Log{}(opaque(value));" in output
+
+    repeated_output = MetalPreprocessor()._lower_struct_member_functions(output)
+    assert "ArcCos__operator_call__float__temporary(value)" in repeated_output
+    assert "return Log{}(opaque(value));" in repeated_output
+
+
+def test_preprocessor_reachable_out_of_line_member_overload_fails_closed():
+    code = """
+    struct complex64_t { float real; float imag; };
+
+    complex64_t opaque(complex64_t value) { return value; }
+
+    struct Log {
+      template <typename T>
+      T operator()(T value) thread { return value; }
+    };
+
+    struct ArcCos {
+      template <typename T>
+      T operator()(T value) thread { return value; }
+      complex64_t operator()(complex64_t value) thread;
+    };
+
+    complex64_t ArcCos::operator()(complex64_t value) thread {
+      return Log{}(opaque(value));
+    }
+
+    [[kernel]] void selected(
+        device const complex64_t* in [[buffer(0)]],
+        device complex64_t* out [[buffer(1)]]) {
+      out[0] = ArcCos{}(in[0]);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == "Log"
+    assert error.method_name == "operator()"
+    assert error.requested_signature == "Log(opaque(value))"
+
+
+def test_reachable_function_spans_select_receiver_qualified_member_overload():
+    code = """
+    struct Operation {
+      template <typename T>
+      T fallback(T value) thread { return value; }
+      float evaluate(float value) thread;
+      float evaluate(float value) const thread;
+    };
+
+    float Operation::evaluate(float value) thread {
+      return value + 1.0;
+    }
+
+    float Operation::evaluate(float value) const thread {
+      return value - 1.0;
+    }
+
+    [[kernel]] void selected(device float* out [[buffer(0)]]) {
+      const Operation operation;
+      out[0] = operation.evaluate(2.0);
+    }
+    """
+    preprocessor = MetalPreprocessor()
+
+    reachable = preprocessor._reachable_function_spans(
+        code,
+        preprocessor._find_template_declaration_spans(code),
+    )
+
+    assert reachable is not None
+    reachable_source = "\n".join(code[start:end] for start, end in reachable)
+    assert "return value - 1.0;" in reachable_source
+    assert "return value + 1.0;" not in reachable_source
+
+
+def test_reachable_function_spans_preserve_namespace_qualified_free_call():
+    code = """
+    namespace operations {
+    float evaluate(float value) {
+      return value + 1.0;
+    }
+    }
+
+    [[kernel]] void selected(device float* out [[buffer(0)]]) {
+      out[0] = operations::evaluate(2.0);
+    }
+    """
+    preprocessor = MetalPreprocessor()
+
+    reachable = preprocessor._reachable_function_spans(code, [])
+
+    assert reachable is not None
+    reachable_source = "\n".join(code[start:end] for start, end in reachable)
+    assert "return value + 1.0;" in reachable_source
+
+
 def test_preprocessor_defers_temporaries_for_declared_out_of_line_call_operators():
     code = """
     struct complex64_t { float real; float imag; };
@@ -8951,6 +9583,56 @@ def test_preprocessor_template_method_uninferable_argument_clean_fails():
     )
 
 
+def test_preprocessor_skips_unreachable_uninferable_template_method_call():
+    code = """
+    struct Log {
+      template <typename T> T operator()(T value) thread { return value; }
+    };
+
+    float opaque(float value) { return value; }
+
+    float unused(float value) {
+      return Log{}(opaque(value));
+    }
+
+    kernel void selected(device float* out [[buffer(0)]]) {
+      out[0] = 1.0;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "kernel void selected" in output
+    assert "Log{}(opaque(value))" in output
+
+    repeated_output = MetalPreprocessor()._lower_struct_member_functions(output)
+    assert "kernel void selected" in repeated_output
+    assert "Log{}(opaque(value))" in repeated_output
+
+
+def test_preprocessor_reachable_uninferable_template_method_call_clean_fails():
+    code = """
+    struct Log {
+      template <typename T> T operator()(T value) thread { return value; }
+    };
+
+    float opaque(float value) { return value; }
+
+    kernel void selected(device float* out [[buffer(0)]]) {
+      out[0] = Log{}(opaque(1.0));
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == "Log"
+    assert error.method_name == "operator()"
+    assert error.requested_signature == "Log(opaque(1.0))"
+
+
 def test_preprocessor_addressed_element_side_effect_clean_fails_structured():
     code = """
     struct Fragment {
@@ -10009,11 +10691,35 @@ def test_sfinae_constraint_evaluation_size_and_integral_tables():
         pp._evaluate_template_constraint("metal::is_same_v<T, float>", {"T": "float"})
         is True
     )
-    # An unsupported constraint or unresolved type still clean-fails.
-    with pytest.raises(MetalPreprocessor._UnrecognizedConstraint):
+    # Numeric convertibility follows Metal's implicit scalar rules. Bfloat is
+    # explicitly constructible from ordinary floating point but is not an
+    # implicit destination; it may widen back to float. Aggregate destinations
+    # remain conservatively non-convertible.
+    assert (
         pp._evaluate_template_constraint(
             "metal::is_convertible_v<T, float>", {"T": "float"}
         )
+        is True
+    )
+    assert (
+        pp._evaluate_template_constraint(
+            "metal::is_convertible_v<T, bfloat16_t>", {"T": "float"}
+        )
+        is False
+    )
+    assert (
+        pp._evaluate_template_constraint(
+            "metal::is_convertible_v<T, float>", {"T": "bfloat16_t"}
+        )
+        is True
+    )
+    assert (
+        pp._evaluate_template_constraint(
+            "metal::is_convertible_v<T, complex64_t>", {"T": "float"}
+        )
+        is False
+    )
+    # A distinct unsupported constraint still fails closed.
     with pytest.raises(MetalPreprocessor._UnrecognizedConstraint):
         pp._evaluate_template_constraint(less8, {"T": "complex64_t"})
 

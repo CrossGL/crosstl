@@ -2253,6 +2253,19 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert arg_reduce["host_dispatch_import_resolved_by"] == (
         module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
     )
+    assert arg_reduce["bounded_native_runtime_status"] == (
+        module.MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE["status"]
+    )
+    assert arg_reduce["bounded_entry_points"] == [
+        "argmin_float32",
+        "argmax_float32",
+    ]
+    assert arg_reduce["bounded_workgroup_size"] == [32, 1, 1]
+    assert arg_reduce["bounded_dispatch_workgroup_count"] == [1, 2, 1]
+    assert (
+        arg_reduce["bounded_native_runtime_evidence"]
+        == "arg_reduce_native_runtime_status"
+    )
 
     opengl_frontier = expected_gaps["opengl_frontier_status"]
     assert opengl_frontier["status"] == (
@@ -2309,19 +2322,31 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_frontier["runtime_parity_claimed"] is False
 
     opengl_logsumexp = expected_gaps["opengl_logsumexp_dispatch_status"]
-    assert opengl_logsumexp["commit"] == module.MLX_COMMIT
+    assert opengl_logsumexp["status"] == (
+        "translated-toolchain-validated-with-axis32-software-runtime"
+    )
+    assert opengl_logsumexp["commit"] == module.MLX_CORPUS_COMMIT
     assert opengl_logsumexp["source"] == module.MLX_LOGSUMEXP_SOURCE
     assert opengl_logsumexp["source_sha256"] == module.MLX_LOGSUMEXP_SHA256
     assert opengl_logsumexp["target"] == "opengl"
     assert opengl_logsumexp["dispatch_contract"] == {
-        "path": "demos/integrations/mlx/contracts/logsumexp.dispatch.json",
-        "content_identity": module.MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY,
+        "path": (
+            "demos/integrations/mlx/contracts/" "logsumexp.native-loader.dispatch.json"
+        ),
+        "content_identity": (
+            module.MLX_LOGSUMEXP_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY
+        ),
         "workload_count": len(module.MLX_LOGSUMEXP_DISPATCH_VARIANTS),
         "workgroup_sizes": [
             variant["workgroupSize"]
             for variant in module.MLX_LOGSUMEXP_DISPATCH_VARIANTS.values()
         ],
         "subgroup_width": 32,
+    }
+    assert opengl_logsumexp["historical_dispatch_contract"] == {
+        "commit": module.MLX_COMMIT,
+        "path": "demos/integrations/mlx/contracts/logsumexp.dispatch.json",
+        "content_identity": module.MLX_LOGSUMEXP_DISPATCH_CONTENT_IDENTITY,
     }
     assert opengl_logsumexp["project_translation"] == {
         "unit_count": 1,
@@ -2341,23 +2366,96 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
             "artifact_specialized_to_reported_width": True,
             "width_source": "GL_SUBGROUP_SIZE_KHR",
         },
-        "logsumexp_required_width": 32,
-        "logsumexp_runtime_execution_attempted": False,
+        "hardware_logsumexp_required_width": 32,
+        "hardware_runtime_execution_attempted": False,
+        "software_runtime_execution_attempted": True,
+        "software_executed_workloads": ["block-float32-axis-32"],
+        "remaining_hardware_only_workloads": ["block-float32-axis-1025"],
         "blocked_by": "https://github.com/CrossGL/crosstl/issues/1894",
     }
-    assert opengl_logsumexp["runtime_integration_included"] is False
+    software_logsumexp = opengl_logsumexp["current_corpus_software_runtime"]
+    assert software_logsumexp == (module.MLX_OPENGL_LOGSUMEXP_SOFTWARE_RUNTIME_EVIDENCE)
+    assert software_logsumexp["generated_glsl"] == {
+        "sha256": "813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5",
+        "size_bytes": 4676,
+    }
+    assert software_logsumexp["software_subgroup"]["operations"] == [
+        "WaveActiveMax(float)",
+        "WaveActiveSum(float)",
+    ]
+    assert (
+        software_logsumexp["software_subgroup"]["control_barrier_instruction_count"]
+        == 10
+    )
+    assert software_logsumexp["runtime_package"]["ready_load_unit_count"] == 1
+    assert software_logsumexp["runtime_execution"]["status"] == "required-on-ci"
+    assert software_logsumexp["remaining_scope"] == {
+        "workload": "block-float32-axis-1025",
+        "axis_size": 1025,
+        "workgroup_size": [288, 1, 1],
+        "status": "hardware-subgroup-only",
+        "reason": "software-mode-requires-exactly-one-32-thread-subgroup",
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1894",
+    }
+    assert opengl_logsumexp["runtime_integration_included"] is True
+    assert opengl_logsumexp["selected_workload_numerical_parity_verified"] is True
+    assert opengl_logsumexp["full_mlx_test_suite_included"] is False
     assert opengl_logsumexp["numerical_parity_claimed"] is False
     assert opengl_logsumexp["runtime_parity_claimed"] is False
 
     opengl_quantized = expected_gaps["opengl_quantized_frontier_status"]
     assert opengl_quantized == module.MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE
+    assert opengl_quantized["commit"] == module.MLX_CORPUS_COMMIT
     assert opengl_quantized["artifact_emitted"] is True
     assert opengl_quantized["native_validation_attempted"] is True
     assert opengl_quantized["native_validation_status"] == "passed"
     assert opengl_quantized["generated_glsl"] == {
-        "sha256": "7808f9f35bab56c1f415dea1a669225c68447cb32f9147ab1c4b04b975543aa3",
-        "size_bytes": 5107,
+        "sha256": "e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb",
+        "size_bytes": 6642,
     }
+    assert opengl_quantized["software_subgroup"] == {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "activation": "explicit-target-scoped",
+        "operations": [
+            "WaveActiveMin(float)",
+            "WaveActiveMax(float)",
+            "WaveShuffleDown(uint,int)",
+        ],
+        "artifact_marker": "CROSSTL_SOFTWARE_SUBGROUP_WIDTH",
+        "control_barrier_instruction_count": 8,
+        "group_non_uniform_instruction_count": 0,
+        "hardware_subgroup_extensions_emitted": False,
+        "hardware_subgroup_marker_emitted": False,
+        "hardware_subgroup_execution_metadata_emitted": False,
+        "unsupported_contract_behavior": "reject-before-artifact-emission",
+    }
+    assert opengl_quantized["runtime_execution"]["status"] == "passed"
+    assert opengl_quantized["runtime_execution"]["outputs"] == {
+        "out_Buffer": {
+            "dtype": "uint32",
+            "shape": [8],
+            "values": [27, 27, 27, 27, 27, 27, 27, 27],
+        },
+        "scalesBuffer": {
+            "dtype": "float32",
+            "shape": [1],
+            "values": [-1.0],
+        },
+        "biasesBuffer": {
+            "dtype": "float32",
+            "shape": [1],
+            "values": [3.0],
+        },
+    }
+    assert opengl_quantized["runtime_execution_attempted"] is True
+    assert opengl_quantized["runtime_integration_included"] is True
+    assert opengl_quantized["mlx_host_runtime_integration_included"] is False
+    assert opengl_quantized["numerical_parity_claimed"] is True
+    assert opengl_quantized["runtime_parity_claimed"] is True
 
     directx = expected_gaps["directx_toolchain_status"]
     assert directx["compiler"] == {"name": "dxc", "version": "v1.9.2602.24"}
@@ -2443,6 +2541,19 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     }
     assert layer_norm["artifact_count"] == len(module.MLX_LAYER_NORM_DISPATCH_VARIANTS)
     assert set(layer_norm["variants"]) == set(module.MLX_LAYER_NORM_DISPATCH_VARIANTS)
+
+    def generated_identities(variants, hash_key):
+        return {
+            name: {
+                "sha256": variant["generated_hlsl"][hash_key],
+                "sizeBytes": variant["generated_hlsl"]["size_bytes"],
+            }
+            for name, variant in variants.items()
+        }
+
+    assert generated_identities(layer_norm["variants"], "sha256") == (
+        module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS["layer_norm"]
+    )
     assert layer_norm["dxc_validated_artifact_count"] == 2
     assert layer_norm["runtime_execution_attempted"] is False
     assert layer_norm["numerical_parity_claimed"] is False
@@ -2463,6 +2574,9 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     }
     assert logsumexp["artifact_count"] == len(module.MLX_LOGSUMEXP_DISPATCH_VARIANTS)
     assert set(logsumexp["variants"]) == set(module.MLX_LOGSUMEXP_DISPATCH_VARIANTS)
+    assert generated_identities(logsumexp["variants"], "sha256") == (
+        module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS["logsumexp"]
+    )
     assert logsumexp["dxc_validated_artifact_count"] == 2
     for workload_id, expected in module.MLX_LOGSUMEXP_DISPATCH_VARIANTS.items():
         variant = logsumexp["variants"][workload_id]
@@ -2497,6 +2611,9 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     }
     assert rms_norm["artifact_count"] == len(module.MLX_RMS_NORM_DISPATCH_VARIANTS)
     assert set(rms_norm["variants"]) == set(module.MLX_RMS_NORM_DISPATCH_VARIANTS)
+    assert generated_identities(rms_norm["variants"], "normalized_sha256") == (
+        module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS["rms_norm"]
+    )
     assert rms_norm["dxc_validated_artifact_count"] == 12
     for workload_id, expected in module.MLX_RMS_NORM_DISPATCH_VARIANTS.items():
         variant = rms_norm["variants"][workload_id]
@@ -4125,12 +4242,17 @@ def test_empty_initializer_issue_is_resolved_for_pinned_quantized_nax():
     )
 
 
-def test_scaled_dot_product_attention_is_vulkan_only_until_runtime_dispatch_maps():
+def test_scaled_dot_product_attention_aggregate_stays_fail_closed_with_bounded_proof():
     module = _load_harness()
     source = module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1535"
     static_constant_issue = "https://github.com/CrossGL/crosstl/issues/1491"
     function_constant_issue = "https://github.com/CrossGL/crosstl/issues/1538"
+    expected_gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
 
     assert source in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     assert source not in (
@@ -4150,6 +4272,19 @@ def test_scaled_dot_product_attention_is_vulkan_only_until_runtime_dispatch_maps
     )
     assert static_constant_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert function_constant_issue in module.FULL_CORPUS_TRACKED_ISSUES
+
+    evidence = expected_gaps["scaled_dot_product_attention_native_runtime_status"]
+    assert evidence == module.MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_RUNTIME_EVIDENCE
+    assert evidence["selected_entry_point"] == "sdpa_vector_float_64_64"
+    assert evidence["dispatch_contract"]["host_selection"] == "one-pass-vector"
+    assert (
+        evidence["remaining_scope"]["aggregate_directx_opengl_translation_unblocked"]
+        is False
+    )
+    assert (
+        "separate bounded dispatch manifest"
+        in expected_gaps["directx_toolchain_status"]["directx_toolchain_gaps"][source]
+    )
 
 
 def test_scaled_attention_local_alias_evidence_requires_complete_entries(tmp_path):
@@ -6973,17 +7108,21 @@ def _gemv_directx_contract_fixture(module):
         },
         "identity": _test_contract_identity("gemv-directx-execution"),
     }
-    helper_record = {
-        "name": "GEMVKernel::run",
-        "materializedName": "gemv_helper_materialization",
-        "parameters": {"BM": "1", "BN": "1", "T": "float"},
-        "parameterSources": {
-            "BM": "call-site",
-            "BN": "call-site",
-            "T": "call-site",
+    helper_records = [
+        {
+            "name": "elem_to_loc",
+            "materializedName": "elem_to_loc_uint",
+            "parameters": {"IdxT": "uint"},
+            "parameterSources": {"IdxT": "call-site"},
         },
-    }
-    return [helper_record, *host_records], execution
+        {
+            "name": "elem_to_loc",
+            "materializedName": "elem_to_loc_uint32_t",
+            "parameters": {"IdxT": "uint32_t"},
+            "parameterSources": {"IdxT": "call-site"},
+        },
+    ]
+    return [*helper_records, *host_records], execution
 
 
 def _gemv_directx_frontier_source(module, *, replace_entry=None):
@@ -7255,7 +7394,7 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
         "intermediate": "crossgl",
         "pipeline": "single-file-translate",
     }
-    assert result["templateSpecializationCount"] == 225
+    assert result["templateSpecializationCount"] == 226
     assert result["unsupportedSpecializationCount"] == 0
     assert result["hostNamedMaterializationCount"] == 224
     assert result["reportExecutionEntryCount"] == 224
@@ -7813,7 +7952,7 @@ def test_gemv_vulkan_toolchain_check_structurally_validates_full_artifact(
     result = module._check_gemv_vulkan_toolchain(*paths, "python")
 
     assert result["status"] == "passed"
-    assert result["specializationCount"] == 225
+    assert result["specializationCount"] == 226
     assert result["entryPointCount"] == 224
     assert result["structuralValidationStatus"] == "validated"
     assert result["semanticReadinessStatus"] == "no-known-codegen-fallbacks"
@@ -8821,6 +8960,33 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         lambda *_args: rms_norm_contract,
     )
     commands = []
+    # This orchestration fixture intentionally emits minimal HLSL instead of the
+    # production artifacts. Keep the production identity validator active by
+    # pinning each synthetic family to the exact bytes written below; separate
+    # evidence tests retain the real generated-artifact identity contract.
+    synthetic_generated_artifacts = {
+        family: dict(identities)
+        for family, identities in (
+            module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS.items()
+        )
+    }
+    monkeypatch.setattr(
+        module,
+        "MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS",
+        synthetic_generated_artifacts,
+    )
+
+    def pin_synthetic_generated_artifacts(family, names, report):
+        artifacts = report["artifacts"]
+        assert len(artifacts) == len(names)
+        identities = {}
+        for name, artifact in zip(names, artifacts):
+            artifact_path = mlx_root / artifact["path"]
+            identities[name] = {
+                "sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+                "sizeBytes": artifact_path.stat().st_size,
+            }
+        synthetic_generated_artifacts[family] = identities
 
     def warning_stderr(source, relative_path):
         lines = []
@@ -8869,6 +9035,9 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
                 report_dir / f"{name}.json",
                 contract=layer_norm_contract,
             )
+            pin_synthetic_generated_artifacts(
+                "layer_norm", module.MLX_LAYER_NORM_DISPATCH_VARIANTS, report
+            )
             if is_toolchain:
                 toolchain_runs = [
                     {
@@ -8910,6 +9079,9 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
                 report_dir / f"{name}.json",
                 contract=logsumexp_contract,
             )
+            pin_synthetic_generated_artifacts(
+                "logsumexp", module.MLX_LOGSUMEXP_DISPATCH_VARIANTS, report
+            )
             if is_toolchain:
                 toolchain_runs = [
                     {
@@ -8950,6 +9122,9 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
                 output_dir,
                 report_dir / f"{name}.json",
                 contract=rms_norm_contract,
+            )
+            pin_synthetic_generated_artifacts(
+                "rms_norm", module.MLX_RMS_NORM_DISPATCH_VARIANTS, report
             )
             if is_toolchain:
                 toolchain_runs = [
@@ -9115,6 +9290,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         "validate-directx-logsumexp-dispatch-toolchain",
         "validate-directx-rms-norm-dispatch-toolchain",
     ]
+    assert all("--no-format" in command for _name, command in commands)
     assert "--run-toolchains" in commands[5][1]
     assert "--run-toolchains" in commands[6][1]
     assert "--run-toolchains" in commands[7][1]
@@ -9313,12 +9489,12 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         source: evidence["specializationCount"]
         for source, evidence in module.MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE.items()
     } == {
-        module.MLX_ARG_REDUCE_SOURCE: 51,
+        module.MLX_ARG_REDUCE_SOURCE: 39,
         module.MLX_LAYER_NORM_SOURCE: 16,
         module.MLX_LOGSUMEXP_SOURCE: 7,
         module.MLX_RMS_NORM_SOURCE: 12,
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
-        module.MLX_SOFTMAX_SOURCE: 17,
+        module.MLX_SOFTMAX_SOURCE: 14,
     }
     directx_status = gaps["directx_toolchain_status"]
     assert directx_status["specialization_constants"] == (
@@ -9437,7 +9613,20 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "zero warnings across all 484 entry-point runs" in normalized_readme
     assert "two float32 block-reduction workloads" in normalized_readme
     assert "axis sizes 32 and 1025" in normalized_readme
-    assert "numerical runtime evidence for one finite workload" in normalized_readme
+    assert "current-corpus axis-size-32 artifact opts into" in normalized_readme
+    assert "``WaveActiveMax(float)`` and ``WaveActiveSum(float)``" in (
+        normalized_readme
+    )
+    assert "4,676 bytes" in normalized_readme
+    assert (
+        "`813762d4535fdd693ca0a48c3c3f5dc79f6cc298050faae6e180d3cc9f1d60e5`" in readme
+    )
+    assert "ten control-barrier instructions" in normalized_readme
+    assert "`3.9978051379373145`" in readme
+    assert "axis-size-1025 record still produces a ``[288, 1, 1]`` artifact" in (
+        normalized_readme
+    )
+    assert "nine logical 32-lane subgroups" in normalized_readme
     assert "does not redirect the MLX runtime" in normalized_readme
     assert "records this as a warning-clean contract" in normalized_readme
     assert "rejects any newly observed warning" in normalized_readme
@@ -9493,7 +9682,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`MTL::Size group_dims(bk, 2, 1)`" in normalized_readme
     assert "`[numthreads(32, 2, 1)]`" in normalized_readme
     assert "`[WaveSize(32)]`" in normalized_readme
-    assert "15,835 bytes" in normalized_readme
+    assert "16,359 bytes" in normalized_readme
     assert "materializes the overloaded `elem_to_loc` helper" in normalized_readme
     assert "independent shape and stride resource offsets" in normalized_readme
     assert "passes its logical offset as `inout int64_t`" in normalized_readme
@@ -9505,11 +9694,17 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`gindex`" in readme
     assert "`out_index / writes_per_reduce`" in readme
     assert "inclusive bounds `[0, 2147483647]`" in normalized_readme
-    assert "5,107-byte GLSL artifact" in normalized_readme
+    assert "6,642 bytes" in normalized_readme
+    assert "`CROSSTL_SOFTWARE_SUBGROUP_WIDTH`" in readme
+    assert "eight control barriers" in normalized_readme
+    assert "no group-nonuniform instruction" in normalized_readme
     assert "OpenGL/SPIR-V 1.3" in normalized_readme
     assert "`spirv-val`" in readme
     assert "not inferred or enforced at runtime" in normalized_readme
-    for issue in (1497, 1515, 1799, 1800, 1801, 1802):
+    assert "eight packed `uint32` values of `27`" in normalized_readme
+    assert "scale `-1`, and bias `3`" in normalized_readme
+    assert "one deterministic affine-quantize workload" in normalized_readme
+    for issue in (1497, 1515, 1799, 1800, 1801, 1802, 1894):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
 
     directx = module.MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE
@@ -9520,7 +9715,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["compiler_target_profiles"] == ["directx-12"]
     assert directx["required_capabilities"] == []
     assert directx["generated_hlsl"] == {
-        "sha256": "52569209d98f1bf2ae7fa645f2e4858a420f3920368e14aecb98c2ba9939ac8f",
+        "sha256": "a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438",
         "size_bytes": 4357,
     }
     assert directx["materialization"] == {
@@ -9561,7 +9756,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["numerical_parity_claimed"] is False
 
     opengl = module.MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE
-    assert opengl["status"] == "translated-glslang-spirv-val-validated"
+    assert opengl["status"] == "translated-toolchain-validated-native-loader-executed"
+    assert opengl["commit"] == module.MLX_CORPUS_COMMIT
     assert opengl["project_translation"] == {
         "unit_count": 1,
         "artifact_record_count": 1,
@@ -9569,6 +9765,22 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "failed_count": 0,
         "emitted_target_file_count": 1,
         "project_diagnostic_count": 0,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width_rule_configured": False,
+        "max_template_specializations": 128,
+        "max_template_materialization_work": 4096,
+    }
+    assert opengl["materialization"] == {
+        "reachable_specialization_count": 9,
+        "concrete_specialization_count": 3,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 104702,
+        "selected_parameters": {
+            "T": "float",
+            "bits": 2,
+            "group_size": 32,
+            "has_global_scale": False,
+        },
     }
     assert opengl["index_range_assertion_evidence"] == {
         "assertion_count": 3,
@@ -9589,9 +9801,20 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "status": "passed",
         "observed_failure_count": 0,
     }
+    assert opengl["generated_glsl"] == {
+        "sha256": "e4d8e5931bfc93f81e2c3686c102a1d676c9a3dcdfd6447e90918aa7581beecb",
+        "size_bytes": 6642,
+    }
+    assert opengl["software_subgroup"]["width"] == 32
+    assert opengl["software_subgroup"]["control_barrier_instruction_count"] == 8
+    assert opengl["software_subgroup"]["group_non_uniform_instruction_count"] == 0
     assert opengl["resolved_by"] == [module.OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE]
-    assert opengl["runtime_execution_attempted"] is False
-    assert opengl["numerical_parity_claimed"] is False
+    assert opengl["runtime_execution"]["status"] == "passed"
+    assert opengl["runtime_execution_attempted"] is True
+    assert opengl["runtime_integration_included"] is True
+    assert opengl["mlx_host_runtime_integration_included"] is False
+    assert opengl["numerical_parity_claimed"] is True
+    assert opengl["runtime_parity_claimed"] is True
 
     adjacent = module.MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE
     assert adjacent["status"] == "translated-dxc-validated"
@@ -9672,8 +9895,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         },
     }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "b7d6251d27fcdafc003c85975bf5c5774a1fca0a3d4602b9e9ea5ef62673f76e",
-        "size_bytes": 15835,
+        "sha256": "c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de",
+        "size_bytes": 16359,
     }
     assert adjacent["compiler_validation"] == {
         "compiler": "dxc",
@@ -9918,6 +10141,1028 @@ def test_full_corpus_checkpoint_probe_records_verified_resume_coordinate():
     }
 
 
+def test_arg_reduce_native_runtime_evidence_records_bounded_cross_target_proof():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["arg_reduce_native_runtime_status"]
+    assert status == module.MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE
+    assert status["status"] == (
+        "translated-packaged-and-cross-target-native-runtime-required"
+    )
+    assert status["commit"] == module.MLX_CORPUS_COMMIT
+    assert status["source"] == module.MLX_ARG_REDUCE_SOURCE
+    assert status["source_sha256"] == module.MLX_CURRENT_ARG_REDUCE_SHA256
+    assert status["selected_entry_points"] == ["argmin_float32", "argmax_float32"]
+
+    contract = status["dispatch_contract"]
+    assert contract["path"] == (
+        "demos/integrations/mlx/contracts/" "arg_reduce.native-loader.dispatch.json"
+    )
+    assert contract["content_identity"] == (
+        module.MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY
+    )
+    assert contract["workload_count"] == 2
+    assert contract["bounded_axis_size"] == 32
+    assert contract["subgroup_width"] == 32
+    assert contract["variants"] == module.MLX_ARG_REDUCE_NATIVE_LOADER_DISPATCH_VARIANTS
+    assert set(contract["variants"]) == {
+        "argmin-float32-axis-32-two-rows",
+        "argmax-float32-axis-32-two-rows",
+    }
+    for variant in contract["variants"].values():
+        assert variant["workgroup_size"] == [32, 1, 1]
+        assert variant["dispatch_workgroup_count"] == [1, 2, 1]
+
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 2, "opengl": 2},
+        "translated_count_by_target": {"directx": 2, "opengl": 2},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+    }
+    overload = status["materialization"]["overloaded_helper_selection"]
+    assert overload == {
+        "source_name": "elem_to_loc",
+        "materialized_name": "elem_to_loc_int64_t",
+        "selected_first_parameter": "int64_t",
+        "rejected_first_parameter": "uint3",
+        "resolution": "signature-aware-call-site-materialization",
+    }
+
+    directx = status["artifacts"]["directx"]
+    assert directx["argmin_float32"] == {
+        "sha256": "e3f7392023bbb6457eb03398a766bdaa128ed709d66ce814c7209cd13de7e896",
+        "size_bytes": 6655,
+    }
+    assert directx["argmax_float32"] == {
+        "sha256": "ef67c5d24ae7c7492a6676a35e0604800c1d18e4113c411fffaa2070090a92c3",
+        "size_bytes": 6657,
+    }
+    assert directx["compiler"] == "dxc"
+    assert directx["compiler_version"] == "1.9.2602.24"
+    assert directx["compiler_profile"] == "cs_6_6"
+    assert directx["compiler_arguments"] == ["-enable-16bit-types", "-WX"]
+    assert directx["compiler_validation_status"] == "passed"
+    assert status["directx_relative_shuffle"] == {
+        "configuration": (
+            "project.source_options.metal.target_options.directx."
+            "relative_wave_shuffle_out_of_range"
+        ),
+        "policy": "self",
+        "default_policy": "undefined",
+        "activation": "explicit-target-scoped",
+        "selected_value_types": ["float", "uint"],
+        "invalid_source_lane_result": "calling-lane-value",
+        "invalid_source_lane_reads_emitted": False,
+        "source_lane_bounds": {
+            "down_valid_when": "delta < laneCount - lane",
+            "read_lane": "valid ? lane + delta : lane",
+        },
+        "wave_read_control_flow": "single-unconditional-selected-lane-read",
+    }
+    opengl = status["artifacts"]["opengl"]
+    assert opengl["compiler"] == "glslangValidator"
+    assert opengl["validator"] == "spirv-val"
+    assert opengl["control_barrier_instruction_count"] == 5
+    assert opengl["group_non_uniform_instruction_count"] == 0
+    assert opengl["compiler_validation_status"] == "passed"
+
+    assert status["runtime_package"] == {
+        "artifact_count_per_variant_and_target": 1,
+        "ready_load_unit_count_per_variant_and_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count_by_target": {"directx": 9, "opengl": 8},
+        "resource_element_types": [
+            "float32",
+            "uint32",
+            "int32",
+            "int64",
+            "uint64",
+        ],
+        "directx_generated_dispatch_binding": "CrossGLDispatchInfo",
+        "scalar_64_bit_layout_reflected": True,
+    }
+    assert status["workloads"]["argmin_expected_indices"] == [5, 7]
+    assert status["workloads"]["argmax_expected_indices"] == [3, 2]
+    assert status["workloads"]["tie_behavior"] == "lowest index"
+    assert status["native_runtime"]["directx"]["status"] == "required-on-ci"
+    assert status["native_runtime"]["opengl"]["status"] == "required-on-ci"
+    assert status["native_runtime"]["opengl"]["local_linux_arm64_validation"] == (
+        "passed"
+    )
+    assert status["metal_roundtrip_boundary"] == {
+        "status": "entry-workgroup-specialization-target-unsupported",
+        "diagnostic": "project.translate.workgroup-size-rule-unsupported-target",
+        "missing_capability": "execution.workgroup-size-specialization",
+    }
+    assert all(value is False for value in status["remaining_scope"].values())
+    assert status["selected_workloads_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+
+def test_scaled_attention_native_runtime_evidence_records_bounded_cross_target_proof():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["scaled_dot_product_attention_native_runtime_status"]
+    assert status == module.MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_RUNTIME_EVIDENCE
+    assert status["status"] == (
+        "translated-packaged-and-cross-target-native-runtime-required"
+    )
+    assert status["commit"] == module.MLX_CORPUS_COMMIT
+    assert status["source"] == module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
+    assert status["source_sha256"] == (
+        module.MLX_CURRENT_SCALED_DOT_PRODUCT_ATTENTION_SHA256
+    )
+    assert status["selected_entry_point"] == "sdpa_vector_float_64_64"
+
+    contract = status["dispatch_contract"]
+    assert contract["path"] == (
+        "demos/integrations/mlx/contracts/"
+        "scaled_dot_product_attention.native-loader.dispatch.json"
+    )
+    assert contract["content_identity"] == (
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY
+    )
+    assert contract["workload_count"] == 1
+    assert contract["host_selection"] == "one-pass-vector"
+    assert contract["subgroup_width"] == 32
+    assert contract["variants"] == (
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_NATIVE_LOADER_DISPATCH_VARIANTS
+    )
+    variant = contract["variants"]["vector-float32-b1-h1-q1-k4-d64-v64-nomask"]
+    assert variant["artifact_id"] == (
+        "sha256:dd0138695bd82e1f8ea49bd667052b484420ee96cb2849c6eed20ba5eae39a89"
+    )
+    assert variant["dispatch_variant_id"] == (
+        "sha256:8b2abb9f7179e051530697fb8d1956d0ff03a324e7acaa5fcdf4f4dd9f1befbb"
+    )
+    assert variant["workgroup_size"] == [1024, 1, 1]
+    assert variant["dispatch_workgroup_count"] == [1, 1, 1]
+    assert variant["specialization_constants"] == {
+        str(constant_id): False for constant_id in range(20, 26)
+    }
+
+    assert status["materialization"] == {
+        "concrete_specialization_count": 1,
+        "reachable_specialization_count": 4,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 753,
+        "selected_parameters": {"D": "64", "T": "float", "V": "64"},
+    }
+    assert set(status["specialization_constants"]) == {
+        str(constant_id) for constant_id in range(20, 26)
+    }
+    assert "26" not in status["specialization_constants"]
+    assert all(
+        constant["value"] is False
+        for constant in status["specialization_constants"].values()
+    )
+
+    directx = status["artifacts"]["directx"]
+    assert directx["sha256"] == (
+        "003c8b9e85bad7363bae2e3d80380d979cbe0b8988d0d98751131c3acfbff6b6"
+    )
+    assert directx["size_bytes"] == 8721
+    assert directx["compiler_version"] == "1.9.2602.24"
+    assert directx["compiler_profile"] == "cs_6_6"
+    assert directx["compiler_arguments"] == ["-enable-16bit-types", "-WX"]
+    assert directx["compiled_dxil_size_bytes"] == 9000
+    assert directx["compiler_validation_status"] == "passed"
+    assert directx["subgroup_id_lowering"] == (
+        "workgroup-synchronized-physical-wave-allocation"
+    )
+
+    opengl = status["artifacts"]["opengl"]
+    assert opengl["sha256"] == (
+        "9b7cb7dc9a76b9fb93c30fd93d13ad639f5493f60fd97b965514db0fe6b4840b"
+    )
+    assert opengl["size_bytes"] == 12089
+    assert opengl["control_barrier_instruction_count"] == 9
+    assert opengl["group_non_uniform_instruction_count"] == 0
+    assert opengl["specialization_constant_false_count"] == 6
+    assert opengl["specialization_materialization"] == "deferred"
+
+    package = status["runtime_package"]
+    assert package["resource_count_by_target"] == {"directx": 19, "opengl": 18}
+    assert package["specialization_constant_count"] == 6
+    assert package["stored_bool_physical_type"] == "uint32"
+    assert package["optional_placeholder_resources"] == [
+        "bmask",
+        "fmask",
+        "sinks",
+    ]
+    assert package["opengl_native_registry_header"] == {
+        "available": False,
+        "reason": "specialization-requires-deferred-compilation",
+    }
+
+    assert status["workload"]["key_length"] == 4
+    assert status["workload"]["query_dimension"] == 64
+    assert status["workload"]["value_dimension"] == 64
+    assert status["workload"]["mask"] == "none"
+    assert status["native_runtime"]["directx"]["status"] == "required-on-ci"
+    assert status["native_runtime"]["opengl"]["status"] == "required-on-ci"
+    assert status["native_runtime"]["opengl"]["local_linux_mesa_validation"] == (
+        "passed"
+    )
+    assert status["native_runtime"]["opengl"]["local_max_absolute_error"] < 5e-8
+    assert status["native_runtime"]["opengl"]["local_max_relative_error"] < 5e-6
+    assert all(value is False for value in status["remaining_scope"].values())
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects current-pinned `sdpa_vector_float_64_64`" in readme
+    assert "partitions 1,024 invocations into 32 logical subgroups" in readme
+    assert "six `OpSpecConstantFalse` declarations" in readme
+    assert "no bounded attention dispatch, package, or numerical runtime proof" in (
+        readme
+    )
+
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "bounded one-pass scaled-attention proof" in guide
+    assert "inactive subgroups supply typed reduction identities" in guide
+    assert "it is not evidence that a bounded attention runtime proof is absent" in (
+        guide
+    )
+
+
+def test_softmax_native_runtime_evidence_records_bounded_cross_target_proof():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["softmax_native_runtime_status"]
+    assert status == module.MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE
+    assert status["status"] == (
+        "translated-packaged-and-cross-target-native-runtime-required"
+    )
+    assert status["commit"] == module.MLX_CORPUS_COMMIT
+    assert status["source"] == module.MLX_SOFTMAX_SOURCE
+    assert status["source_sha256"] == module.MLX_CURRENT_SOFTMAX_SHA256
+    assert status["selected_entry_point"] == "block_softmax_float32"
+
+    contract = status["dispatch_contract"]
+    assert contract["path"] == (
+        "demos/integrations/mlx/contracts/softmax.native-loader.dispatch.json"
+    )
+    assert contract["content_identity"] == (
+        module.MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY
+    )
+    assert contract["workload_count"] == 2
+    assert contract["host_formula"] == "32 * ceilDiv(ceilDiv(axisSize, 4), 32)"
+    assert contract["block_limit"] == 4096
+    assert contract["subgroup_width"] == 32
+    assert contract["variants"] == module.MLX_SOFTMAX_NATIVE_LOADER_DISPATCH_VARIANTS
+    assert set(contract["variants"]) == {
+        "block-float32-axis-32-two-rows",
+        "block-float32-axis-2049",
+    }
+    assert contract["variants"]["block-float32-axis-32-two-rows"]["workgroup_size"] == [
+        32,
+        1,
+        1,
+    ]
+    assert contract["variants"]["block-float32-axis-2049"]["workgroup_size"] == [
+        544,
+        1,
+        1,
+    ]
+
+    assert status["materialization"] == {
+        "concrete_specialization_count": 2,
+        "reachable_specialization_count": 5,
+        "dependency_discovery_work_count": 11,
+        "pruned_candidate_count": 131,
+        "selected_parameters": {
+            "AccT": "float",
+            "N_READS": "SOFTMAX_N_READS",
+            "T": "float",
+        },
+    }
+    assert status["guarded_artifacts"]["directx"]["block-float32-axis-32-two-rows"] == {
+        "sha256": "8b5540acc90669bc8b4a75985b42ee34c9e45258c63889f703f140b1330337ee",
+        "size_bytes": 4213,
+        "subgroup_id_lowering": "fixed-single-wave-group-index-quotient",
+    }
+    assert status["guarded_artifacts"]["directx"]["block-float32-axis-2049"] == {
+        "sha256": "1c20679115f29d981762165f7c9e1ecd57a641ceff376b2f8d13f33520857f05",
+        "size_bytes": 4784,
+        "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
+    }
+    directx_artifacts = status["guarded_artifacts"]["directx"]
+    assert directx_artifacts["compiler_profile"] == "cs_6_6"
+    assert directx_artifacts["compiler_arguments"] == ["-enable-16bit-types"]
+    assert directx_artifacts["warnings_as_errors"] is True
+    assert directx_artifacts["compiler_validation_status"] == "passed"
+    software = status["software_opengl_artifacts"]
+    assert software["block-float32-axis-32-two-rows"]["sha256"] == (
+        "f69dad597cefc34f7908799aaf0ba2eac47a0dcdd91e5f2bf3d7247172fa84b9"
+    )
+    assert software["block-float32-axis-32-two-rows"]["size_bytes"] == 5585
+    assert software["block-float32-axis-2049"]["sha256"] == (
+        "eb195e15089f4e7bade380af55e8b7e167c4b89f80b2f25675eb71196a5468ce"
+    )
+    assert software["block-float32-axis-2049"]["size_bytes"] == 7204
+    assert software["block-float32-axis-2049"]["logical_subgroup_count"] == 17
+    assert software["block-float32-axis-2049"]["masked_collective_count"] == 2
+    for workload_id in (
+        "block-float32-axis-32-two-rows",
+        "block-float32-axis-2049",
+    ):
+        assert software[workload_id]["control_barrier_instruction_count"] == 11
+        assert software[workload_id]["group_non_uniform_instruction_count"] == 0
+
+    subgroup = status["software_subgroup"]
+    assert subgroup["selected_kernel_operations"] == [
+        "WaveActiveMax(float)",
+        "WaveActiveSum(float)",
+    ]
+    assert subgroup["masked_reduction_operations"] == [
+        "WaveActiveSum",
+        "WaveActiveMin",
+        "WaveActiveMax",
+    ]
+    assert subgroup["typed_mask_identities"]["WaveActiveMax"] == {
+        "float": "-infinity",
+        "int": "INT_MIN",
+        "uint": "0u",
+    }
+    assert subgroup["masked_shuffle_supported"] is False
+    assert status["runtime_package"]["resource_count"] == 3
+    assert status["runtime_package"]["blocked_load_unit_count"] == 0
+    assert status["native_runtime"]["directx"]["status"] == "required-on-ci"
+    assert status["native_runtime"]["opengl"]["status"] == "required-on-ci"
+    assert (
+        status["native_runtime"]["opengl"]["local_linux_arm64_validation"] == "passed"
+    )
+    assert status["metal_roundtrip_boundary"] == {
+        "status": "entry-scoped-target-unsupported",
+        "diagnostic": "project.translate.entry-point-target-unsupported",
+        "missing_capability": "artifact.entry-point-selection",
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects current-pinned `block_softmax_float32`" in readme
+    assert "Axis size 2049 with one row uses `[544, 1, 1]`" in readme
+    assert "17 independent logical subgroups" in readme
+    assert "negative infinity for float maximum and zero for float sum" in readme
+    assert "does not mean that no bounded Softmax translation" in readme
+
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "a bounded Softmax proof for ``block_softmax_float32``" in guide
+    assert "typed inactive-lane identities" in guide
+    assert "does not claim a Metal round trip" in guide
+
+
+def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["rms_norm_native_runtime_status"]
+    assert status == module.MLX_RMS_NORM_NATIVE_RUNTIME_EVIDENCE
+    assert status["status"] == "translated-packaged-and-native-runtime-required"
+    assert status["commit"] == module.MLX_CORPUS_COMMIT
+    assert status["source"] == module.MLX_RMS_NORM_SOURCE
+    assert status["source_sha256"] == module.MLX_CURRENT_RMS_NORM_SHA256
+    assert status["selected_entry_point"] == "rmsfloat32"
+    assert status["selected_workload"] == "forward-float32-axis-32"
+    assert status["dispatch_contract"] == {
+        "path": (
+            "demos/integrations/mlx/contracts/" "rms_norm.native-loader.dispatch.json"
+        ),
+        "content_identity": module.MLX_RMS_NORM_NATIVE_LOADER_DISPATCH_CONTENT_IDENTITY,
+        "artifact_id": (
+            "sha256:00c05fccf276cf11f3fb9b617b8fe0bb3c5f8766c0e4ca1ed990c093e700422e"
+        ),
+        "workload_count": 1,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width": 32,
+        "dispatch_workgroup_count": [2, 1, 1],
+        "function_constants": {},
+    }
+    assert status["entry_scoped_specialization_ownership"] == {
+        "constant_name": "has_w",
+        "constant_id": 20,
+        "reachable_from_selected_entry": False,
+        "artifact_specialization_constant_count": 0,
+        "runtime_manifest_specialization_constant_count": 0,
+        "reachable_vjp_constants_preserved": True,
+        "resolved_issue": "https://github.com/CrossGL/crosstl/issues/1795",
+    }
+    assert status["materialization"] == {
+        "concrete_specialization_count": 1,
+        "reachable_specialization_count": 4,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 168,
+        "selected_parameters": {"N_READS": "RMS_N_READS", "T": "float"},
+    }
+    assert status["artifacts"]["directx"]["sha256"] == (
+        "f03d8c3c1df2256e5c867bfd235e57b66d68a1c6e3c3c04701a581d8ef7b3e67"
+    )
+    assert status["artifacts"]["directx"]["size_bytes"] == 3486
+    assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
+        "required-on-ci"
+    )
+    assert status["artifacts"]["opengl"]["sha256"] == (
+        "3180aba83b64add0ae3c2d471b9297eb5bada4c4ff2bd5c91a3db3698cf0df78"
+    )
+    assert status["artifacts"]["opengl"]["size_bytes"] == 4393
+    assert status["artifacts"]["opengl"]["control_barrier_instruction_count"] == 6
+    assert status["artifacts"]["opengl"]["group_non_uniform_instruction_count"] == 0
+    assert status["artifacts"]["opengl"]["native_runtime"]["status"] == (
+        "required-on-ci"
+    )
+    assert status["software_subgroup"]["operations"] == ["WaveActiveSum(float)"]
+    assert status["software_subgroup"]["width"] == 32
+    assert status["runtime_package"]["resource_count"] == 6
+    assert status["runtime_package"]["ready_load_unit_count_by_target"] == {
+        "directx": 1,
+        "opengl": 1,
+    }
+    assert status["runtime_package"]["blocked_load_unit_count_by_target"] == {
+        "directx": 0,
+        "opengl": 0,
+    }
+    assert status["workload"] == {
+        "dtype": "float32",
+        "shape": [2, 32],
+        "axis_size": 32,
+        "row_count": 2,
+        "weight_shape": [32],
+        "epsilon": 0.00001,
+        "weight_stride": 1,
+        "input_values": "row0=(index-16)/8; row1=((index%9)-4)*0.3125",
+        "weight_values": "0.5+(index%5)*0.125",
+        "reference": "x*w*rsqrt(mean(x*x)+epsilon)",
+        "output_element_count": 64,
+        "absolute_tolerance": 0.00003,
+        "relative_tolerance": 0.00003,
+    }
+    assert status["remaining_scope"] == {
+        "forward_entries_other_than_rmsfloat32_included": False,
+        "vjp_entries_included": False,
+        "float16_and_bfloat16_included": False,
+        "looped_entries_included": False,
+        "other_axis_sizes_included": False,
+        "historical_compiler_dispatch_record_count": 12,
+        "mlx_host_runtime_integration_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    specialization = gaps["rms_norm_specialization_status"]
+    assert specialization["status"] == (
+        "translation-native-compilation-and-bounded-runtime-validated"
+    )
+    assert specialization["numerical_execution_included"] is True
+    assert specialization["runtime_integration_included"] is True
+    assert specialization["selected_workload_numerical_parity_verified"] is True
+    assert specialization["bounded_native_runtime_evidence"] == (
+        "rms_norm_native_runtime_status"
+    )
+    assert specialization["runtime_blocked_by"] == []
+    issue = "https://github.com/CrossGL/crosstl/issues/1795"
+    assert issue not in gaps["tracked_issues"]
+    assert issue in gaps["resolved_issues"]
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects the current-corpus `rmsfloat32` entry" in readme
+    assert "two deterministic float32 rows of axis size 32" in readme
+    assert "six-buffer native-loader ABI" in readme
+    assert "six `OpControlBarrier` instructions" in readme
+    assert "Direct3D 12 WARP and Mesa software OpenGL" in readme
+    assert "does not cover VJP, looped, float16, or bfloat16 entries" in readme
+
+
+def test_rms_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["rms_norm_vjp_native_runtime_status"]
+    assert status["status"] == (
+        "translated-packaged-deferred-specialized-and-native-runtime-required"
+    )
+    assert status["commit"] == "846d176227a0ac13d2667e58d2bb68b322109ab0"
+    assert status["source"] == "mlx/backend/metal/kernels/rms_norm.metal"
+    assert status["source_sha256"] == (
+        "b2e04e377fdad1d645581f9beeaf9cbb06d1ad32926161e06cbc15240caf12bf"
+    )
+    assert status["selected_entry_point"] == "vjp_rmsfloat32"
+    assert status["selected_workload"] == "vjp-float32-axis-32-one-row-has-w"
+    assert status["upstream_test"] == "python/tests/test_fast.py::test_rms_norm_grad"
+    assert status["dispatch_contract"] == {
+        "path": (
+            "demos/integrations/mlx/contracts/"
+            "rms_norm_vjp.native-loader.dispatch.json"
+        ),
+        "content_identity": (
+            "sha256:6b80c42a03de10db01881cbf2ca01c119ee4537cb5c221b0be9efcff138edfb3"
+        ),
+        "dispatch_variant_id": (
+            "sha256:5f30015f711d2884061ea69c110e54a5ac2e1c03361315e6cac9de2b2c7891a5"
+        ),
+        "artifact_id": (
+            "sha256:a9be06b43a6156fb9ee1f9a6955d03d6bda0940c2a8223b58f564c2d12bd0cd0"
+        ),
+        "workload_count": 1,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width": 32,
+        "dispatch_workgroup_count": [1, 1, 1],
+        "function_constants": {"20": True},
+    }
+    assert status["index_range_contracts"] == [
+        {
+            "expression": "uint64(row) * axis_size + lid * RMS_N_READS",
+            "minimum": 0,
+            "maximum": 31,
+        },
+        {
+            "expression": "uint64(gid) * axis_size + lid * RMS_N_READS",
+            "minimum": 0,
+            "maximum": 31,
+        },
+    ]
+    assert status["materialization"] == {
+        "concrete_specialization_count": 1,
+        "reachable_specialization_count": 4,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 168,
+        "selected_specializations": {
+            "vjp_rms_single_row": {
+                "N_READS": "RMS_N_READS",
+                "T": "float",
+            }
+        },
+    }
+    specialization = status["specialization"]
+    assert specialization["name"] == "has_w"
+    assert specialization["constant_id"] == 20
+    assert specialization["value"] is True
+    assert specialization["directx_materialization"] == "concrete-crossgl-variant"
+    assert specialization["opengl_materialization"] == "deferred-layout-constant-id"
+    assert specialization["native_header_available"] is False
+    assert specialization["native_header_unavailable_reason"] == (
+        "specialization-requires-deferred-compilation"
+    )
+    assert specialization["deferred_compilation_request_status"] == "ready"
+    assert specialization["deferred_output_format"] == "SPIR-V binary"
+
+    directx = status["artifacts"]["directx"]
+    assert directx["sha256"] == (
+        "7c1fe2a3c5f6d883b11b3fb17511663ebb3ead2a0931611229930c3f07035c9f"
+    )
+    assert directx["size_bytes"] == 6795
+    assert directx["wave_active_sum_call_count"] == 4
+    assert directx["native_runtime"]["status"] == "required-on-ci"
+    opengl = status["artifacts"]["opengl"]
+    assert opengl["sha256"] == (
+        "2112adeb6c1693fa42c48fe3013cd57637f34a9393c0d468b547ed06ab42cf73"
+    )
+    assert opengl["size_bytes"] == 7771
+    assert opengl["specialization_enforcement"] == (
+        "deferred-opengl-spirv-specialization"
+    )
+    assert opengl["control_barrier_instruction_count"] == 6
+    assert opengl["group_non_uniform_instruction_count"] == 0
+    assert opengl["local_validation"] == {
+        "platform": "linux-arm64",
+        "runtime": "mesa-headless-egl-llvmpipe",
+        "status": "passed",
+        "gx_maximum_absolute_error": 3.5336688131160088e-08,
+        "gx_maximum_relative_error": 2.1698385352267783e-06,
+        "gw_maximum_absolute_error": 3.3944730581936255e-08,
+        "gw_maximum_relative_error": 6.02581746340496e-08,
+    }
+    assert opengl["native_runtime"]["status"] == "required-on-ci"
+    assert status["software_subgroup"]["operations"] == ["WaveActiveSum(float)"]
+    assert status["software_subgroup"]["width"] == 32
+    assert status["software_subgroup"]["runtime_loop_uniformity"] == {
+        "accepted_form": "canonical-int-or-uint-for-loop",
+        "initializer_and_bound": "proven-workgroup-uniform",
+        "uniform_sources": [
+            "compile-time constants",
+            "read-only scalar blocks",
+            "workgroup builtins",
+            "conservative local dataflow",
+        ],
+        "lane_varying_or_mutating_bounds_rejected": True,
+        "escaping_control_flow_rejected": True,
+        "unresolved_calls_rejected": True,
+    }
+    assert status["runtime_package"]["resource_count"] == 10
+    assert status["runtime_package"]["specialization_constant_count"] == 1
+    assert [
+        resource["role"] for resource in status["runtime_package"]["resources"]
+    ] == [
+        "input",
+        "weight",
+        "output_cotangent",
+        "input_gradient",
+        "per_group_weight_gradient",
+        "epsilon",
+        "axis_size",
+        "weight_stride",
+        "row_count",
+        "rows_per_group",
+    ]
+    assert status["one_row_boundary"] == {
+        "per_group_weight_gradient_equals_final_reduced_gradient": True,
+        "follow_on_weight_reduction_dispatch_required": False,
+    }
+    assert status["remaining_scope"] == {
+        "multi_row_weight_reduction_included": False,
+        "has_w_false_included": False,
+        "float16_and_bfloat16_included": False,
+        "looped_entries_included": False,
+        "other_axis_sizes_included": False,
+        "mlx_host_runtime_integration_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects `vjp_rmsfloat32`" in readme
+    assert "deferred OpenGL specialization constant `20`" in readme
+    assert "initializer and bound workgroup-uniform" in readme
+    assert "ten-resource native-loader ABI" in readme
+    assert "one row and one group" in readme
+    assert "does not cover multi-row weight reduction" in readme
+
+
+def test_layer_norm_native_runtime_evidence_records_bounded_cross_target_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["layer_norm_native_runtime_status"]
+    assert status["status"] == "translated-packaged-and-native-runtime-required"
+    assert status["commit"] == "846d176227a0ac13d2667e58d2bb68b322109ab0"
+    assert status["source"] == "mlx/backend/metal/kernels/layer_norm.metal"
+    assert status["source_sha256"] == (
+        "2d243f5abea7353929f9bc838ceb5a98e52a452dfc29609ad4d5974447ea689f"
+    )
+    assert status["selected_entry_point"] == "layer_normfloat32"
+    assert status["selected_workload"] == "forward-float32-axis-32"
+    assert status["upstream_test"] == "python/tests/test_fast.py::test_layer_norm"
+    assert status["dispatch_contract"] == {
+        "path": (
+            "demos/integrations/mlx/contracts/" "layer_norm.native-loader.dispatch.json"
+        ),
+        "content_identity": (
+            "sha256:320929bc503640b12748a28f72aa571f9a79123e498d5f8cda4a9827c2d01add"
+        ),
+        "dispatch_variant_id": (
+            "sha256:3ffe2a2e8450658c4972b627679caa9a16290f4f596eab2af26888433de9870f"
+        ),
+        "artifact_id": (
+            "sha256:4b1c27c05949e3021e5b28aeb4552e668aad8dd00141a1880fe98e7ebc7b129e"
+        ),
+        "workload_count": 1,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width": 32,
+        "dispatch_workgroup_count": [2, 1, 1],
+        "function_constants": {},
+    }
+    assert status["workgroup_access_contract"] == {
+        "kind": "explicit-host-runtime-portability-precondition",
+        "source": "mlx/backend/metal/kernels/layer_norm.metal",
+        "entry_point": "layer_normfloat32",
+        "function": "*",
+        "parameter": "*",
+        "minimum": 0,
+        "maximum": 31,
+        "inferred": False,
+        "runtime_enforced": False,
+    }
+    assert status["materialization"] == {
+        "concrete_specialization_count": 3,
+        "reachable_specialization_count": 6,
+        "dependency_discovery_work_count": 8,
+        "pruned_candidate_count": 194,
+        "selected_specializations": {
+            "layer_norm_single_row": {"N_READS": "8", "T": "float"},
+            "initialize_buffer": {"N": "1"},
+            "threadgroup_sum": {"N": "1"},
+        },
+    }
+    assert status["artifacts"]["directx"]["sha256"] == (
+        "7e790d4e665c72025e46c7c038aba2bec57ba6f65e209178eae5160c0c7ea8e9"
+    )
+    assert status["artifacts"]["directx"]["size_bytes"] == 5216
+    assert status["artifacts"]["directx"]["wave_active_sum_call_count"] == 2
+    assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
+        "required-on-ci"
+    )
+    assert status["artifacts"]["opengl"]["sha256"] == (
+        "f86f83b6835b7d4b07ece9f153df883300f7a131bbcec5d084bf29084c1bf51a"
+    )
+    assert status["artifacts"]["opengl"]["size_bytes"] == 5914
+    assert status["artifacts"]["opengl"]["control_barrier_instruction_count"] == 6
+    assert status["artifacts"]["opengl"]["group_non_uniform_instruction_count"] == 0
+    assert status["artifacts"]["opengl"]["local_validation"] == {
+        "platform": "linux-arm64",
+        "runtime": "mesa-headless-egl-llvmpipe",
+        "status": "passed",
+        "maximum_absolute_error": 8.876972712457132e-08,
+        "maximum_relative_error": 2.9057866258306256e-07,
+    }
+    assert status["artifacts"]["opengl"]["native_runtime"]["status"] == (
+        "required-on-ci"
+    )
+    software = status["software_subgroup"]
+    assert software["operations"] == ["WaveActiveSum(float)"]
+    assert software["width"] == 32
+    assert software["approved_helpers"] == ["threadgroup_sum_1"]
+    assert software["rejected_helper_contracts"] == [
+        "conditional-or-nested helper calls",
+        "indirect helper calls",
+        "ambiguous helper identities",
+        "subgroup operations in potentially divergent helper control flow",
+        "narrower or base-incompatible workgroup proof reuse",
+    ]
+    assert software["control_barrier_instruction_count"] == 6
+    assert software["group_non_uniform_instruction_count"] == 0
+    assert software["hardware_subgroup_extensions_emitted"] is False
+    assert software["unsupported_contract_behavior"] == (
+        "reject-before-artifact-emission"
+    )
+    assert status["runtime_package"]["resource_count"] == 8
+    assert status["runtime_package"]["specialization_constant_count"] == 0
+    assert status["runtime_package"]["ready_load_unit_count_by_target"] == {
+        "directx": 1,
+        "opengl": 1,
+    }
+    assert status["runtime_package"]["blocked_load_unit_count_by_target"] == {
+        "directx": 0,
+        "opengl": 0,
+    }
+    assert [
+        resource["role"] for resource in status["runtime_package"]["resources"]
+    ] == [
+        "input",
+        "weight",
+        "bias",
+        "output",
+        "epsilon",
+        "axis_size",
+        "weight_stride",
+        "bias_stride",
+    ]
+    assert status["workload"] == {
+        "dtype": "float32",
+        "shape": [2, 32],
+        "axis_size": 32,
+        "row_count": 2,
+        "weight_shape": [32],
+        "bias_shape": [32],
+        "epsilon": 0.00001,
+        "weight_stride": 1,
+        "bias_stride": 1,
+        "input_values": "row0=(index-16)/8; row1=((index%9)-4)*0.3125",
+        "weight_values": "0.5+(index%5)*0.125",
+        "bias_values": "((index%7)-3)*0.0625",
+        "reference": "((x-mean(x))/sqrt(mean((x-mean(x))^2)+epsilon))*weight+bias",
+        "output_element_count": 64,
+        "absolute_tolerance": 0.00005,
+        "relative_tolerance": 0.00005,
+    }
+    assert status["remaining_scope"] == {
+        "forward_entries_other_than_layer_normfloat32_included": False,
+        "vjp_entries_included": False,
+        "float16_and_bfloat16_included": False,
+        "looped_entries_included": False,
+        "other_axis_sizes_included": False,
+        "historical_axis_4096_and_vjp_dispatch_frontier_included": False,
+        "mlx_host_runtime_integration_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    historical = gaps["directx_toolchain_status"]["layer_norm_dispatch_frontier"]
+    assert historical["bounded_axis_32_native_runtime_evidence"] == (
+        "layer_norm_native_runtime_status"
+    )
+    assert historical["runtime_execution_attempted"] is False
+    assert historical["runtime_execution_scope"] == (
+        "historical-axis-4096-forward-and-vjp-variants-only"
+    )
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects the forward `layer_normfloat32` entry" in readme
+    assert "workgroup-access precondition bounds specialized helper views" in readme
+    assert "one stable non-overloaded source identity" in readme
+    assert "eight ready resources on both targets" in readme
+    assert "maximum absolute error below `8.88e-8`" in readme
+    assert "does not redirect MLX host execution" in readme
+
+
+def test_layer_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["layer_norm_vjp_native_runtime_status"]
+    assert status["status"] == (
+        "translated-packaged-deferred-specialized-and-native-runtime-required"
+    )
+    assert status["commit"] == "846d176227a0ac13d2667e58d2bb68b322109ab0"
+    assert status["source"] == "mlx/backend/metal/kernels/layer_norm.metal"
+    assert status["source_sha256"] == (
+        "2d243f5abea7353929f9bc838ceb5a98e52a452dfc29609ad4d5974447ea689f"
+    )
+    assert status["selected_entry_point"] == "vjp_layer_normfloat32"
+    assert status["selected_workload"] == ("vjp-float32-axis-32-one-row-has-w")
+    assert status["upstream_test"] == (
+        "python/tests/test_fast.py::test_layer_norm_grad"
+    )
+    assert status["dispatch_contract"] == {
+        "path": (
+            "demos/integrations/mlx/contracts/"
+            "layer_norm_vjp.native-loader.dispatch.json"
+        ),
+        "content_identity": (
+            "sha256:e0e47ea5589f6fa812990617f0ac9f0de4f7749054a7f68ab1959dbcb5f8859c"
+        ),
+        "dispatch_variant_id": (
+            "sha256:7bbb4b949deb3bfcd443016f4e5d8bb46f297ffb5f8508a9fd73619496c41cf3"
+        ),
+        "artifact_id": (
+            "sha256:89b99b1316177ae5a2cae5a0aa57767219e01e9c4efc0497f6831e5e367fd9db"
+        ),
+        "workload_count": 1,
+        "workgroup_size": [32, 1, 1],
+        "subgroup_width": 32,
+        "dispatch_workgroup_count": [1, 1, 1],
+        "function_constants": {"20": True},
+    }
+    assert status["workgroup_access_contract"] == {
+        "kind": "explicit-host-runtime-portability-precondition",
+        "source": "mlx/backend/metal/kernels/layer_norm.metal",
+        "entry_point": "vjp_layer_normfloat32",
+        "function": "*",
+        "parameter": "*",
+        "minimum": 0,
+        "maximum": 95,
+        "inferred": False,
+        "runtime_enforced": False,
+    }
+    assert status["materialization"] == {
+        "concrete_specialization_count": 4,
+        "reachable_specialization_count": 7,
+        "dependency_discovery_work_count": 8,
+        "pruned_candidate_count": 194,
+        "selected_specializations": {
+            "vjp_layer_norm_single_row": {"N_READS": "8", "T": "float"},
+            "initialize_buffer": {"N": "3"},
+            "threadgroup_sum_3": {"N": "3"},
+            "threadgroup_sum_1": {"N": "1"},
+        },
+    }
+    specialization = status["specialization"]
+    assert specialization["name"] == "has_w"
+    assert specialization["constant_id"] == 20
+    assert specialization["value"] is True
+    assert specialization["directx_materialization"] == "concrete-crossgl-variant"
+    assert specialization["opengl_materialization"] == ("deferred-layout-constant-id")
+    assert specialization["native_header_available"] is False
+    assert specialization["native_header_unavailable_reason"] == (
+        "specialization-requires-deferred-compilation"
+    )
+    assert specialization["deferred_compilation_request_status"] == "ready"
+    assert specialization["deferred_output_format"] == "SPIR-V binary"
+
+    directx = status["artifacts"]["directx"]
+    assert directx["sha256"] == (
+        "6d4a3281d038309c8c294952411acfeb773f6ee8ddd8d73935cb3f3c4ce93a61"
+    )
+    assert directx["size_bytes"] == 7504
+    assert directx["wave_active_sum_call_count"] == 4
+    assert directx["native_runtime"]["status"] == "required-on-ci"
+    opengl = status["artifacts"]["opengl"]
+    assert opengl["sha256"] == (
+        "9e6c4e6201e1c78e981a346275b849c37e6c8d834e7509d662f7aec5782980fa"
+    )
+    assert opengl["size_bytes"] == 8291
+    assert opengl["specialization_enforcement"] == (
+        "deferred-opengl-spirv-specialization"
+    )
+    assert opengl["control_barrier_instruction_count"] == 8
+    assert opengl["group_non_uniform_instruction_count"] == 0
+    assert opengl["local_validation"] == {
+        "platform": "linux-arm64",
+        "runtime": "mesa-headless-egl-llvmpipe",
+        "status": "passed",
+        "gx_maximum_absolute_error": 4.8107191008561756e-08,
+        "gx_maximum_relative_error": 6.617471155711408e-06,
+        "gw_maximum_absolute_error": 5.43903434513382e-08,
+        "gw_maximum_relative_error": 1.198717416402971e-07,
+    }
+    assert opengl["native_runtime"]["status"] == "required-on-ci"
+    assert status["runtime_package"]["resource_count"] == 8
+    assert status["runtime_package"]["specialization_constant_count"] == 1
+    assert [
+        resource["role"] for resource in status["runtime_package"]["resources"]
+    ] == [
+        "input",
+        "weight",
+        "output_cotangent",
+        "input_gradient",
+        "per_row_weight_gradient",
+        "epsilon",
+        "axis_size",
+        "weight_stride",
+    ]
+    assert status["one_row_boundary"] == {
+        "per_row_weight_gradient_equals_final_reduced_gradient": True,
+        "follow_on_weight_reduction_dispatch_required": False,
+        "bias_gradient_reduction_included": False,
+    }
+    assert status["remaining_scope"] == {
+        "multi_row_weight_reduction_included": False,
+        "bias_gradient_reduction_included": False,
+        "has_w_false_included": False,
+        "float16_and_bfloat16_included": False,
+        "looped_entries_included": False,
+        "other_axis_sizes_included": False,
+        "mlx_host_runtime_integration_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects `vjp_layer_normfloat32` at axis size 32" in readme
+    assert "deferred OpenGL specialization constant `20`" in readme
+    assert "one-row boundary makes the per-row `gw` temporary" in readme
+    assert "eight-resource native-loader ABI" in readme
+    assert "does not include the separate bias-gradient reduction" in readme
+
+
 def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -9927,7 +11172,7 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
 
     status = gaps["copy_native_runtime_status"]
     assert status["status"] == "translated-packaged-and-native-executed"
-    assert status["commit"] == "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+    assert status["commit"] == "846d176227a0ac13d2667e58d2bb68b322109ab0"
     assert status["source"] == "mlx/backend/metal/kernels/copy.metal"
     assert status["source_sha256"] == (
         "ed8a579eb6fe6a14c36560d2c8b548baf99e66fa77d300fb4ad7554883820eba"
@@ -9936,14 +11181,28 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     assert status["template_materialization"] == {
         "template": "copy_v",
         "arguments": {"N": "1", "T": "float", "U": "float"},
-        "reachable_specialization_count": 1,
-        "dependency_discovery_work_count": 0,
-        "pruned_candidate_count": 69915,
+        "specializations": [
+            {
+                "template": "copy_v",
+                "arguments": {"N": "1", "T": "float", "U": "float"},
+                "source": "source-instantiation",
+            },
+            {
+                "template": "cast_to",
+                "materialized_name": "cast_to_float_float",
+                "arguments": {"T": "float", "U": "float"},
+                "source": "call-site",
+            },
+        ],
+        "specialization_count": 2,
+        "reachable_specialization_count": 5,
+        "dependency_discovery_work_count": 7,
+        "pruned_candidate_count": 62424,
     }
     assert status["artifacts"]["directx"] == {
         "target_entry_point": "CSMain",
-        "sha256": "5dcd4bee2b0075ab1bcd61f632b2d76a99a4c0978f6dae84a12c3f972c492a3f",
-        "size_bytes": 1020,
+        "sha256": "023227a86b82cfeff6c32219e2526efbb658d018a4679b47f06c8369186a3495",
+        "size_bytes": 1234,
         "workgroup_size": [1, 1, 1],
         "resource_layouts": {
             "input_storage": "hlsl-structured-buffer",
@@ -9965,8 +11224,8 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     }
     assert status["artifacts"]["opengl"] == {
         "target_entry_point": "main",
-        "sha256": "e91b07ca10b84de624b126420b6cd216a569b639488f40b7afe2527955e226d1",
-        "size_bytes": 1434,
+        "sha256": "fac13358ba17271c622634c3e42f9b3cd0863adb75bcfe71aca7ce13aa5628cb",
+        "size_bytes": 1619,
         "workgroup_size": [1, 1, 1],
         "resource_layouts": {
             "input_storage": "std430",
@@ -10006,12 +11265,1806 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     }
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "selects `v_copyfloat32float32` from that same full source" in readme
-    assert "materializes only `copy_v<float, float, 1>`" in readme
-    assert "pruning 69,915 unreachable candidate pairs" in readme
+    assert "selects `v_copyfloat32float32` from the current corpus" in readme
+    assert "materializes `copy_v<float, float, 1>`" in readme
+    assert "`cast_to<float, float>`" in readme
+    assert "pruning 62,424 unreachable candidate pairs" in readme
     assert "requires exact readback on both targets" in readme
     assert "bounded execution evidence for one scalar copy entry" in readme
     assert "does not cover the complex or bfloat16 entries" in readme
+
+
+def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["dot_native_runtime_status"]
+    assert status["status"] == "translated-packaged-and-cross-target-executed"
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/dot.metal"
+    assert status["source_sha256"] == (
+        "97bcad13d09c3d5fed87482a0bb9719d6eeff9b21d364967cd6aec5b695b3462"
+    )
+    assert status["selected_entry_point"] == "dot_product_float32_it32_tg512_sg16"
+    assert status["template_arguments"] == {
+        "T": "float",
+        "ITEMS_PER_THREAD": 32,
+        "TG_SIZE": 512,
+        "SIMD_GROUPS": 16,
+    }
+    assert status["execution"] == {
+        "workgroup_size": [512, 1, 1],
+        "subgroup_width": 32,
+        "workgroup_reduction_element_count": 16,
+    }
+    assert status["artifacts"]["directx"] == {
+        "target_entry_point": "CSMain",
+        "sha256": "f902bae0e7603d302340327c61e5a82ab392b9ce1afffb5557b1760592a1465f",
+        "size_bytes": 5110,
+        "subgroup_enforcement": "hlsl-wave-size-attribute",
+        "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
+        "native_runtime": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_dot_native_loader.py::"
+                "test_pinned_mlx_dot_executes_through_directx_native_loader"
+            ),
+        },
+    }
+    assert status["artifacts"]["opengl"] == {
+        "target_entry_point": "main",
+        "sha256": "ef69a757339fe09897a38804c27be279a19a7db146e2e02f85f0349c59f3168d",
+        "size_bytes": 5188,
+        "subgroup_enforcement": "glsl-subgroup-size-guard",
+        "toolchain_validation": {
+            "platform": "ubuntu-latest",
+            "compiler": "glslangValidator",
+            "validator": "spirv-val",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_dot_native_loader.py::"
+                "test_pinned_mlx_dot_translates_to_guarded_opengl_artifact"
+            ),
+        },
+        "native_runtime_executed": False,
+        "software_runtime_artifact": {
+            "target_entry_point": "main",
+            "sha256": (
+                "a3c1958daa680419ce3f38559de1a6a2319a7abdac556a049632194c88223a32"
+            ),
+            "size_bytes": 6275,
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "software_subgroup_width": 32,
+            "software_subgroup_count": 16,
+            "shared_scratch_element_count": 512,
+            "hardware_subgroup_extension_required": False,
+            "toolchain_validation": {
+                "platform": "ubuntu-latest",
+                "compiler": "glslangValidator",
+                "validator": "spirv-val",
+                "spirv_target_environment": "spv1.3",
+                "control_barrier_count": 4,
+                "group_non_uniform_instruction_count": 0,
+                "status": "required-on-ci",
+            },
+            "native_runtime": {
+                "platform": "ubuntu-latest",
+                "runtime": "mesa-llvmpipe-opengl",
+                "adapter": "opengl-native-runtime",
+                "status": "required-on-ci",
+                "test": (
+                    "tests/test_translator/test_mlx_dot_native_loader.py::"
+                    "test_pinned_mlx_dot_executes_with_opengl_software_subgroups"
+                ),
+            },
+        },
+    }
+    assert status["artifacts"]["metal"] == {
+        "target_entry_point": "dot_product_float32_it32_tg512_sg16",
+        "status": "blocked-before-emission",
+        "diagnostic_code": "project.translate.pointer-reinterpret-unsupported",
+        "missing_capability": "pointer.reinterpretation",
+        "reason": "target-lowering-unavailable",
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1903",
+        "test": (
+            "tests/test_translator/test_mlx_dot_native_loader.py::"
+            "test_pinned_mlx_dot_records_metal_roundtrip_boundary"
+        ),
+    }
+    assert status["workload"] == {
+        "dtype": "float32",
+        "input_element_count": 1024,
+        "left_value": 1.0,
+        "right_value": 0.25,
+        "dispatch_workgroup_count": [1, 1, 1],
+        "expected_output": 256.0,
+        "absolute_tolerance": 0.00001,
+        "relative_tolerance": 0.00001,
+    }
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is True
+    assert status["metal_roundtrip_included"] is False
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["cross_target_selected_workload_numerical_parity_verified"] is True
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "selects `dot_product_float32_it32_tg512_sg16`" in readme
+    assert "preserve the read-only `float4` storage views" in readme
+    assert "requires a readback of `256.0`" in readme
+    assert "separate software artifact is 6,275 bytes" in readme
+    assert "sixteen independent 32-lane logical subgroups" in readme
+    assert "four control barriers and no group-nonuniform instruction" in readme
+    assert "Mesa llvmpipe executes the same workload" in readme
+    assert "still fails closed at storage-backed vector pointer lowering" in readme
+    assert "do not redirect MLX host dispatch" in readme
+    assert "or run the MLX test suite" in readme
+
+
+def test_unary_native_runtime_evidence_records_selected_entry_proofs():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["unary_square_native_runtime_status"]
+    assert status["status"] == "translated-packaged-and-executed"
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/unary.metal"
+    assert status["source_sha256"] == (
+        "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
+    )
+    assert status["selected_entry_point"] == "v_Squarefloat32float32"
+    assert status["specialization"] == {
+        "name": "unary_v",
+        "arguments": {
+            "T": "float",
+            "U": "float",
+            "Op": "Square",
+            "N": 1,
+        },
+        "specialization_count": 1,
+        "unsupported_specialization_count": 0,
+        "pruned_candidate_count": 39509,
+    }
+    assert status["entry_reachability"] == {
+        "unreachable_member_lowering_pruned": True,
+        "reachable_unresolved_calls_fail_closed": True,
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1922",
+    }
+    assert status["execution"] == {
+        "workgroup_size": [1, 1, 1],
+        "dispatch_workgroup_count": [5, 1, 1],
+    }
+    assert status["artifacts"]["directx"] == {
+        "target_entry_point": "CSMain",
+        "sha256": "64540a89c95e39914a4d616aff9bec98b939a5209fa4caef5cc1425511abb4e5",
+        "size_bytes": 2314,
+        "native_runtime": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "compiler": "dxc",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_square_executes_through_directx_native_loader"
+            ),
+        },
+    }
+    assert status["artifacts"]["metal"] == {
+        "target_entry_point": "v_Squarefloat32float32",
+        "sha256": "244e34b7aa58b7abe7c3ff09f3f51f3aa283a42bf7585bf88200590767032495",
+        "size_bytes": 1015,
+        "host_dispatch_workgroup_size": [1, 1, 1],
+        "native_roundtrip": {
+            "platform": "macos-latest",
+            "compiler": "xcrun -sdk macosx metal",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_square_roundtrips_through_metal"
+            ),
+        },
+        "numerical_runtime_included": False,
+    }
+    assert status["artifacts"]["opengl"] == {
+        "target_entry_point": "main",
+        "sha256": "2bb46a3bb0858eb849e533bfe46eff1d59b9192436e15b2639c7998698db6a48",
+        "size_bytes": 3613,
+        "native_runtime": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-opengl-4.3",
+            "compiler": "glslangValidator",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_square_executes_through_opengl_native_loader"
+            ),
+        },
+    }
+    assert status["workload"] == {
+        "dtype": "float32",
+        "input": [-3.0, -1.5, 0.0, 2.0, 4.25],
+        "expected_output": [9.0, 2.25, 0.0, 4.0, 18.0625],
+        "absolute_tolerance": 0.000001,
+        "relative_tolerance": 0.000001,
+    }
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["other_unary_specializations_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    arccos = gaps["unary_arccos_native_runtime_status"]
+    assert arccos["status"] == "translated-packaged-and-executed"
+    assert arccos["commit"] == CURRENT_MLX_COMMIT
+    assert arccos["source"] == "mlx/backend/metal/kernels/unary.metal"
+    assert arccos["source_sha256"] == (
+        "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
+    )
+    assert arccos["selected_entry_point"] == "v_ArcCosfloat32float32"
+    assert arccos["specialization"] == {
+        "name": "unary_v",
+        "arguments": {
+            "T": "float",
+            "U": "float",
+            "Op": "ArcCos",
+            "N": 1,
+        },
+        "specialization_count": 1,
+        "unsupported_specialization_count": 0,
+        "pruned_candidate_count": 39509,
+    }
+    assert arccos["entry_reachability"] == {
+        "unselected_out_of_line_overloads_pruned": True,
+        "reachable_unresolved_calls_fail_closed": True,
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1924",
+    }
+    assert arccos["precise_math_lowering"] == {
+        "source_operation": "metal::precise::acos",
+        "strategy": "portable-float32-range-reduction",
+        "no_contraction": True,
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1925",
+    }
+    assert arccos["execution"] == {
+        "workgroup_size": [1, 1, 1],
+        "dispatch_workgroup_count": [5, 1, 1],
+    }
+    assert arccos["artifacts"]["directx"] == {
+        "target_entry_point": "CSMain",
+        "sha256": "4562332ad4fb951478ca419180ccdf3589f74b9e0956226badc6de877d343239",
+        "size_bytes": 4175,
+        "native_runtime": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "compiler": "dxc",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_arccos_executes_through_directx_native_loader"
+            ),
+        },
+    }
+    assert arccos["artifacts"]["metal"] == {
+        "target_entry_point": "v_ArcCosfloat32float32",
+        "sha256": "1247739bc0c48d11692aee81953d8a6a4071de488bfe7ea8d7b2083aa48d9b2b",
+        "size_bytes": 2742,
+        "host_dispatch_workgroup_size": [1, 1, 1],
+        "native_roundtrip": {
+            "platform": "macos-latest",
+            "compiler": "xcrun -sdk macosx metal",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_arccos_roundtrips_through_metal"
+            ),
+        },
+        "numerical_runtime_included": False,
+    }
+    assert arccos["artifacts"]["opengl"] == {
+        "target_entry_point": "main",
+        "sha256": "280864c39e88198cd5e660127db453877349fadb090cb37f022bcc46300660b3",
+        "size_bytes": 5965,
+        "native_runtime": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-opengl-4.3",
+            "compiler": "glslangValidator",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_unary_native_loader.py::"
+                "test_pinned_mlx_unary_arccos_executes_through_opengl_native_loader"
+            ),
+        },
+    }
+    assert arccos["workload"] == {
+        "dtype": "float32",
+        "input": [-1.0, -0.5, 0.0, 0.5, 1.0],
+        "expected_output": [
+            3.141592653589793,
+            2.0943951023931957,
+            1.5707963267948966,
+            1.0471975511965979,
+            0.0,
+        ],
+        "absolute_tolerance": 0.000001,
+        "relative_tolerance": 0.00001,
+    }
+    assert arccos["mlx_host_runtime_included"] is False
+    assert arccos["runtime_integration_included"] is True
+    assert arccos["metal_roundtrip_included"] is True
+    assert arccos["metal_numerical_runtime_included"] is False
+    assert arccos["selected_workload_numerical_parity_verified"] is True
+    assert arccos["other_unary_specializations_included"] is False
+    assert arccos["full_mlx_test_suite_included"] is False
+    assert arccos["numerical_parity_claimed"] is False
+    assert arccos["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "select `v_Squarefloat32float32` and `v_ArcCosfloat32float32`" in readme
+    assert "Each entry-scoped artifact emits exactly one" in readme
+    assert "keeps the out-of-line complex `ArcCos::operator()` body out" in readme
+    assert "Square retains `x * x`" in readme
+    assert "portable float32 range-reduction implementation" in readme
+    assert "collision-safe `precise` local" in readme
+    assert "preserving SPIR-V `NoContraction`" in readme
+    assert "target intrinsic's unspecified accuracy" in readme
+    assert "The Square and ArcCos entries now also round-trip through Metal" in readme
+    assert "2,742-byte artifact" in readme
+    assert "Both exact artifacts compile with ``xcrun -sdk macosx metal -c``" in (
+        readme
+    )
+    assert "executes them through the native loader on Direct3D 12 WARP" in readme
+    assert "surfaceless Mesa OpenGL context" in readme
+    assert "numerical evidence for two selected unary specializations" in readme
+    assert "does not cover the other unary operations or dtypes" in readme
+    assert "run the MLX test suite" in readme
+
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 877 discovered entries" in guide
+    assert "877 artifacts contain 1,243 exact materializations" in guide
+    assert "does not claim Metal numerical execution" in guide
+
+
+def test_unary_metal_roundtrip_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["unary_metal_roundtrip_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/unary.metal"
+    assert status["source_sha256"] == (
+        "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
+    )
+    assert status["target"] == "metal"
+    assert status["scope"] == {
+        "discovered_unary_instantiation_count": 877,
+        "entry_count": 877,
+        "shape_counts": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 183,
+            "gn4large": 183,
+        },
+        "template_counts": {"unary_v": 328, "unary_v2": 183, "unary_g": 366},
+        "operator_count": 37,
+        "input_output_type_pair_count": 20,
+        "semantic_family_count": 16,
+        "previously_proven_scalar_entry_count": 183,
+        "newly_proven_non_scalar_entry_count": 694,
+        "all_discovered_unary_instantiations_included": True,
+    }
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
+        "schema_version": 2,
+        "sha256": "35a7f1de77b178cc459651431336b987a336e11827ff46b2c8ac38221ab0e741",
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert hashlib.sha256(contract_bytes).hexdigest() == status["contract"]["sha256"]
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryCount": 877,
+        "shapeCount": 5,
+        "templateCount": 3,
+        "operatorCount": 37,
+        "typePairCount": 20,
+        "familyCount": 16,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    assert len(contract["entries"]) == 877
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 877
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert contract["classifications"]["shapes"] == status["scope"]["shape_counts"]
+    assert (
+        contract["classifications"]["templates"] == status["scope"]["template_counts"]
+    )
+    assert status["family_counts"] == contract["classifications"]["families"]
+    assert sum(status["family_counts"].values()) == 877
+    assert len(contract["classifications"]["operators"]) == 37
+    assert sum(contract["classifications"]["operators"].values()) == 877
+    assert len(contract["classifications"]["typePairs"]) == 20
+    assert sum(contract["classifications"]["typePairs"].values()) == 877
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 877,
+        "artifact_count": 877,
+        "translated_count": 877,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 1243,
+        "specialization_counts_by_shape": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 366,
+            "gn4large": 366,
+        },
+        "unsupported_specialization_count": 0,
+        "selected_operator_implementation_count_per_artifact": 1,
+        "unselected_operator_bodies_pruned": True,
+        "reachable_empty_helper_tag_structs_allowed": True,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["implementation_contracts"] == {
+        "typedef_aliases_and_native_bfloat_mapping": True,
+        "source_compatible_free_operator_materialization": True,
+        "aggregate_alias_inference": True,
+        "branch_complete_return_analysis": True,
+        "bfloat_result_reconstruction": True,
+        "narrow_as_type_storage": True,
+        "read_only_thread_local_single_field_parameter_reinterpret": True,
+        "other_pointer_reinterpretation_fail_closed": True,
+        "constant_resource_address_space_provenance": True,
+        "const_device_reference_preservation": True,
+        "postfix_update_position_preservation": True,
+        "native_metal_union_reconstruction": True,
+        "malformed_union_layout_fail_closed": True,
+        "warning_safe_shift_grouping": True,
+        "conflicting_resource_address_spaces_fail_closed": True,
+        "writable_constant_resources_fail_closed": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "resource_counts_by_shape": {
+            "v": 3,
+            "v2": 3,
+            "vn": 3,
+            "gn1": 5,
+            "gn4large": 5,
+        },
+        "reflected_resource_count": 3363,
+        "vector_resources": contract["shapeContracts"]["v"]["hostResources"],
+        "gather_resources": contract["shapeContracts"]["gn1"]["hostResources"],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": 1321546,
+        "generated_size_range": {
+            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 972},
+            "maximum": {
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 4468,
+            },
+        },
+    }
+    assert status["native_validation"] == {
+        "platform": "macos-latest",
+        "compiler": "xcrun -sdk macosx metal -Werror -c",
+        "source_warning_exemption": None,
+        "status": "required-on-ci",
+        "compiled_artifact_count": 877,
+        "all_air_artifacts_nonempty": True,
+        "test": (
+            "tests/test_translator/test_mlx_unary_native_loader.py::"
+            "test_current_mlx_unary_family_roundtrips_through_metal"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
+    assert status["directx_family_translation_included"] is True
+    assert status["opengl_family_translation_included"] is True
+    assert status["directx_and_opengl_family_translation_included"] is True
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "all_discovered_unary_instantiations_included": True,
+        "metal_numerical_execution_included": False,
+        "directx_whole_family_included": True,
+        "opengl_whole_family_included": True,
+        "directx_and_opengl_whole_family_included": True,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "all 877 discovered current-pinned unary entries" in readme
+    assert "adding the complete 694-entry non-scalar frontier" in readme
+    assert "1,243 specializations across 877 artifacts" in readme
+    assert "requires 877 non-empty AIR outputs" in readme
+    assert "every discovered unary instantiation" in readme
+    assert "not Metal numerical execution" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 877 discovered entries" in guide
+    assert "877 artifacts contain 1,243 exact materializations" in guide
+    assert "compiles all 877 exact artifacts" in guide
+    assert "does not claim Metal numerical execution" in guide
+
+
+def test_unary_opengl_translation_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["unary_opengl_translation_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/unary.metal"
+    assert status["source_sha256"] == (
+        "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
+    )
+    assert status["target"] == "opengl"
+    assert status["scope"] == {
+        "discovered_unary_instantiation_count": 877,
+        "entry_count": 877,
+        "shape_counts": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 183,
+            "gn4large": 183,
+        },
+        "template_count": 3,
+        "operator_count": 37,
+        "input_output_type_pair_count": 20,
+        "semantic_family_count": 16,
+        "all_discovered_unary_instantiations_included": True,
+    }
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
+        "schema_version": 2,
+        "sha256": "9708dd97ea36d14cb6bcf167a0153fc89b8e61d01698130722eac3733669758f",
+        "size_bytes": 317614,
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert len(contract_bytes) == status["contract"]["size_bytes"]
+    assert hashlib.sha256(contract_bytes).hexdigest() == status["contract"]["sha256"]
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"]["entryCount"] == status["scope"]["entry_count"]
+    assert contract["classifications"]["shapes"] == status["scope"]["shape_counts"]
+    assert len(contract["entries"]) == 877
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 877
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 877,
+        "artifact_count": 877,
+        "translated_count": 877,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "target_entry_point": "main",
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 1243,
+        "specialization_counts_by_shape": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 366,
+            "gn4large": 366,
+        },
+        "unsupported_specialization_count": 0,
+        "selected_operator_implementation_count_per_artifact": 1,
+        "unselected_operator_bodies_pruned": True,
+        "reachable_complex_operator_dependencies_retained": True,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["portability_preconditions"] == {
+        "kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
+        "minimum": 0,
+        "maximum": 2147483647,
+        "expressions": ["offset + i", "out_idx++", "idx"],
+    }
+    assert (
+        contract["portabilityPreconditions"]["contractKind"]
+        == status["portability_preconditions"]["kind"]
+    )
+    assert [
+        assertion["expression"]
+        for assertion in contract["portabilityPreconditions"]["indexRangeAssertions"]
+    ] == status["portability_preconditions"]["expressions"]
+    assert status["implementation_contracts"] == {
+        "glsl_log10_lowered_through_single_evaluation_log2": True,
+        "user_defined_log10_preserved": True,
+        "const_device_scalar_reference_emitted_as_read_only_storage_buffer": True,
+        "const_device_scalar_reference_expression_aliases_element_zero": True,
+        "const_device_scalar_reference_preserves_scalar_expression_type": True,
+        "explicit_index_range_preconditions_required": True,
+        "unproven_index_narrowing_fail_closed": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "resource_counts_by_shape": {
+            "v": 3,
+            "v2": 3,
+            "vn": 3,
+            "gn1": 5,
+            "gn4large": 5,
+        },
+        "reflected_resource_count": 3363,
+        "vector_resources": [
+            {key: value for key, value in resource.items() if key != "sourceName"}
+            for resource in contract["shapeContracts"]["v"]["hostResources"]
+        ],
+        "gather_resources": [
+            {key: value for key, value in resource.items() if key != "sourceName"}
+            for resource in contract["shapeContracts"]["gn1"]["hostResources"]
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": 4060696,
+        "generated_size_range": {
+            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3568},
+            "maximum": {
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 8746,
+            },
+        },
+    }
+    assert (
+        contract["artifactContract"]["generatedSizeBytesTotal"]
+        == status["artifacts"]["generated_size_bytes_total"]
+    )
+    assert contract["artifactContract"]["reflectedResourceCount"] == 3363
+    assert status["native_validation"] == {
+        "platform": "ubuntu-latest",
+        "compiler": (
+            "glslangValidator --target-env opengl --target-env spirv1.3 -S comp"
+        ),
+        "validator": "spirv-val --target-env spv1.3",
+        "status": "required-on-ci",
+        "compiled_artifact_count": 877,
+        "validated_artifact_count": 877,
+        "all_spirv_artifacts_nonempty": True,
+        "ci_shard_count": 5,
+        "test": (
+            "tests/test_translator/test_mlx_unary_complete_opengl.py::"
+            "test_current_mlx_unary_family_translates_to_opengl"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["opengl_family_translation_included"] is True
+    assert status["opengl_numerical_runtime_included"] is False
+    assert status["directx_family_translation_included"] is True
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "all_discovered_unary_instantiations_included": True,
+        "opengl_numerical_execution_included": False,
+        "directx_whole_family_included": True,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "all 877 discovered current-pinned `unary.metal` entries to OpenGL" in readme
+    assert "4,060,696 generated GLSL bytes" in readme
+    assert "three explicit host/runtime index-range preconditions" in readme
+    assert "requires 877 non-empty SPIR-V 1.3 modules" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 877 current-pinned unary entries to standalone OpenGL" in guide
+    assert "4,060,696 generated GLSL bytes" in guide
+    assert "five disjoint Linux shards" in guide
+
+
+def test_unary_directx_translation_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["unary_directx_translation_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/unary.metal"
+    assert status["source_sha256"] == (
+        "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
+    )
+    assert status["target"] == "directx"
+    assert status["scope"] == {
+        "discovered_unary_instantiation_count": 877,
+        "entry_count": 877,
+        "shape_counts": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 183,
+            "gn4large": 183,
+        },
+        "template_count": 3,
+        "operator_count": 37,
+        "input_output_type_pair_count": 20,
+        "semantic_family_count": 16,
+        "all_discovered_unary_instantiations_included": True,
+    }
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
+        "schema_version": 2,
+        "sha256": "cceab0e1a2add8af3f96307ed09ae9630e795fc92f8cf29a2d58775405bcaccd",
+        "size_bytes": 318158,
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert len(contract_bytes) == status["contract"]["size_bytes"]
+    assert hashlib.sha256(contract_bytes).hexdigest() == status["contract"]["sha256"]
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"]["entryCount"] == status["scope"]["entry_count"]
+    assert contract["classifications"]["shapes"] == status["scope"]["shape_counts"]
+    assert len(contract["entries"]) == 877
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 877
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 877,
+        "artifact_count": 877,
+        "translated_count": 877,
+        "failed_count": 0,
+        "project_error_diagnostic_count": 0,
+        "local_generation_warning_count": 1,
+        "local_generation_warning_codes": ["project.validate.toolchain-unavailable"],
+        "target_entry_point": "CSMain",
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 1243,
+        "specialization_counts_by_shape": {
+            "v": 183,
+            "v2": 183,
+            "vn": 145,
+            "gn1": 366,
+            "gn4large": 366,
+        },
+        "unsupported_specialization_count": 0,
+        "selected_operator_implementation_count_per_artifact": 1,
+        "unselected_operator_bodies_pruned": True,
+        "reachable_complex_operator_dependencies_retained": True,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["portability_preconditions"] == {
+        "kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
+        "minimum": 0,
+        "maximum": 2147483647,
+        "expressions": ["offset + i", "out_idx++", "idx"],
+    }
+    assert (
+        contract["portabilityPreconditions"]["contractKind"]
+        == status["portability_preconditions"]["kind"]
+    )
+    assert [
+        assertion["expression"]
+        for assertion in contract["portabilityPreconditions"]["indexRangeAssertions"]
+    ] == status["portability_preconditions"]["expressions"]
+    assert status["implementation_contracts"] == {
+        "complete_bfloat16_unary_intrinsic_lowering": True,
+        "bfloat16_inverse_hyperbolic_float_helper_roundtrip": True,
+        "const_device_scalar_reference_emitted_as_read_only_structured_buffer": True,
+        "const_device_scalar_reference_expression_aliases_element_zero": True,
+        "const_device_scalar_reference_preserves_scalar_expression_type": True,
+        "postfix_update_position_preserved": True,
+        "source_derived_native_16bit_compiler_arguments": True,
+        "explicit_contextual_floating_narrowing_for_native_16bit_destinations": True,
+        "explicit_index_range_preconditions_required": True,
+        "unproven_index_narrowing_fail_closed": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "resource_counts_by_shape": {
+            "v": 3,
+            "v2": 4,
+            "vn": 3,
+            "gn1": 6,
+            "gn4large": 6,
+        },
+        "reflected_resource_count": 3912,
+        "vector_resources": [
+            {key: value for key, value in resource.items() if key != "sourceName"}
+            for resource in contract["shapeContracts"]["v"]["hostResources"]
+        ],
+        "work_per_thread_resources": [
+            {key: value for key, value in resource.items() if key != "sourceName"}
+            for resource in contract["shapeContracts"]["v2"]["hostResources"]
+        ],
+        "gather_resources": [
+            {key: value for key, value in resource.items() if key != "sourceName"}
+            for resource in contract["shapeContracts"]["gn1"]["hostResources"]
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": 3033764,
+        "generated_size_range": {
+            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 2252},
+            "maximum": {
+                "entryPoint": "gn4large_ArcTancomplex64complex64",
+                "sizeBytes": 7332,
+            },
+        },
+    }
+    artifact_contract = contract["artifactContract"]
+    assert (
+        artifact_contract["generatedSizeBytesTotal"]
+        == status["artifacts"]["generated_size_bytes_total"]
+    )
+    assert artifact_contract["reflectedResourceCount"] == 3912
+    assert artifact_contract["compilerArguments"] == ["-enable-16bit-types"]
+    assert artifact_contract["requiresNonemptyDxilArtifact"] is True
+    assert status["native_validation"] == {
+        "platform": "windows-latest",
+        "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
+        "compiler_arguments": ["-enable-16bit-types"],
+        "status": "required-on-ci",
+        "compiled_artifact_count": 877,
+        "all_dxil_artifacts_nonempty": True,
+        "ci_shard_count": 5,
+        "test": (
+            "tests/test_translator/test_mlx_unary_complete_directx.py::"
+            "test_current_mlx_unary_family_translates_to_directx"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["directx_family_translation_included"] is True
+    assert status["directx_numerical_runtime_included"] is False
+    assert status["opengl_family_translation_included"] is True
+    assert status["directx_and_opengl_family_translation_included"] is True
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "all_discovered_unary_instantiations_included": True,
+        "directx_numerical_execution_included": False,
+        "opengl_numerical_execution_included": False,
+        "directx_and_opengl_whole_family_included": True,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert (
+        "all 877 discovered current-pinned `unary.metal` entries to DirectX" in readme
+    )
+    assert "3,912 reflected HLSL resources" in readme
+    assert "requires 877 non-empty DXIL modules" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 877 current-pinned unary entries to standalone DirectX" in guide
+    assert "five disjoint Windows shards" in guide
+    assert "non-empty DXIL modules" in guide
+
+
+def test_binary_scalar_metal_roundtrip_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["binary_scalar_metal_roundtrip_status"]
+    assert status["status"] == (
+        "selected-entry-scalar-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/binary.metal"
+    assert status["source_sha256"] == (
+        "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e"
+    )
+    assert status["target"] == "metal"
+    assert status["scope"] == {
+        "discovered_binary_instantiation_count": 4122,
+        "selected_shape": "ss",
+        "entry_count": 238,
+        "operator_count": 24,
+        "input_output_type_pair_count": 25,
+        "semantic_family_count": 25,
+        "remaining_non_scalar_entry_count": 3884,
+        "all_scalar_scalar_source_instantiations_included": True,
+        "all_discovered_binary_instantiations_included": False,
+    }
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
+        "schema_version": 1,
+        "sha256": "afb4d74c25d07203ded397df7f740d9721f9611b0c9bae64ee629a9043296e83",
+        "entry_identity_fields": [
+            "entryPoint",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert hashlib.sha256(contract_bytes).hexdigest() == status["contract"]["sha256"]
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryPrefix": "ss_",
+        "templateName": "binary_ss",
+        "shape": "scalar-scalar",
+        "entryCount": 238,
+        "discoveredBinaryEntryCount": 4122,
+        "operatorCount": 24,
+        "typePairCount": 25,
+        "familyCount": 25,
+    }
+    assert len(contract["entries"]) == 238
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 238
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["family_counts"] == contract["classifications"]["families"]
+    assert sum(status["family_counts"].values()) == 238
+    assert len(contract["classifications"]["operators"]) == 24
+    assert sum(contract["classifications"]["operators"].values()) == 238
+    assert len(contract["classifications"]["typePairs"]) == 25
+    assert sum(contract["classifications"]["typePairs"].values()) == 238
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 238,
+        "artifact_count": 238,
+        "translated_count": 238,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 238,
+        "unsupported_specialization_count": 0,
+        "selected_operator_implementation_count_per_artifact": 1,
+        "unselected_operator_bodies_pruned": True,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["implementation_contracts"] == {
+        "native_int64_vector_mapping": True,
+        "dependent_free_operator_rebinding": True,
+        "non_explicit_contextual_aggregate_construction": True,
+        "explicit_contextual_constructor_rejected": True,
+        "bfloat_min_max_float_promotion_and_reconstruction": True,
+        "discarded_type_constructor_disambiguation": True,
+        "bool_relational_integral_promotion": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "resource_count_per_artifact": 3,
+        "reflected_resource_count": 714,
+        "resources": contract["shapeContract"]["hostResources"],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": 189047,
+        "generated_size_range": {
+            "minimum": {"entryPoint": "ss_Addint8", "sizeBytes": 668},
+            "maximum": {
+                "entryPoint": "ss_LogAddExpcomplex64",
+                "sizeBytes": 3490,
+            },
+        },
+    }
+    assert status["native_validation"] == {
+        "platform": "macos-latest",
+        "compiler": "xcrun -sdk macosx metal -Werror -c",
+        "source_warning_exemption": None,
+        "status": "required-on-ci",
+        "compiled_artifact_count": 238,
+        "all_air_artifacts_nonempty": True,
+        "test": (
+            "tests/test_translator/test_mlx_binary_metal_roundtrip.py::"
+            "test_current_mlx_binary_scalar_family_roundtrips_through_metal"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
+    assert status["directx_and_opengl_family_translation_included"] is True
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "non_scalar_binary_entry_count": 3884,
+        "metal_numerical_execution_included": False,
+        "directx_and_opengl_whole_family_included": True,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "remains an exact 238-entry ``ss_`` subset" in readme
+    assert "all 4,122 discovered current-pinned binary entries" in readme
+    assert "not Metal numerical execution" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "238-entry scalar contract remains an exact subset" in guide
+    assert "all 4,122 discovered entries" in guide
+    assert "does not claim Metal numerical execution" in guide
+
+
+def test_binary_metal_roundtrip_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["binary_metal_roundtrip_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/binary.metal"
+    assert status["source_sha256"] == (
+        "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e"
+    )
+    assert status["target"] == "metal"
+    assert status["scope"] == {
+        "discovered_binary_instantiation_count": 4122,
+        "entry_count": 4122,
+        "shape_count": 18,
+        "template_count": 11,
+        "operator_count": 24,
+        "input_output_type_pair_count": 25,
+        "semantic_family_count": 25,
+        "base_shape_entry_count": 3570,
+        "work_per_thread_shape_entry_count": 552,
+        "scalar_contract_entry_count": 238,
+        "uncovered_binary_entry_count": 0,
+        "all_scalar_scalar_source_instantiations_included": True,
+        "all_discovered_binary_instantiations_included": True,
+    }
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
+        "schema_version": 2,
+        "sha256": "01fb47137f7a330cad3404a5c81abd677b455ae010aceb3d88e92f01d257ca5e",
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+        "scalar_subset_path": (
+            "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json"
+        ),
+        "scalar_subset_sha256": (
+            "afb4d74c25d07203ded397df7f740d9721f9611b0c9bae64ee629a9043296e83"
+        ),
+    }
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert hashlib.sha256(contract_bytes).hexdigest() == status["contract"]["sha256"]
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryCount": 4122,
+        "shapeCount": 18,
+        "templateCount": 11,
+        "operatorCount": 24,
+        "typePairCount": 25,
+        "familyCount": 25,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    assert len(contract["entries"]) == 4122
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 4122
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["shape_counts"] == contract["classifications"]["shapes"]
+    assert sum(status["shape_counts"].values()) == 4122
+    assert len(status["shape_counts"]) == 18
+    assert status["template_counts"] == contract["classifications"]["templates"]
+    assert sum(status["template_counts"].values()) == 4122
+    assert len(status["template_counts"]) == 11
+    assert len(contract["classifications"]["operators"]) == 24
+    assert sum(contract["classifications"]["operators"].values()) == 4122
+    assert len(contract["classifications"]["typePairs"]) == 25
+    assert sum(contract["classifications"]["typePairs"].values()) == 4122
+    assert len(contract["classifications"]["families"]) == 25
+    assert sum(contract["classifications"]["families"].values()) == 4122
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 4122,
+        "artifact_count": 4122,
+        "translated_count": 4122,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 6026,
+        "reachable_index_helper_specialization_count": 1904,
+        "unsupported_specialization_count": 0,
+        "selected_operator_implementation_count_per_artifact": 1,
+        "unselected_operator_bodies_pruned": True,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["implementation_contracts"] == {
+        "native_int64_vector_mapping": True,
+        "dependent_free_operator_rebinding": True,
+        "non_explicit_contextual_aggregate_construction": True,
+        "explicit_contextual_constructor_rejected": True,
+        "bfloat_min_max_float_promotion_and_reconstruction": True,
+        "discarded_type_constructor_disambiguation": True,
+        "bool_relational_integral_promotion": True,
+        "source_default_template_parameter_provenance": True,
+        "call_site_index_helper_materialization": True,
+        "shape_specific_resource_reflection": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": 3,
+        "maximum_resource_count_per_artifact": 7,
+        "reflected_resource_count": 19106,
+        "resource_counts_by_shape": contract["artifactContract"][
+            "reflectedResourceCountsByShape"
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": 5140983,
+        "generated_size_range": {
+            "minimum": {
+                "entryPoint": "ss_Addint8",
+                "sizeBytes": 668,
+            },
+            "maximum": {
+                "entryPoint": "gn4large_LogAddExpcomplex64",
+                "sizeBytes": 4717,
+            },
+        },
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": contract["artifactContract"][
+            "generatedSizeBytesTotal"
+        ],
+        "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
+    }
+    assert status["native_validation"] == {
+        "platform": "macos-latest",
+        "compiler": "xcrun -sdk macosx metal -Werror -c",
+        "source_warning_exemption": None,
+        "status": "required-on-ci",
+        "ci_shard_count": 24,
+        "compiled_artifact_count": 4122,
+        "all_air_artifacts_nonempty": True,
+        "test": (
+            "tests/test_translator/test_mlx_binary_complete_metal_roundtrip.py::"
+            "test_current_mlx_binary_family_roundtrips_through_metal"
+        ),
+    }
+    assert status["scalar_contract_preserved_as_exact_subset"] is True
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
+    assert status["opengl_family_translation_included"] is True
+    assert status["directx_family_translation_included"] is True
+    assert status["directx_and_opengl_family_translation_included"] is True
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "uncovered_binary_entry_count": 0,
+        "metal_numerical_execution_included": False,
+        "opengl_whole_family_included": True,
+        "directx_whole_family_included": True,
+        "directx_and_opengl_whole_family_included": True,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "all 4,122 discovered current-pinned binary entries" in readme
+    assert "18 shapes and 11 concrete kernel templates" in readme
+    assert "6,026 exact materializations" in readme
+    assert "requires 4,122 non-empty AIR outputs" in readme
+    assert "every discovered binary instantiation" in readme
+    assert "not Metal numerical execution" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 4,122 discovered entries" in guide
+    assert "4,122 artifacts contain 6,026 exact materializations" in guide
+    assert "compiles all 4,122 exact artifacts" in guide
+    assert "does not claim Metal numerical execution" in guide
+
+
+def test_binary_opengl_translation_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["binary_opengl_translation_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/binary.metal"
+    assert status["source_sha256"] == (
+        "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e"
+    )
+    assert status["target"] == "opengl"
+    assert status["scope"] == {
+        "discovered_binary_instantiation_count": 4122,
+        "entry_count": 4122,
+        "shape_count": 18,
+        "template_count": 11,
+        "operator_count": 24,
+        "input_output_type_pair_count": 25,
+        "semantic_family_count": 25,
+        "base_shape_entry_count": 3570,
+        "work_per_thread_shape_entry_count": 552,
+        "uncovered_binary_entry_count": 0,
+        "all_discovered_binary_instantiations_included": True,
+    }
+
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/binary.opengl-translation.json",
+        "schema_version": 2,
+        "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "size_bytes": len(contract_bytes),
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryCount": 4122,
+        "shapeCount": 18,
+        "templateCount": 11,
+        "operatorCount": 24,
+        "typePairCount": 25,
+        "familyCount": 25,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    assert len(contract["entries"]) == 4122
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 4122
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["shape_counts"] == contract["classifications"]["shapes"]
+    assert sum(status["shape_counts"].values()) == 4122
+    assert len(status["shape_counts"]) == 18
+    assert status["template_counts"] == contract["classifications"]["templates"]
+    assert sum(status["template_counts"].values()) == 4122
+    assert len(status["template_counts"]) == 11
+    assert len(contract["classifications"]["operators"]) == 24
+    assert sum(contract["classifications"]["operators"].values()) == 4122
+    assert len(contract["classifications"]["typePairs"]) == 25
+    assert sum(contract["classifications"]["typePairs"].values()) == 4122
+    assert len(contract["classifications"]["families"]) == 25
+    assert sum(contract["classifications"]["families"].values()) == 4122
+
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 4122,
+        "artifact_count": 4122,
+        "translated_count": 4122,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "target_entry_point": "main",
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 6026,
+        "reachable_index_helper_specialization_count": 1904,
+        "unsupported_specialization_count": 0,
+        "selected_operator_implementation_count_per_artifact": 1,
+        "unselected_operator_bodies_pruned": True,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["portability_preconditions"] == {
+        "kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
+        "minimum": 0,
+        "maximum": 2147483647,
+        "expressions": [
+            "offset + i",
+            "a_idx",
+            "b_idx",
+            "out_idx",
+            "out_idx++",
+            "idx.x",
+            "idx.y",
+        ],
+    }
+    assert contract["portabilityPreconditions"] == {
+        "indexRangeAssertions": [
+            {
+                "source": status["source"],
+                "expression": expression,
+                "minimum": 0,
+                "maximum": 2147483647,
+            }
+            for expression in status["portability_preconditions"]["expressions"]
+        ],
+        "contractKind": status["portability_preconditions"]["kind"],
+        "inferred": False,
+        "runtimeEnforced": False,
+    }
+    assert status["implementation_contracts"] == {
+        "explicit_index_range_preconditions_required": True,
+        "unproven_index_narrowing_fail_closed": True,
+        "source_default_template_parameter_provenance": True,
+        "call_site_index_helper_materialization": True,
+        "shape_specific_resource_reflection": True,
+        "storage_buffer_array_resource_lowering": True,
+        "selected_operator_body_pruning": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": 3,
+        "maximum_resource_count_per_artifact": 7,
+        "reflected_resource_count": 19106,
+        "resource_counts_by_shape": contract["artifactContract"][
+            "reflectedResourceCountsByShape"
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": contract["artifactContract"][
+            "generatedSizeBytesTotal"
+        ],
+        "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
+    }
+    assert status["native_validation"] == {
+        "platform": "ubuntu-latest",
+        "compiler": (
+            "glslangValidator --target-env opengl --target-env spirv1.3 -S comp"
+        ),
+        "validator": "spirv-val --target-env spv1.3",
+        "status": "required-on-ci",
+        "compiled_artifact_count": 4122,
+        "validated_artifact_count": 4122,
+        "all_spirv_artifacts_nonempty": True,
+        "ci_shard_count": 24,
+        "test": (
+            "tests/test_translator/test_mlx_binary_complete_opengl.py::"
+            "test_current_mlx_binary_family_translates_to_opengl"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["opengl_family_translation_included"] is True
+    assert status["opengl_numerical_runtime_included"] is False
+    assert status["directx_family_translation_included"] is True
+    assert status["directx_and_opengl_family_translation_included"] is True
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "all_discovered_binary_instantiations_included": True,
+        "opengl_numerical_execution_included": False,
+        "directx_whole_family_included": True,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "all 4,122 discovered current-pinned `binary.metal` entries" in readme
+    assert "Seven explicit host/runtime index-range preconditions" in readme
+    assert "require 4,122 non-empty SPIR-V modules" in readme
+    assert "not numerical execution or MLX host runtime redirection" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 4,122 binary entries to standalone OpenGL" in guide
+    assert "seven-resource target interfaces" in guide
+    assert "Required Linux CI partitions the family into 24 disjoint shards" in guide
+    assert "does not claim numerical execution" in guide
+
+
+def test_binary_directx_translation_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["binary_directx_translation_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/binary.metal"
+    assert status["source_sha256"] == (
+        "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e"
+    )
+    assert status["target"] == "directx"
+    assert status["scope"] == {
+        "discovered_binary_instantiation_count": 4122,
+        "entry_count": 4122,
+        "shape_count": 18,
+        "template_count": 11,
+        "operator_count": 24,
+        "input_output_type_pair_count": 25,
+        "semantic_family_count": 25,
+        "base_shape_entry_count": 3570,
+        "work_per_thread_shape_entry_count": 552,
+        "uncovered_binary_entry_count": 0,
+        "all_discovered_binary_instantiations_included": True,
+    }
+
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/binary.directx-translation.json",
+        "schema_version": 2,
+        "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "size_bytes": len(contract_bytes),
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "operator",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryCount": 4122,
+        "shapeCount": 18,
+        "templateCount": 11,
+        "operatorCount": 24,
+        "typePairCount": 25,
+        "familyCount": 25,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    assert len(contract["entries"]) == 4122
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 4122
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["shape_counts"] == contract["classifications"]["shapes"]
+    assert sum(status["shape_counts"].values()) == 4122
+    assert len(status["shape_counts"]) == 18
+    assert status["template_counts"] == contract["classifications"]["templates"]
+    assert sum(status["template_counts"].values()) == 4122
+    assert len(status["template_counts"]) == 11
+    assert len(contract["classifications"]["operators"]) == 24
+    assert sum(contract["classifications"]["operators"].values()) == 4122
+    assert len(contract["classifications"]["typePairs"]) == 25
+    assert sum(contract["classifications"]["typePairs"].values()) == 4122
+    assert len(contract["classifications"]["families"]) == 25
+    assert sum(contract["classifications"]["families"].values()) == 4122
+
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 4122,
+        "artifact_count": 4122,
+        "translated_count": 4122,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "target_entry_point": "CSMain",
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 6026,
+        "reachable_index_helper_specialization_count": 1904,
+        "unsupported_specialization_count": 0,
+        "selected_operator_implementation_count_per_artifact": 1,
+        "unselected_operator_bodies_pruned": True,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["portability_preconditions"] == {
+        "kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
+        "minimum": 0,
+        "maximum": 2147483647,
+        "expressions": [
+            "offset + i",
+            "a_idx",
+            "b_idx",
+            "out_idx",
+            "out_idx++",
+            "idx.x",
+            "idx.y",
+        ],
+    }
+    assert contract["portabilityPreconditions"] == {
+        "indexRangeAssertions": [
+            {
+                "source": status["source"],
+                "expression": expression,
+                "minimum": 0,
+                "maximum": 2147483647,
+            }
+            for expression in status["portability_preconditions"]["expressions"]
+        ],
+        "contractKind": status["portability_preconditions"]["kind"],
+        "inferred": False,
+        "runtimeEnforced": False,
+    }
+    assert status["implementation_contracts"] == {
+        "explicit_index_range_preconditions_required": True,
+        "unproven_index_narrowing_fail_closed": True,
+        "source_default_template_parameter_provenance": True,
+        "call_site_index_helper_materialization": True,
+        "shape_specific_resource_reflection": True,
+        "storage_buffer_array_resource_lowering": True,
+        "selected_operator_body_pruning": True,
+        "exact_bfloat16_binary_builtin_lowering": True,
+        "bfloat_computed_result_requantization": True,
+        "bfloat_maximum_minimum_payload_selection": True,
+        "unproven_bfloat16_builtin_fail_closed": True,
+        "generated_dispatch_workgroup_count_reflection": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": 3,
+        "maximum_resource_count_per_artifact": 8,
+        "reflected_resource_count": 21248,
+        "resource_counts_by_shape": contract["artifactContract"][
+            "reflectedResourceCountsByShape"
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+        "dispatch_metadata_shape_count": 9,
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": contract["artifactContract"][
+            "generatedSizeBytesTotal"
+        ],
+        "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
+    }
+    assert status["native_validation"] == {
+        "platform": "windows-latest",
+        "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
+        "status": "required-on-ci",
+        "compiled_artifact_count": 4122,
+        "all_dxil_artifacts_nonempty": True,
+        "ci_shard_count": 24,
+        "test": (
+            "tests/test_translator/test_mlx_binary_complete_directx.py::"
+            "test_current_mlx_binary_family_translates_to_directx"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["opengl_family_translation_included"] is True
+    assert status["directx_family_translation_included"] is True
+    assert status["directx_numerical_runtime_included"] is False
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "all_discovered_binary_instantiations_included": True,
+        "opengl_numerical_execution_included": False,
+        "directx_numerical_execution_included": False,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert (
+        "all 4,122 discovered current-pinned `binary.metal` entries to DirectX"
+        in readme
+    )
+    assert "21,248 reflected DirectX resources" in readme
+    assert (
+        "Computed-result bfloat ``ArcTan2``, ``LogAddExp``, and ``Power`` paths"
+        in readme
+    )
+    assert "selected original bfloat payload without requantization" in readme
+    assert "requires 4,122 non-empty DXIL modules" in readme
+    assert "not numerical execution or MLX host runtime redirection" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 4,122 binary entries to standalone DirectX" in guide
+    assert "eight-resource target interfaces" in guide
+    assert (
+        "Computed-result bfloat ``ArcTan2``, ``LogAddExp``, and ``Power`` paths"
+        in guide
+    )
+    assert "selected original low-16-bit bfloat payload without requantization" in guide
+    assert "Required Windows CI partitions the family into 24 disjoint shards" in guide
+    assert "does not claim numerical execution" in guide
 
 
 def test_fft_directx_evidence_records_selected_native_runtime_proof():
@@ -10065,6 +13118,7 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     assert status["artifact"] == {
         "sha256": module.FFT_DIRECTX_GENERATED_SHA256,
         "size_bytes": module.FFT_DIRECTX_GENERATED_SIZE_BYTES,
+        "promoted_native_16_shift_count": 20,
         "first_class_workgroup_pointer_residue": False,
     }
     assert status["native_validation"] == {
@@ -10125,6 +13179,260 @@ def test_fft_directx_evidence_records_selected_native_runtime_proof():
     assert "index-1 complex unit impulse" in readme
     assert "`2e-4` absolute and relative tolerance" in readme
     assert "does not redirect the MLX host runtime" in readme
+
+
+def test_fft_current_corpus_evidence_records_native_runtime_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["directx_fft_current_corpus_status"]
+    assert status["status"] == "translated-dxc-validated-direct3d-executed"
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/fft.metal"
+    assert status["source_sha256"] == (
+        "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e"
+    )
+    assert status["source_size_bytes"] == 3436
+    assert status["target"] == "directx"
+    assert status["selected_entry_point"] == "fft_mem_256_float2_float2"
+    assert status["target_entry_point"] == "CSMain"
+    assert status["workgroup_size"] == [1, 1, 64]
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "artifact_emitted": True,
+        "index_range_assertion_count": 4,
+        "workgroup_access_assertion_count": 1,
+        "max_template_specializations": 4096,
+        "max_template_materialization_work": 2097152,
+    }
+    assert status["specialization"] == {
+        "configured_function_constant_count": 23,
+        "reachable_function_constant_count": 21,
+        "pruned_function_constant_ids": [3, 22],
+        "new_function_constant": {
+            "id": 22,
+            "name": "use_bluestein_twiddle_table_",
+            "value": False,
+        },
+    }
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 37,
+        "unsupported_specialization_count": 0,
+        "reachable_specialization_count": 42,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 2120,
+    }
+    assert status["artifact"] == {
+        "sha256": "3bc42b2dd3bf128bcbe1fd202763f3434d64df6e60b53da4b6e754ceff0f6e7a",
+        "size_bytes": 146763,
+        "promoted_native_16_shift_count": 20,
+        "first_class_workgroup_pointer_residue": False,
+        "workgroup_pointer_transport": "concrete-groupshared-root-plus-integer-offset",
+        "overload_body_reachability": "all-compatible-source-overloads",
+        "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
+        "observable_null_resource_pointer_policy": "fail-closed",
+    }
+    assert status["native_validation"] == {
+        "compiler": "dxc",
+        "profile": "cs_6_2",
+        "arguments": ["-enable-16bit-types"],
+        "warnings_as_errors": True,
+        "status": "required-on-ci",
+    }
+    assert status["native_runtime"] == {
+        "runtime": "direct3d-12-warp",
+        "status": "required-on-ci",
+        "test": (
+            "tests/test_translator/test_mlx_fft_native_loader.py::"
+            "test_current_mlx_fft_executes_through_directx_native_loader"
+        ),
+        "workgroup_count": [1, 1, 1],
+        "global_size": [1, 1, 64],
+        "input": {
+            "kind": "complex-unit-impulse",
+            "index": 1,
+            "shape": [256, 2],
+        },
+        "expected_output": {
+            "kind": "forward-dft-unit-circle",
+            "shape": [256, 2],
+            "absolute_tolerance": 0.0002,
+            "relative_tolerance": 0.0002,
+        },
+        "resource_layouts": {
+            "input_element": "float2",
+            "input_stride_bytes": 8,
+            "output_element": "float2",
+            "output_stride_bytes": 8,
+            "dispatch_element": "uint3",
+            "dispatch_block_size_bytes": 16,
+        },
+        "dispatch_binding_source": "dispatch.workgroupCount",
+    }
+    assert status["resolved_blocker"] == {
+        "former_diagnostic_code": (
+            "project.translate.directx-workgroup-pointer-unsupported"
+        ),
+        "function": "ReadWriter_float2_float2__load",
+        "parameter": "crosstl_ptr_buf",
+        "cause": "same-name-overload-body-was-not-analyzed",
+        "resolution": "merge-compatible-overload-pointer-analysis",
+        "diagnostic_emitted": False,
+        "broader_contract_tracked_by": "https://github.com/CrossGL/crosstl/issues/1518",
+    }
+    assert status["previous_verified_proof"] == {
+        "commit": PINNED_MLX_COMMIT,
+        "status_key": "directx_fft_translation_status",
+    }
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "bounded runtime proof now also covers current corpus commit" in readme
+    assert "adds function constant 22" in readme
+    assert "materializes 37 specializations" in readme
+    assert "records 42 reachable specializations before pruning" in readme
+    assert "two compatible `ReadWriter_float2_float2__load` overload bodies" in readme
+    assert "transport `crosstl_ptr_buf` as an integer offset" in readme
+    assert "carried into the CrossGL intermediate before target lowering" in readme
+    assert "removes that unobserved resource parameter" in readme
+    assert (
+        "null pointer that can be observed or dereferenced still fails closed" in readme
+    )
+    assert "146,763-byte HLSL artifact" in readme
+    assert "All 20 native-16 ``power`` shift counts" in readme
+    assert "explicitly promoted to ``int``" in readme
+    assert "zero project diagnostics" in readme
+    assert "packages and dispatches it through Direct3D 12 WARP" in readme
+    assert (
+        "roots without a concrete shared-array identity or extent still fail closed"
+        in readme
+    )
+    assert "no longer being used as a substitute for current-corpus evidence" in readme
+
+
+def test_fft_current_opengl_evidence_records_native_runtime_proof():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["opengl_fft_current_corpus_status"]
+    assert status["status"] == "translated-glslang-spirv-val-mesa-executed"
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/fft.metal"
+    assert status["source_sha256"] == (
+        "c478eb84283bbdf585c0cb34b2bfde5b0fc32d1740c6ad76e8559698a57b8d2e"
+    )
+    assert status["source_size_bytes"] == 3436
+    assert status["target"] == "opengl"
+    assert status["selected_entry_point"] == "fft_mem_256_float2_float2"
+    assert status["target_entry_point"] == "main"
+    assert status["workgroup_size"] == [1, 1, 64]
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "index_range_assertion_count": 5,
+        "workgroup_access_assertion_count": 1,
+        "source_remap_mapping_count": 84,
+        "max_template_specializations": 4096,
+        "max_template_materialization_work": 2097152,
+    }
+    assert status["specialization"]["deferred_function_constant_count"] == 21
+    assert status["specialization"]["pruned_function_constant_ids"] == [3, 22]
+    assert status["specialization"]["mode"] == "deferred"
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 37,
+        "unsupported_specialization_count": 0,
+        "reachable_specialization_count": 42,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 2120,
+    }
+    assert status["artifact"] == {
+        "sha256": "a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb",
+        "size_bytes": 82045,
+        "source_remap_mapping_count": 84,
+        "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
+        "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
+        "encoded_generic_vector_constructor_residue": False,
+        "all_overload_specialization_declarations_defined": True,
+    }
+    assert status["native_validation"]["compiler"] == "glslangValidator"
+    assert status["native_validation"]["validator"] == "spirv-val"
+    assert status["native_validation"]["status"] == "passed"
+    assert status["native_validation"]["control_barrier_count"] == 19
+    assert status["native_validation"]["group_non_uniform_instruction_count"] == 0
+    assert status["runtime_package"] == {
+        "resource_binding_count": 4,
+        "specialization_constant_count": 21,
+        "blocked_variant_count": 0,
+        "registry_status": "ready",
+        "input_layout": {
+            "physical_type": "float2",
+            "element_type": "float32",
+            "element_size_bytes": 8,
+            "element_stride_bytes": 8,
+            "alignment_bytes": 8,
+            "storage_layout": "std430",
+        },
+        "output_layout": {
+            "physical_type": "float2",
+            "element_type": "float32",
+            "element_size_bytes": 8,
+            "element_stride_bytes": 8,
+            "alignment_bytes": 8,
+            "storage_layout": "std430",
+        },
+    }
+    runtime = status["native_runtime"]
+    assert runtime["platform"] == "ubuntu-latest"
+    assert runtime["runtime"] == "mesa-llvmpipe-opengl"
+    assert runtime["specialization_mode"] == "deferred-spirv"
+    assert runtime["status"] == "required-on-ci"
+    assert runtime["test"].endswith(
+        "::test_current_mlx_fft_executes_through_opengl_native_loader"
+    )
+    assert runtime["observed_max_absolute_error"] < 1e-7
+    assert runtime["interface_status"] == "verified"
+    assert runtime["cache_status"] == "published"
+    assert status["resolved_blockers"] == [
+        "transitive-statically-dead-null-storage-pointer-specialization",
+        "encoded-metal-generic-vector-constructor",
+        "overload-specialization-body-name-deduplication",
+        "std430-vector-resource-layout-reflection",
+    ]
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["cross_target_selected_workload_numerical_parity_verified"] is True
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "current FFT source now also emits an 82,045-byte GLSL artifact" in readme
+    assert "21 deferred specialization constants" in readme
+    assert "8-byte size, stride, and alignment" in readme
+    assert "19 control barriers and no group-nonuniform instructions" in readme
+    assert "Mesa llvmpipe" in readme
+    assert "`9.264554161336758e-08`" in readme
+    assert "does not establish full FFT, MLX host-runtime, or backend parity" in readme
 
 
 def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():
@@ -10212,7 +13520,7 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
     }
     assert status["materialization"] == {
         "status": "materialized",
-        "specialization_count": 225,
+        "specialization_count": 226,
         "host_named_specialization_count": 224,
         "unsupported_specialization_count": 0,
         "unresolved_residue_count": 0,
@@ -10319,7 +13627,7 @@ def test_gemv_opengl_evidence_records_all_entry_toolchain_validation():
     }
     assert status["materialization"] == {
         "status": "materialized",
-        "specialization_count": 225,
+        "specialization_count": 226,
         "unsupported_specialization_count": 0,
         "artifact_packaging": "entry-scoped-artifacts",
     }
@@ -10367,11 +13675,662 @@ def test_gemv_opengl_evidence_records_all_entry_toolchain_validation():
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
     assert "--require-opengl-gemv-toolchain" in readme
-    assert "all 225 specializations materialized" in readme
+    assert "all 226 specializations materialized" in readme
     assert "all 224 entry-scoped GLSL artifacts" in readme
     assert "validates every resulting SPIR-V 1.3 module" in readme
     assert "five explicit host index-range preconditions" in readme
     assert "does not establish runtime execution or numerical parity" in readme
+
+
+def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["gemv_native_runtime_status"]
+    assert status["status"] == (
+        "translated-packaged-and-cross-target-native-runtime-required"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == module.MLX_GEMV_SOURCE
+    assert status["source_sha256"] == (
+        "0bd8bde0c867a17c345a3651f9f0a6c2909e0c74e76ea2a08f373fe4dcafaeda"
+    )
+    assert status["source_size_bytes"] == 6981
+    assert status["selected_entry_point"] == (
+        "gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0"
+    )
+    assert status["selected_workload"] == (
+        "vector-matrix-float32-m1-n32-k32-contiguous"
+    )
+
+    dispatch = status["dispatch_contract"]
+    assert dispatch["path"] == (
+        "demos/integrations/mlx/contracts/gemv.native-loader.dispatch.json"
+    )
+    assert dispatch["content_identity"] == (
+        "sha256:6b3bb18d130159f13874f06668b536fe4b9270ffbb2a1f44b6d9aac257aba7e4"
+    )
+    assert dispatch["workload_count"] == 1
+    assert dispatch["host_source"] == "mlx/backend/metal/matmul.cpp"
+    assert dispatch["implementation_source"] == ("mlx/backend/metal/kernels/gemv.h")
+    assert dispatch["upstream_test"] == (
+        "python/tests/test_blas.py::TestBlas::test_matrix_vector"
+    )
+    assert dispatch["host_selection"] == {
+        "BM": 1,
+        "BN": 2,
+        "SM": 8,
+        "SN": 4,
+        "TM": 4,
+        "TN": 4,
+        "kDoNCBatch": False,
+        "kDoAxpby": False,
+    }
+    assert dispatch["subgroup_width"] == 32
+    variant = dispatch["variants"][status["selected_workload"]]
+    assert variant == {
+        "artifact_id": (
+            "sha256:34eab189b10cc699f06f4cbed04faae41a2658a2a3665a6866ed987f5946949a"
+        ),
+        "dispatch_variant_id": (
+            "sha256:acaba2ec4813a364b06d95a5136bda80351797591a4d9f0b3d195f85da287fe3"
+        ),
+        "entry_point": status["selected_entry_point"],
+        "inputs": {
+            "K": 32,
+            "M": 1,
+            "N": 32,
+            "batchSize": 1,
+            "contiguousBatch": True,
+            "doAxpby": False,
+            "dtype": "float32",
+            "transposeA": False,
+            "transposeB": False,
+        },
+        "workgroup_size": [32, 2, 1],
+        "dispatch_workgroup_count": [1, 1, 1],
+        "specialization_constants": {},
+    }
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 1, "opengl": 1},
+        "translated_count_by_target": {"directx": 1, "opengl": 1},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+        "opengl_index_range_assertion_count": 1,
+    }
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 2,
+        "unsupported_specialization_count": 0,
+        "materialized_names": [
+            status["selected_entry_point"],
+            "elem_to_loc_uint",
+        ],
+        "selected_parameters": {
+            "BM": "1",
+            "BN": "2",
+            "SM": "8",
+            "SN": "4",
+            "T": "float",
+            "TM": "4",
+            "TN": "4",
+            "kDoAxpby": "0",
+            "kDoNCBatch": "0",
+        },
+    }
+
+    assert status["artifacts"] == {
+        "directx": {
+            "target_entry_point": "CSMain",
+            "sha256": (
+                "f300bbea75b2ed9e47c29313a56f882ed848cbb93858f1347fbc97a60e167223"
+            ),
+            "size_bytes": 8188,
+            "subgroup_id_lowering": "flattened-logical-software-subgroups",
+            "relative_shuffle_out_of_range": "calling-invocation-value",
+            "software_subgroup_width": 32,
+            "logical_subgroup_count": 2,
+            "shared_float_element_count": 64,
+            "hardware_wave_read_count": 0,
+            "workgroup_size": [32, 2, 1],
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "compiler": "dxc",
+            "compiler_version": "1.9.2602.24",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types", "-WX"],
+            "compiler_validation_status": "passed",
+        },
+        "opengl": {
+            "target_entry_point": "main",
+            "sha256": (
+                "f5ef8900ee65d63a6df2818ef111f56b4f269c6366c82d82a9d97c967042f562"
+            ),
+            "size_bytes": 7705,
+            "workgroup_size": [32, 2, 1],
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "compiler": "glslangValidator",
+            "compiler_target": "OpenGL/SPIR-V 1.3",
+            "validator": "spirv-val",
+            "control_barrier_instruction_count": 3,
+            "group_non_uniform_instruction_count": 0,
+            "compiler_validation_status": "passed",
+        },
+    }
+    assert status["directx_software_subgroup"] == {
+        "configuration": (
+            "project.source_options.metal.target_options.directx."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "logical_subgroup_count": 2,
+        "shared_float_element_count": 64,
+        "logical_invocation_index": "flattened-SV_GroupIndex",
+        "selected_kernel_operations": ["WaveShuffleDown(float,uint)"],
+        "barrier": "GroupMemoryBarrierWithGroupSync",
+        "out_of_range_value": "calling-invocation-value",
+        "hardware_wave_reads_emitted": False,
+        "unsupported_contract_behavior": "reject-before-artifact-emission",
+    }
+    assert status["directx_warp_diagnostic"] == {
+        "rejected_artifact_sha256": (
+            "f8f1107d0de251fd300c7a16ce6638796bd08dd2eadd8f7959e37c78d0aa170d"
+        ),
+        "rejected_artifact_size_bytes": 8410,
+        "workflow_run": 33268998061,
+        "job": 99143984804,
+        "mismatched_output_count": 32,
+        "output_element_count": 32,
+        "max_absolute_error": 1.90625,
+        "max_relative_error": 0.1382488479262673,
+        "first_obtained": 6.78125,
+        "first_expected": 5.84375,
+        "reduction_signature": "logical-lanes-5-through-8-replaced-by-21-through-24",
+    }
+    assert status["software_subgroup"] == {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "logical_subgroup_count": 2,
+        "shared_float_element_count": 64,
+        "activation": "explicit-target-scoped",
+        "selected_kernel_operations": ["WaveShuffleDown(float,uint)"],
+        "uniform_halving_loop_contract": {
+            "source_condition": "sm >= 1",
+            "source_update": "sm >>= 1",
+            "canonical_positive_bounds": ["value > 0", "value >= 1"],
+            "helper_call_form": "direct-top-level-statement",
+            "unsafe_loop_behavior": "reject-before-artifact-emission",
+        },
+        "hardware_subgroup_extensions_emitted": False,
+        "group_non_uniform_instruction_count": 0,
+    }
+    assert status["index_range_assertions"] == [
+        {
+            "source": module.MLX_GEMV_SOURCE,
+            "expression": "uint64(bm + tm) * marix_ld + out_col + tn",
+            "minimum": 0,
+            "maximum": (1 << 32) - 1,
+        }
+    ]
+    assert status["runtime_package"] == {
+        "artifact_count_per_target": 1,
+        "ready_load_unit_count_per_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count_by_target": {"directx": 15, "opengl": 15},
+        "resource_element_types": ["float32", "int32", "int64"],
+        "scalar_argument_count": 7,
+        "disabled_path_placeholders": [
+            "bias",
+            "vector_batch_stride",
+            "matrix_batch_stride",
+            "bias_batch_stride",
+        ],
+    }
+    assert status["workload"] == {
+        "matrix_shape": [32, 32],
+        "vector_shape": [32],
+        "output_shape": [32],
+        "matrix_values": "(row + 1) / 64 + (column + 1) / 64",
+        "vector_values": "(row + 1) / 32",
+        "expected_values": "5.5859375 + 0.2578125 * (column + 1)",
+        "reference": "float32-vector-matrix-product",
+        "absolute_tolerance": 1e-5,
+        "relative_tolerance": 1e-5,
+    }
+    assert status["native_runtime"] == {
+        "directx": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_gemv_native_loader.py::"
+                "test_current_mlx_gemv_executes_through_directx_native_loader"
+            ),
+        },
+        "opengl": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-headless-egl-software-opengl",
+            "status": "required-on-ci",
+            "local_linux_arm64_validation": "passed",
+            "test": (
+                "tests/test_translator/test_mlx_gemv_native_loader.py::"
+                "test_current_mlx_gemv_executes_with_opengl_software_subgroups"
+            ),
+        },
+    }
+    assert status["metal_roundtrip_boundary"] == {
+        "status": "outside-selected-native-loader-proof",
+        "aggregate_native_baseline": "separate",
+        "selected_entry_compiler_validation_included": False,
+    }
+    assert status["previous_verified_proofs"] == {
+        "directx_aggregate_status_key": "directx_gemv_compiler_frontier_status",
+        "opengl_aggregate_status_key": "opengl_gemv_toolchain_status",
+        "aggregate_commit": PINNED_MLX_COMMIT,
+    }
+    assert status["remaining_scope"] == {
+        "gather_entries_included": False,
+        "wide_entries_included": False,
+        "batched_entries_included": False,
+        "axpby_entries_included": False,
+        "remaining_host_named_entries_included": False,
+        "mlx_host_runtime_integration_included": False,
+        "full_mlx_test_suite_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "contracts/gemv.native-loader.dispatch.json" in readme
+    assert status["selected_entry_point"] in readme
+    assert status["artifacts"]["directx"]["sha256"] in readme
+    assert status["artifacts"]["opengl"]["sha256"] in readme
+    assert "canonical positive-to-zero halving loop" in readme
+    assert "does not replace the historical 224-entry aggregate gates" in readme
+
+
+def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["fp_quantized_mxfp4_native_runtime_status"]
+    assert status["status"] == (
+        "translated-packaged-and-cross-target-native-runtime-required"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/fp_quantized.metal"
+    assert status["source_sha256"] == (
+        "ef4ba099710a63a0b5d27d3e5ce69a8528bee8f1757805aa606c8d8e43de18d4"
+    )
+    assert status["source_size_bytes"] == 9700
+    assert status["selected_entry_point"] == (
+        "mxfp4_quantize_dequantize_float_gs_32_b_4_hgs_false"
+    )
+    assert status["selected_workload"] == (
+        "mxfp4-quantize-dequantize-float32-32-no-global-scale"
+    )
+
+    dispatch = status["dispatch_contract"]
+    assert dispatch["path"] == (
+        "demos/integrations/mlx/contracts/" "fp_quantized.native-loader.dispatch.json"
+    )
+    assert dispatch["content_identity"] == (
+        "sha256:5256e32b364ac303a6873f28b5ac3e9a1a811ac5c38bc41a977bce9191a025ed"
+    )
+    assert dispatch["workload_count"] == 1
+    assert dispatch["host_source"] == "mlx/backend/metal/quantized.cpp"
+    assert dispatch["implementation_source"] == (
+        "mlx/backend/metal/kernels/fp_quantized.h"
+    )
+    assert dispatch["kernel_source"] == status["source"]
+    assert dispatch["subgroup_width"] == 32
+    variant = dispatch["variants"][status["selected_workload"]]
+    assert variant == {
+        "artifact_id": (
+            "sha256:bde1bfa31c116a52a1dc3b6e546dfa2ee43dc968719393ba04f629b4e2d95319"
+        ),
+        "dispatch_variant_id": (
+            "sha256:ebd6ab3f40f5839764f592943180ba64f11a66f10a5561b9468019032c04df8a"
+        ),
+        "entry_point": status["selected_entry_point"],
+        "inputs": {
+            "bits": 4,
+            "dtype": "float32",
+            "elementCount": 32,
+            "groupSize": 32,
+            "hasGlobalScale": False,
+            "isMxfp4": True,
+            "rowContiguous": True,
+        },
+        "workgroup_size": [32, 1, 1],
+        "dispatch_workgroup_count": [1, 1, 1],
+        "specialization_constants": {},
+    }
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count_by_target": {"directx": 1, "opengl": 1},
+        "translated_count_by_target": {"directx": 1, "opengl": 1},
+        "failed_count_by_target": {"directx": 0, "opengl": 0},
+        "project_diagnostic_count": 0,
+        "opengl_index_range_assertion_count": 1,
+    }
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 1,
+        "unsupported_specialization_count": 0,
+        "reachable_specialization_count": 9,
+        "dependency_discovery_work_count": 0,
+        "pruned_candidate_count": 25492,
+        "selected_parameters": {
+            "T": "float",
+            "bits": "4",
+            "group_size": "32",
+            "has_global_scale": "false",
+        },
+    }
+    assert status["artifacts"] == {
+        "directx": {
+            "target_entry_point": "CSMain",
+            "sha256": (
+                "3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d"
+            ),
+            "size_bytes": 9123,
+            "workgroup_size": [32, 1, 1],
+            "subgroup_enforcement": "hlsl-wave-size-attribute",
+            "compiler": "dxc",
+            "compiler_profile": "cs_6_6",
+            "compiler_arguments": ["-enable-16bit-types", "-WX"],
+            "compiled_artifact_size_bytes": 4716,
+            "compiler_validation_status": "passed",
+        },
+        "opengl": {
+            "target_entry_point": "main",
+            "sha256": (
+                "cbbe989c40317c04ffe915f1f314f55db8896edfd38f04ad4b8882be53b2a4da"
+            ),
+            "size_bytes": 9571,
+            "workgroup_size": [32, 1, 1],
+            "subgroup_enforcement": "explicit-32-lane-software-subgroup",
+            "compiler": "glslangValidator",
+            "compiler_target": "OpenGL/SPIR-V 1.3",
+            "validator": "spirv-val",
+            "compiled_artifact_size_bytes": 10488,
+            "control_barrier_instruction_count": 3,
+            "group_non_uniform_instruction_count": 0,
+            "compiler_validation_status": "passed",
+        },
+    }
+    assert status["semantic_contracts"] == {
+        "scale_constructor": "fp8_e8m0 source constructor factory",
+        "scale_conversion": "selected sibling float conversion operator",
+        "finite_test": "single-evaluation IEEE-754 float32 exponent mask",
+        "sign_test": "exact IEEE-754 float32 sign bit",
+        "private_scalar_struct_view": "read-only exact one-member layout",
+        "directx_binary16_bitcast": "target-scoped-integer-ieee754-binary16-to-float32",
+        "directx_binary16_mixed_arithmetic": (
+            "source-scoped-native-float16-widening-with-float32-arithmetic-"
+            "and-no-half-roundtrip"
+        ),
+        "directx_native_float16_widening": (
+            "project.source_options.metal.target_options.directx."
+            "widen_native_float16"
+        ),
+        "directx_native_16_bit_integer_promotion": (
+            "scalar-int16-and-uint16-promote-to-int-before-shifts-and-arithmetic"
+        ),
+        "opengl_binary16_bitcast": "exact-low-16-bit-payload-via-pack-unpack-half",
+        "global_scale_read": "statically-eliminated-for-has_global_scale-false",
+    }
+    assert status["directx_binary16_diagnostics"] == {
+        "numeric_cast_rejection": {
+            "artifact_sha256": (
+                "3591e38d20a612b4061fe3154ef0ea3deb035283294fbd27376ef90627569361"
+            ),
+            "artifact_size_bytes": 7809,
+            "workflow_run": 33271117475,
+            "job": 99149649480,
+            "output_element_count": 32,
+            "mismatched_nonzero_output_count": 28,
+            "observed_nonzero_outputs": "signed-zero-only",
+            "rejected_dxil_conversion": "uitofp-i16-to-half",
+        },
+        "native_half_subnormal_rejection": {
+            "artifact_sha256": (
+                "4e8044758d65b6b2c189092ce56fff3c5ba7948221883de490c1a4b9c5563352"
+            ),
+            "artifact_size_bytes": 7809,
+            "workflow_run": 33272842347,
+            "job": 99154326814,
+            "output_element_count": 32,
+            "mismatched_nonzero_output_count": 28,
+            "observed_nonzero_outputs": "signed-zero-only",
+            "dxil_bitcast": "bitcast-i16-to-half",
+            "rejected_dxil_arithmetic": "fmul-half-on-binary16-subnormal",
+        },
+        "legacy_half_decode_rejection": {
+            "artifact_sha256": (
+                "938ca6fac1c47ea633453836b5d76833c294853bb92d6a410a2c4772dd7fa627"
+            ),
+            "artifact_size_bytes": 7909,
+            "workflow_run": 33274360343,
+            "job": 99158370210,
+            "output_element_count": 32,
+            "mismatched_nonzero_output_count": 28,
+            "observed_nonzero_outputs": "signed-zero-only",
+            "rejected_dxil_decode": "legacy-f16-to-f32",
+        },
+        "integer_decode_half_roundtrip_rejection": {
+            "artifact_sha256": (
+                "936088a24a6b575e50dc97e16a4c0dca63a76200ddd94d5211e4bf312fec1625"
+            ),
+            "artifact_size_bytes": 9240,
+            "workflow_run": 33275550062,
+            "job": 99161501105,
+            "output_element_count": 32,
+            "mismatched_nonzero_output_count": 28,
+            "observed_nonzero_outputs": "signed-zero-only",
+            "integer_decode": "uitofp-i32-to-float",
+            "rejected_dxil_roundtrip": (
+                "fptrunc-float-to-half-fsub-half-fpext-half-to-float"
+            ),
+        },
+        "widened_float16_narrow_shift_rejection": {
+            "artifact_sha256": (
+                "7afdc612f9091ae47abca8c4fd9d2171e8ea42c6539e02a40bbad2de7d1a7c6a"
+            ),
+            "artifact_size_bytes": 9118,
+            "workflow_run": 33277494856,
+            "job": 99166677942,
+            "output_element_count": 32,
+            "mismatched_nonzero_output_count": 28,
+            "observed_nonzero_outputs": "signed-zero-only",
+            "native_half_operation_count": 0,
+            "rejected_dxil_scale_bit_construction": (
+                "native-uint16-shift-23-truncated-to-shift-7-and-mask-0xffff"
+            ),
+        },
+        "corrected_dxil_contract": {
+            "artifact_sha256": (
+                "3fe38e171ba8c8ea1adfc8efad20b242ca02dd05e1a5a53a9b9d1e18459d8c7d"
+            ),
+            "artifact_size_bytes": 9123,
+            "source_bitcast": "integer-ieee754-binary16-to-float32",
+            "subnormal_decode": "integer-ieee754-binary16-to-float32",
+            "arithmetic": "fmul-float",
+            "logical_float16_representation": "widened-float32",
+            "native_half_operation_count": 0,
+            "scale_bit_construction": "promoted-int-shift-23-before-asfloat",
+            "rounding": "none-in-selected-widened-path",
+        },
+    }
+    assert status["software_subgroup"] == {
+        "configuration": (
+            "project.source_options.metal.target_options.opengl."
+            "software_subgroup_width"
+        ),
+        "width": 32,
+        "logical_subgroup_count": 1,
+        "shared_float_element_count": 32,
+        "activation": "explicit-target-scoped",
+        "selected_kernel_operations": ["WaveActiveMax(float)"],
+        "control_barrier_instruction_count": 3,
+        "hardware_subgroup_extensions_emitted": False,
+        "group_non_uniform_instruction_count": 0,
+    }
+    assert status["index_range_assertions"] == [
+        {
+            "source": status["source"],
+            "expression": "index",
+            "minimum": 0,
+            "maximum": 31,
+        }
+    ]
+    assert status["runtime_package"] == {
+        "artifact_count_per_target": 1,
+        "ready_load_unit_count_per_target": 1,
+        "blocked_load_unit_count": 0,
+        "resource_count_by_target": {"directx": 4, "opengl": 3},
+        "data_resources": [
+            {
+                "binding": 0,
+                "role": "input",
+                "dtype": "float32",
+                "access": "read",
+            },
+            {
+                "binding": 1,
+                "role": "global_scale_inert_placeholder",
+                "dtype": "float32",
+                "access": "read",
+            },
+            {
+                "binding": 2,
+                "role": "output",
+                "dtype": "float32",
+                "access": "read_write",
+            },
+        ],
+        "directx_binding_namespaces": {
+            "dispatch_info": "b0",
+            "input": "t0",
+            "global_scale": "t1",
+            "output": "u2",
+        },
+        "host_global_scale_binding": "omitted-for-selected-specialization",
+        "loader_global_scale_allocation": (
+            "inert-allocation-required-by-reflected-generic-loader"
+        ),
+    }
+    values = [
+        -6.0,
+        -4.0,
+        -3.0,
+        -2.0,
+        -1.5,
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0,
+        1.5,
+        2.0,
+        3.0,
+        4.0,
+        6.0,
+        6.0,
+        4.0,
+        3.0,
+        2.0,
+        1.5,
+        1.0,
+        0.5,
+        0.0,
+        -0.5,
+        -1.0,
+        -1.5,
+        -2.0,
+        -3.0,
+        -4.0,
+        -6.0,
+        0.0,
+        0.0,
+    ]
+    assert status["workload"] == {
+        "dtype": "float32",
+        "shape": [32],
+        "input_values": values,
+        "maximum_absolute_value": 6.0,
+        "scale_divisor": 6.0,
+        "mx_scale": 1.0,
+        "reference": "exact-FP4-E2M1-representable-roundtrip",
+        "expected_output": "input_values",
+        "absolute_tolerance": 0.0,
+        "relative_tolerance": 0.0,
+    }
+    assert status["native_runtime"] == {
+        "directx": {
+            "platform": "windows-latest",
+            "runtime": "direct3d-12-warp",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_fp_quantized_native_loader.py::"
+                "test_current_mlx_mxfp4_executes_through_directx_native_loader"
+            ),
+        },
+        "opengl": {
+            "platform": "ubuntu-latest",
+            "runtime": "mesa-headless-egl-software-opengl",
+            "status": "required-on-ci",
+            "test": (
+                "tests/test_translator/test_mlx_fp_quantized_native_loader.py::"
+                "test_current_mlx_mxfp4_executes_with_opengl_software_subgroups"
+            ),
+        },
+    }
+    assert status["metal_roundtrip_boundary"] == {
+        "status": "outside-selected-native-loader-proof",
+        "aggregate_native_baseline": "separate",
+        "selected_entry_compiler_validation_included": False,
+    }
+    assert status["remaining_scope"] == {
+        "other_fp_quantized_entries_included": False,
+        "global_scale_variants_included": False,
+        "other_group_sizes_included": False,
+        "other_bit_widths_included": False,
+        "other_dtypes_included": False,
+        "mlx_host_runtime_integration_included": False,
+        "full_mlx_test_suite_included": False,
+    }
+    assert status["runtime_execution_attempted"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_required"] is True
+    assert status["complete_runtime_coverage_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "contracts/fp_quantized.native-loader.dispatch.json" in readme
+    assert status["selected_entry_point"] in readme
+    assert status["artifacts"]["directx"]["sha256"] in readme
+    assert status["artifacts"]["opengl"]["sha256"] in readme
+    assert "exact FP4 E2M1 values" in readme
+    assert "does not cover the remaining `fp_quantized` entries" in readme
 
 
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):
@@ -10947,13 +14906,21 @@ def test_rms_norm_contract_fixture_matches_pinned_translation_scope():
     assert status["opengl"]["constant_free_artifact_count"] == 12
     assert status["opengl"]["compiled_artifact_count"] == 24
     assert status["opengl"]["validated_artifact_count"] == 24
-    assert status["numerical_execution_included"] is False
+    assert status["numerical_execution_included"] is True
+    assert status["runtime_integration_included"] is True
+    assert status["selected_workload_numerical_parity_verified"] is True
+    assert status["bounded_native_runtime_evidence"] == (
+        "rms_norm_native_runtime_status"
+    )
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
     assert status["complete_runtime_coverage_claimed"] is False
     assert status["full_mlx_test_suite_included"] is False
     assert status["runtime_blocked_by"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
-    assert set(status["runtime_blocked_by"]) <= set(expected_gaps["tracked_issues"])
+    assert status["runtime_blocked_by"] == []
+    assert "https://github.com/CrossGL/crosstl/issues/1795" in (
+        expected_gaps["resolved_issues"]
+    )
 
 
 def test_rms_norm_checkout_verifies_revision_and_source_hash(tmp_path, monkeypatch):
@@ -11538,3 +15505,666 @@ def test_mlx_workflow_runs_platform_native_rms_norm_specialization_proof():
     assert 'if [ "$RUNNER_OS" = "Windows" ]; then' in workflow
     assert 'elif [ "$RUNNER_OS" = "Linux" ]; then' in workflow
     assert "rms-norm-specialization" in workflow
+
+
+def test_copy_metal_roundtrip_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["copy_metal_roundtrip_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/copy.metal"
+    assert status["source_sha256"] == (
+        "ed8a579eb6fe6a14c36560d2c8b548baf99e66fa77d300fb4ad7554883820eba"
+    )
+    assert status["target"] == "metal"
+    assert status["scope"] == {
+        "discovered_copy_instantiation_count": 2496,
+        "entry_count": 2496,
+        "shape_count": 30,
+        "template_count": 16,
+        "input_type_count": 13,
+        "output_type_count": 13,
+        "input_output_type_pair_count": 169,
+        "semantic_family_count": 6,
+        "base_conversion_shape_entry_count": 2028,
+        "work_per_thread_shape_entry_count": 260,
+        "generalized_same_type_shape_entry_count": 208,
+        "uncovered_copy_entry_count": 0,
+        "all_discovered_copy_instantiations_included": True,
+    }
+
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/copy.metal-roundtrip.json",
+        "schema_version": 2,
+        "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "size_bytes": len(contract_bytes),
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+            "resources",
+        ],
+    }
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryCount": 2496,
+        "shapeCount": 30,
+        "templateCount": 16,
+        "inputTypeCount": 13,
+        "outputTypeCount": 13,
+        "typePairCount": 169,
+        "familyCount": 6,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    assert len(contract["entries"]) == 2496
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 2496
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["shape_counts"] == contract["classifications"]["shapes"]
+    assert sum(status["shape_counts"].values()) == 2496
+    assert len(status["shape_counts"]) == 30
+    assert status["template_counts"] == contract["classifications"]["templates"]
+    assert sum(status["template_counts"].values()) == 2496
+    assert len(status["template_counts"]) == 16
+    assert len(contract["classifications"]["inputTypes"]) == 13
+    assert sum(contract["classifications"]["inputTypes"].values()) == 2496
+    assert len(contract["classifications"]["outputTypes"]) == 13
+    assert sum(contract["classifications"]["outputTypes"].values()) == 2496
+    assert len(contract["classifications"]["typePairs"]) == 169
+    assert sum(contract["classifications"]["typePairs"].values()) == 2496
+    assert len(contract["classifications"]["families"]) == 6
+    assert sum(contract["classifications"]["families"].values()) == 2496
+
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 2496,
+        "artifact_count": 2496,
+        "translated_count": 2496,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 6566,
+        "entry_cast_specialization_count": 2496,
+        "reachable_index_helper_specialization_count": 1560,
+        "nested_complex_bool_specialization_count": 14,
+        "unsupported_specialization_count": 0,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["implementation_contracts"] == {
+        "exact_explicit_free_specialization_selection": True,
+        "partial_template_argument_inference": True,
+        "nested_explicit_specialization_selection": True,
+        "duplicate_exact_free_specialization_rejected": True,
+        "float_bool_bit_pattern_body_preserved": True,
+        "bfloat_bool_native_width_bit_pattern_body_preserved": True,
+        "registered_complex_representation_exact_shape_required": True,
+        "unregistered_structure_lookalike_projection_rejected": True,
+        "complex_scalar_source_evaluated_once": True,
+        "source_default_template_parameter_provenance": True,
+        "call_site_index_helper_materialization": True,
+        "shape_specific_resource_reflection": True,
+        "exact_reflected_resource_types": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": 3,
+        "maximum_resource_count_per_artifact": 8,
+        "reflected_resource_count": 8684,
+        "resource_counts_by_shape": contract["artifactContract"][
+            "reflectedResourceCountsByShape"
+        ],
+        "resource_type_counts": contract["artifactContract"][
+            "reflectedResourceTypeCounts"
+        ],
+        "resource_abi_fields": [
+            "name",
+            "kind",
+            "set",
+            "binding",
+            "access",
+            "type",
+        ],
+        "resource_types_included": True,
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": contract["artifactContract"][
+            "generatedSizeBytesTotal"
+        ],
+        "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
+    }
+    assert status["native_validation"] == {
+        "platform": "macos-latest",
+        "compiler": "xcrun -sdk macosx metal -Werror -c",
+        "source_warning_exemption": None,
+        "status": "required-on-ci",
+        "ci_shard_count": 24,
+        "entries_per_shard": 104,
+        "compiled_artifact_count": 2496,
+        "all_air_artifacts_nonempty": True,
+        "test": (
+            "tests/test_translator/test_mlx_copy_complete_metal_roundtrip.py::"
+            "test_current_mlx_copy_family_roundtrips_through_metal"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
+    assert status["opengl_complete_family_translation_included"] is True
+    assert status["directx_complete_family_translation_included"] is True
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "uncovered_copy_metal_entry_count": 0,
+        "metal_numerical_execution_included": False,
+        "opengl_whole_family_included": True,
+        "directx_whole_family_included": True,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "all 2,496 discovered entries from `copy.metal`" in readme
+    assert "30 shapes, 16 concrete kernel templates" in readme
+    assert "6,566 exact materializations and 8,684 reflected resources" in readme
+    assert "requires 2,496 non-empty AIR outputs" in readme
+    assert "not Metal numerical execution" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 2,496 discovered entries from ``copy.metal``" in guide
+    assert "2,496 artifacts contain 6,566 exact materializations" in guide
+    assert "compiles all 2,496 exact artifacts" in guide
+    assert "does not claim Metal numerical execution" in guide
+
+
+def test_copy_opengl_translation_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["copy_opengl_translation_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/copy.metal"
+    assert status["source_sha256"] == (
+        "ed8a579eb6fe6a14c36560d2c8b548baf99e66fa77d300fb4ad7554883820eba"
+    )
+    assert status["target"] == "opengl"
+    assert status["scope"] == {
+        "discovered_copy_instantiation_count": 2496,
+        "entry_count": 2496,
+        "shape_count": 30,
+        "template_count": 16,
+        "input_type_count": 13,
+        "output_type_count": 13,
+        "input_output_type_pair_count": 169,
+        "semantic_family_count": 6,
+        "base_conversion_shape_entry_count": 2028,
+        "work_per_thread_shape_entry_count": 260,
+        "generalized_same_type_shape_entry_count": 208,
+        "uncovered_copy_entry_count": 0,
+        "all_discovered_copy_instantiations_included": True,
+    }
+
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/copy.opengl-translation.json",
+        "schema_version": 2,
+        "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "size_bytes": len(contract_bytes),
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract = json.loads(contract_bytes)
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["kind"] == "crosstl-mlx-copy-opengl-translation-contract"
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryCount": 2496,
+        "shapeCount": 30,
+        "templateCount": 16,
+        "inputTypeCount": 13,
+        "outputTypeCount": 13,
+        "typePairCount": 169,
+        "familyCount": 6,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    assert len(contract["entries"]) == 2496
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 2496
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["shape_counts"] == contract["classifications"]["shapes"]
+    assert sum(status["shape_counts"].values()) == 2496
+    assert len(status["shape_counts"]) == 30
+    assert status["template_counts"] == contract["classifications"]["templates"]
+    assert sum(status["template_counts"].values()) == 2496
+    assert len(status["template_counts"]) == 16
+    assert len(contract["classifications"]["inputTypes"]) == 13
+    assert sum(contract["classifications"]["inputTypes"].values()) == 2496
+    assert len(contract["classifications"]["outputTypes"]) == 13
+    assert sum(contract["classifications"]["outputTypes"].values()) == 2496
+    assert len(contract["classifications"]["typePairs"]) == 169
+    assert sum(contract["classifications"]["typePairs"].values()) == 2496
+    assert len(contract["classifications"]["families"]) == 6
+    assert sum(contract["classifications"]["families"].values()) == 2496
+
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 2496,
+        "artifact_count": 2496,
+        "translated_count": 2496,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "target_entry_point": "main",
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 6566,
+        "entry_cast_specialization_count": 2496,
+        "reachable_index_helper_specialization_count": 1560,
+        "nested_complex_bool_specialization_count": 14,
+        "registered_complex_scalar_projection_count": 150,
+        "unsupported_specialization_count": 0,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["portability_preconditions"] == {
+        "kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
+        "minimum": 0,
+        "maximum": 2147483647,
+        "expressions": [
+            "offset + i",
+            "src_idx",
+            "dst_idx",
+            "dst_idx + i",
+            "src_idx + src_offset",
+            "dst_idx + dst_offset",
+            "idx.x",
+            "idx.y",
+        ],
+    }
+    assert contract["portabilityPreconditions"] == {
+        "indexRangeAssertions": [
+            {
+                "source": status["source"],
+                "expression": expression,
+                "minimum": 0,
+                "maximum": 2147483647,
+            }
+            for expression in status["portability_preconditions"]["expressions"]
+        ],
+        "contractKind": status["portability_preconditions"]["kind"],
+        "inferred": False,
+        "runtimeEnforced": False,
+    }
+    assert status["implementation_contracts"] == {
+        "explicit_index_range_preconditions_required": True,
+        "unproven_index_narrowing_fail_closed": True,
+        "exact_explicit_free_specialization_selection": True,
+        "nested_explicit_specialization_selection": True,
+        "registered_complex_representation_exact_shape_required": True,
+        "registered_complex_representation_arithmetic_fail_closed": True,
+        "unregistered_structure_lookalike_projection_rejected": True,
+        "complex_scalar_source_evaluated_once": True,
+        "source_default_template_parameter_provenance": True,
+        "call_site_index_helper_materialization": True,
+        "shape_specific_resource_reflection": True,
+        "storage_buffer_array_resource_lowering": True,
+        "exact_reflected_resource_types": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": 3,
+        "maximum_resource_count_per_artifact": 8,
+        "reflected_resource_count": 8684,
+        "resource_counts_by_shape": contract["artifactContract"][
+            "reflectedResourceCountsByShape"
+        ],
+        "resource_abi_fields": [
+            "name",
+            "kind",
+            "set",
+            "binding",
+            "access",
+            "type",
+        ],
+        "resource_types_included": True,
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": contract["artifactContract"][
+            "generatedSizeBytesTotal"
+        ],
+        "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
+    }
+    assert status["native_validation"] == {
+        "platform": "ubuntu-latest",
+        "compiler": (
+            "glslangValidator --target-env opengl --target-env spirv1.3 -S comp"
+        ),
+        "validator": "spirv-val --target-env spv1.3",
+        "status": "required-on-ci",
+        "compiled_artifact_count": 2496,
+        "validated_artifact_count": 2496,
+        "all_spirv_artifacts_nonempty": True,
+        "ci_shard_count": 24,
+        "entries_per_shard": 104,
+        "test": (
+            "tests/test_translator/test_mlx_copy_complete_opengl.py::"
+            "test_current_mlx_copy_family_translates_to_opengl"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["opengl_complete_family_translation_included"] is True
+    assert status["opengl_numerical_runtime_included"] is False
+    assert status["directx_complete_family_translation_included"] is True
+    assert status["directx_and_opengl_complete_family_translation_included"] is True
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "all_discovered_copy_instantiations_included": True,
+        "opengl_numerical_execution_included": False,
+        "directx_whole_family_included": True,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert (
+        "all 2,496 discovered current-pinned `copy.metal` entries to OpenGL" in readme
+    )
+    assert "6,566 materializations, and 8,684 reflected target resources" in readme
+    assert "Eight explicit host/runtime index-range preconditions" in readme
+    assert "require 2,496 non-empty SPIR-V modules" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "translates all 2,496 copy entries to standalone OpenGL" in guide
+    assert "6,566 exact materializations, and 8,684 reflected target resources" in guide
+    assert "24 disjoint 104-entry shards" in guide
+    assert "requires a non-empty SPIR-V module" in guide
+
+
+def test_copy_directx_translation_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["copy_directx_translation_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/copy.metal"
+    assert status["source_sha256"] == (
+        "ed8a579eb6fe6a14c36560d2c8b548baf99e66fa77d300fb4ad7554883820eba"
+    )
+    assert status["target"] == "directx"
+    assert status["scope"] == {
+        "discovered_copy_instantiation_count": 2496,
+        "entry_count": 2496,
+        "shape_count": 30,
+        "template_count": 16,
+        "input_type_count": 13,
+        "output_type_count": 13,
+        "input_output_type_pair_count": 169,
+        "semantic_family_count": 6,
+        "base_conversion_shape_entry_count": 2028,
+        "work_per_thread_shape_entry_count": 260,
+        "generalized_same_type_shape_entry_count": 208,
+        "uncovered_copy_entry_count": 0,
+        "all_discovered_copy_instantiations_included": True,
+    }
+
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/copy.directx-translation.json",
+        "schema_version": 2,
+        "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "size_bytes": len(contract_bytes),
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "templateName",
+            "inputType",
+            "outputType",
+            "family",
+            "sha256",
+            "sizeBytes",
+        ],
+    }
+    contract = json.loads(contract_bytes)
+    assert list(contract) == [
+        "schemaVersion",
+        "kind",
+        "commit",
+        "source",
+        "sourceSha256",
+        "target",
+        "selection",
+        "shapeContracts",
+        "classifications",
+        "artifactContract",
+        "entries",
+    ]
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["kind"] == "crosstl-mlx-copy-directx-translation-contract"
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryCount": 2496,
+        "shapeCount": 30,
+        "templateCount": 16,
+        "inputTypeCount": 13,
+        "outputTypeCount": 13,
+        "typePairCount": 169,
+        "familyCount": 6,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    assert len(contract["entries"]) == 2496
+    assert [entry["entryPoint"] for entry in contract["entries"]] == sorted(
+        entry["entryPoint"] for entry in contract["entries"]
+    )
+    assert len({entry["entryPoint"] for entry in contract["entries"]}) == 2496
+    assert len({entry["sha256"] for entry in contract["entries"]}) == 2496
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"]
+        for entry in contract["entries"]
+    )
+    assert status["shape_counts"] == contract["classifications"]["shapes"]
+    assert sum(status["shape_counts"].values()) == 2496
+    assert len(status["shape_counts"]) == 30
+    assert status["template_counts"] == contract["classifications"]["templates"]
+    assert sum(status["template_counts"].values()) == 2496
+    assert len(status["template_counts"]) == 16
+    assert len(contract["classifications"]["inputTypes"]) == 13
+    assert sum(contract["classifications"]["inputTypes"].values()) == 2496
+    assert len(contract["classifications"]["outputTypes"]) == 13
+    assert sum(contract["classifications"]["outputTypes"].values()) == 2496
+    assert len(contract["classifications"]["typePairs"]) == 169
+    assert sum(contract["classifications"]["typePairs"].values()) == 2496
+    assert len(contract["classifications"]["families"]) == 6
+    assert sum(contract["classifications"]["families"].values()) == 2496
+    assert "portabilityPreconditions" not in contract
+    assert "portability_preconditions" not in status
+
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 2496,
+        "artifact_count": 2496,
+        "translated_count": 2496,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "target_entry_point": "CSMain",
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": 6566,
+        "entry_cast_specialization_count": 2496,
+        "reachable_index_helper_specialization_count": 1560,
+        "nested_complex_bool_specialization_count": 14,
+        "registered_complex_scalar_projection_count": 150,
+        "unsupported_specialization_count": 0,
+        "reachable_kernel_count_per_artifact": 1,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert status["implementation_contracts"] == {
+        "additional_index_range_preconditions_required": False,
+        "exact_explicit_free_specialization_selection": True,
+        "nested_explicit_specialization_selection": True,
+        "registered_complex_representation_exact_shape_required": True,
+        "unregistered_structure_lookalike_projection_rejected": True,
+        "complex_scalar_source_evaluated_once": True,
+        "actionable_structure_conversion_diagnostics": True,
+        "source_default_template_parameter_provenance": True,
+        "call_site_index_helper_materialization": True,
+        "shape_specific_resource_reflection": True,
+        "storage_buffer_array_resource_lowering": True,
+        "entry_scoped_constant_buffer_lowering": True,
+        "generated_dispatch_metadata_shape_count": 8,
+        "exact_reflected_resource_types": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": 3,
+        "maximum_resource_count_per_artifact": 8,
+        "reflected_resource_count": 10036,
+        "resource_counts_by_shape": contract["artifactContract"][
+            "reflectedResourceCountsByShape"
+        ],
+        "resource_abi_fields": [
+            "name",
+            "kind",
+            "set",
+            "binding",
+            "access",
+            "type",
+        ],
+        "resource_types_included": True,
+        "host_dispatch_workgroup_size": [1, 1, 1],
+        "dispatch_metadata_shape_count": 8,
+    }
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": contract["artifactContract"][
+            "generatedSizeBytesTotal"
+        ],
+        "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
+    }
+    assert status["native_validation"] == {
+        "platform": "windows-latest",
+        "compiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
+        "status": "required-on-ci",
+        "compiled_artifact_count": 2496,
+        "all_dxil_artifacts_nonempty": True,
+        "ci_shard_count": 24,
+        "entries_per_shard": 104,
+        "test": (
+            "tests/test_translator/test_mlx_copy_complete_directx.py::"
+            "test_current_mlx_copy_family_translates_to_directx"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["opengl_complete_family_translation_included"] is True
+    assert status["directx_complete_family_translation_included"] is True
+    assert status["directx_numerical_runtime_included"] is False
+    assert status["directx_and_opengl_complete_family_translation_included"] is True
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "all_discovered_copy_instantiations_included": True,
+        "opengl_numerical_execution_included": False,
+        "directx_numerical_execution_included": False,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert (
+        "all 2,496 discovered current-pinned `copy.metal` entries to DirectX" in readme
+    )
+    assert "Exact HLSL target reflection contains 10,036 resources" in readme
+    assert "150 complex-to-scalar entries" in readme
+    assert (
+        "no additional source-scoped 32-bit index-range portability promise" in readme
+    )
+    assert "requiring 2,496 non-empty DXIL modules" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert (
+        "translates the same 2,496 entries to standalone ``CSMain`` artifacts" in guide
+    )
+    assert "Exact target reflection contains 10,036 resources" in guide
+    assert "Exactly 150 complex-to-scalar entries project the real field" in guide
+    assert "no additional source-scoped 32-bit index-range portability promise" in guide
+    assert "requires a non-empty DXIL module" in guide

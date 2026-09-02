@@ -1,0 +1,138 @@
+{
+  "kind": "crosstl-project-runtime-fixture-metadata",
+  "metadata": {
+    "fixtureSet": "directx-software-subgroup-runtime-proofs"
+  },
+  "fixtures": [
+    {
+      "id": "directx-software-subgroup-shuffle-u32",
+      "selector": {
+        "source": "tests/fixtures/runtime_verification/directx/software_subgroup_shuffle.cgl",
+        "target": "directx",
+        "variant": "logical-width-32"
+      },
+      "inputs": [],
+      "expectedOutputs": [
+        {
+          "name": "output",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            64
+          ],
+          "values": [
+            2,
+            103,
+            204,
+            305,
+            406,
+            507,
+            608,
+            709,
+            810,
+            911,
+            1012,
+            1113,
+            1214,
+            1315,
+            1416,
+            1517,
+            1618,
+            1719,
+            1820,
+            1921,
+            2022,
+            2123,
+            2224,
+            2325,
+            2426,
+            2527,
+            2628,
+            2729,
+            2830,
+            2931,
+            3032,
+            3132,
+            1034,
+            1135,
+            1236,
+            1337,
+            1438,
+            1539,
+            1640,
+            1741,
+            1842,
+            1943,
+            2044,
+            2145,
+            2246,
+            2347,
+            2448,
+            2549,
+            2650,
+            2751,
+            2852,
+            2953,
+            3054,
+            3155,
+            3256,
+            3357,
+            3458,
+            3559,
+            3660,
+            3761,
+            3862,
+            3963,
+            4064,
+            4164
+          ]
+        }
+      ],
+      "runtimeAdapter": {
+        "id": "directx-software-subgroup-contract-v1",
+        "entryPoints": [
+          {
+            "name": "CSMain",
+            "stage": "compute",
+            "workgroupSize": [
+              32,
+              2,
+              1
+            ],
+            "subgroupWidth": 32
+          }
+        ],
+        "resourceBindings": [
+          {
+            "name": "output",
+            "kind": "buffer",
+            "binding": 0,
+            "access": "write",
+            "value": "output"
+          }
+        ],
+        "dispatch": {
+          "entryPoint": "CSMain",
+          "globalSize": [
+            32,
+            2,
+            1
+          ]
+        }
+      },
+      "metadata": {
+        "proof": "logical-width-32-groupshared-shuffle-down",
+        "testCommand": [
+          "python",
+          "-m",
+          "pytest",
+          "-n",
+          "auto",
+          "tests/test_translator/test_native_runtime_drivers.py",
+          "-k",
+          "directx_compute_runtime_executes_software_subgroup_shuffle_on_device"
+        ]
+      }
+    }
+  ]
+}

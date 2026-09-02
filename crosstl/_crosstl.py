@@ -22,6 +22,7 @@ from .translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from .translator.codegen.entry_selection import prepare_entry_scoped_target
 from .translator.codegen.pointer_reinterpret import (
     validate_pointer_reinterpretation_target,
 )
@@ -232,8 +233,19 @@ def translate(
         else:
             codegen = get_codegen(requested_backend)
             lower_default_arguments(ast)
-            validate_pointer_reinterpretation_target(ast, normalized_backend)
-            generated_code = _generate_target_code(codegen, ast, entry_point)
+            selected_ast, remaining_entry_point = prepare_entry_scoped_target(
+                codegen,
+                ast,
+                (
+                    _validated_entry_point(entry_point)
+                    if entry_point is not None
+                    else None
+                ),
+            )
+            validate_pointer_reinterpretation_target(selected_ast, normalized_backend)
+            generated_code = _generate_target_code(
+                codegen, selected_ast, remaining_entry_point
+            )
     else:
         if normalized_backend in ["cgl", "crossgl"]:
             codegen = source_spec.create_reverse_codegen(source_options)
@@ -241,6 +253,7 @@ def translate(
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
             if source_spec.name == "opencl":
                 codegen.normalize_target_safe_cgl = True
+            lower_default_arguments(ast)
             generated_code = codegen.generate(ast)
             if source_spec.name == "opencl":
                 cgl_spec = SOURCE_REGISTRY.get("cgl")
@@ -280,8 +293,19 @@ def translate(
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(requested_backend)
             lower_default_arguments(cgl_ast)
-            validate_pointer_reinterpretation_target(cgl_ast, normalized_backend)
-            generated_code = _generate_target_code(codegen, cgl_ast, entry_point)
+            selected_ast, remaining_entry_point = prepare_entry_scoped_target(
+                codegen,
+                cgl_ast,
+                (
+                    _validated_entry_point(entry_point)
+                    if entry_point is not None
+                    else None
+                ),
+            )
+            validate_pointer_reinterpretation_target(selected_ast, normalized_backend)
+            generated_code = _generate_target_code(
+                codegen, selected_ast, remaining_entry_point
+            )
 
     if (
         format_output

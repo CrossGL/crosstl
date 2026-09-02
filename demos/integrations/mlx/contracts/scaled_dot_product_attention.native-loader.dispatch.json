@@ -1,0 +1,427 @@
+{
+  "kind": "crosstl-host-dispatch-contract",
+  "schemaVersion": 1,
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "sourceReferences": {
+      "hostDispatch": "mlx/backend/metal/scaled_dot_product_attention.cpp",
+      "kernel": "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
+      "implementation": "mlx/backend/metal/kernels/sdpa_vector.h"
+    },
+    "scope": {
+      "description": "Pinned float32 one-pass scaled-dot-product-attention dispatch with one batch, one query/KV head, one query, four keys, no mask, no causal mode, no sinks, and row-contiguous queries.",
+      "onePassEntryIncluded": true,
+      "twoPassEntriesIncluded": false,
+      "maskedEntriesIncluded": false,
+      "causalEntriesIncluded": false,
+      "sinkEntriesIncluded": false,
+      "runtimeExecutionVerified": false,
+      "numericalParityVerified": false
+    }
+  },
+  "inputs": [
+    {
+      "name": "batchSize",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "q.shape(0)"
+      }
+    },
+    {
+      "name": "queryHeads",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "q.shape(1)"
+      }
+    },
+    {
+      "name": "kvHeads",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "k.shape(1)"
+      }
+    },
+    {
+      "name": "queryLength",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "q.shape(2)"
+      }
+    },
+    {
+      "name": "keyLength",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "k.shape(2)"
+      }
+    },
+    {
+      "name": "queryDimension",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "q.shape(-1)"
+      }
+    },
+    {
+      "name": "valueDimension",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "v.shape(-1)"
+      }
+    },
+    {
+      "name": "dtype",
+      "role": "dtype",
+      "type": "string"
+    },
+    {
+      "name": "hasMask",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostSymbol": "has_mask",
+        "functionConstantId": 20
+      }
+    },
+    {
+      "name": "queryTransposed",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostSymbol": "query_transposed",
+        "functionConstantId": 21
+      }
+    },
+    {
+      "name": "doCausal",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostSymbol": "do_causal",
+        "functionConstantId": 22
+      }
+    },
+    {
+      "name": "boolMask",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostSymbol": "bool_mask",
+        "functionConstantId": 23
+      }
+    },
+    {
+      "name": "floatMask",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostSymbol": "float_mask",
+        "functionConstantId": 24
+      }
+    },
+    {
+      "name": "hasSinks",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostSymbol": "has_sinks",
+        "functionConstantId": 25
+      }
+    }
+  ],
+  "workloads": [
+    {
+      "id": "vector-float32-b1-h1-q1-k4-d64-v64-nomask",
+      "values": {
+        "batchSize": 1,
+        "queryHeads": 1,
+        "kvHeads": 1,
+        "queryLength": 1,
+        "keyLength": 4,
+        "queryDimension": 64,
+        "valueDimension": 64,
+        "dtype": "float32",
+        "hasMask": false,
+        "queryTransposed": false,
+        "doCausal": false,
+        "boolMask": false,
+        "floatMask": false,
+        "hasSinks": false
+      },
+      "provenance": {
+        "hostFunction": "sdpa_vector",
+        "branch": "one-pass",
+        "queryShape": [
+          1,
+          1,
+          1,
+          64
+        ],
+        "keyShape": [
+          1,
+          1,
+          4,
+          64
+        ],
+        "valueShape": [
+          1,
+          1,
+          4,
+          64
+        ],
+        "gqaFactor": 1,
+        "scale": 0.125
+      }
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "simdWidth",
+      "type": "integer",
+      "provenance": {
+        "kernelSymbol": "BD"
+      }
+    },
+    {
+      "name": "maxThreadsPerWorkgroup",
+      "type": "integer",
+      "provenance": {
+        "requirement": "bounded device record"
+      }
+    }
+  ],
+  "devices": [
+    {
+      "id": "wave32-max1024",
+      "values": {
+        "simdWidth": 32,
+        "maxThreadsPerWorkgroup": 1024
+      },
+      "provenance": {
+        "scope": "bounded wave32 device record"
+      }
+    }
+  ],
+  "contracts": [
+    {
+      "id": "mlx-scaled-dot-product-attention-native-loader",
+      "source": "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
+      "provenance": {
+        "hostSource": "mlx/backend/metal/scaled_dot_product_attention.cpp",
+        "kernelSource": "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
+        "implementationSource": "mlx/backend/metal/kernels/sdpa_vector.h",
+        "hostWorkgroup": [
+          1024,
+          1,
+          1
+        ],
+        "hostDispatchFormula": [
+          "batchSize * queryHeads",
+          "queryLength",
+          1
+        ]
+      },
+      "branches": [
+        {
+          "id": "vector-float32-64-64-nomask",
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "dtype"
+                  },
+                  "float32"
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "queryDimension"
+                  },
+                  64
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "valueDimension"
+                  },
+                  64
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "queryHeads"
+                  },
+                  {
+                    "input": "kvHeads"
+                  }
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "hasMask"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "queryTransposed"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "doCausal"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "boolMask"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "floatMask"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "hasSinks"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "capability": "simdWidth"
+                  },
+                  32
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "capability": "maxThreadsPerWorkgroup"
+                  },
+                  1024
+                ]
+              }
+            ]
+          },
+          "entryPoint": "sdpa_vector_float_64_64",
+          "workgroupSize": [
+            1024,
+            1,
+            1
+          ],
+          "subgroupWidth": {
+            "capability": "simdWidth"
+          },
+          "specializationConstants": {
+            "20": {
+              "input": "hasMask",
+              "provenance": {
+                "symbol": "has_mask"
+              }
+            },
+            "21": {
+              "input": "queryTransposed",
+              "provenance": {
+                "symbol": "query_transposed"
+              }
+            },
+            "22": {
+              "input": "doCausal",
+              "provenance": {
+                "symbol": "do_causal"
+              }
+            },
+            "23": {
+              "input": "boolMask",
+              "provenance": {
+                "symbol": "bool_mask"
+              }
+            },
+            "24": {
+              "input": "floatMask",
+              "provenance": {
+                "symbol": "float_mask"
+              }
+            },
+            "25": {
+              "input": "hasSinks",
+              "provenance": {
+                "symbol": "has_sinks"
+              }
+            }
+          },
+          "dispatch": {
+            "workgroupCount": [
+              {
+                "op": "multiply",
+                "args": [
+                  {
+                    "input": "batchSize"
+                  },
+                  {
+                    "input": "queryHeads"
+                  }
+                ]
+              },
+              {
+                "input": "queryLength"
+              },
+              1
+            ]
+          },
+          "provenance": {
+            "hostFunction": "sdpa_vector",
+            "branch": "one-pass",
+            "functionConstants20Through25Applied": true,
+            "keyBlockSize": 32,
+            "dimensionBlockSize": 32
+          }
+        }
+      ]
+    }
+  ]
+}

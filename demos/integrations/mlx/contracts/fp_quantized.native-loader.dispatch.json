@@ -1,0 +1,268 @@
+{
+  "kind": "crosstl-host-dispatch-contract",
+  "schemaVersion": 1,
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "sourceReferences": {
+      "hostDispatch": "mlx/backend/metal/quantized.cpp",
+      "kernel": "mlx/backend/metal/kernels/fp_quantized.metal",
+      "implementation": "mlx/backend/metal/kernels/fp_quantized.h"
+    },
+    "scope": {
+      "description": "Pinned one-group float32 MXFP4 quantize-dequantize dispatch with 32 elements, group size 32, four-bit values, and no global scale.",
+      "mxfp4QuantizeDequantizeIncluded": true,
+      "quantizeOnlyIncluded": false,
+      "dequantizeOnlyIncluded": false,
+      "globalScaleIncluded": false,
+      "runtimeExecutionVerified": false,
+      "numericalParityVerified": false
+    }
+  },
+  "inputs": [
+    {
+      "name": "elementCount",
+      "role": "shape",
+      "type": "integer",
+      "provenance": {
+        "hostExpression": "w.size()"
+      }
+    },
+    {
+      "name": "dtype",
+      "role": "dtype",
+      "type": "string",
+      "provenance": {
+        "hostExpression": "get_type_string(in.dtype())"
+      }
+    },
+    {
+      "name": "isMxfp4",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostExpression": "mode == 'mxfp4'"
+      }
+    },
+    {
+      "name": "groupSize",
+      "role": "scalar",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "group_size"
+      }
+    },
+    {
+      "name": "bits",
+      "role": "scalar",
+      "type": "integer",
+      "provenance": {
+        "hostSymbol": "bits"
+      }
+    },
+    {
+      "name": "hasGlobalScale",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostExpression": "global_scale.has_value()"
+      }
+    },
+    {
+      "name": "rowContiguous",
+      "role": "feature",
+      "type": "boolean",
+      "provenance": {
+        "hostFunction": "ensure_row_contiguous"
+      }
+    }
+  ],
+  "workloads": [
+    {
+      "id": "mxfp4-quantize-dequantize-float32-32-no-global-scale",
+      "values": {
+        "elementCount": 32,
+        "dtype": "float32",
+        "isMxfp4": true,
+        "groupSize": 32,
+        "bits": 4,
+        "hasGlobalScale": false,
+        "rowContiguous": true
+      },
+      "provenance": {
+        "hostFunction": "fp_quantize_dequantize",
+        "caller": "quantize_dequantize_input",
+        "branch": "mxfp4-no-global-scale",
+        "inputShape": [
+          32
+        ],
+        "outputShape": [
+          32
+        ],
+        "numericalFixture": "32 FP4-representable float32 values with maximum absolute value 6.0"
+      }
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "simdWidth",
+      "type": "integer",
+      "provenance": {
+        "hostConstant": "simd_size"
+      }
+    },
+    {
+      "name": "maxThreadsPerWorkgroup",
+      "type": "integer",
+      "provenance": {
+        "hostExpression": "kernel->maxTotalThreadsPerThreadgroup()"
+      }
+    }
+  ],
+  "devices": [
+    {
+      "id": "wave32-max1024",
+      "values": {
+        "simdWidth": 32,
+        "maxThreadsPerWorkgroup": 1024
+      },
+      "provenance": {
+        "scope": "bounded wave32 device record"
+      }
+    }
+  ],
+  "contracts": [
+    {
+      "id": "mlx-mxfp4-quantize-dequantize-native-loader",
+      "source": "mlx/backend/metal/kernels/fp_quantized.metal",
+      "provenance": {
+        "hostSource": "mlx/backend/metal/quantized.cpp",
+        "kernelSource": "mlx/backend/metal/kernels/fp_quantized.metal",
+        "implementationSource": "mlx/backend/metal/kernels/fp_quantized.h",
+        "entryNameFormula": "mode + '_quantize_dequantize_' + type_string + '_gs_' + group_size + '_b_' + bits + '_hgs_' + (global_scale ? 'true' : 'false')",
+        "threadsPerElementFormula": "max(groupSize / 32, 1)",
+        "threadCountFormula": "elementCount / threadsPerElement",
+        "threadgroupSizeFormula": "min(maxThreadsPerWorkgroup, threadCount)",
+        "dispatchNormalization": "dispatch_threads grid 32 divided by threadgroup size 32 gives one workgroup"
+      },
+      "branches": [
+        {
+          "id": "mxfp4-quantize-dequantize-float32-32-no-global-scale",
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "elementCount"
+                  },
+                  32
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "dtype"
+                  },
+                  "float32"
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "isMxfp4"
+                  },
+                  true
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "groupSize"
+                  },
+                  32
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "bits"
+                  },
+                  4
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "hasGlobalScale"
+                  },
+                  false
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "input": "rowContiguous"
+                  },
+                  true
+                ]
+              },
+              {
+                "op": "eq",
+                "args": [
+                  {
+                    "capability": "simdWidth"
+                  },
+                  32
+                ]
+              },
+              {
+                "op": "ge",
+                "args": [
+                  {
+                    "capability": "maxThreadsPerWorkgroup"
+                  },
+                  32
+                ]
+              }
+            ]
+          },
+          "entryPoint": "mxfp4_quantize_dequantize_float_gs_32_b_4_hgs_false",
+          "workgroupSize": [
+            32,
+            1,
+            1
+          ],
+          "subgroupWidth": {
+            "capability": "simdWidth"
+          },
+          "dispatch": {
+            "workgroupCount": [
+              1,
+              1,
+              1
+            ]
+          },
+          "provenance": {
+            "hostFunction": "fp_quantize_dequantize",
+            "dimensionHelper": "get_quantize_kernel_dims",
+            "kernelTemplate": "fp_quantize_dequantize<float, 32, 4, false>",
+            "bufferBindings": {
+              "input": 0,
+              "globalScale": 1,
+              "output": 2
+            },
+            "globalScaleBindingUsed": false
+          }
+        }
+      ]
+    }
+  ]
+}

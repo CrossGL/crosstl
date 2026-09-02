@@ -130,8 +130,6 @@
     "completeRuntimeCoverage": false,
     "numericalRuntimeParity": false,
     "fullMlxTestSuite": false,
-    "runtimeBlockedBy": [
-      "https://github.com/CrossGL/crosstl/issues/1795"
-    ]
+    "runtimeBlockedBy": []
   }
 }

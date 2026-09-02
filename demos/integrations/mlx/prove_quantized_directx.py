@@ -67,6 +67,16 @@ ENTRY_CONTRACTS = {
         "subgroupWidth": MLX_QUANTIZED_GATHER_SUBGROUP_WIDTH,
     },
 }
+GENERATED_ARTIFACTS = {
+    MLX_QUANTIZED_ENTRY_POINT: {
+        "sha256": "a0f1a10def581f30dc34ed870b9ce36f70fb12abfd447e9b1b369524efde7438",
+        "sizeBytes": 4357,
+    },
+    MLX_QUANTIZED_GATHER_ENTRY_POINT: {
+        "sha256": "c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de",
+        "sizeBytes": 16359,
+    },
+}
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/quantized-directx"
 SUMMARY_FILENAME = "summary.json"
 NATIVE_16_BIT_CAPABILITY = "directx.native-16bit-types"
@@ -902,6 +912,13 @@ def run_proof(
         mlx_root=root,
         work_dir=resolved_work_dir,
         entry_point=entry_point,
+    )
+    expected_artifact = GENERATED_ARTIFACTS[entry_point]
+    _require(
+        artifact["generatedHash"]
+        == {"algorithm": "sha256", "value": expected_artifact["sha256"]}
+        and artifact["generatedSizeBytes"] == expected_artifact["sizeBytes"],
+        f"generated DirectX artifact identity changed for {entry_point}",
     )
     generated_checks, compiler_contract = _validate_generated_hlsl(
         artifact_path, entry_point=entry_point

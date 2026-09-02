@@ -128,8 +128,8 @@ def test_directx_bfloat16_storage_uses_native_uint16_and_rejects_dx11():
 def test_directx_bfloat16_unproven_builtin_fails_closed():
     shader = """
     shader UnsupportedBFloatBuiltin {
-        bfloat16_t apply_sine(bfloat16_t value) {
-            return sin(value);
+        bfloat16_t apply_cospi(bfloat16_t value) {
+            return cospi(value);
         }
     }
     """
@@ -137,7 +137,54 @@ def test_directx_bfloat16_unproven_builtin_fails_closed():
     with pytest.raises(DirectXBFloat16UnsupportedError) as exc_info:
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert exc_info.value.operation == "sin"
+    assert exc_info.value.operation == "cospi"
+    assert exc_info.value.reason == "unsupported-bfloat16-builtin"
+
+
+@pytest.mark.parametrize("builtin", ["atan2", "max", "min", "pow"])
+def test_directx_bfloat16_binary_builtin_contract_rounds_back_to_bfloat(builtin):
+    shader = f"""
+    shader ExactBFloatBinaryBuiltin {{
+        bfloat16_t apply(bfloat16_t left, bfloat16_t right) {{
+            return {builtin}(left, right);
+        }}
+    }}
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert f"{builtin}(" in generated
+    assert generated.count("__crossgl_bfloat16_to_float(") >= 2
+    assert "__crossgl_bfloat16_from_float(" in generated
+    assert (
+        f"__crossgl_bfloat16_from_float(float({builtin}("
+        "__crossgl_bfloat16_to_float(uint(left)), "
+        "__crossgl_bfloat16_to_float(uint(right)))))"
+    ) in generated
+
+
+@pytest.mark.parametrize("builtin", ["atan2", "max", "min", "pow"])
+@pytest.mark.parametrize(
+    ("left_type", "right_type"),
+    [("bfloat16_t", "float"), ("float", "bfloat16_t")],
+)
+def test_directx_bfloat16_binary_builtin_mixed_operands_fail_closed(
+    builtin,
+    left_type,
+    right_type,
+):
+    shader = f"""
+    shader MixedBFloatBinaryBuiltin {{
+        bfloat16_t apply({left_type} left, {right_type} right) {{
+            return {builtin}(left, right);
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXBFloat16UnsupportedError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.operation == builtin
     assert exc_info.value.reason == "unsupported-bfloat16-builtin"
 
 
@@ -239,8 +286,8 @@ def test_project_bfloat16_failure_reports_actionable_lowering_contract(tmp_path)
     (kernels / "unsupported.cgl").write_text(
         textwrap.dedent("""
             shader UnsupportedBFloatBuiltin {
-                bfloat16_t apply_sine(bfloat16_t value) {
-                    return sin(value);
+                bfloat16_t apply_cospi(bfloat16_t value) {
+                    return cospi(value);
                 }
             }
             """).strip(),
@@ -271,7 +318,7 @@ def test_project_bfloat16_failure_reports_actionable_lowering_contract(tmp_path)
     assert diagnostic["details"] == {
         "bfloat16Lowering": {
             "approximationUsed": False,
-            "operation": "sin",
+            "operation": "cospi",
             "reason": "unsupported-bfloat16-builtin",
             "sourceType": "bfloat16_t",
             "status": "unsupported",

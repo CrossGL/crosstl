@@ -12,6 +12,9 @@ import crosstl.translator
 import crosstl.translator.codegen as codegen
 from crosstl.project import translate_project
 from crosstl.translator.ast import ShaderStage
+from crosstl.translator.codegen.pointer_reinterpret import (
+    PointerReinterpretationError,
+)
 from crosstl.translator.source_registry import (
     SOURCE_REGISTRY,
     SourceSpec,
@@ -255,6 +258,78 @@ def test_cgl_translate_save_shader_preserves_source_line_endings(tmp_path):
 
     assert generated == source_text
     assert output_path.read_bytes() == source_path.read_bytes()
+
+
+def test_public_translate_validates_only_reachable_selected_metal_entry(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "entry-reachability.cgl",
+        """
+        shader EntryReachability {
+            compute selected {
+                void main() {
+                    uint retained = 1u;
+                }
+            }
+
+            compute blocked {
+                void main() {
+                    uint word = 0u;
+                    auto bytes = (uint8_t*)&word;
+                }
+            }
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="metal",
+        entry_point="selected",
+        format_output=False,
+    )
+
+    assert "kernel void kernel_selected" in generated
+    assert "kernel void kernel_blocked" not in generated
+    assert "uint8_t" not in generated
+
+
+def test_public_translate_rejects_reachable_selected_metal_pointer_reinterpret(
+    tmp_path,
+):
+    source_path = _write_source(
+        tmp_path,
+        "entry-reachability.cgl",
+        """
+        shader EntryReachability {
+            compute selected {
+                void main() {
+                    uint retained = 1u;
+                }
+            }
+
+            compute blocked {
+                void main() {
+                    uint word = 0u;
+                    auto bytes = (uint8_t*)&word;
+                }
+            }
+        }
+        """,
+    )
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        crosstl.translate(
+            str(source_path),
+            backend="metal",
+            entry_point="blocked",
+            format_output=False,
+        )
+
+    error = exc_info.value
+    assert error.target_backend == "metal"
+    assert error.target_type == "uint8_t"
+    assert error.reason == "target-lowering-unavailable"
 
 
 def test_root_package_exposes_documented_registry_helpers():
@@ -2355,3 +2430,33 @@ def test_metal_function_header_masks_comments_spanning_the_header_start():
     assert "OR" not in header
     assert "BUSINESS" not in header
     assert "float foo(int x)" in header
+
+
+def test_metal_default_pointer_call_lowers_for_crossgl_intermediate(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "default-pointer.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        float ignored_default(const device float* values = nullptr) {
+            return 7.0f;
+        }
+
+        kernel void computeMain(device float* output [[buffer(0)]]) {
+            output[0] = ignored_default();
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="cgl",
+        source_backend="metal",
+        format_output=False,
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "ignored_default(nullptr)" in generated
+    assert "ignored_default()" not in generated

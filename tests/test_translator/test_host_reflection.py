@@ -134,6 +134,72 @@ def test_hlsl_reflection_preserves_entry_points_resources_and_constants(tmp_path
     ]
 
 
+def test_metal_reflection_records_entries_resources_and_function_constants(tmp_path):
+    artifact = tmp_path / "kernel.metal"
+    artifact.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant bool enabled [[function_constant(20)]];
+
+            kernel void first(
+                const device float* input [[buffer(0)]],
+                device float* output [[buffer(1)]],
+                texture2d<float, access::read> source [[texture(0)]],
+                sampler linear_sampler [[sampler(0)]]) {
+                output[0] = enabled ? input[0] : source.read(uint2(0)).x;
+            }
+
+            kernel void second(
+                device uint* output [[buffer(0)]]) {
+                output[0] = 1u;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    reflection = reflect_target_host_interface(artifact, target="metal")
+
+    assert reflection["status"] == "ready"
+    assert reflection["parser"] == "metal-reflection"
+    assert reflection["entryPoints"] == [
+        {"name": "first", "stage": "compute", "executionConfig": {}},
+        {"name": "second", "stage": "compute", "executionConfig": {}},
+    ]
+    assert [
+        (
+            resource["name"],
+            resource["kind"],
+            resource["binding"],
+            resource["access"],
+            resource["metadata"]["entryPoint"],
+        )
+        for resource in reflection["resources"]
+    ] == [
+        ("input", "buffer", 0, "read", "first"),
+        ("output", "buffer", 1, "read_write", "first"),
+        ("source", "texture", 0, "read", "first"),
+        ("linear_sampler", "sampler", 0, "read", "first"),
+        ("output", "buffer", 0, "read_write", "second"),
+    ]
+    assert reflection["specializationConstants"] == [
+        {
+            "name": "enabled",
+            "kind": "function-constant",
+            "id": 20,
+            "dtype": "bool",
+            "sourceType": "bool",
+            "required": True,
+            "overridden": False,
+            "overrideStatus": "not-overridden",
+            "status": "required",
+            "source": "metal.function_constant",
+        }
+    ]
+    assert reflection["diagnostics"] == []
+
+
 def test_glsl_reflection_canonicalizes_c_family_specialization_ids(tmp_path):
     artifact = tmp_path / "kernel.comp"
     artifact.write_text(
@@ -215,6 +281,105 @@ def test_glsl_reflection_records_exact_mlx_scalar_block_layouts(tmp_path):
     assert by_name["arangeuint32_step_Args"]["scalarLayout"]["memberName"] == "step"
 
 
+def test_glsl_reflection_records_exact_vector_block_layouts(tmp_path):
+    artifact = tmp_path / "vectors.glsl"
+    artifact.write_text(
+        textwrap.dedent("""
+            #version 450 core
+            #extension GL_ARB_gpu_shader_int64 : require
+            layout(std430, binding = 0) readonly buffer Inputs { vec2 values[]; };
+            layout(std430, binding = 1) buffer Triples { vec3 values[]; };
+            layout(std430, binding = 2) buffer Outputs { vec4 values[]; };
+            layout(std430, binding = 3) buffer Integers { ivec2 values[]; };
+            layout(std430, binding = 4) buffer Unsigned { uvec4 values[]; };
+            layout(std430, binding = 5) buffer Flags { bvec2 values[]; };
+            layout(std430, binding = 6) buffer WideIntegers { i64vec2 values[]; };
+            layout(std430, binding = 7) buffer WideTriples { u64vec3 values[]; };
+            layout(std140, binding = 8) uniform Scale { vec2 value; };
+            layout(std430, binding = 9) buffer Unsupported { dvec2 values[]; };
+            layout(local_size_x = 1) in;
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    reflection = reflect_target_host_interface(
+        artifact, target="opengl", stage="compute"
+    )
+    by_name = {resource["name"]: resource for resource in reflection["resources"]}
+
+    assert by_name["Inputs"]["scalarLayout"] == {
+        "physicalType": "float2",
+        "elementType": "float32",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 8,
+        "memberOffsetBytes": 0,
+        "storageLayout": "std430",
+        "runtimeSized": True,
+        "vectorWidth": 2,
+        "memberName": "values",
+    }
+    assert by_name["Triples"]["scalarLayout"] == {
+        "physicalType": "float3",
+        "elementType": "float32",
+        "elementSizeBytes": 12,
+        "elementStrideBytes": 16,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "std430",
+        "runtimeSized": True,
+        "vectorWidth": 3,
+        "memberName": "values",
+    }
+    assert by_name["Outputs"]["scalarLayout"] == {
+        **by_name["Triples"]["scalarLayout"],
+        "physicalType": "float4",
+        "elementSizeBytes": 16,
+        "vectorWidth": 4,
+    }
+    assert by_name["Integers"]["scalarLayout"] == {
+        **by_name["Inputs"]["scalarLayout"],
+        "physicalType": "int2",
+        "elementType": "int32",
+    }
+    assert by_name["Unsigned"]["scalarLayout"] == {
+        **by_name["Outputs"]["scalarLayout"],
+        "physicalType": "uint4",
+        "elementType": "uint32",
+    }
+    assert by_name["Flags"]["scalarLayout"] == {
+        **by_name["Inputs"]["scalarLayout"],
+        "physicalType": "uint2",
+        "elementType": "uint32",
+    }
+    assert by_name["WideIntegers"]["scalarLayout"] == {
+        **by_name["Inputs"]["scalarLayout"],
+        "physicalType": "int64_t2",
+        "elementType": "int64",
+        "elementSizeBytes": 16,
+        "elementStrideBytes": 16,
+        "alignmentBytes": 16,
+    }
+    assert by_name["WideTriples"]["scalarLayout"] == {
+        **by_name["Triples"]["scalarLayout"],
+        "physicalType": "uint64_t3",
+        "elementType": "uint64",
+        "elementSizeBytes": 24,
+        "elementStrideBytes": 32,
+        "alignmentBytes": 32,
+    }
+    assert by_name["Scale"]["scalarLayout"] == {
+        **by_name["Inputs"]["scalarLayout"],
+        "alignmentBytes": 16,
+        "storageLayout": "std140",
+        "runtimeSized": False,
+        "memberName": "value",
+        "blockSizeBytes": 16,
+    }
+    assert "scalarLayout" not in by_name["Unsupported"]
+
+
 def test_hlsl_reflection_records_exact_vector_resource_layouts(tmp_path):
     reflection = _reflect_hlsl(
         tmp_path,
@@ -267,6 +432,146 @@ def test_hlsl_reflection_records_exact_vector_resource_layouts(tmp_path):
     }
 
 
+def test_source_reflection_records_stored_bool_as_uint32_abi(tmp_path):
+    hlsl = _reflect_hlsl(
+        tmp_path,
+        """
+        StructuredBuffer<bool> inputFlags : register(t0);
+        RWStructuredBuffer<bool> outputFlags : register(u1);
+        [numthreads(1, 1, 1)] void CSMain() {}
+        """,
+    )
+    hlsl_by_name = {resource["name"]: resource for resource in hlsl["resources"]}
+    hlsl_layout = {
+        "physicalType": "uint",
+        "elementType": "uint32",
+        "elementSizeBytes": 4,
+        "elementStrideBytes": 4,
+        "alignmentBytes": 4,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer",
+        "runtimeSized": True,
+    }
+    assert hlsl_by_name["inputFlags"]["scalarLayout"] == hlsl_layout
+    assert hlsl_by_name["outputFlags"]["scalarLayout"] == hlsl_layout
+
+    artifact = tmp_path / "bool.comp"
+    artifact.write_text(
+        textwrap.dedent("""
+            #version 450 core
+            layout(std430, binding = 0) readonly buffer InputFlags {
+                bool inputFlags[];
+            };
+            layout(std430, binding = 1) buffer OutputFlags {
+                bool outputFlags[];
+            };
+            layout(local_size_x = 1) in;
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    glsl = reflect_target_host_interface(artifact, target="opengl", stage="compute")
+    glsl_by_name = {resource["name"]: resource for resource in glsl["resources"]}
+    assert glsl_by_name["InputFlags"]["scalarLayout"] == {
+        **hlsl_layout,
+        "storageLayout": "std430",
+        "memberName": "inputFlags",
+    }
+    assert glsl_by_name["OutputFlags"]["scalarLayout"] == {
+        **hlsl_layout,
+        "storageLayout": "std430",
+        "memberName": "outputFlags",
+    }
+
+
+def test_source_reflection_records_exact_64_bit_scalar_layouts(tmp_path):
+    hlsl = _reflect_hlsl(
+        tmp_path,
+        """
+        StructuredBuffer<int64_t> inputStrides : register(t0);
+        RWStructuredBuffer<uint64_t> outputOffsets : register(u1);
+        cbuffer AxisStride : register(b2) { int64_t axisStride; };
+        cbuffer AxisSize : register(b3) { uint64_t axisSize; };
+        [numthreads(1, 1, 1)] void CSMain() {}
+        """,
+    )
+    hlsl_by_name = {resource["name"]: resource for resource in hlsl["resources"]}
+    assert hlsl_by_name["inputStrides"]["scalarLayout"] == {
+        "physicalType": "int64_t",
+        "elementType": "int64",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 8,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-structured-buffer",
+        "runtimeSized": True,
+    }
+    assert hlsl_by_name["outputOffsets"]["scalarLayout"]["elementType"] == ("uint64")
+    assert hlsl_by_name["AxisStride"]["scalarLayout"] == {
+        "physicalType": "int64_t",
+        "elementType": "int64",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "hlsl-constant-buffer",
+        "runtimeSized": False,
+        "memberName": "axisStride",
+        "blockSizeBytes": 16,
+    }
+    assert hlsl_by_name["AxisSize"]["scalarLayout"]["elementType"] == "uint64"
+
+    artifact = tmp_path / "kernel.comp"
+    artifact.write_text(
+        textwrap.dedent("""
+            #version 450 core
+            #extension GL_ARB_gpu_shader_int64 : require
+            layout(std430, binding = 0) readonly buffer InputStrides {
+                int64_t inputStrides[];
+            };
+            layout(std430, binding = 1) buffer OutputOffsets {
+                uint64_t outputOffsets[];
+            };
+            layout(std140, binding = 2) uniform AxisStride {
+                int64_t axisStride;
+            };
+            layout(std140, binding = 3) uniform AxisSize {
+                uint64_t axisSize;
+            };
+            layout(local_size_x = 1) in;
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    glsl = reflect_target_host_interface(artifact, target="opengl", stage="compute")
+    glsl_by_name = {resource["name"]: resource for resource in glsl["resources"]}
+    assert glsl_by_name["InputStrides"]["scalarLayout"] == {
+        "physicalType": "int64_t",
+        "elementType": "int64",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 8,
+        "memberOffsetBytes": 0,
+        "storageLayout": "std430",
+        "runtimeSized": True,
+        "memberName": "inputStrides",
+    }
+    assert glsl_by_name["OutputOffsets"]["scalarLayout"]["elementType"] == ("uint64")
+    assert glsl_by_name["AxisStride"]["scalarLayout"] == {
+        "physicalType": "int64_t",
+        "elementType": "int64",
+        "elementSizeBytes": 8,
+        "elementStrideBytes": 8,
+        "alignmentBytes": 16,
+        "memberOffsetBytes": 0,
+        "storageLayout": "std140",
+        "runtimeSized": False,
+        "memberName": "axisStride",
+        "blockSizeBytes": 16,
+    }
+    assert glsl_by_name["AxisSize"]["scalarLayout"]["elementType"] == "uint64"
+
+
 def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts(tmp_path):
     hlsl = _reflect_hlsl(
         tmp_path,
@@ -278,6 +583,8 @@ def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts(tmp_path
         };
         RWStructuredBuffer<Pair> pairs : register(u0);
         ByteAddressBuffer bytes : register(t0);
+        RWStructuredBuffer<uint64_t2> wideOffsets : register(u1);
+        cbuffer Wide : register(b1) { int64_t2 wide; };
         [numthreads(1, 1, 1)] void CSMain() {}
         """,
     )
@@ -291,7 +598,7 @@ def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts(tmp_path
                 uint first;
                 uint second;
             };
-            layout(std430, binding = 1) buffer Vectors { uvec2 values[]; };
+            layout(std430, binding = 1) buffer UnsupportedVector { dvec2 values[]; };
             layout(binding = 2) buffer Implicit { uint values[]; };
             layout(local_size_x = 1) in;
             void main() {}
@@ -349,3 +656,45 @@ def test_hlsl_function_scan_has_bounded_work_on_failed_declarations(monkeypatch)
     assert declarations == [("CSMain", "[numthreads(8, 1, 1)]")]
     assert parsed_segments == 2
     assert parsed_characters <= len(source)
+
+
+def test_hlsl_reflection_distinguishes_register_namespaces(tmp_path):
+    reflection = _reflect_hlsl(
+        tmp_path,
+        """
+        cbuffer CrossGLDispatchInfo : register(b0) {
+            uint3 crossglNumWorkGroups;
+        };
+        StructuredBuffer<float> inputValues : register(t0);
+        RWStructuredBuffer<float> outputValues : register(u0);
+        SamplerState linearSampler : register(s0);
+        [numthreads(32, 1, 1)] void CSMain() {}
+        """,
+    )
+
+    assert reflection["status"] == "ready"
+    assert reflection["diagnostics"] == []
+
+
+def test_hlsl_reflection_rejects_duplicate_binding_within_register_namespace(tmp_path):
+    reflection = _reflect_hlsl(
+        tmp_path,
+        """
+        StructuredBuffer<float> firstInput : register(t0);
+        StructuredBuffer<float> secondInput : register(t0);
+        [numthreads(1, 1, 1)] void CSMain() {}
+        """,
+    )
+
+    assert reflection["status"] == "ambiguous"
+    assert reflection["diagnostics"] == [
+        "project.runtime-package-inspection."
+        "host-interface-reflection-ambiguous-binding"
+    ]
+    assert reflection["diagnosticRecords"][0]["details"] == {
+        "resource": "secondInput",
+        "conflictingResource": "firstInput",
+        "set": 0,
+        "binding": 0,
+        "bindingNamespace": "srv",
+    }

@@ -32,8 +32,504 @@ from crosstl.translator.ast import (
 )
 from crosstl.translator.codegen.metal_codegen import (
     MetalCodeGen,
+    MetalEntryPointSelectionError,
+    MetalStructConversionError,
     UnsupportedMetalFeatureError,
 )
+
+
+@pytest.mark.parametrize(
+    ("destination_type", "metal_type"),
+    [
+        ("float", "float"),
+        ("int", "int"),
+        ("int64_t", "int64_t"),
+        ("uint64_t", "uint64_t"),
+        ("bfloat16", "bfloat"),
+    ],
+)
+def test_metal_registered_complex_representation_projects_converted_field(
+    destination_type,
+    metal_type,
+):
+    shader = f"""
+    shader MetalComplexValueConversion {{
+        struct complex_t_float {{
+            float real;
+            float imag;
+        }}
+        compute {{
+            void main(uint3 tid @ gl_GlobalInvocationID) {{
+                complex_t_float value;
+                {destination_type} converted = {destination_type}(value);
+            }}
+        }}
+    }}
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert f"{metal_type} converted = {metal_type}((value).real);" in generated
+    assert f"{metal_type}(value)" not in generated
+
+
+def test_metal_registered_complex_representation_rejects_wrong_shape():
+    shader = """
+    shader MetalInvalidComplexValueConversion {
+        struct complex_t_float {
+            float real;
+            int imag;
+        }
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                complex_t_float value;
+                float converted = float(value);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(MetalStructConversionError) as exc_info:
+        MetalCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.metal-struct-construction-unsupported"
+    )
+    assert error.missing_capabilities == ("metal.struct-conversion-construction",)
+    assert error.destination_type == "float"
+    assert error.source_type == "complex_t_float"
+    assert error.conversion_kind == "value-conversion"
+    assert error.reason == "source-shape-mismatch"
+
+
+def test_metal_unregistered_structure_lookalike_is_not_projected():
+    shader = """
+    shader MetalUnregisteredValueConversion {
+        struct Pair {
+            float real;
+            float imag;
+        }
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                Pair value;
+                float converted = float(value);
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float converted = float(value);" in generated
+    assert "(value).real" not in generated
+
+
+def test_metal_bfloat_asuint_uses_native_width_and_compiles_warning_fatal():
+    shader = """
+    shader MetalNarrowBitcast {
+        compute {
+            void main(
+                RWStructuredBuffer<uint> output @buffer(0),
+                uint3 tid @ gl_GlobalInvocationID) {
+                bfloat16 value = bfloat16(1.0);
+                uint bits = asuint(value);
+                output[tid.x] = bits;
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "uint bits = as_type<ushort>(value);" in generated
+    assert "as_type<uint>(value)" not in generated
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if lookup.returncode != 0:
+        pytest.skip("Metal compiler is not available")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "shader.metal"
+        output_path = Path(temp_dir) / "shader.air"
+        source_path.write_text(generated, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(source_path),
+                "-o",
+                str(output_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if result.returncode != 0 and _missing_metal_toolchain(result):
+            pytest.skip("Metal toolchain is not installed")
+        assert result.returncode == 0, result.stderr
+        assert output_path.stat().st_size > 0
+
+
+def test_metal_explicit_as_type_rejects_unequal_native_width():
+    shader = """
+    shader MetalExplicitBitcastWidth {
+        compute {
+            void main(
+                RWStructuredBuffer<uint> output @buffer(0),
+                uint3 tid @ gl_GlobalInvocationID) {
+                half value = half(1.0);
+                uint bits = as_type<uint>(value);
+                output[tid.x] = bits;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Metal as_type<uint> cannot bitcast from half: "
+            r"total widths are 32 and 16 bits"
+        ),
+    ):
+        MetalCodeGen().generate_stage(
+            crosstl.translator.parse(shader),
+            "compute",
+        )
+
+
+def test_metal_explicit_as_type_uses_padded_three_lane_storage_width():
+    shader = """
+    shader MetalPaddedThreeLaneBitcast {
+        compute {
+            void main(
+                RWStructuredBuffer<uint> output @buffer(0),
+                uint3 tid @ gl_GlobalInvocationID) {
+                uint3 three = uint3(1u, 2u, 3u);
+                uint4 four = as_type<uint4>(three);
+                uint3 roundtrip = as_type<uint3>(four);
+                output[tid.x] = roundtrip.x + four.w;
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader),
+        "compute",
+    )
+
+    assert "uint4 four = as_type<uint4>(three);" in generated
+    assert "uint3 roundtrip = as_type<uint3>(four);" in generated
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if lookup.returncode != 0:
+        pytest.skip("Metal compiler is not available")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "shader.metal"
+        output_path = Path(temp_dir) / "shader.air"
+        source_path.write_text(generated, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(source_path),
+                "-o",
+                str(output_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if result.returncode != 0 and _missing_metal_toolchain(result):
+            pytest.skip("Metal toolchain is not installed")
+        assert result.returncode == 0, result.stderr
+        assert output_path.stat().st_size > 0
+
+
+def test_metal_explicit_as_type_preserves_native_narrow_vector_widths():
+    shader = """
+    shader MetalNativeNarrowVectorBitcast {
+        compute {
+            void main(
+                RWStructuredBuffer<uint> output @buffer(0),
+                uint3 tid @ gl_GlobalInvocationID) {
+                short3 signedWords = short3(1, 2, 3);
+                ushort4 unsignedWords = as_type<ushort4>(signedWords);
+                char3 signedBytes = char3(1, 2, 3);
+                uchar4 unsignedBytes = as_type<uchar4>(signedBytes);
+                int8_t3 signedByteAliases = int8_t3(1, 2, 3);
+                uint8_t4 unsignedByteAliases =
+                    as_type<uint8_t4>(signedByteAliases);
+                int16_t3 signedWordAliases = int16_t3(1, 2, 3);
+                uint16_t4 unsignedWordAliases =
+                    as_type<uint16_t4>(signedWordAliases);
+                float16_t3 halfAliases = float16_t3(1.0, 2.0, 3.0);
+                uint16_t4 halfAliasBits = as_type<uint16_t4>(halfAliases);
+                bfloat16_t3 bfloatAliases = bfloat16_t3(
+                    bfloat16_t(1.0), bfloat16_t(2.0), bfloat16_t(3.0));
+                uint16_t4 bfloatAliasBits = as_type<uint16_t4>(bfloatAliases);
+                output[tid.x] =
+                    uint(unsignedWords.x) + uint(unsignedBytes.x) +
+                    uint(unsignedByteAliases.x) + uint(unsignedWordAliases.x) +
+                    uint(halfAliasBits.x) + uint(bfloatAliasBits.x);
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader),
+        "compute",
+    )
+
+    assert (
+        "uint4 unsignedWords = "
+        "uint4(as_type<ushort4>(short3(signedWords)));" in generated
+    )
+    assert (
+        "uint4 unsignedBytes = uint4(as_type<uchar4>(char3(signedBytes)));" in generated
+    )
+    assert (
+        "uint4 unsignedByteAliases = "
+        "uint4(as_type<uchar4>(char3(signedByteAliases)));" in generated
+    )
+    assert (
+        "uint4 unsignedWordAliases = "
+        "uint4(as_type<ushort4>(short3(signedWordAliases)));" in generated
+    )
+    assert "uint4 halfAliasBits = uint4(as_type<ushort4>(halfAliases));" in generated
+    assert (
+        "uint4 bfloatAliasBits = uint4(as_type<ushort4>(bfloatAliases));" in generated
+    )
+    assert "int8_t3" not in generated
+    assert "uint8_t4" not in generated
+    assert "int16_t3" not in generated
+    assert "uint16_t4" not in generated
+    assert "float16_t3" not in generated
+    assert "bfloat16_t3" not in generated
+    assert "as_type<uint4>(signedWords)" not in generated
+    assert "as_type<uint4>(signedBytes)" not in generated
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if lookup.returncode != 0:
+        pytest.skip("Metal compiler is not available")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "shader.metal"
+        output_path = Path(temp_dir) / "shader.air"
+        source_path.write_text(generated, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(source_path),
+                "-o",
+                str(output_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if result.returncode != 0 and _missing_metal_toolchain(result):
+            pytest.skip("Metal toolchain is not installed")
+        assert result.returncode == 0, result.stderr
+        assert output_path.stat().st_size > 0
+
+
+@pytest.mark.parametrize(
+    ("source_type", "expected_type"),
+    (
+        ("int8_t2", "int2"),
+        ("uint8_t4", "uint4"),
+        ("int16_t3", "int3"),
+        ("uint16_t4", "uint4"),
+        ("int32_t2", "int2"),
+        ("uint32_t3", "uint3"),
+        ("int64_t3", "long3"),
+        ("uint64_t4", "ulong4"),
+        ("float16_t3", "half3"),
+        ("float32_t4", "float4"),
+        ("float64_t2", "double2"),
+        ("bfloat16_t3", "bfloat3"),
+    ),
+)
+def test_metal_fixed_width_vector_aliases_map_to_valid_native_types(
+    source_type,
+    expected_type,
+):
+    assert MetalCodeGen().map_type(source_type) == expected_type
+
+
+@pytest.mark.parametrize(
+    ("value_type", "expected_width"),
+    (
+        ("vector<short, 3>", 64),
+        ("metal::vector<uchar, 4>", 32),
+        ("vector<long,3>", 256),
+    ),
+)
+def test_metal_explicit_as_type_accepts_native_vector_template_spacing(
+    value_type,
+    expected_width,
+):
+    info = MetalCodeGen().metal_explicit_bitcast_type_info(value_type)
+    assert info is not None
+    assert info["totalWidth"] == expected_width
+
+
+def test_metal_explicit_as_type_accepts_const_reference_value():
+    shader = """
+    shader MetalReferenceBitcast {
+        float decode(const uint& value) {
+            return as_type<float>(value);
+        }
+        compute {
+            void main(
+                RWStructuredBuffer<uint> output @buffer(0),
+                uint3 tid @ gl_GlobalInvocationID) {
+                uint value = 0x3f800000u;
+                output[tid.x] = uint(decode(value));
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader),
+        "compute",
+    )
+
+    assert "float decode(const thread uint& value)" in generated
+    assert "return as_type<float>(value);" in generated
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if lookup.returncode != 0:
+        pytest.skip("Metal compiler is not available")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "shader.metal"
+        output_path = Path(temp_dir) / "shader.air"
+        source_path.write_text(generated, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(source_path),
+                "-o",
+                str(output_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if result.returncode != 0 and _missing_metal_toolchain(result):
+            pytest.skip("Metal toolchain is not installed")
+        assert result.returncode == 0, result.stderr
+        assert output_path.stat().st_size > 0
+
+
+@pytest.mark.parametrize(
+    ("declaration", "target_type", "argument", "packed_role"),
+    (
+        (
+            "packed_uint3 value = packed_uint3(1u, 2u, 3u);",
+            "uint3",
+            "value",
+            "source packed_uint3",
+        ),
+        (
+            "uint3 value = uint3(1u, 2u, 3u);",
+            "packed_uint3",
+            "value",
+            "target packed_uint3",
+        ),
+    ),
+)
+def test_metal_explicit_as_type_rejects_packed_vector_storage_loss(
+    declaration,
+    target_type,
+    argument,
+    packed_role,
+):
+    shader = f"""
+    shader MetalPackedVectorBitcast {{
+        compute {{
+            void main(
+                RWStructuredBuffer<uint> output @buffer(0),
+                uint3 tid @ gl_GlobalInvocationID) {{
+                {declaration}
+                {target_type} converted = as_type<{target_type}>({argument});
+                output[tid.x] = converted.x;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"Metal as_type<{target_type}> cannot preserve packed vector "
+            rf"storage for {packed_role}"
+        ),
+    ):
+        MetalCodeGen().generate_stage(
+            crosstl.translator.parse(shader),
+            "compute",
+        )
+
+
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -98,6 +594,127 @@ def compile_with_metal_if_available(source: str):
     if result.returncode != 0 and _missing_metal_toolchain(result):
         pytest.skip("Metal toolchain is not installed")
     assert result.returncode == 0, result.stderr
+
+
+METAL_ENTRY_SCOPED_COMPUTE_SOURCE = """
+shader MetalEntryScopedCompute {
+    struct SelectedInner {
+        uint value;
+    }
+
+    struct SelectedPayload {
+        SelectedInner inner;
+    }
+
+    struct UnrelatedPayload {
+        uint value;
+    }
+
+    uint selected_helper(SelectedPayload payload) {
+        return payload.inner.value + 1u;
+    }
+
+    uint unrelated_helper(UnrelatedPayload payload) {
+        return payload.value * 9u;
+    }
+
+    compute first {
+        void main(RWStructuredBuffer<uint> output @buffer(0)) {
+            UnrelatedPayload payload;
+            payload.value = 3u;
+            output[0] = unrelated_helper(payload);
+        }
+    }
+
+    compute second {
+        void main(RWStructuredBuffer<uint> output @buffer(0)) {
+            SelectedPayload payload;
+            payload.inner.value = 5u;
+            output[0] = selected_helper(payload);
+        }
+    }
+}
+"""
+
+
+def test_metal_entry_scoped_generation_prunes_unreachable_program(tmp_path):
+    ast = parse_code(tokenize_code(METAL_ENTRY_SCOPED_COMPUTE_SOURCE))
+
+    generated = MetalCodeGen().generate_entry(ast, "second")
+
+    assert generated.count("kernel void") == 1
+    assert "kernel void kernel_second" in generated
+    assert "kernel void kernel_first" not in generated
+    assert "selected_helper" in generated
+    assert "unrelated_helper" not in generated
+    assert "struct SelectedInner" in generated
+    assert "struct SelectedPayload" in generated
+    assert "struct UnrelatedPayload" not in generated
+    assert generated.count("[[buffer(0)]]") == 1
+    compile_with_metal_if_available(generated)
+
+
+def test_metal_entry_scoped_generation_reports_available_entries():
+    ast = parse_code(tokenize_code(METAL_ENTRY_SCOPED_COMPUTE_SOURCE))
+
+    with pytest.raises(
+        MetalEntryPointSelectionError,
+        match="source entry point 'missing' was not found",
+    ) as error:
+        MetalCodeGen().generate_entry(ast, "missing")
+
+    assert error.value.project_diagnostic_code == (
+        "project.translate.metal-entry-point-unavailable"
+    )
+    assert error.value.missing_capabilities == ("artifact.entry-point-selection",)
+    assert error.value.reason == "not-found"
+    assert error.value.entry_point == "missing"
+    assert error.value.available_entry_points == ("first", "second")
+
+
+def test_metal_entry_scoped_generation_rejects_ambiguous_entry():
+    ast = parse_code(tokenize_code("""
+            shader AmbiguousMetalEntry {
+                @compute
+                @stage_entry
+                void duplicate(RWStructuredBuffer<uint> output @buffer(0)) {
+                    output[0] = 1u;
+                }
+
+                @compute
+                @stage_entry
+                void duplicate(
+                    RWStructuredBuffer<uint> output @buffer(0),
+                    uint index @gl_GlobalInvocationID
+                ) {
+                    output[index] = 2u;
+                }
+            }
+            """))
+
+    with pytest.raises(MetalEntryPointSelectionError) as error:
+        MetalCodeGen().generate_entry(ast, "duplicate")
+
+    assert error.value.reason == "ambiguous"
+    assert error.value.available_entry_points == ("duplicate",)
+
+
+def test_metal_entry_scoped_generation_rejects_non_compute_entry():
+    ast = parse_code(tokenize_code("""
+            shader MetalVertexEntry {
+                vertex first {
+                    vec4 main() @ gl_Position {
+                        return vec4(0.0);
+                    }
+                }
+            }
+            """))
+
+    with pytest.raises(MetalEntryPointSelectionError) as error:
+        MetalCodeGen().generate_entry(ast, "first")
+
+    assert error.value.reason == "unsupported-stage"
+    assert error.value.stage == "vertex"
 
 
 def test_metal_codegen_skips_resource_array_hint_walk_without_resource_arrays():
@@ -260,6 +877,92 @@ def test_binary_expression_precedence_preserves_grouping_in_metal():
     ) in generated_code
     assert "float t = -nearPoint.y / farPoint.y - nearPoint.y;" not in generated_code
     assert "float3(t) * farPoint - nearPoint" not in generated_code
+
+
+def test_metal_reconstructs_retained_source_union_layout_and_compiles():
+    shader = """
+    shader MetalRetainedUnionLayout {
+        @union_layout(4, 4, little_endian, metal)
+        struct FloatWord {
+            @union_member_layout(0, 4, 4) float value;
+            @union_member_layout(0, 4, 4) uint word;
+        }
+
+        uint float_word(float value) {
+            FloatWord bits;
+            bits.value = value;
+            return bits.word;
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "union FloatWord {" in generated
+    assert "float value;" in generated
+    assert "uint word;" in generated
+    assert "struct FloatWord" not in generated
+    assert "union_member_layout" not in generated
+    compile_with_metal_if_available(generated)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "reason"),
+    [
+        (
+            """
+            @union_layout(4, 4, little_endian, metal)
+            struct MissingMemberLayout { float value; }
+            """,
+            "member-layout-missing",
+        ),
+        (
+            """
+            @union_layout(4, 4, little_endian, metal)
+            struct NonzeroOffset {
+                @union_member_layout(1, 4, 4) uint word;
+            }
+            """,
+            "member-offset-unsupported",
+        ),
+        (
+            """
+            @union_layout(4, 4, little_endian, directx)
+            struct ForeignAbi {
+                @union_member_layout(0, 4, 4) uint word;
+            }
+            """,
+            "source-abi-unsupported",
+        ),
+    ],
+    ids=["missing-member", "nonzero-offset", "foreign-abi"],
+)
+def test_metal_retained_union_layout_rejects_ambiguous_contracts(declaration, reason):
+    shader = f"shader InvalidMetalUnion {{ {declaration} }}"
+
+    with pytest.raises(UnsupportedMetalFeatureError) as error:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert error.value.feature == "union-layout-contract"
+    assert error.value.reason == reason
+    assert error.value.missing_capabilities == ("metal.union-layout-contract",)
+
+
+def test_metal_shift_grouping_is_explicit_for_warning_fatal_native_builds():
+    shader = """
+    shader MetalShiftGrouping {
+        uint pack(uint value, uint mask) {
+            uint shifted = (127u + value) << 23u;
+            return mask | ((127u + value) << 23u) | shifted;
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint shifted = (127u + value) << 23u;" in generated
+    assert "mask | (127u + value) << 23u | shifted" in generated
+    compile_with_metal_if_available(generated)
 
 
 def test_glsl_fragment_output_named_fragment_escapes_metal_keyword(tmp_path):
@@ -3292,6 +3995,66 @@ def test_metal_indexed_pointer_member_access_uses_element_dot_operator():
     assert "payloads[0]->value" not in generated_code
 
 
+def test_metal_structured_buffer_constant_metadata_and_postfix_updates_roundtrip():
+    shader = """
+    shader MetalConstantStructuredBuffer {
+        int readShape(constant int* shape, int index) {
+            return shape[index];
+        }
+
+        compute {
+            void main(
+                StructuredBuffer<int> shape @buffer(0) @constant,
+                RWStructuredBuffer<int> output @buffer(1),
+                uint gid @gl_GlobalInvocationID
+            ) {
+                uint outputIndex = gid;
+                output[outputIndex++] = readShape(shape, 0);
+                ++outputIndex;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "int readShape(constant int* shape, int index)" in generated_code
+    assert "constant int* shape [[buffer(0)]]" in generated_code
+    assert "output[outputIndex++] = readShape(shape, 0);" in generated_code
+    assert "++outputIndex;" in generated_code
+    assert "output[++outputIndex]" not in generated_code
+    assert "unsupported Metal address-space call" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("resource", "message"),
+    [
+        (
+            "StructuredBuffer<int> shape @buffer(0) @constant @device",
+            "Conflicting address space metadata",
+        ),
+        (
+            "RWStructuredBuffer<int> shape @buffer(0) @constant",
+            "cannot use the constant address space",
+        ),
+    ],
+    ids=["conflicting-address-spaces", "writable-constant"],
+)
+def test_metal_structured_buffer_address_space_metadata_fails_closed(resource, message):
+    shader = f"""
+    shader InvalidMetalStructuredBufferAddressSpace {{
+        compute {{
+            void main({resource}) {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        MetalCodeGen().generate_stage(parse_code(tokenize_code(shader)), "compute")
+
+
 def test_metal_readonly_raw_buffer_parameters_use_const_device_address_space():
     shader = """
     shader MetalReadonlyRawBuffers {
@@ -4001,6 +4764,45 @@ def test_metal_precision_aliases_map_to_native_metal_types():
         "min12int",
     ):
         assert invalid_token not in generated_code
+
+
+def test_metal_precise_functions_and_locals_disable_contraction():
+    shader = """
+    shader PreciseArithmetic {
+        @precise
+        float stableProduct(float left, float right) {
+            return left * right + left;
+        }
+
+        float scopedProduct(float left, float right) {
+            float product @precise = left * right;
+            return product + left;
+        }
+
+        float relaxedProduct(float left, float right) {
+            return left * right + left;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("#pragma clang fp contract(off)") == 2
+    assert generated_code.count("#pragma clang fp contract(fast)") == 2
+    assert (
+        "#pragma clang fp contract(off)\n"
+        "float stableProduct(float left, float right)"
+    ) in generated_code
+    assert (
+        "#pragma clang fp contract(off)\n"
+        "float scopedProduct(float left, float right)"
+    ) in generated_code
+    assert (
+        "#pragma clang fp contract(off)\n"
+        "float relaxedProduct(float left, float right)"
+    ) not in generated_code
+    assert "[[precise]]" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_float16_matrix_ir_aliases_map_to_half_matrices():
@@ -4778,6 +5580,34 @@ def test_metal_unsized_structured_buffer_arrays_infer_helper_size():
     assert "uint64_t offset = readOffset(offsets, index);" in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
+
+
+def test_metal_readonly_structured_buffer_array_rejects_mutable_helper_call():
+    shader = """
+    shader ReadonlyStructuredBufferArrayMetal {
+        StructuredBuffer<uint> values[2] @ binding(5);
+
+        void mutate(RWStructuredBuffer<uint> localValues[2], uint index) {
+            buffer_store(localValues[0], index, 1u);
+        }
+
+        void callMutate(uint index) {
+            mutate(values, index);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "array<const device uint*, 2> values" in generated_code
+    assert "void mutate(array<device uint*, 2> localValues, uint index)" in (
+        generated_code
+    )
+    assert (
+        "readonly parameter 'values' cannot be passed to mutable parameter "
+        "'localValues' of 'mutate'" in generated_code
+    )
+    assert "mutate(values, index);" not in generated_code
 
 
 def test_metal_dynamic_only_unsized_structured_buffer_arrays_keep_fallback_size():
@@ -6277,13 +7107,13 @@ def test_for_statement_preserves_declaration_initializers():
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "const float weights[2];" in generated_code
-    assert "for (int i = 0; i < 2; ++i)" in generated_code
-    assert "for (i = 0; i < 4; ++i)" in generated_code
+    assert "for (int i = 0; i < 2; i++)" in generated_code
+    assert "for (i = 0; i < 4; i++)" in generated_code
     assert "for (const int fixed = 0; fixed < 0; )" in generated_code
     assert "for (; ; )" in generated_code
     assert "continue;" in generated_code
     assert "break;" in generated_code
-    assert "for (i; i < 2; ++i)" not in generated_code
+    assert "for (i; i < 2; i++)" not in generated_code
     assert "for (fixed; fixed < 0; )" not in generated_code
     assert "BreakNode(" not in generated_code
     assert "ContinueNode(" not in generated_code
