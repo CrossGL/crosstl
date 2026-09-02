@@ -4829,6 +4829,62 @@ def test_pr_issue_link_workflow_assigns_closing_keywords_and_gates_traceability(
     assert "path: support/generated/pr-issue-link-summary.json" in pr_issue_links
 
 
+def test_mlx_project_porting_workflow_runs_copy_complete_opengl_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_copy_complete_opengl.py"
+
+    copy_opengl_job = _workflow_job_section(
+        mlx_porting,
+        "mlx-copy-complete-opengl-translation",
+    )
+    assert (
+        "name: MLX complete copy OpenGL translation "
+        "(shard ${{ matrix.shard_index }} of 24)" in copy_opengl_job
+    )
+    assert "if: github.event_name != 'schedule'" in copy_opengl_job
+    assert "runs-on: ubuntu-latest" in copy_opengl_job
+    assert "timeout-minutes: 180" in copy_opengl_job
+    assert "fail-fast: false" in copy_opengl_job
+    assert _matrix_values(copy_opengl_job, "shard_index") == {
+        str(index) for index in range(24)
+    }
+    assert 'python-version: "3.12"' in copy_opengl_job
+    assert "sudo apt-get install -y glslang-tools spirv-tools" in copy_opengl_job
+    assert "python -m pip install -e . pytest-xdist" in copy_opengl_job
+    assert "glslangValidator --version" in copy_opengl_job
+    assert "spirv-val --version" in copy_opengl_job
+    assert "Checkout current MLX copy corpus" in copy_opengl_job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_opengl_job
+
+    copy_opengl_step = ci_coverage.workflow_step_section(
+        copy_opengl_job,
+        "Prove current MLX complete copy family OpenGL translation",
+    )
+    assert "if: runner.os" not in copy_opengl_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
+        in copy_opengl_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_COPY_OPENGL_TRANSLATION: "1"' in copy_opengl_step
+    assert (
+        "CROSTL_MLX_COPY_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}"
+        in copy_opengl_step
+    )
+    assert 'CROSTL_MLX_COPY_OPENGL_SHARD_COUNT: "24"' in copy_opengl_step
+    assert (
+        f"{test_path}::test_current_mlx_copy_family_translates_to_opengl"
+        in copy_opengl_step
+    )
+    assert "-n auto" in copy_opengl_step
+    assert "-k" not in copy_opengl_step
+    assert mlx_porting.count(f'- "{test_path}"') == 2
+    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
+    assert "Prove current MLX complete copy family OpenGL translation" not in (
+        matrix_job
+    )
+
+
 def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
     workflows = _workflow_texts()
     full_suite = workflows.get("full-tests.yml", "")

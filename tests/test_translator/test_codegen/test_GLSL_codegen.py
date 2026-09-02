@@ -44,6 +44,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLBooleanCompoundAssignmentError,
     OpenGLBooleanOrderedIntrinsicError,
     OpenGLCompileTimeGlobalError,
+    OpenGLComplexArithmeticError,
     OpenGLCompoundAssignmentError,
     OpenGLCooperativeMatrixError,
     OpenGLCopySignError,
@@ -14393,6 +14394,149 @@ def test_opengl_explicit_complex64_to_scalar_uses_real_component(tmp_path):
         tmp_path,
         "complex64_scalar_conversion",
     )
+
+
+def test_opengl_registered_complex64_representation_to_scalar_uses_real_component(
+    tmp_path,
+):
+    shader = """
+    shader RegisteredComplex64RepresentationConversion {
+        struct complex_t_float {
+            float real;
+            float imag;
+        };
+
+        StructuredBuffer<complex_t_float> source @ binding(0);
+
+        float projectFloat(complex_t_float value) {
+            return float(value);
+        }
+
+        int projectInt(complex_t_float value) {
+            return int(value);
+        }
+
+        uint projectUint(complex_t_float value) {
+            return uint(value);
+        }
+
+        bool projectBool(complex_t_float value) {
+            return bool(value);
+        }
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main(uint3 dispatchId @ SV_DispatchThreadID) {
+                complex_t_float value = buffer_load(source, dispatchId.x);
+                float asFloat = projectFloat(value);
+                int asInt = projectInt(value);
+                uint asUint = projectUint(value);
+                bool asBool = projectBool(value);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return (value).real;" in generated
+    assert "return int((value).real);" in generated
+    assert "return uint((value).real);" in generated
+    assert "return ((value).real != 0.0);" in generated
+    for invalid in (
+        "return float(value);",
+        "return int(value);",
+        "return uint(value);",
+        "return bool(value);",
+    ):
+        assert invalid not in generated
+    assert "complex64_t" not in generated
+    assert "crossgl_complex64_" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "registered_complex64_representation_to_scalar",
+        spirv_target="spirv1.3",
+    )
+
+
+@pytest.mark.parametrize("imag_type", ["float", "int"])
+@pytest.mark.parametrize(
+    ("body", "operator", "operand_types"),
+    [
+        ("return -left;", "-", ("complex_t_float",)),
+        (
+            "return left + right;",
+            "+",
+            ("complex_t_float", "complex_t_float"),
+        ),
+        (
+            "left += right;\n            return left;",
+            "+=",
+            ("complex_t_float", "complex_t_float"),
+        ),
+    ],
+    ids=("unary", "binary", "compound"),
+)
+def test_opengl_registered_complex64_representation_arithmetic_fails_closed(
+    imag_type,
+    body,
+    operator,
+    operand_types,
+):
+    shader = f"""
+    shader RegisteredComplex64RepresentationArithmetic {{
+        struct complex_t_float {{
+            float real;
+            {imag_type} imag;
+        }};
+
+        complex_t_float invalid(
+            complex_t_float left,
+            complex_t_float right
+        ) {{
+            {body}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLComplexArithmeticError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-complex-arithmetic-unsupported"
+    )
+    assert diagnostic.operator == operator
+    assert diagnostic.operand_types == operand_types
+    assert diagnostic.reason == ("registered-representation-arithmetic-unsupported")
+
+
+def test_opengl_registered_complex64_representation_rejects_shape_mismatch():
+    shader = """
+    shader InvalidRegisteredComplex64Representation {
+        struct complex_t_float {
+            int real;
+            float imag;
+        };
+
+        float project(complex_t_float value) {
+            return float(value);
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStructConstructionError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-struct-construction-unsupported"
+    )
+    assert diagnostic.destination_type == "complex_t_float"
+    assert diagnostic.source_type == "complex_t_float"
+    assert diagnostic.conversion_kind == "value-conversion"
+    assert diagnostic.reason == "destination-shape-mismatch"
 
 
 def test_opengl_contextual_scalar_to_complex_return_conversion(tmp_path):

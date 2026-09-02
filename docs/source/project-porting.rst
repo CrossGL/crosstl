@@ -610,6 +610,41 @@ object for each. This proves translation, reflection, and native compiler
 acceptance; it does not claim Metal numerical execution, MLX host-runtime
 redirection, or MLX test-suite parity.
 
+The same selected-entry pipeline translates all 2,496 copy entries to
+standalone OpenGL ``main`` artifacts. The schema-v2
+``copy.opengl-translation.json`` contract preserves all 30 shapes, 16 concrete
+kernel templates, 13 input/output types, all 169 conversion pairs, 6,566 exact
+materializations, and 8,684 reflected target resources. Scalar and vector forms
+expose source and destination storage buffers plus an entry-scoped size block;
+fixed generalized forms add scalar stride blocks or stride storage buffers;
+rank-generic forms expose shape and stride buffers plus an entry-scoped rank
+block; dynamic forms add exact source and destination offset blocks.
+
+The generic registered-structure contract recognizes both canonical
+``complex64_t`` and its emitted ``complex_t_float`` representation. The 150
+complex-to-scalar entries project the real field only after validating the exact
+ordered ``real``/``imag`` float shape, evaluate the source once, and retain
+narrow target conversion semantics. A malformed registered representation
+fails closed rather than emitting an invalid GLSL constructor.
+
+OpenGL's 32-bit index profile cannot implicitly preserve every source 64-bit
+buffer index. The complete contract therefore declares explicit host/runtime
+bounds of ``[0, 2147483647]`` for ``offset + i``, ``src_idx``, ``dst_idx``,
+``dst_idx + i``, ``src_idx + src_offset``, ``dst_idx + dst_offset``, ``idx.x``,
+and ``idx.y``. These are portability preconditions rather than inferred facts
+or generated checks; absent proof continues to fail closed.
+
+Required Linux CI partitions the family into 24 disjoint 104-entry shards. Each
+shard retranslates its entries, verifies deterministic artifact identity,
+materialization provenance, standalone ``main`` workgroup metadata, and exact
+target reflection, compiles with
+``glslangValidator --target-env opengl --target-env spirv1.3 -S comp``, validates
+with ``spirv-val --target-env spv1.3``, and requires a non-empty SPIR-V module.
+Together with the Metal contract this closes complete discovered-copy
+translation, reflection, and native compiler coverage for those two targets; it
+does not claim numerical execution, MLX host-runtime redirection, or MLX
+test-suite parity.
+
 The current-pinned MLX binary integration independently proves all 4,122
 discovered entries from ``binary.metal``. Fifteen 238-entry base shapes and
 three 184-entry work-per-thread shapes span 18 shapes, 11 concrete kernel

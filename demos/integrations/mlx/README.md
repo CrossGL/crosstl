@@ -92,6 +92,26 @@ The current harness verifies:
   2,496 non-empty AIR objects in aggregate. This is complete copy translation,
   reflection, and native compiler coverage, not numerical execution or MLX host
   runtime redirection;
+- selected-entry translation of all 2,496 discovered current-pinned
+  `copy.metal` entries to OpenGL. The schema-v2
+  `contracts/copy.opengl-translation.json` contract pins every standalone
+  `main` artifact across all 30 shapes, 16 templates, 13 input/output types,
+  169 conversion pairs, 6,566 materializations, and 8,684 reflected target
+  resources. Registered `complex_t_float` representations project through the
+  real field for the 150 complex-to-scalar entries only after exact ordered
+  `real`/`imag` float-shape validation; malformed registered shapes continue to
+  fail closed. Eight explicit host/runtime index-range preconditions bound
+  `offset + i`, `src_idx`, `dst_idx`, `dst_idx + i`,
+  `src_idx + src_offset`, `dst_idx + dst_offset`, `idx.x`, and `idx.y` to
+  signed 32-bit OpenGL index space. These are portability promises, not
+  inferred or runtime-enforced checks, and unproven wide indices remain
+  rejected. Twenty-four required Linux CI shards retranslate every exact
+  entry, verify deterministic identity, materialization, workgroup metadata,
+  and reflected ABI, compile for OpenGL/SPIR-V 1.3 with
+  `glslangValidator`, validate with `spirv-val`, and require 2,496 non-empty
+  SPIR-V modules. Together with the Metal proof this closes complete copy
+  translation, reflection, and native compiler coverage for those two targets,
+  not numerical execution or MLX host runtime redirection;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 4,122
   discovered current-pinned binary entries from ``binary.metal``. The complete
   contract spans 18 shapes and 11 concrete kernel templates, 24 operators, and

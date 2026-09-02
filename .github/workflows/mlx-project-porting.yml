@@ -39,6 +39,7 @@ on:
       - "tests/test_translator/test_mlx_binary_metal_roundtrip.py"
       - "tests/test_translator/test_mlx_binary_complete_metal_roundtrip.py"
       - "tests/test_translator/test_mlx_copy_complete_metal_roundtrip.py"
+      - "tests/test_translator/test_mlx_copy_complete_opengl.py"
       - "tests/test_translator/test_mlx_binary_complete_opengl.py"
       - "tests/test_translator/test_mlx_binary_complete_directx.py"
       - "tests/test_translator/test_mlx_copy_native_loader.py"
@@ -94,6 +95,7 @@ on:
       - "tests/test_translator/test_mlx_binary_metal_roundtrip.py"
       - "tests/test_translator/test_mlx_binary_complete_metal_roundtrip.py"
       - "tests/test_translator/test_mlx_copy_complete_metal_roundtrip.py"
+      - "tests/test_translator/test_mlx_copy_complete_opengl.py"
       - "tests/test_translator/test_mlx_binary_complete_opengl.py"
       - "tests/test_translator/test_mlx_binary_complete_directx.py"
       - "tests/test_translator/test_mlx_copy_native_loader.py"
@@ -2113,6 +2115,59 @@ jobs:
         run: >-
           python -m pytest -q -n auto
           tests/test_translator/test_mlx_copy_complete_metal_roundtrip.py::test_current_mlx_copy_family_roundtrips_through_metal
+
+  mlx-copy-complete-opengl-translation:
+    name: MLX complete copy OpenGL translation (shard ${{ matrix.shard_index }} of 24)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+
+    steps:
+      - name: Checkout CrossTL
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CrossTL and OpenGL SPIR-V validators
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools spirv-tools
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest-xdist
+          glslangValidator --version
+          spirv-val --version
+
+      - name: Checkout current MLX copy corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
+          git -C mlx-current-upstream config core.autocrlf false
+          git -C mlx-current-upstream sparse-checkout init --cone
+          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
+          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
+          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+
+      - name: Prove current MLX complete copy family OpenGL translation
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
+          CROSTL_REQUIRE_MLX_COPY_OPENGL_TRANSLATION: "1"
+          CROSTL_MLX_COPY_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}
+          CROSTL_MLX_COPY_OPENGL_SHARD_COUNT: "24"
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_translator/test_mlx_copy_complete_opengl.py::test_current_mlx_copy_family_translates_to_opengl
 
   mlx-binary-complete-opengl-translation:
     name: MLX complete binary OpenGL translation (shard ${{ matrix.shard_index }} of 24)

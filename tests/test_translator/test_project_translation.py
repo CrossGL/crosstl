@@ -9077,6 +9077,74 @@ def test_translate_project_reports_unsupported_opengl_complex_operand(tmp_path):
     )
 
 
+def test_translate_project_reports_registered_complex_representation_arithmetic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "complex.cgl").write_text(
+        textwrap.dedent("""
+            shader InvalidRegisteredComplexArithmetic {
+                struct complex_t_float {
+                    float real;
+                    float imag;
+                };
+
+                complex_t_float invalid(
+                    complex_t_float left,
+                    complex_t_float right
+                ) {
+                    left += right;
+                    return left;
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-complex-arithmetic-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "opengl.complex-arithmetic-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["location"]["file"] == "shaders/complex.cgl"
+    assert diagnostic["missingCapabilities"] == ["opengl.complex-arithmetic-lowering"]
+    assert diagnostic["details"] == {
+        "complexArithmetic": {
+            "operandTypes": ["complex_t_float", "complex_t_float"],
+            "operator": "+=",
+            "reason": "registered-representation-arithmetic-unsupported",
+        },
+        "sourcePath": "shaders/complex.cgl",
+        "targetArtifact": "translated/opengl/shaders/complex.glsl",
+    }
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_reports_unsupported_opengl_struct_construction(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

@@ -76,7 +76,7 @@ from ..structure_conversions import (
     ScalarKind,
     StructureConversionKind,
     StructureFieldValue,
-    registered_scalar_to_structure_conversion,
+    registered_structure_conversion_for_identity,
 )
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
@@ -21339,8 +21339,15 @@ complex64_t crossgl_complex64_mod_assign(
 
 """
 
+    def is_glsl_registered_complex64_type(self, type_text):
+        binding = self.glsl_registered_scalar_structure_contract(type_text)
+        return binding is not None and binding[0].destination_type == "complex64_t"
+
     def is_glsl_complex64_type(self, type_text):
-        return self.map_type(type_text) == "complex64_t"
+        return (
+            self.is_glsl_registered_complex64_type(type_text)
+            and self.map_type(type_text) == "complex64_t"
+        )
 
     def glsl_complex64_operand(self, rendered, type_text, expr=None):
         if self.is_glsl_complex64_type(type_text):
@@ -21361,7 +21368,9 @@ complex64_t crossgl_complex64_mod_assign(
 
         argument = arguments[0]
         source_type = self.glsl_source_expression_type(argument)
-        if source_type is None or not self.is_glsl_complex64_type(source_type):
+        if source_type is None or not self.is_glsl_registered_complex64_type(
+            source_type
+        ):
             return None
 
         binding = self.glsl_registered_scalar_structure_contract(source_type)
@@ -21407,7 +21416,7 @@ complex64_t crossgl_complex64_mod_assign(
             destination_type_name.rsplit("::", 1)[-1],
         )
         for candidate in candidates:
-            contract = registered_scalar_to_structure_conversion(candidate)
+            contract = registered_structure_conversion_for_identity(candidate)
             if contract is not None:
                 mapped_destination_type = self.map_type(destination_type_name)
                 source_destination_type = self.glsl_source_type_identifier_name(
@@ -21661,6 +21670,24 @@ complex64_t crossgl_complex64_mod_assign(
             source_location=getattr(expr, "source_location", None),
         )
 
+    def glsl_validate_complex64_arithmetic_representation(
+        self,
+        expr,
+        operator,
+        operand_types,
+    ):
+        if any(
+            self.is_glsl_registered_complex64_type(operand_type)
+            and not self.is_glsl_complex64_type(operand_type)
+            for operand_type in operand_types
+        ):
+            self.glsl_complex64_error(
+                expr,
+                operator,
+                operand_types,
+                "registered-representation-arithmetic-unsupported",
+            )
+
     def glsl_complex64_binary_expression(
         self,
         expr,
@@ -21673,10 +21700,15 @@ complex64_t crossgl_complex64_mod_assign(
         left_type = left_type or self.glsl_source_expression_type(expr.left)
         right_type = right_type or self.glsl_source_expression_type(expr.right)
         if not (
-            self.is_glsl_complex64_type(left_type)
-            or self.is_glsl_complex64_type(right_type)
+            self.is_glsl_registered_complex64_type(left_type)
+            or self.is_glsl_registered_complex64_type(right_type)
         ):
             return None
+        self.glsl_validate_complex64_arithmetic_representation(
+            expr,
+            operator,
+            (left_type, right_type),
+        )
 
         helpers = {
             "+": "crossgl_complex64_add",
@@ -21714,8 +21746,13 @@ complex64_t crossgl_complex64_mod_assign(
 
     def glsl_complex64_unary_expression(self, expr, operand, operator):
         operand_type = self.glsl_source_expression_type(expr.operand)
-        if not self.is_glsl_complex64_type(operand_type):
+        if not self.is_glsl_registered_complex64_type(operand_type):
             return None
+        self.glsl_validate_complex64_arithmetic_representation(
+            expr,
+            operator,
+            (operand_type,),
+        )
         if operator == "+":
             return operand
         if operator != "-":
@@ -21737,10 +21774,16 @@ complex64_t crossgl_complex64_mod_assign(
         operator,
         left_type,
     ):
-        if not self.is_glsl_complex64_type(left_type):
+        if not self.is_glsl_registered_complex64_type(left_type):
             return None
         if operator == "=":
             return None
+        right_type = self.glsl_source_expression_type(right_node)
+        self.glsl_validate_complex64_arithmetic_representation(
+            node,
+            operator,
+            (left_type, right_type),
+        )
         helpers = {
             "+=": "crossgl_complex64_add_assign",
             "-=": "crossgl_complex64_sub_assign",
@@ -21756,7 +21799,6 @@ complex64_t crossgl_complex64_mod_assign(
                 (left_type, self.glsl_source_expression_type(right_node)),
                 "operator-unsupported",
             )
-        right_type = self.glsl_source_expression_type(right_node)
         right = self.generate_expression(right_node)
         right_operand = self.glsl_complex64_operand(right, right_type, right_node)
         if right_operand is None:
@@ -25429,9 +25471,9 @@ complex64_t crossgl_complex64_mod_assign(
                 return vector_relational
             left_type = self.glsl_source_expression_type(expr.left)
             right_type = self.glsl_source_expression_type(expr.right)
-            if self.is_glsl_complex64_type(left_type) or self.is_glsl_complex64_type(
-                right_type
-            ):
+            if self.is_glsl_registered_complex64_type(
+                left_type
+            ) or self.is_glsl_registered_complex64_type(right_type):
                 left = self.generate_expression(expr.left)
                 right = self.generate_expression(expr.right)
                 return self.glsl_complex64_binary_expression(
