@@ -58,6 +58,11 @@ from ..ast import (
 )
 from ..cooperative_matrix import get_cooperative_matrix_fragment_mapping
 from ..standard_constants import render_standard_math_constant
+from ..structure_conversions import (
+    StructureConversionKind,
+    StructureFieldValue,
+    registered_structure_conversion_for_identity,
+)
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
     INTEGER_COORDINATE_INTRINSIC_NAMES,
@@ -376,6 +381,32 @@ class DirectXContextualConversionError(ValueError):
         super().__init__(message)
         self.source_type = source_type
         self.target_type = target_type
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXStructConversionError(ValueError):
+    """Raised when a registered source structure conversion is not faithful."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-struct-construction-unsupported"
+    )
+    missing_capabilities = ("directx.struct-conversion-construction",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        destination_type=None,
+        source_type=None,
+        conversion_kind=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.destination_type = destination_type
+        self.source_type = source_type
+        self.conversion_kind = conversion_kind
         self.reason = reason
         self.source_location = source_location
 
@@ -10457,13 +10488,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_bfloat16_conversion_expression(
         self, rendered, expected_type, source_type, *, source_location=None
     ):
-        complex_conversion = self.hlsl_complex64_scalar_conversion_expression(
-            rendered,
-            expected_type,
-            source_type,
+        registered_conversion = (
+            self.hlsl_registered_structure_scalar_conversion_expression(
+                rendered,
+                expected_type,
+                source_type,
+                source_location=source_location,
+            )
         )
-        if complex_conversion is not None:
-            return complex_conversion
+        if registered_conversion is not None:
+            return registered_conversion
 
         expected_is_bfloat = self.is_hlsl_bfloat16_type(expected_type)
         source_is_bfloat = self.is_hlsl_bfloat16_type(source_type)
@@ -10634,13 +10668,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not rendered or not expected_name or not source_name:
             return rendered
 
-        complex_conversion = self.hlsl_complex64_scalar_conversion_expression(
-            rendered,
-            expected_name,
-            source_name,
+        registered_conversion = (
+            self.hlsl_registered_structure_scalar_conversion_expression(
+                rendered,
+                expected_name,
+                source_name,
+                source_location=source_location,
+            )
         )
-        if complex_conversion is not None:
-            return complex_conversion
+        if registered_conversion is not None:
+            return registered_conversion
 
         bfloat_conversion = self.hlsl_bfloat16_conversion_expression(
             rendered,
@@ -12093,24 +12130,130 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def is_hlsl_complex64_type(self, type_text):
         return self.map_type(type_text) == "complex64_t"
 
-    def hlsl_complex64_scalar_conversion_expression(
-        self, rendered, expected_type, source_type
+    def hlsl_registered_structure_scalar_conversion_contract(
+        self,
+        destination_type,
+        source_type,
+        *,
+        source_location=None,
     ):
-        if not self.is_hlsl_complex64_type(source_type):
+        """Return one validated registered structure-to-scalar conversion.
+
+        CrossGL carries structure fields rather than source C++ conversion
+        operators.  Preserve a value conversion only when the source identity is
+        registered, its ordered field shape is exact, and one field consumes the
+        source value.  Unregistered lookalikes remain ordinary HLSL expressions.
+        """
+        destination_name = self.type_name_string(destination_type)
+        source_name = self.type_name_string(source_type)
+        if not destination_name or not source_name:
             return None
 
-        real_component = f"({rendered}).real"
-        if self.is_hlsl_bfloat16_type(expected_type):
-            return self.hlsl_float_to_bfloat16_expression(real_component)
-
-        mapped_target = self.map_type(expected_type)
-        if not self.is_scalar_value_type(mapped_target):
+        mapped_destination = self.map_type(destination_name)
+        if not self.is_scalar_value_type(mapped_destination):
             return None
-        if mapped_target == "bool":
-            return f"({real_component} != 0.0)"
-        return f"{mapped_target}({real_component})"
 
-    def hlsl_complex64_scalar_constructor_call(self, func_name, args):
+        mapped_source = self.map_type(source_name)
+        source_identities = {source_name, mapped_source}
+        matching_contracts = {
+            contract
+            for identity in source_identities
+            if (contract := registered_structure_conversion_for_identity(identity))
+            is not None
+        }
+        if not matching_contracts:
+            return None
+        if len(matching_contracts) != 1:
+            raise DirectXStructConversionError(
+                "DirectX structure value conversion source identity is ambiguous: "
+                f"'{source_name}'",
+                destination_type=destination_name,
+                source_type=source_name,
+                conversion_kind=StructureConversionKind.VALUE_CONVERSION.value,
+                reason="source-identity-ambiguous",
+                source_location=source_location,
+            )
+        contract = next(iter(matching_contracts))
+
+        member_types = self.struct_member_types.get(source_name)
+        if member_types is None:
+            member_types = self.struct_member_types.get(mapped_source)
+        actual_shape = (
+            None
+            if member_types is None
+            else tuple(
+                (name, self.map_type(member_type))
+                for name, member_type in member_types.items()
+            )
+        )
+        expected_shape = tuple(
+            (field.name, self.map_type(field.type_name)) for field in contract.fields
+        )
+        if actual_shape != expected_shape:
+            reason = (
+                "source-shape-unknown"
+                if actual_shape is None
+                else "source-shape-mismatch"
+            )
+            raise DirectXStructConversionError(
+                "DirectX cannot preserve registered structure value conversion "
+                f"from '{source_name}' to '{destination_name}': "
+                f"{reason.replace('-', ' ')}",
+                destination_type=destination_name,
+                source_type=source_name,
+                conversion_kind=StructureConversionKind.VALUE_CONVERSION.value,
+                reason=reason,
+                source_location=source_location,
+            )
+
+        converted_fields = [
+            field
+            for field in contract.fields
+            if field.scalar_value is StructureFieldValue.CONVERTED_SOURCE
+        ]
+        if len(converted_fields) != 1:
+            raise DirectXStructConversionError(
+                "DirectX registered structure value conversion requires exactly "
+                "one converted source field",
+                destination_type=destination_name,
+                source_type=source_name,
+                conversion_kind=StructureConversionKind.VALUE_CONVERSION.value,
+                reason="source-single-evaluation-unsupported",
+                source_location=source_location,
+            )
+        return mapped_destination, converted_fields[0].name
+
+    def hlsl_registered_structure_scalar_conversion_expression(
+        self,
+        rendered,
+        destination_type,
+        source_type,
+        *,
+        source_location=None,
+    ):
+        conversion = self.hlsl_registered_structure_scalar_conversion_contract(
+            destination_type,
+            source_type,
+            source_location=source_location,
+        )
+        if conversion is None:
+            return None
+
+        mapped_destination, source_field = conversion
+        source_component = f"({rendered}).{source_field}"
+        if self.is_hlsl_bfloat16_type(destination_type):
+            return self.hlsl_float_to_bfloat16_expression(source_component)
+        if mapped_destination == "bool":
+            return f"({source_component} != 0.0)"
+        return f"{mapped_destination}({source_component})"
+
+    def hlsl_registered_structure_scalar_constructor_call(
+        self,
+        func_name,
+        args,
+        *,
+        source_location=None,
+    ):
         if (
             not isinstance(func_name, str)
             or func_name in getattr(self, "function_return_types", {})
@@ -12119,13 +12262,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
 
         source_type = self.hlsl_source_expression_type(args[0])
-        if not self.is_hlsl_complex64_type(source_type):
+        conversion = self.hlsl_registered_structure_scalar_conversion_contract(
+            func_name,
+            source_type,
+            source_location=source_location,
+        )
+        if conversion is None:
             return None
         rendered = self.generate_expression_with_expected(args[0], None)
-        return self.hlsl_complex64_scalar_conversion_expression(
+        return self.hlsl_registered_structure_scalar_conversion_expression(
             rendered,
             func_name,
             source_type,
+            source_location=source_location,
         )
 
     def hlsl_complex64_operand(self, rendered, type_text):
@@ -18159,6 +18308,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
+            registered_conversion = (
+                self.hlsl_registered_structure_scalar_constructor_call(
+                    self.type_name_string(getattr(expr, "constructor_type", None)),
+                    list(getattr(expr, "arguments", []) or []),
+                    source_location=getattr(expr, "source_location", None),
+                )
+            )
+            if registered_conversion is not None:
+                return registered_conversion
             enum_constructor = generate_enum_constructor_expression(self, expr)
             if enum_constructor is not None:
                 return enum_constructor
@@ -18223,6 +18381,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if enum_constructor is not None:
                 return enum_constructor
 
+            registered_conversion = (
+                self.hlsl_registered_structure_scalar_constructor_call(
+                    func_name,
+                    args,
+                    source_location=getattr(expr, "source_location", None),
+                )
+            )
+            if registered_conversion is not None:
+                return registered_conversion
+
             bfloat_constructor = self.hlsl_bfloat16_constructor_call(
                 func_name,
                 args,
@@ -18236,12 +18404,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if complex64_constructor is not None:
                 return complex64_constructor
-
-            complex64_scalar_constructor = self.hlsl_complex64_scalar_constructor_call(
-                func_name, args
-            )
-            if complex64_scalar_constructor is not None:
-                return complex64_scalar_constructor
 
             struct_constructor = self.generate_hlsl_struct_constructor_call(
                 func_name,

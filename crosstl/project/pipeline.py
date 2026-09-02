@@ -23548,12 +23548,13 @@ def _math_intrinsic_failure_details(
     return dict(sorted(details.items()))
 
 
-def _opengl_struct_construction_failure_details(
+def _struct_construction_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
     artifact_path: str | None,
 ) -> dict[str, Any]:
     if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-struct-construction-unsupported",
         "project.translate.metal-struct-construction-unsupported",
         "project.translate.opengl-struct-construction-unsupported",
         "project.translate.webgl-struct-construction-unsupported",
@@ -24491,7 +24492,7 @@ def _translation_failure_details(
         **_compile_time_global_failure_details(exc, unit, artifact_path),
         **_boolean_ordered_intrinsic_failure_details(exc, unit, artifact_path),
         **_math_intrinsic_failure_details(exc, unit, artifact_path),
-        **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
+        **_struct_construction_failure_details(exc, unit, artifact_path),
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
         **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
         **_directx_private_pointer_failure_details(exc, unit, artifact_path),

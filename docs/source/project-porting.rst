@@ -645,6 +645,33 @@ translation, reflection, and native compiler coverage for those two targets; it
 does not claim numerical execution, MLX host-runtime redirection, or MLX
 test-suite parity.
 
+The DirectX path translates the same 2,496 entries to standalone ``CSMain``
+artifacts. Its compact schema-v2 ``copy.directx-translation.json`` contract
+preserves all 30 shapes, 16 concrete templates, 13 input/output types, all 169
+conversion pairs, and 6,566 exact materializations. Exact target reflection
+contains 10,036 resources. The ``g2``, ``g2large``, ``g3``, ``g3large``,
+``gn2``, ``gn4large``, ``s2``, and ``v2`` shapes additionally expose generated
+``CrossGLDispatchInfo`` metadata at their exact shape-specific ``b0``, ``b6``,
+or ``b3`` binding.
+
+The shared registered-structure conversion contract admits emitted
+``complex_t_float`` values only after validating their ordered ``real`` and
+``imag`` float fields. Exactly 150 complex-to-scalar entries project the real
+field, malformed registered representations fail closed with structured
+project diagnostics, and unregistered lookalikes remain untouched. Unlike the
+OpenGL lowering, this native HLSL path introduces no additional source-scoped
+32-bit index-range portability promise.
+
+Required Windows CI partitions the DirectX family into 24 disjoint 104-entry
+shards. Each shard retranslates its exact entries, verifies deterministic HLSL
+identity, materialization provenance, ``CSMain`` workgroup metadata, and exact
+reflected ABI, then compiles with checksum-pinned DXC using
+``-enable-16bit-types -WX -T cs_6_2 -E CSMain`` and requires a non-empty DXIL
+module. Together with the Metal and OpenGL contracts this closes complete
+discovered-copy translation, reflection, and native compiler coverage on all
+three targets; it does not claim numerical execution, MLX host-runtime
+redirection, or MLX test-suite parity.
+
 The current-pinned MLX binary integration independently proves all 4,122
 discovered entries from ``binary.metal``. Fifteen 238-entry base shapes and
 three 184-entry work-per-thread shapes span 18 shapes, 11 concrete kernel

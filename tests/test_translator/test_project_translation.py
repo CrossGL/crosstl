@@ -58566,6 +58566,74 @@ def test_metal_project_materialization_selects_alias_equivalent_specialization(
     )
 
 
+def test_translate_project_reports_directx_registered_structure_conversion_failure(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "construction.cgl").write_text(
+        textwrap.dedent("""
+            shader InvalidDirectXComplexValueConversion {
+                struct complex_t_float {
+                    float real;
+                    int imag;
+                };
+
+                compute {
+                    void main(uint3 tid @ gl_GlobalInvocationID) {
+                        complex_t_float value;
+                        float converted = float(value);
+                    }
+                }
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-struct-construction-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.struct-conversion-construction": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["location"]["file"] == "shaders/construction.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "directx.struct-conversion-construction"
+    ]
+    assert diagnostic["details"] == {
+        "sourcePath": "shaders/construction.cgl",
+        "structConstruction": {
+            "conversionKind": "value-conversion",
+            "destinationType": "float",
+            "reason": "source-shape-mismatch",
+            "sourceType": "complex_t_float",
+        },
+        "targetArtifact": "translated/directx/shaders/construction.hlsl",
+    }
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+
+
 def test_translate_project_reports_metal_registered_structure_conversion_failure(
     tmp_path,
 ):

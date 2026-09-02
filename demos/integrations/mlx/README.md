@@ -112,6 +112,26 @@ The current harness verifies:
   SPIR-V modules. Together with the Metal proof this closes complete copy
   translation, reflection, and native compiler coverage for those two targets,
   not numerical execution or MLX host runtime redirection;
+- selected-entry translation of all 2,496 discovered current-pinned
+  `copy.metal` entries to DirectX. The compact schema-v2
+  `contracts/copy.directx-translation.json` contract pins every standalone
+  `CSMain` artifact across all 30 shapes, 16 templates, 13 input/output types,
+  169 conversion pairs, and 6,566 exact materializations. Exact HLSL target
+  reflection contains 10,036 resources; `g2`, `g2large`, `g3`, `g3large`,
+  `gn2`, `gn4large`, `s2`, and `v2` receive generated
+  `CrossGLDispatchInfo` metadata at their shape-specific `b0`, `b6`, or `b3`
+  binding. Registered `complex_t_float` representations project through the
+  real field for the 150 complex-to-scalar entries only after exact ordered
+  `real`/`imag` float-shape validation, while malformed registered shapes fail
+  closed. Unlike the OpenGL lowering, this native HLSL path introduces no
+  additional source-scoped 32-bit index-range portability promise. Twenty-four
+  required Windows CI shards retranslate every exact entry, verify identity,
+  materialization, workgroup metadata, and reflected ABI, and compile with
+  checksum-pinned DXC using `-enable-16bit-types -WX -T cs_6_2 -E CSMain`,
+  requiring 2,496 non-empty DXIL modules. Together with the Metal and OpenGL
+  proofs this closes complete copy translation, reflection, and native
+  compiler coverage on all three targets, not numerical execution or MLX host
+  runtime redirection;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 4,122
   discovered current-pinned binary entries from ``binary.metal``. The complete
   contract spans 18 shapes and 11 concrete kernel templates, 24 operators, and

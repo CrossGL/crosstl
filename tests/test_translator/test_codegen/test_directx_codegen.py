@@ -75,6 +75,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXSignBitError,
     DirectXSoftwareSubgroupError,
     DirectXSpecializationConstantError,
+    DirectXStructConversionError,
     DirectXTextureOffsetError,
     DirectXTrailingZeroBuiltinError,
     DirectXUnionLayoutError,
@@ -3549,6 +3550,128 @@ def test_hlsl_complex_to_scalar_conversions_use_real_component(tmp_path):
     assert "return ((value).real != 0.0);" in generated
     assert "uint result = convert(value);" in generated
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_registered_complex_representation_projects_real_for_all_scalars(
+    tmp_path,
+):
+    source = """
+    shader RegisteredComplexToScalar {
+        struct complex_t_float {
+            float real;
+            float imag;
+        };
+
+        bfloat16_t convert_bfloat(complex_t_float value) {
+            return bfloat16_t(value);
+        }
+
+        bool convert_bool(complex_t_float value) { return bool(value); }
+        half convert_half(complex_t_float value) { return half(value); }
+        float convert_float(complex_t_float value) { return float(value); }
+        int8_t convert_int8(complex_t_float value) { return int8_t(value); }
+        int16_t convert_int16(complex_t_float value) { return int16_t(value); }
+        int32_t convert_int32(complex_t_float value) { return int32_t(value); }
+        int64_t convert_int64(complex_t_float value) { return int64_t(value); }
+        uint8_t convert_uint8(complex_t_float value) { return uint8_t(value); }
+        uint16_t convert_uint16(complex_t_float value) { return uint16_t(value); }
+        uint32_t convert_uint32(complex_t_float value) { return uint32_t(value); }
+        uint64_t convert_uint64(complex_t_float value) { return uint64_t(value); }
+
+        compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                complex_t_float value;
+                value.real = 1.0;
+                value.imag = 2.0;
+                bfloat16_t bfloat_result = convert_bfloat(value);
+                bool bool_result = convert_bool(value);
+                half half_result = convert_half(value);
+                float float_result = convert_float(value);
+                int8_t int8_result = convert_int8(value);
+                int16_t int16_result = convert_int16(value);
+                int32_t int32_result = convert_int32(value);
+                int64_t int64_result = convert_int64(value);
+                uint8_t uint8_result = convert_uint8(value);
+                uint16_t uint16_result = convert_uint16(value);
+                uint32_t uint32_result = convert_uint32(value);
+                uint64_t uint64_result = convert_uint64(value);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "return __crossgl_bfloat16_from_float(float((value).real));" in generated
+    assert "return ((value).real != 0.0);" in generated
+    assert "return float16_t((value).real);" in generated
+    assert "return float((value).real);" in generated
+    assert "return int((value).real);" in generated
+    assert "return int16_t((value).real);" in generated
+    assert "return int64_t((value).real);" in generated
+    assert "return uint((value).real);" in generated
+    assert "return uint16_t((value).real);" in generated
+    assert "return uint64_t((value).real);" in generated
+    assert "return float(value);" not in generated
+    assert "return int16_t(value);" not in generated
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_registered_complex_representation_rejects_wrong_shape():
+    source = """
+    shader InvalidRegisteredComplexToScalar {
+        struct complex_t_float {
+            float real;
+            int imag;
+        };
+
+        compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                complex_t_float value;
+                float converted = float(value);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXStructConversionError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.directx-struct-construction-unsupported"
+    )
+    assert error.missing_capabilities == ("directx.struct-conversion-construction",)
+    assert error.destination_type == "float"
+    assert error.source_type == "complex_t_float"
+    assert error.conversion_kind == "value-conversion"
+    assert error.reason == "source-shape-mismatch"
+
+
+def test_hlsl_unregistered_structure_lookalike_is_not_projected():
+    source = """
+    shader UnregisteredComplexLookalike {
+        struct Pair {
+            float real;
+            float imag;
+        };
+
+        compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                Pair value;
+                float converted = float(value);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "float converted = float(value);" in generated
+    assert "(value).real" not in generated
 
 
 def test_hlsl_complex_compound_and_subgroup_operations_validate(tmp_path):
