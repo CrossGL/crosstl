@@ -8702,6 +8702,85 @@ def test_codegen_reports_unresolved_auto_local_resource_overload():
     }
 
 
+def mlx_contextual_initializer_list_overload_source(
+    initializer,
+    *,
+    include_signed_vector=False,
+):
+    source = mlx_materialized_auto_local_overload_source().replace(
+        "uint3(vector_index.x, 0u, 0u)",
+        initializer,
+    )
+    if not include_signed_vector:
+        return source
+    signed_overload = """
+    int64_t elem_to_loc_int64_t(
+        int3 elem,
+        constant const int* shape,
+        constant const int64_t* strides,
+        int ndim) {
+      return int64_t(elem.x) + int64_t(shape[0]) + strides[0] + ndim;
+    }
+    """
+    return source.replace(
+        "    kernel void use_indices(",
+        signed_overload + "\n    kernel void use_indices(",
+    )
+
+
+def test_codegen_contextually_binds_braced_vector_source_overload():
+    source = mlx_contextual_initializer_list_overload_source("{vector_index.x, 0u, 0u}")
+
+    normalized = normalize(convert(source))
+
+    assert (
+        "int64 vector_value = elem_to_loc_int64_t__metal_overload_2("
+        "uvec3(vector_index.x, 0u, 0u), shape, strides, ndim);" in normalized
+    )
+    assert "elem_to_loc_int64_t({" not in normalized
+
+
+def test_codegen_rejects_braced_vector_source_overload_with_wrong_width():
+    source = mlx_contextual_initializer_list_overload_source("{vector_index.x, 0u}")
+
+    with pytest.raises(MetalSourceOverloadResolutionError) as exc_info:
+        convert(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.argument_types == ("<unknown>", "int*", "int64_t*", "int")
+    assert diagnostic.reason == (
+        "no source-compatible overload matches the inferred argument types"
+    )
+    assert set(diagnostic.candidates) == {
+        "elem_to_loc_int64_t(int64_t, constant const int*, "
+        "constant const int64_t*, int)",
+        "elem_to_loc_int64_t(uint3, constant const int*, "
+        "constant const int64_t*, int)",
+    }
+
+
+def test_codegen_reports_ambiguous_contextual_braced_vector_source_overload():
+    source = mlx_contextual_initializer_list_overload_source(
+        "{vector_index.x, 1, 2}",
+        include_signed_vector=True,
+    )
+
+    with pytest.raises(MetalSourceOverloadResolutionError) as exc_info:
+        convert(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.argument_types == ("<unknown>", "int*", "int64_t*", "int")
+    assert diagnostic.reason == (
+        "multiple source-compatible overloads remain after type matching"
+    )
+    assert set(diagnostic.candidates) == {
+        "elem_to_loc_int64_t(int3, constant const int*, "
+        "constant const int64_t*, int)",
+        "elem_to_loc_int64_t(uint3, constant const int*, "
+        "constant const int64_t*, int)",
+    }
+
+
 def metal_materialized_callable_array_auto_source():
     return """
     struct DivMod {

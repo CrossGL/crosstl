@@ -14646,6 +14646,119 @@ def test_plain_metal_helper_materialization_recovers_commented_function_boundary
     assert "uint3 elem" not in materialized.split("uint elem_to_loc_uint(", 1)[1]
 
 
+def test_plain_metal_helper_contextually_selects_explicit_braced_vector_overload():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename IdxT = int64_t>
+        IdxT elem_to_loc(
+            IdxT elem,
+            constant const int* shape,
+            constant const int64_t* strides,
+            int ndim) {
+          return elem + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+        }
+
+        template <typename IdxT = int64_t>
+        IdxT elem_to_loc(
+            uint3 elem,
+            constant const int* shape,
+            constant const int64_t* strides,
+            int ndim) {
+          return IdxT(elem.x) + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+        }
+
+        kernel void launch(
+            device int* output [[buffer(0)]],
+            constant const int* shape [[buffer(1)]],
+            constant const int64_t* strides [[buffer(2)]],
+            uint3 index [[thread_position_in_grid]]) {
+          output[index.x] = elem_to_loc<int>(
+              {index.x, index.y, index.z}, shape, strides, 3);
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {"elem_to_loc"}
+    assert records == [
+        {
+            "name": "elem_to_loc",
+            "materializedName": "elem_to_loc_int",
+            "parameters": {"IdxT": "int"},
+            "parameterSources": {"IdxT": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    assert materialized_names == {
+        (
+            "elem_to_loc",
+            ("int",),
+            ("uint3", "constant const int*", "constant const int64_t*", "int"),
+        ): "elem_to_loc_int"
+    }
+    assert "elem_to_loc_int( {index.x, index.y, index.z}, shape, strides, 3)" in (
+        " ".join(materialized.split())
+    )
+    assert "int elem_to_loc_int( uint3 elem," in " ".join(materialized.split())
+    assert "int elem_to_loc_int( int elem," not in " ".join(materialized.split())
+
+
+def test_plain_metal_helper_rejects_aggregate_braced_vector_component():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        struct complex64_t {
+          float real;
+          float imag;
+        };
+
+        template <typename IdxT = int64_t>
+        IdxT elem_to_loc(
+            IdxT elem,
+            constant const int* shape,
+            constant const int64_t* strides,
+            int ndim) {
+          return elem + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+        }
+
+        template <typename IdxT = int64_t>
+        IdxT elem_to_loc(
+            uint3 elem,
+            constant const int* shape,
+            constant const int64_t* strides,
+            int ndim) {
+          return IdxT(elem.x) + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+        }
+
+        kernel void launch(
+            device int* output [[buffer(0)]],
+            constant const int* shape [[buffer(1)]],
+            constant const int64_t* strides [[buffer(2)]]) {
+          complex64_t value;
+          output[0] = elem_to_loc<int>({value, 0u, 0u}, shape, strides, 3);
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert records == []
+    assert completed_names == set()
+    assert materialized_names == {}
+    assert "elem_to_loc<int>({value, 0u, 0u}, shape, strides, 3)" in materialized
+    assert "elem_to_loc_int" not in materialized
+
+
 def test_plain_metal_helper_explicit_binding_rejects_pointer_conversion():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 

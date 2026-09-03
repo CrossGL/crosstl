@@ -18376,6 +18376,55 @@ def _infer_plain_template_helper_arguments(
         )
         return resolved_type if resolved_type != expanded_type else actual_type
 
+    def contextual_initializer_component_compatible(
+        expected_type: str,
+        actual_type: str,
+    ) -> bool:
+        expected_scalar = _metal_template_scalar_type(expected_type)
+        actual_scalar = _metal_template_scalar_type(actual_type)
+        if expected_scalar is None or actual_scalar is None:
+            return False
+        if expected_scalar == actual_scalar:
+            return True
+        if expected_scalar == "bfloat16_t":
+            return False
+        return expected_scalar not in {"bool", "complex64_t"} and actual_scalar not in {
+            "bool",
+            "complex64_t",
+        }
+
+    def contextual_initializer_list_compatible(
+        argument: str,
+        expected_type: str,
+    ) -> bool | None:
+        initializer = argument.strip()
+        if not initializer.startswith("{"):
+            return None
+        initializer_end = preprocessor._find_matching_delimiter(
+            initializer,
+            0,
+            "{",
+            "}",
+        )
+        if initializer_end != len(initializer) - 1:
+            return False
+
+        vector_type = _metal_template_vector_type(expected_type)
+        if vector_type is None:
+            return False
+        component_type, width = vector_type
+        elements = preprocessor._split_top_level_commas(initializer[1:initializer_end])
+        if len(elements) != width:
+            return False
+        for element in elements:
+            actual_type = inferred_actual_type(element)
+            if actual_type is None or not contextual_initializer_component_compatible(
+                component_type,
+                actual_type,
+            ):
+                return False
+        return True
+
     inference_arguments = [
         preprocessor._substitute_template_argument_static_constants(
             argument,
@@ -18444,12 +18493,23 @@ def _infer_plain_template_helper_arguments(
             continue
         if argument_index >= len(call_arguments):
             continue
-        actual_type = inferred_actual_type(inference_arguments[argument_index])
+        argument = inference_arguments[argument_index]
+        actual_type = inferred_actual_type(argument)
         argument_index += 1
-        if not actual_type:
-            continue
         expected_clean = _strip_metal_type_qualifiers(expected_type)
         explicit_expected_type = explicit_parameter_bindings.get(expected_clean)
+        if not actual_type:
+            contextual_expected_type = preprocessor._replace_identifiers(
+                explicit_expected_type or expected_type,
+                bindings,
+            )
+            contextual_match = contextual_initializer_list_compatible(
+                argument,
+                contextual_expected_type,
+            )
+            if contextual_match is False:
+                return None
+            continue
         if explicit_expected_type is not None:
             if not _metal_concrete_parameter_type_compatible(
                 explicit_expected_type,

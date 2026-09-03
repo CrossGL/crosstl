@@ -10536,7 +10536,11 @@ class MetalToCrossGLConverter:
                 )
             return f"{mapped_type}({args})"
         elif isinstance(expr, InitializerListNode):
-            return self.generate_initializer_list(expr, is_main)
+            return self.generate_initializer_list(
+                expr,
+                is_main,
+                getattr(expr, "_metal_source_overload_expected_type", None),
+            )
         elif isinstance(expr, DesignatedInitializerNode):
             return self.generate_designated_initializer(expr, is_main)
         elif isinstance(expr, TextureSampleNode):
@@ -11735,9 +11739,55 @@ class MetalToCrossGLConverter:
             return cls.metal_source_overload_identity_contains_bfloat(identity[2])
         return identity[0] == "scalar" and identity[1] == "bfloat"
 
+    def metal_source_overload_initializer_list_match_rank(self, argument, parameter):
+        parameter_type = self.metal_source_overload_parameter_type(parameter)
+        expected = self.metal_source_overload_type_descriptor(parameter_type)
+        if expected is None or expected[0] != "vector":
+            return None
+
+        elements = list(argument.elements)
+        expected_width = expected[1]
+        if len(elements) != expected_width or any(
+            isinstance(element, (InitializerListNode, DesignatedInitializerNode))
+            for element in elements
+        ):
+            return None
+
+        parameter_value_type = self.metal_source_overload_value_type(parameter_type)
+        vector_parts = self.metal_small_vector_type_parts(parameter_value_type)
+        if vector_parts is None or vector_parts[1] != expected_width:
+            return None
+        component_type, _width = vector_parts
+        component_parameter = VariableNode(
+            component_type,
+            "_crosstl_initializer_component",
+        )
+
+        ranks = []
+        for element in elements:
+            element_type = self.metal_source_overload_value_type(
+                self.expression_metal_type(element)
+            )
+            if element_type is None:
+                return None
+            rank = self.metal_source_overload_argument_match_rank(
+                element,
+                element_type,
+                component_parameter,
+            )
+            if rank is None:
+                return None
+            ranks.append(rank)
+        return min(ranks)
+
     def metal_source_overload_argument_match_rank(
         self, argument, actual_type, parameter
     ):
+        if isinstance(argument, InitializerListNode):
+            return self.metal_source_overload_initializer_list_match_rank(
+                argument,
+                parameter,
+            )
         actual = self.metal_source_overload_type_descriptor(actual_type)
         parameter_type = self.metal_source_overload_parameter_type(parameter)
         expected = self.metal_source_overload_type_descriptor(parameter_type)
@@ -11955,7 +12005,10 @@ class MetalToCrossGLConverter:
             self.metal_source_overload_candidate_signature(declarations[0])
             for declarations in arity_groups.values()
         ]
-        if any(argument_type is None for argument_type in argument_types):
+        if any(
+            argument_type is None and not isinstance(argument, InitializerListNode)
+            for argument, argument_type in zip(arguments, argument_types)
+        ):
             raise MetalSourceOverloadResolutionError(
                 function_name,
                 diagnostic_argument_types,
@@ -12033,6 +12086,16 @@ class MetalToCrossGLConverter:
         )
         if selected is None:
             return function_name
+        for argument, parameter in zip(
+            arguments,
+            getattr(selected, "params", []) or [],
+        ):
+            if not isinstance(argument, InitializerListNode):
+                continue
+            parameter_type = self.metal_source_overload_parameter_type(parameter)
+            descriptor = self.metal_source_overload_type_descriptor(parameter_type)
+            if descriptor is not None and descriptor[0] == "vector":
+                argument._metal_source_overload_expected_type = parameter_type
         return self.metal_source_overload_output_names[id(selected)]
 
     def metal_user_function_overloads(self, function_name):
