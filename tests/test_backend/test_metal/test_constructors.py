@@ -396,6 +396,107 @@ def test_constructor_array_loop_uses_evaluated_conditional_extent():
     assert_crossgl_parses(generated)
 
 
+def test_constructor_array_loop_resolves_program_scope_constexpr_extent():
+    source = """
+    static constant constexpr const uint8_t simd_size = 2;
+
+    struct Value {
+      int value;
+      Value() : value(0) {}
+    };
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      Value values[simd_size];
+      output[0] = values[1].value;
+    }
+    """
+
+    _preprocessed, generated = convert(source)
+
+    assert "Value[simd_size] values;" in generated
+    assert re.search(
+        r"for \(int (?P<index>\w+) = 0; (?P=index) < 2; " r"(?P=index)\+\+\)",
+        generated,
+    )
+    assert_crossgl_parses(generated)
+
+
+def test_constructor_array_loop_resolves_lexical_constexpr_extent():
+    source = """
+    struct Value {
+      int value;
+      Value() : value(0) {}
+    };
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      constexpr int value_count = 2;
+      Value values[value_count];
+      output[0] = values[1].value;
+    }
+    """
+
+    _preprocessed, generated = convert(source)
+
+    assert "Value[value_count] values;" in generated
+    assert re.search(
+        r"for \(int (?P<index>\w+) = 0; (?P=index) < 2; " r"(?P=index)\+\+\)",
+        generated,
+    )
+    assert_crossgl_parses(generated)
+
+
+def test_runtime_constructor_array_extent_reports_contract_error():
+    source = """
+    struct Value {
+      int value;
+      Value() : value(0) {}
+    };
+
+    void compute(uint value_count) {
+      Value values[value_count];
+    }
+    """
+
+    _preprocessed, ast = preprocess_and_parse(
+        source, "constructor-runtime-array-extent.metal"
+    )
+    with pytest.raises(MetalConstructorContractError) as raised:
+        MetalToCrossGLConverter().generate(ast)
+
+    error = raised.value
+    assert error.owner == "Value"
+    assert error.reason == (
+        "the local constructor array extent is not a concrete integral constant"
+    )
+
+
+def test_runtime_extent_shadow_does_not_reuse_global_constexpr_value():
+    source = """
+    static constant constexpr const uint value_count = 2;
+
+    struct Value {
+      int value;
+      Value() : value(0) {}
+    };
+
+    void compute(uint value_count) {
+      Value values[value_count];
+    }
+    """
+
+    _preprocessed, ast = preprocess_and_parse(
+        source, "constructor-shadowed-array-extent.metal"
+    )
+    with pytest.raises(MetalConstructorContractError) as raised:
+        MetalToCrossGLConverter().generate(ast)
+
+    error = raised.value
+    assert error.owner == "Value"
+    assert error.reason == (
+        "the local constructor array extent is not a concrete integral constant"
+    )
+
+
 def test_multidimensional_constructor_array_reports_contract_error():
     source = """
     struct Value {

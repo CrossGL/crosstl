@@ -178,6 +178,19 @@ The current harness verifies:
   Together with the OpenGL and Metal contracts this closes complete binary
   translation, reflection, and native compiler coverage, not numerical
   execution or MLX host runtime redirection;
+- selected-entry Metal-to-CrossGL-to-Metal translation of all 2,396
+  discovered current-pinned reduction entries from `reduce.metal`. The compact
+  schema-v2 `contracts/reduce.metal-roundtrip.json` contract spans 39 exact ABI
+  shapes, nine kernel templates, six operator families, 44 concrete operator
+  types, and 13 input/output types. It pins every artifact identity plus exact
+  materialization and resource digests while avoiding transient proof rows in
+  git. The one- through twelve-resource interfaces contain 25,088 reflected
+  resources in aggregate and retain a host-owned `[1, 1, 1]` workgroup
+  contract. Twenty-four required macOS shards cover 20 groups of 100 entries
+  and four groups of 99, compile every artifact with warnings fatal, and require
+  2,396 non-empty AIR objects. This is complete reduce translation, reflection,
+  and native compiler coverage, not numerical execution or MLX host runtime
+  redirection;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains
@@ -738,7 +751,7 @@ The pinned `gather_qmv` host dispatch in `mlx/backend/metal/quantized.cpp` sets
 emits `[numthreads(32, 2, 1)]`. The kernel's simdgroup indices require a
 32-lane subgroup, so the generated HLSL also emits `[WaveSize(32)]` and requires
 Shader Model 6.6. The resulting artifact is 16,359 bytes with SHA-256
-`c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de`.
+`654e2788b4b1cf202ddfad3b4d90f6d933853e9e857e0e5fffd6cd41fae8a3b6`.
 Windows CI compiles it with DXC profile `cs_6_6` and `-WX`. This is selected-entry
 evidence for the fixed-array alias work tracked by
 [#1497](https://github.com/CrossGL/crosstl/issues/1497) and the read-only storage
@@ -1967,6 +1980,45 @@ DXC using ``-enable-16bit-types -WX -T cs_6_2 -E CSMain``. All 4,122 DXIL
 modules must be non-empty. This closes discovered binary DirectX translation,
 reflection, and native compiler coverage; it does not claim numerical
 execution, MLX host-runtime redirection, or MLX test-suite parity.
+
+The complete current-pinned reduction gate covers all 2,396 host-named entries
+from `reduce.metal` at commit
+`846d176227a0ac13d2667e58d2bb68b322109ab0`. Three base forms cover
+initialization, all-reduce, and simple row reduction. Six multidimensional
+families each combine 32- and 64-bit index types with one, two, and five
+logical dimensions, yielding 39 exact ABI shapes over nine source templates.
+The family spans `And`, `Or`, `Sum`, `Prod`, `Min`, and `Max`, 44 concrete
+operator types, and 13 source input and output types. Its compact schema-v2
+contract records only deterministic classification, generated identity and
+size, exact materialization identity/count, and exact resource identity/count
+per entry; full transient translation reports and native AIR objects stay out
+of git.
+
+The one- through twelve-resource interfaces contain 25,088 reflected resources
+in aggregate. Each shape pins normalized Metal resource types, exact binding
+coordinates, access, and a host-owned `[1, 1, 1]` workgroup contract. Generic
+lowering now distinguishes comparison operators inside non-type template
+arguments from closing angle brackets, folds proven integral non-type struct
+arguments for specialization selection without renaming source-spelled
+materializations, normalizes visible aliases and raw scalar pointer spellings,
+and admits pointer-plus/minus-integral built-in arithmetic before aggregate
+free-operator dispatch. Concrete-helper deduplication ignores comments and
+external whitespace but preserves exact preprocessing-token literal bytes.
+Compile-time static members used by references, address-taking, receivers, or
+unevaluated storage-sensitive expressions are hoisted into address-space-correct
+Metal `constant` storage instead of being substituted as rvalues. Unknown
+aliases, unresolved address provenance, non-integral pointer offsets, and
+incompatible overloads continue to fail closed.
+
+Required macOS CI partitions the sorted family into 24 disjoint shards: 20 with
+100 entries and four with 99. Each shard retranslates its exact entries,
+verifies deterministic artifact identity, materialization, workgroup metadata,
+and reflected ABI, then invokes `xcrun -sdk macosx metal -Werror -c` and
+requires a non-empty AIR object. In aggregate the gate requires all 2,396 AIR
+outputs. This proves complete discovered-reduce translation, reflection, and
+native compiler acceptance; it does not claim Metal numerical execution,
+OpenGL or DirectX whole-family translation, MLX host-runtime redirection, or
+MLX test-suite parity.
 
 Windows CI compiles the selected HLSL entries with DXC and executes them through
 the native loader on Direct3D 12 WARP. Linux CI compiles the GLSL entries with

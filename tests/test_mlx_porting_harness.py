@@ -9895,7 +9895,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         },
     }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de",
+        "sha256": "654e2788b4b1cf202ddfad3b4d90f6d933853e9e857e0e5fffd6cd41fae8a3b6",
         "size_bytes": 16359,
     }
     assert adjacent["compiler_validation"] == {
@@ -16168,3 +16168,247 @@ def test_copy_directx_translation_evidence_records_complete_family():
     assert "Exactly 150 complex-to-scalar entries project the real field" in guide
     assert "no additional source-scoped 32-bit index-range portability promise" in guide
     assert "requires a non-empty DXIL module" in guide
+
+
+def test_reduce_metal_roundtrip_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["reduce_metal_roundtrip_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/reduce.metal"
+    assert status["source_sha256"] == (
+        "f1e410ab635eaa940ec195461069cbb013ab88ab0d1f8d5dd8790d30b32c454a"
+    )
+    assert status["target"] == "metal"
+    assert status["scope"] == {
+        "discovered_reduce_instantiation_count": 2396,
+        "entry_count": 2396,
+        "shape_count": 39,
+        "template_count": 9,
+        "operator_count": 6,
+        "operator_type_count": 44,
+        "input_type_count": 13,
+        "output_type_count": 13,
+        "uncovered_reduce_entry_count": 0,
+        "all_discovered_reduce_instantiations_included": True,
+    }
+
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/reduce.metal-roundtrip.json",
+        "schema_version": 2,
+        "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "size_bytes": len(contract_bytes),
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "inputType",
+            "outputType",
+            "operator",
+            "sha256",
+            "sizeBytes",
+            "specializationCount",
+            "materializationSha256",
+            "resourceCount",
+            "resourcesSha256",
+        ],
+    }
+    contract = json.loads(contract_bytes)
+    assert set(contract) == {
+        "schemaVersion",
+        "kind",
+        "commit",
+        "source",
+        "sourceSha256",
+        "target",
+        "metalTypeNames",
+        "selection",
+        "shapeContracts",
+        "classifications",
+        "artifactContract",
+        "entries",
+    }
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["kind"] == "mlx-reduce-metal-roundtrip-contract"
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["metalTypeNames"] == {
+        "bfloat16_t": "bfloat",
+        "bool": "bool",
+        "complex64_t": "complex_t_float",
+        "float": "float",
+        "float16_t": "half",
+        "int16_t": "int",
+        "int32_t": "int",
+        "int64_t": "int64_t",
+        "int8_t": "int",
+        "uint16_t": "uint",
+        "uint32_t": "uint",
+        "uint64_t": "uint64_t",
+        "uint8_t": "uint",
+    }
+    assert contract["selection"] == {
+        "entryCount": 2396,
+        "shapeCount": 39,
+        "templateCount": 9,
+        "operatorCount": 6,
+        "operatorTypeCount": 44,
+        "inputTypeCount": 13,
+        "outputTypeCount": 13,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    assert len(contract["shapeContracts"]) == 39
+    entries = contract["entries"]
+    assert len(entries) == 2396
+    assert [entry["entryPoint"] for entry in entries] == sorted(
+        entry["entryPoint"] for entry in entries
+    )
+    assert len({entry["entryPoint"] for entry in entries}) == 2396
+    assert len({entry["sha256"] for entry in entries}) == 2396
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"] for entry in entries
+    )
+    classifications = contract["classifications"]
+    assert set(classifications) == {
+        "templates",
+        "shapes",
+        "operators",
+        "operatorTypes",
+        "inputTypes",
+        "outputTypes",
+        "indexTypes",
+        "dimensions",
+    }
+    expected_classification_counts = {
+        "templates": 9,
+        "shapes": 39,
+        "operators": 6,
+        "operatorTypes": 44,
+        "inputTypes": 13,
+        "outputTypes": 13,
+        "indexTypes": 3,
+        "dimensions": 4,
+    }
+    for field, expected_count in expected_classification_counts.items():
+        assert len(classifications[field]) == expected_count
+        assert sum(classifications[field].values()) == 2396
+
+    artifact = contract["artifactContract"]
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 2396,
+        "artifact_count": 2396,
+        "translated_count": 2396,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": artifact["specializationCount"],
+        "unsupported_specialization_count": 0,
+        "reachable_kernel_count_per_artifact": 1,
+        "exact_materialization_digests_included": True,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert (
+        sum(entry["specializationCount"] for entry in entries)
+        == artifact["specializationCount"]
+    )
+    assert status["implementation_contracts"] == {
+        "comparison_aware_template_angle_matching": True,
+        "integral_non_type_struct_argument_folding": True,
+        "const_pointee_pointer_value_rebinding": True,
+        "thread_local_pointer_slot_address_provenance": True,
+        "leading_preprocessor_constexpr_parsing": True,
+        "literal_sensitive_concrete_helper_deduplication": True,
+        "storage_sensitive_static_constant_hoisting": True,
+        "unresolved_static_member_address_provenance_fails_closed": True,
+        "raw_pointer_base_type_mapping": True,
+        "lexical_alias_local_array_inference": True,
+        "native_pointer_integral_arithmetic_dispatch": True,
+        "shape_specific_resource_reflection": True,
+        "exact_reflected_resource_types": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": 1,
+        "maximum_resource_count_per_artifact": 12,
+        "reflected_resource_count": artifact["reflectedResourceCount"],
+        "exact_resource_digests_included": True,
+        "exact_source_resource_reconstruction": True,
+        "source_to_metal_type_names": contract["metalTypeNames"],
+        "resource_abi_fields": [
+            "name",
+            "kind",
+            "set",
+            "binding",
+            "access",
+            "type",
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert artifact["exactSourceResourceReconstruction"] is True
+    assert artifact["reflectedResourceCount"] == 25088
+    assert sum(entry["resourceCount"] for entry in entries) == 25088
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": artifact["generatedSizeBytesTotal"],
+        "generated_size_range": artifact["generatedSizeRange"],
+    }
+    assert status["native_validation"] == {
+        "platform": "macos-latest",
+        "compiler": "xcrun -sdk macosx metal -Werror -c",
+        "source_warning_exemption": None,
+        "status": "required-on-ci",
+        "ci_shard_count": 24,
+        "shard_entry_counts": [100] * 20 + [99] * 4,
+        "compiled_artifact_count": 2396,
+        "all_air_artifacts_nonempty": True,
+        "test": (
+            "tests/test_translator/test_mlx_reduce_complete_metal_roundtrip.py::"
+            "test_current_mlx_reduce_family_roundtrips_through_metal"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
+    assert status["opengl_complete_family_translation_included"] is False
+    assert status["directx_complete_family_translation_included"] is False
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "uncovered_reduce_metal_entry_count": 0,
+        "metal_numerical_execution_included": False,
+        "opengl_whole_family_included": False,
+        "directx_whole_family_included": False,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "all 2,396 host-named entries from `reduce.metal`" in readme
+    assert "39 exact ABI shapes over nine source templates" in readme
+    assert "contain 25,088 reflected resources in aggregate" in readme
+    assert "requires all 2,396 AIR outputs" in readme
+    assert "does not claim Metal numerical execution" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 2,396 host-named entries from ``reduce.metal``" in guide
+    assert "39 exact ABI shapes over nine kernel templates" in guide
+    assert "contains 25,088 resources" in guide
+    assert "All 2,396 AIR objects must be non-empty" in guide
+    assert "does not claim Metal numerical execution" in guide

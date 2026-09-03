@@ -1438,6 +1438,7 @@ class MetalToCrossGLConverter:
         self.local_type_alias_names = set()
         self.local_struct_type_aliases = {}
         self.local_integral_constant_bindings = {}
+        self.global_integral_constant_bindings = {}
         self.local_aggregate_declarations = []
         self.local_aggregate_declaration_keys = {}
         self.local_aggregate_reserved_names = set()
@@ -1576,6 +1577,7 @@ class MetalToCrossGLConverter:
             "thread_index_in_threadgroup": "gl_LocalInvocationIndex",
             "thread_index_in_simdgroup": "gl_SubgroupInvocationID",
             "simdgroup_index_in_threadgroup": "gl_SubgroupID",
+            "simdgroups_per_threadgroup": "gl_NumSubgroups",
             "threads_per_threadgroup": "gl_WorkGroupSize",
             "threads_per_simdgroup": "gl_SubgroupSize",
             "threadgroups_per_grid": "gl_NumWorkGroups",
@@ -2624,12 +2626,14 @@ class MetalToCrossGLConverter:
         self.local_type_alias_names = set()
         self.local_struct_type_aliases = {}
         self.local_integral_constant_bindings = {}
+        self.global_integral_constant_bindings = {}
         self.local_aggregate_declarations = []
         self.local_aggregate_declaration_keys = {}
         self.local_aggregate_reserved_names = set()
         self.struct_member_name_maps = {}
         functions = getattr(ast, "functions", []) or []
         self.prepare_texture_usage(ast)
+        self.prepare_global_integral_constants(ast)
         self.prepare_out_of_line_call_operator_bindings(functions)
         effective_functions = [
             function
@@ -3849,7 +3853,7 @@ class MetalToCrossGLConverter:
                 location,
             )
         rendered_extent = self.format_array_extent(extent)
-        extent_value = self.evaluate_value_template_constant_expression(rendered_extent)
+        extent_value = self.evaluate_concrete_array_extent(rendered_extent)
         if not isinstance(extent_value, int) or isinstance(extent_value, bool):
             raise MetalConstructorContractError(
                 element_type,
@@ -4104,7 +4108,7 @@ class MetalToCrossGLConverter:
                 location,
             )
         rendered_extent = self.format_array_extent(extent)
-        extent_value = self.evaluate_value_template_constant_expression(rendered_extent)
+        extent_value = self.evaluate_concrete_array_extent(rendered_extent)
         if not isinstance(extent_value, int) or isinstance(extent_value, bool):
             raise MetalConstructorContractError(
                 owner,
@@ -7497,6 +7501,7 @@ class MetalToCrossGLConverter:
         self.local_type_alias_names = set()
         self.local_struct_type_aliases = {}
         self.local_integral_constant_bindings = {}
+        self.global_integral_constant_bindings = {}
         self.local_aggregate_declarations = []
         self.local_aggregate_declaration_keys = {}
         self.local_aggregate_reserved_names = set()
@@ -7530,6 +7535,95 @@ class MetalToCrossGLConverter:
         self.constructor_factory_names = {}
         self.pending_constructor_factories = []
         self.current_constructor_scope_index = None
+
+    def prepare_global_integral_constants(self, ast):
+        """Collect uniquely visible program-scope integral constexpr values.
+
+        Constructor-bearing local arrays must be expanded into explicit element
+        assignments, which requires a finite loop bound.  Metal accepts a proven
+        program-scope ``constexpr`` identifier as that bound (MLX reduction uses
+        ``static constant constexpr const uint8_t simd_size = 32``), so retain
+        those exact values without treating mutable or merely constant-address-
+        space data as compile-time expressions.
+        """
+        self.global_integral_constant_bindings = {}
+        candidates = []
+        for entry in getattr(ast, "global_variables", []) or getattr(
+            ast, "global_vars", []
+        ):
+            if (
+                not isinstance(entry, AssignmentNode)
+                or getattr(entry, "operator", None) != "="
+                or not isinstance(getattr(entry, "left", None), VariableNode)
+            ):
+                continue
+            declaration = entry.left
+            name = getattr(declaration, "name", None)
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(declaration, "qualifiers", []) or []
+            }
+            if (
+                not name
+                or "constexpr" not in qualifiers
+                or not self.is_integral_constexpr_type(
+                    getattr(declaration, "vtype", None)
+                )
+            ):
+                continue
+            qualified_name = re.sub(
+                r"\s*::\s*",
+                "::",
+                str(getattr(declaration, "qualified_name", None) or name),
+            ).lstrip(":")
+            candidates.append((declaration, entry.right, name, qualified_name))
+
+        unqualified_counts = {}
+        qualified_counts = {}
+        for _declaration, _initializer, name, qualified_name in candidates:
+            unqualified_counts[name] = unqualified_counts.get(name, 0) + 1
+            qualified_counts[qualified_name] = (
+                qualified_counts.get(qualified_name, 0) + 1
+            )
+
+        values = {}
+        for _declaration, initializer, name, qualified_name in candidates:
+            value = evaluate_literal_int_expression(initializer, values)
+            if not isinstance(value, int) or isinstance(value, bool):
+                continue
+            identities = []
+            if qualified_counts[qualified_name] == 1:
+                identities.append(qualified_name)
+            if unqualified_counts[name] == 1:
+                identities.append(name)
+            for identity in dict.fromkeys(identities):
+                values[identity] = value
+        self.global_integral_constant_bindings = values
+
+    def visible_global_integral_constant_bindings(self):
+        """Return global constexpr values not hidden by a lexical declaration."""
+        visible = {}
+        local_scopes = self.identifier_maps[1:]
+        for name, value in self.global_integral_constant_bindings.items():
+            if "::" not in name and any(name in scope for scope in local_scopes):
+                continue
+            visible[name] = value
+        return visible
+
+    def evaluate_concrete_array_extent(self, expression):
+        rendered = self.substitute_local_integral_constant_text(expression)
+        try:
+            lexer = MetalLexer(rendered, preprocess=False)
+            parser = MetalParser(lexer.tokenize())
+            node = parser.parse_expression()
+            if parser.current_token[0] != "EOF":
+                return None
+        except (SyntaxError, ValueError, TypeError):
+            return None
+        return evaluate_literal_int_expression(
+            node,
+            self.visible_global_integral_constant_bindings(),
+        )
 
     def effective_metal_variable_type(self, var):
         metal_type = self.resolved_struct_member_types.get(
@@ -10442,7 +10536,11 @@ class MetalToCrossGLConverter:
                 )
             return f"{mapped_type}({args})"
         elif isinstance(expr, InitializerListNode):
-            return self.generate_initializer_list(expr, is_main)
+            return self.generate_initializer_list(
+                expr,
+                is_main,
+                getattr(expr, "_metal_source_overload_expected_type", None),
+            )
         elif isinstance(expr, DesignatedInitializerNode):
             return self.generate_designated_initializer(expr, is_main)
         elif isinstance(expr, TextureSampleNode):
@@ -11641,9 +11739,55 @@ class MetalToCrossGLConverter:
             return cls.metal_source_overload_identity_contains_bfloat(identity[2])
         return identity[0] == "scalar" and identity[1] == "bfloat"
 
+    def metal_source_overload_initializer_list_match_rank(self, argument, parameter):
+        parameter_type = self.metal_source_overload_parameter_type(parameter)
+        expected = self.metal_source_overload_type_descriptor(parameter_type)
+        if expected is None or expected[0] != "vector":
+            return None
+
+        elements = list(argument.elements)
+        expected_width = expected[1]
+        if len(elements) != expected_width or any(
+            isinstance(element, (InitializerListNode, DesignatedInitializerNode))
+            for element in elements
+        ):
+            return None
+
+        parameter_value_type = self.metal_source_overload_value_type(parameter_type)
+        vector_parts = self.metal_small_vector_type_parts(parameter_value_type)
+        if vector_parts is None or vector_parts[1] != expected_width:
+            return None
+        component_type, _width = vector_parts
+        component_parameter = VariableNode(
+            component_type,
+            "_crosstl_initializer_component",
+        )
+
+        ranks = []
+        for element in elements:
+            element_type = self.metal_source_overload_value_type(
+                self.expression_metal_type(element)
+            )
+            if element_type is None:
+                return None
+            rank = self.metal_source_overload_argument_match_rank(
+                element,
+                element_type,
+                component_parameter,
+            )
+            if rank is None:
+                return None
+            ranks.append(rank)
+        return min(ranks)
+
     def metal_source_overload_argument_match_rank(
         self, argument, actual_type, parameter
     ):
+        if isinstance(argument, InitializerListNode):
+            return self.metal_source_overload_initializer_list_match_rank(
+                argument,
+                parameter,
+            )
         actual = self.metal_source_overload_type_descriptor(actual_type)
         parameter_type = self.metal_source_overload_parameter_type(parameter)
         expected = self.metal_source_overload_type_descriptor(parameter_type)
@@ -11723,6 +11867,17 @@ class MetalToCrossGLConverter:
             for argument in arguments
         ]
         if any(argument_type is None for argument_type in argument_types):
+            return None
+        if (
+            len(argument_types) == 2
+            and self.metal_builtin_pointer_arithmetic_operand_index(
+                operator, argument_types[0], argument_types[1]
+            )
+            is not None
+        ):
+            # Pointer +/- integral is a native built-in expression even when the
+            # pointee is an aggregate. Unrelated aggregate value overloads are
+            # not candidates for this operation and must not intercept it.
             return None
         ranked = []
         for function in candidates:
@@ -11850,7 +12005,10 @@ class MetalToCrossGLConverter:
             self.metal_source_overload_candidate_signature(declarations[0])
             for declarations in arity_groups.values()
         ]
-        if any(argument_type is None for argument_type in argument_types):
+        if any(
+            argument_type is None and not isinstance(argument, InitializerListNode)
+            for argument, argument_type in zip(arguments, argument_types)
+        ):
             raise MetalSourceOverloadResolutionError(
                 function_name,
                 diagnostic_argument_types,
@@ -11928,6 +12086,16 @@ class MetalToCrossGLConverter:
         )
         if selected is None:
             return function_name
+        for argument, parameter in zip(
+            arguments,
+            getattr(selected, "params", []) or [],
+        ):
+            if not isinstance(argument, InitializerListNode):
+                continue
+            parameter_type = self.metal_source_overload_parameter_type(parameter)
+            descriptor = self.metal_source_overload_type_descriptor(parameter_type)
+            if descriptor is not None and descriptor[0] == "vector":
+                argument._metal_source_overload_expected_type = parameter_type
         return self.metal_source_overload_output_names[id(selected)]
 
     def metal_user_function_overloads(self, function_name):
@@ -15799,24 +15967,39 @@ class MetalToCrossGLConverter:
 
         return self.metal_scalar_binary_result_type(expr.op, left_type, right_type)
 
-    def metal_pointer_arithmetic_source(self, expr, left_type=None, right_type=None):
-        if not isinstance(expr, BinaryOpNode) or expr.op not in {"+", "-"}:
+    def metal_builtin_pointer_arithmetic_operand_index(
+        self, operator, left_type, right_type
+    ):
+        """Return the pointer operand for a proven built-in pointer operation."""
+        if operator not in {"+", "-"}:
             return None
-        if left_type is None:
-            left_type = self.expression_metal_type(expr.left)
-        if right_type is None:
-            right_type = self.expression_metal_type(expr.right)
         left_pointer = self.metal_pointer_pointee_type_once(left_type)
         right_pointer = self.metal_pointer_pointee_type_once(right_type)
 
         if left_pointer is not None and right_pointer is None:
             right_info = self.metal_scalar_arithmetic_type_info(right_type)
             if right_info is not None and right_info[0] == "integer":
-                return expr.left, left_type
-        if expr.op == "+" and right_pointer is not None and left_pointer is None:
+                return 0
+        if operator == "+" and right_pointer is not None and left_pointer is None:
             left_info = self.metal_scalar_arithmetic_type_info(left_type)
             if left_info is not None and left_info[0] == "integer":
-                return expr.right, right_type
+                return 1
+        return None
+
+    def metal_pointer_arithmetic_source(self, expr, left_type=None, right_type=None):
+        if not isinstance(expr, BinaryOpNode):
+            return None
+        if left_type is None:
+            left_type = self.expression_metal_type(expr.left)
+        if right_type is None:
+            right_type = self.expression_metal_type(expr.right)
+        pointer_operand = self.metal_builtin_pointer_arithmetic_operand_index(
+            expr.op, left_type, right_type
+        )
+        if pointer_operand == 0:
+            return expr.left, left_type
+        if pointer_operand == 1:
+            return expr.right, right_type
         return None
 
     def expression_metal_type_qualifiers(self, expr):
@@ -15926,8 +16109,23 @@ class MetalToCrossGLConverter:
                     source_location,
                     operand_type,
                 )
+            name = operand if isinstance(operand, str) else operand.name
+            parameter_names = {
+                getattr(parameter, "name", None)
+                for parameter in getattr(self.current_function, "params", ()) or ()
+            }
+            thread_local_pointer_slot = (
+                bool(name)
+                and name in self.current_variable_types
+                and name not in self.global_variable_types
+                and name not in parameter_names
+            )
             return self.metal_address_pointer_provenance(
-                operand_type, qualifiers, source_location, "identifier"
+                operand_type,
+                qualifiers,
+                source_location,
+                "identifier",
+                allow_thread_local_pointer_slot=thread_local_pointer_slot,
             )
 
         if isinstance(operand, UnaryOpNode) and operand.op == "*":
@@ -15957,7 +16155,13 @@ class MetalToCrossGLConverter:
         )
 
     def metal_address_pointer_provenance(
-        self, selected_type, qualifiers, source_location, operand_kind
+        self,
+        selected_type,
+        qualifiers,
+        source_location,
+        operand_kind,
+        *,
+        allow_thread_local_pointer_slot=False,
     ):
         value_type = self.metal_source_overload_value_type(selected_type)
         if value_type is None:
@@ -15967,8 +16171,22 @@ class MetalToCrossGLConverter:
                 source_location,
                 selected_type,
             )
+        pointer_pointee = self.metal_pointer_pointee_type_once(value_type)
+        if pointer_pointee is not None:
+            pointer_slot_is_portable = (
+                allow_thread_local_pointer_slot
+                and self.metal_pointer_pointee_type_once(pointer_pointee) is None
+                and self.split_outer_metal_declarator_array_type(pointer_pointee)
+                is None
+                and self.metal_array_type_parts(pointer_pointee) is None
+                and not self.is_metal_resource_type(pointer_pointee)
+            )
+            if pointer_slot_is_portable:
+                return f"{value_type}*", self.normalized_metal_address_qualifiers(
+                    qualifiers, source_location, value_type
+                )
         if (
-            self.metal_pointer_pointee_type_once(value_type) is not None
+            pointer_pointee is not None
             or self.split_outer_metal_declarator_array_type(value_type) is not None
             or self.metal_array_type_parts(value_type) is not None
         ):
