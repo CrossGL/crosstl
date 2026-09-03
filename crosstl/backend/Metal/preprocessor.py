@@ -17934,14 +17934,20 @@ class MetalPreprocessor(HLSLPreprocessor):
         return normalized
 
     def _normalize_inferred_expression_type(self, type_text: str) -> Optional[str]:
-        # Value expressions discard top-level cv/address-space qualifiers during
-        # template binding. Pointer expressions cannot: Metal requires a proven
-        # address space, and dropping it can produce a validating but unusable
-        # specialization. Preserve one fully qualified pointer; reject every
-        # other pointer-bearing spelling rather than normalizing it to `T*`.
+        # Value expressions discard top-level cv/address-space qualifiers and
+        # references during template binding: a named `thread U& total` has value
+        # type U when passed to a by-value parameter. Pointer expressions cannot
+        # discard pointee qualifiers or address spaces, so after reference decay
+        # preserve one fully qualified pointer and reject every other
+        # pointer-bearing spelling rather than normalizing it to `T*`.
         normalized = self._normalize_template_argument_text(type_text or "")
         if not normalized:
             return None
+        reference = re.search(r"\s*(?:&&|&)\s*$", normalized)
+        if reference is not None:
+            normalized = normalized[: reference.start()].strip()
+            if not normalized:
+                return None
         if "*" in normalized:
             return self._normalize_known_address_space_pointer_type(normalized)
         value_type = self._normalize_inferred_type(normalized)
@@ -18090,10 +18096,14 @@ class MetalPreprocessor(HLSLPreprocessor):
                         )
 
         # Dereference of one explicit C-style pointer cast has the cast's
-        # pointee type: `*(thread Value*)(&bits)` -> `Value`. This is deliberately
-        # narrower than general pointer-expression inference; offsets, nested
-        # casts, and side-effecting tails remain unresolved.
-        if expr.startswith("*"):
+        # pointee type: `*(thread Value*)(&bits)` -> `Value`. A dereference of a
+        # tracked pointer/array is also exact: `*row`, `*(row + index)`, and the
+        # MLX reduction shape `*row++` all retain the declared pointee type. The
+        # postfix update is admitted only on one bare tracked pointer and remains
+        # in the rewritten call expression, so its side effect is neither erased
+        # nor duplicated. Prefix updates, arbitrary calls, nested dereferences,
+        # and unbalanced/compound tails remain unresolved rather than guessed.
+        if expr.startswith("*") and not expr.startswith("**"):
             cast = expr[1:].lstrip()
             if cast.startswith("("):
                 cast_close = self._find_matching_delimiter(cast, 0, "(", ")")
@@ -18109,6 +18119,53 @@ class MetalPreprocessor(HLSLPreprocessor):
                         ).strip()
                         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_:]*", pointee):
                             return self._normalize_inferred_type(pointee)
+
+            operand = expr[1:].strip()
+            parenthesized = False
+            if operand.startswith("("):
+                operand_close = self._find_matching_delimiter(operand, 0, "(", ")")
+                if operand_close == len(operand) - 1:
+                    operand = operand[1:-1].strip()
+                    parenthesized = True
+
+            postfix = re.fullmatch(
+                r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<update>\+\+|--)",
+                operand,
+            )
+            if postfix is not None:
+                name = postfix.group("name")
+                pointer_type = self._buffer_pointer_type(buffer_element_types, name)
+                if pointer_type is None and name in local_variable_types:
+                    pointer_type = self._normalize_known_address_space_pointer_type(
+                        local_variable_types[name]
+                    )
+                if pointer_type is not None:
+                    pointee = self._pointer_pointee_value_type(pointer_type)
+                    if pointee is not None:
+                        return pointee
+            elif IDENTIFIER_RE.fullmatch(operand):
+                element_type = self._buffer_element_type(buffer_element_types, operand)
+                if element_type is not None:
+                    return self._normalize_inferred_type(element_type)
+                pointer_type = self._normalize_known_address_space_pointer_type(
+                    local_variable_types.get(operand, "")
+                )
+                if pointer_type is not None:
+                    pointee = self._pointer_pointee_value_type(pointer_type)
+                    if pointee is not None:
+                        return pointee
+            elif parenthesized:
+                pointer_type = self._infer_pointer_arithmetic_type(
+                    operand,
+                    buffer_element_types,
+                    local_variable_types,
+                    struct_field_types,
+                    structs_by_name,
+                )
+                if pointer_type is not None:
+                    pointee = self._pointer_pointee_value_type(pointer_type)
+                    if pointee is not None:
+                        return pointee
 
         # Literal types.
         literal_type = self._infer_literal_type(expr)

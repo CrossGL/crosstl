@@ -50869,6 +50869,63 @@ def test_translate_project_metal_struct_method_diagnostic_uses_call_location(
     )
 
 
+def test_translate_project_metal_postincremented_pointer_functor_compiles(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct Max {
+          template <typename T>
+          metal::enable_if_t<metal::is_integral_v<T>, T> operator()(
+              T a, T b) thread {
+            return a > b ? a : b;
+          }
+
+          template <typename T>
+          metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(
+              T a, T b) thread {
+            return a > b ? a : b;
+          }
+        };
+
+        kernel void reduce(
+            const device float* row [[buffer(0)]],
+            device float* out [[buffer(1)]]) {
+          Max op;
+          float total = row[0];
+          total = op(*row++, total);
+          out[0] = total;
+        }
+        """).strip()
+    (repo / "reduce.metal").write_text(source, encoding="utf-8")
+
+    payload = translate_project(
+        repo,
+        targets=["metal"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert generated.count("row++") == 1
+    assert "Max__operator_call__float" in generated
+    assert "op(*row" not in generated
+    assert_metal_validates_if_available(
+        generated,
+        tmp_path,
+        warnings_as_errors=True,
+    )
+
+
 def test_translate_project_reports_unrepresentable_metal_constructor_details(
     tmp_path,
 ):
@@ -59200,7 +59257,7 @@ def test_metal_concrete_function_fingerprints_preserve_literal_token_bytes():
 
     preprocessor = MetalPreprocessor()
 
-    def fingerprints(source: str) -> set[tuple[str, str]]:
+    def fingerprints(source: str):
         return project_pipeline._metal_concrete_function_definition_fingerprints(
             preprocessor,
             source,

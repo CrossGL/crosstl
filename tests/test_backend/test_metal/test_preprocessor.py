@@ -10670,6 +10670,137 @@ def test_infer_argument_type_preserves_qualified_pointer_expressions():
     assert pp._infer_argument_type("offset - src", buffers, locals_) is None
 
 
+def test_infer_argument_type_dereferences_only_proven_pointer_shapes():
+    pp = MetalPreprocessor()
+    code = "kernel void k(const device half* row [[buffer(0)]]) {}"
+    positioned = pp._collect_buffer_element_types(code, [])
+    buffers = pp._flatten_types_at(positioned, len(code))
+    locals_ = {
+        "index": "uint",
+        "local": "threadgroup float*",
+        "aggregate_ref": "thread complex_t_float&",
+        "pointer_ref": "const device half*&",
+    }
+
+    assert pp._infer_argument_type("*row", buffers, locals_) == "half"
+    assert pp._infer_argument_type("*row++", buffers, locals_) == "half"
+    assert pp._infer_argument_type("*(row--)", buffers, locals_) == "half"
+    assert pp._infer_argument_type("*(row + index)", buffers, locals_) == "half"
+    assert pp._infer_argument_type("*local++", buffers, locals_) == "float"
+    assert (
+        pp._infer_argument_type("aggregate_ref", buffers, locals_) == "complex_t_float"
+    )
+    assert (
+        pp._infer_argument_type("pointer_ref", buffers, locals_) == "const device half*"
+    )
+
+    for unsupported in (
+        "*missing++",
+        "*next(row)",
+        "*++row",
+        "**row",
+        "*(row + 1.0)",
+        "*(row, row)",
+    ):
+        assert pp._infer_argument_type(unsupported, buffers, locals_) is None
+
+
+_POSTINCREMENT_CONSTRAINED_FUNCTOR_SOURCE = """
+#include <metal_stdlib>
+using namespace metal;
+
+template <typename U>
+struct Max {
+  template <typename T>
+  metal::enable_if_t<metal::is_integral_v<T>, T> operator()(T a, T b) thread {
+    return a > b ? a : b;
+  }
+
+  template <typename T>
+  metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(T a, T b) thread {
+    return a > b ? a : b;
+  }
+};
+
+kernel void reduce(
+    const device float* row [[buffer(0)]],
+    device float* out [[buffer(1)]]) {
+  Max<float> op;
+  float total = row[0];
+  total = op(*row++, total);
+  out[0] = total;
+}
+"""
+
+
+def test_preprocessor_lowers_constrained_functor_from_postincremented_pointer():
+    output = MetalPreprocessor().preprocess(_POSTINCREMENT_CONSTRAINED_FUNCTOR_SOURCE)
+
+    assert (
+        "float Max_float__operator_call__float("
+        "thread Max_float& self, float a, float b)" in output
+    )
+    assert "Max_float__operator_call__float(op, *row++, total)" in output
+    assert output.count("row++") == 1
+    assert "op(*row" not in output
+
+    # The lowered source must also survive the native-source parser; this catches
+    # a rewrite that happens to look plausible as text but leaves an invalid AST.
+    MetalParser(MetalLexer(output).tokenize()).parse()
+
+
+_COMPLEX_REFERENCE_CONSTRAINED_FUNCTOR_SOURCE = """
+#include <metal_stdlib>
+using namespace metal;
+
+struct complex_t_float { float real; float imag; };
+using complex64_t = complex_t_float;
+
+struct Max {
+  template <typename T>
+  metal::enable_if_t<metal::is_integral_v<T>, T> operator()(T a, T b) thread {
+    return a;
+  }
+
+  template <typename T>
+  metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(T a, T b) thread {
+    return a;
+  }
+
+  complex64_t operator()(complex64_t a, complex64_t b) thread {
+    return a;
+  }
+};
+
+void reduce_one(
+    thread complex_t_float& total,
+    const device complex64_t* row) {
+  Max op;
+  total = op(*row++, total);
+}
+
+kernel void reduce_complex(
+    const device complex64_t* row [[buffer(0)]],
+    device complex64_t* out [[buffer(1)]]) {
+  complex_t_float total = row[0];
+  reduce_one(total, row);
+  out[0] = total;
+}
+"""
+
+
+def test_preprocessor_prefers_exact_complex_overload_for_reference_argument():
+    output = MetalPreprocessor().preprocess(
+        _COMPLEX_REFERENCE_CONSTRAINED_FUNCTOR_SOURCE
+    )
+
+    assert "Max__operator_call(op, *row++, total)" in output
+    assert "Max__operator_call__complex" not in output
+    assert output.count("row++") == 1
+    assert "op(*row" not in output
+    MetalParser(MetalLexer(output).tokenize()).parse()
+
+
 @pytest.mark.parametrize(
     ("expression", "expected"),
     [

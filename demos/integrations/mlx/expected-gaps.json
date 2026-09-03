@@ -2659,6 +2659,178 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
+  "reduce_metal_roundtrip_status": {
+    "status": "selected-entry-complete-family-native-compilation-validated",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/reduce.metal",
+    "source_sha256": "f1e410ab635eaa940ec195461069cbb013ab88ab0d1f8d5dd8790d30b32c454a",
+    "target": "metal",
+    "scope": {
+      "discovered_reduce_instantiation_count": 2396,
+      "entry_count": 2396,
+      "shape_count": 39,
+      "template_count": 9,
+      "operator_count": 6,
+      "operator_type_count": 44,
+      "input_type_count": 13,
+      "output_type_count": 13,
+      "uncovered_reduce_entry_count": 0,
+      "all_discovered_reduce_instantiations_included": true
+    },
+    "contract": {
+      "path": "demos/integrations/mlx/contracts/reduce.metal-roundtrip.json",
+      "schema_version": 2,
+      "sha256": "0b00b118c0fc2137a60d28400abe3b48de1ccb7a27193273b7b83d3119330abc",
+      "size_bytes": 1476769,
+      "entry_identity_fields": [
+        "entryPoint",
+        "shape",
+        "inputType",
+        "outputType",
+        "operator",
+        "sha256",
+        "sizeBytes",
+        "specializationCount",
+        "materializationSha256",
+        "resourceCount",
+        "resourcesSha256"
+      ]
+    },
+    "project_translation": {
+      "selected_entry_run_count": 2396,
+      "artifact_count": 2396,
+      "translated_count": 2396,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "provenance": "entry-scoped-translate",
+      "intermediate": "crossgl",
+      "specialization_count": 9216,
+      "unsupported_specialization_count": 0,
+      "reachable_kernel_count_per_artifact": 1,
+      "exact_materialization_digests_included": true,
+      "residual_template_syntax": false,
+      "residual_decltype_syntax": false,
+      "residual_call_operator_syntax": false,
+      "unsupported_placeholder_count": 0
+    },
+    "implementation_contracts": {
+      "comparison_aware_template_angle_matching": true,
+      "integral_non_type_struct_argument_folding": true,
+      "const_pointee_pointer_value_rebinding": true,
+      "thread_local_pointer_slot_address_provenance": true,
+      "leading_preprocessor_constexpr_parsing": true,
+      "literal_sensitive_concrete_helper_deduplication": true,
+      "storage_sensitive_static_constant_hoisting": true,
+      "unresolved_static_member_address_provenance_fails_closed": true,
+      "raw_pointer_base_type_mapping": true,
+      "lexical_alias_local_array_inference": true,
+      "native_pointer_integral_arithmetic_dispatch": true,
+      "shape_specific_resource_reflection": true,
+      "exact_reflected_resource_types": true
+    },
+    "host_interface": {
+      "status": "ready",
+      "minimum_resource_count_per_artifact": 1,
+      "maximum_resource_count_per_artifact": 12,
+      "reflected_resource_count": 25088,
+      "exact_resource_digests_included": true,
+      "exact_source_resource_reconstruction": true,
+      "source_to_metal_type_names": {
+        "bfloat16_t": "bfloat",
+        "bool": "bool",
+        "complex64_t": "complex_t_float",
+        "float": "float",
+        "float16_t": "half",
+        "int16_t": "int",
+        "int32_t": "int",
+        "int64_t": "int64_t",
+        "int8_t": "int",
+        "uint16_t": "uint",
+        "uint32_t": "uint",
+        "uint64_t": "uint64_t",
+        "uint8_t": "uint"
+      },
+      "resource_abi_fields": [
+        "name",
+        "kind",
+        "set",
+        "binding",
+        "access",
+        "type"
+      ],
+      "host_dispatch_workgroup_size": [
+        1,
+        1,
+        1
+      ]
+    },
+    "artifacts": {
+      "generated_size_bytes_total": 19829720,
+      "generated_size_range": {
+        "minimum": {
+          "entryPoint": "init_reduce_andbool_",
+          "sizeBytes": 461
+        },
+        "maximum": {
+          "entryPoint": "col_reduce_looped_large_5_32_32_reduce_mincomplex64",
+          "sizeBytes": 17640
+        }
+      }
+    },
+    "native_validation": {
+      "platform": "macos-latest",
+      "compiler": "xcrun -sdk macosx metal -Werror -c",
+      "source_warning_exemption": null,
+      "status": "required-on-ci",
+      "ci_shard_count": 24,
+      "shard_entry_counts": [
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        99,
+        99,
+        99,
+        99
+      ],
+      "compiled_artifact_count": 2396,
+      "all_air_artifacts_nonempty": true,
+      "test": "tests/test_translator/test_mlx_reduce_complete_metal_roundtrip.py::test_current_mlx_reduce_family_roundtrips_through_metal"
+    },
+    "host_interface_reflection_included": true,
+    "metal_roundtrip_included": true,
+    "metal_numerical_runtime_included": false,
+    "opengl_complete_family_translation_included": false,
+    "directx_complete_family_translation_included": false,
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": false,
+    "full_mlx_test_suite_included": false,
+    "remaining_scope": {
+      "uncovered_reduce_metal_entry_count": 0,
+      "metal_numerical_execution_included": false,
+      "opengl_whole_family_included": false,
+      "directx_whole_family_included": false,
+      "mlx_host_runtime_redirection_included": false
+    },
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "copy_opengl_translation_status": {
     "status": "selected-entry-complete-family-native-compilation-validated",
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
@@ -7518,7 +7690,7 @@
         }
       },
       "generated_hlsl": {
-        "sha256": "c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de",
+        "sha256": "654e2788b4b1cf202ddfad3b4d90f6d933853e9e857e0e5fffd6cd41fae8a3b6",
         "size_bytes": 16359
       },
       "compiler_validation": {
