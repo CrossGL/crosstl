@@ -16,6 +16,7 @@ from crosstl.backend.Metal.preprocessor import (
     MetalTemplateSpecializationError,
     MetalTypeTraitError,
     _MetalIntegralConstantBinding,
+    _MetalTemplateStruct,
 )
 
 
@@ -858,6 +859,41 @@ def test_preprocessor_materialized_numeric_specialization_preserves_member_names
     ]
 
 
+def test_preprocessor_materialized_type_substitution_ignores_comment_punctuation():
+    code = """
+    template <typename IdxT>
+    [[kernel]] void gather(
+        device IdxT* out [[buffer(0)]],
+        uint tid [[thread_position_in_grid]]) {
+      // Compute one source index for this thread.
+      IdxT first = IdxT(tid);
+
+      // Split member-style formatting remains a member access despite comments.
+      IdxT second = first;
+      out[0] = first + second;
+    }
+
+    template [[host_name("gather_int")]] [[kernel]]
+    decltype(gather<int>) gather<int>;
+    """
+    preprocessor = MetalPreprocessor()
+
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+
+    assert "int first = int(tid);" in materialized
+    assert "int second = first;" in materialized
+    assert "IdxT first" not in materialized
+    assert "IdxT second" not in materialized
+    commented_member = "holder. // retain this member.\n value"
+    assert (
+        preprocessor._replace_identifiers(commented_member, {"value": "int"})
+        == commented_member
+    )
+
+
 def test_preprocessor_removes_proven_static_assertion_after_specialization():
     code = """
     inline int checked_simd_size() {
@@ -1376,6 +1412,88 @@ def test_preprocessor_removes_proven_static_assertion_for_concrete_struct_layout
     assert "struct TaggedPair" in output
 
 
+def test_preprocessor_removes_proven_static_assertion_for_template_struct_layout():
+    code = """
+    template <typename T>
+    struct Pair {
+        T first;
+        T second;
+    };
+
+    kernel void valid_template_layout(device half* out [[buffer(0)]]) {
+        static_assert(sizeof(Pair<half>) == 4, "Unexpected pair layout.");
+        out[0] = 1.0h;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "static_assert" not in output
+    assert "template <typename T>" in output
+
+
+def test_preprocessor_removes_proven_static_assertion_for_aliased_template_layout():
+    code = """
+    template <typename T>
+    struct Pair {
+        T first;
+        T second;
+    };
+
+    using HalfPair = Pair<half>;
+
+    kernel void valid_alias_layout(device half* out [[buffer(0)]]) {
+        static_assert(sizeof(HalfPair) == 4, "Unexpected alias layout.");
+        out[0] = 1.0h;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "static_assert" not in output
+    assert "using HalfPair = Pair<half>;" in output
+
+
+def test_preprocessor_keeps_pointer_template_layout_assertion_fail_closed():
+    code = """
+    template <typename T>
+    struct PointerPair {
+        device T* pointer;
+        T value;
+    };
+
+    kernel void unresolved_template_layout(device half* out [[buffer(0)]]) {
+        static_assert(
+            sizeof(PointerPair<half>) == 16,
+            "Pointer layout must remain unresolved.");
+        out[0] = 1.0h;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.reason == "condition-unresolved"
+    assert error.resolved_expression == "sizeof(PointerPair<half>) == 16"
+    assert set(error.unresolved_dependencies) == {"PointerPair", "half"}
+
+
 def _evaluate_aggregate_static_assertions(
     assertions,
     *,
@@ -1425,6 +1543,150 @@ def test_preprocessor_removes_proven_aggregate_constexpr_static_assertions():
     assert "static_assert" not in output
     assert "struct Pair_half" in output
     assert "struct Pair_bfloat16_t" in output
+
+
+def test_preprocessor_removes_proven_unmaterialized_template_aggregate_assertion():
+    code = """
+    template <typename T>
+    struct Pair {
+        T real;
+        T imag;
+
+        constexpr Pair(T real, T imag) thread : real(real), imag(imag) {}
+        constexpr Pair() thread : real(0), imag(0) {}
+
+        template <typename U>
+        constexpr Pair(U value) thread : real(static_cast<T>(value)), imag(0) {}
+    };
+
+    template <typename T>
+    constexpr Pair<T> operator*(Pair<T> a, Pair<T> b) {
+        return {
+            a.real * b.real - a.imag * b.imag,
+            a.real * b.imag + a.imag * b.real};
+    }
+
+    static_assert(
+        (Pair<half>{1.0h, 2.0h} * Pair<half>{3.0h, 4.0h}).real ==
+            -5.0h);
+    """
+
+    output = MetalPreprocessor()._evaluate_static_assertions(code)
+
+    assert "static_assert" not in output
+    assert "template <typename T>" in output
+    assert "struct Pair" in output
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        """
+        template <typename T>
+        class Pair {
+        public:
+            T real;
+            T imag;
+        };
+        """,
+        """
+        struct Base {};
+        template <typename T>
+        struct Pair : Base {
+            T real;
+            T imag;
+        };
+        """,
+        """
+        template <typename T>
+        struct Pair {
+            T real;
+            alignas(8) T imag;
+        };
+        """,
+    ],
+)
+def test_preprocessor_keeps_unsafe_template_aggregate_evaluation_fail_closed(code):
+    preprocessor = MetalPreprocessor()
+    templates = [
+        declaration
+        for declaration in preprocessor._find_template_structs(code)
+        if declaration.name == "Pair"
+    ]
+
+    assert len(templates) == 1
+    assert (
+        preprocessor._concrete_template_struct_for_static_evaluation(
+            "Pair<half>",
+            template_structs=templates,
+            explicit_template_specializations=set(),
+        )
+        is None
+    )
+
+
+def test_preprocessor_keeps_template_union_aggregate_evaluation_fail_closed(
+    monkeypatch,
+):
+    preprocessor = MetalPreprocessor()
+    declaration = _MetalTemplateStruct(
+        name="Pair",
+        template_parameters=["T"],
+        span=(0, 36),
+        source="union Pair { T real; T imag; };",
+    )
+
+    def materialize_union(_template, _arguments, concrete_name):
+        return f"union {concrete_name} {{ half real; half imag; }};"
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_materialize_template_struct_with_name",
+        materialize_union,
+    )
+
+    assert (
+        preprocessor._concrete_template_struct_for_static_evaluation(
+            "Pair<half>",
+            template_structs=[declaration],
+            explicit_template_specializations=set(),
+        )
+        is None
+    )
+
+
+def test_preprocessor_keeps_specialized_template_aggregate_assertion_fail_closed():
+    code = """
+    template <typename T>
+    struct Pair {
+        T real;
+        T imag;
+        constexpr Pair(T real, T imag) thread : real(real), imag(imag) {}
+    };
+
+    template <>
+    struct Pair<half> {
+        half real;
+        half imag;
+        constexpr Pair(half real, half imag) thread : real(real), imag(imag) {}
+    };
+
+    template <typename T>
+    constexpr Pair<T> operator*(Pair<T> a, Pair<T> b) {
+        return {
+            a.real * b.real - a.imag * b.imag,
+            a.real * b.imag + a.imag * b.real};
+    }
+
+    static_assert(
+        (Pair<half>{1.0h, 2.0h} * Pair<half>{3.0h, 4.0h}).real ==
+            -5.0h);
+    """
+
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        MetalPreprocessor()._evaluate_static_assertions(code)
+
+    assert exc_info.value.reason == "condition-unresolved"
 
 
 def test_preprocessor_rejects_false_aggregate_constexpr_static_assertion():
@@ -3161,6 +3423,51 @@ def test_preprocessor_bounds_owner_alias_materialization_work():
     )
 
 
+def test_preprocessor_folds_recursive_struct_non_type_arguments_for_partial_selection():
+    class CountingWorkBudget:
+        def __init__(self):
+            self.used = 0
+
+        def consume(self, amount, **_kwargs):
+            self.used += amount
+
+    code = """
+    template <int Dim, typename OffsetT = int, bool General = true>
+    struct Looped {
+        Looped<Dim - 1, OffsetT, General> inner;
+    };
+
+    template <typename OffsetT>
+    struct Looped<1, OffsetT, false> {
+        OffsetT offset;
+    };
+
+    Looped<2, int, (2 > 2)> loop;
+    """
+    preprocessor = MetalPreprocessor(max_template_specializations=16)
+    work_budget = CountingWorkBudget()
+
+    output = preprocessor._materialize_explicit_template_struct_instantiations(
+        code,
+        work_budget=work_budget,
+        allow_partial_object_specializations=True,
+    )
+
+    # Preserve the existing source-spelling identity for the caller-visible
+    # specialization, but fold the recursively substituted Dim/General values so
+    # the terminal partial specialization is selected after one bounded step.
+    assert "Looped_2_int_2_2 loop;" in output
+    assert "Looped_1_int_false inner;" in output
+    assert output.count("struct Looped_2_int_2_2 {") == 1
+    assert output.count("struct Looped_1_int_false {") == 1
+    assert "Looped_2_1" not in output
+    assert work_budget.used == 2
+    assert preprocessor._materialized_struct_specializations == {
+        "Looped_1_int_false": ("Looped", ("1", "int", "false")),
+        "Looped_2_int_2_2": ("Looped", ("2", "int", "(2>2)")),
+    }
+
+
 def test_preprocessor_reports_dependent_owner_alias_at_nested_instantiation():
     code = """
     template <typename Frag>
@@ -4482,6 +4789,98 @@ def test_preprocessor_lowers_instance_method_with_member_reference():
     assert "adder.add(" not in output
 
 
+def test_preprocessor_lowers_brace_initialized_member_references():
+    code = """
+    struct Counter {
+        int dim;
+        int offset{0};
+        uint index{0};
+
+        void advance() {
+            index++;
+            offset = int(index) + dim;
+        }
+
+        int location() { return offset; }
+    };
+    """
+    preprocessor = MetalPreprocessor()
+    definitions = preprocessor._find_concrete_struct_definitions(code)
+
+    assert len(definitions) == 1
+    counter = definitions[0]
+    assert counter.data_member_names == {"dim", "offset", "index"}
+    assert counter.data_member_types == {
+        "dim": "int",
+        "offset": "int",
+        "index": "uint",
+    }
+    assert [
+        (member.name, member.default, member.initializer_style)
+        for member in counter.data_members
+    ] == [
+        ("dim", None, "="),
+        ("offset", "0", "direct-list"),
+        ("index", "0", "direct-list"),
+    ]
+
+    output = preprocessor.preprocess(code)
+
+    assert "self.index++;" in output
+    assert "self.offset = int(self.index) + self.dim;" in output
+    assert "return self.offset;" in output
+    assert "int offset{0};" in output
+    assert "uint index{0};" in output
+
+
+def test_preprocessor_scoped_partial_object_materialization_requires_unique_match():
+    unique = """
+    template <typename T, int Width, bool Active>
+    struct Selector { T primary; };
+
+    template <typename T>
+    struct Selector<T, 1, true> { T selected{0}; };
+
+    Selector<int, 1, true> value;
+    """
+    preprocessor = MetalPreprocessor()
+
+    default_output = preprocessor._materialize_explicit_template_struct_instantiations(
+        unique
+    )
+    assert "Selector<int, 1, true> value;" in default_output
+    assert "struct Selector_int_1_true" not in default_output
+
+    scoped_output = preprocessor._materialize_explicit_template_struct_instantiations(
+        unique,
+        allow_partial_object_specializations=True,
+    )
+    assert "struct Selector_int_1_true" in scoped_output
+    assert "int selected{0};" in scoped_output
+    assert "Selector_int_1_true value;" in scoped_output
+
+    ambiguous = """
+    template <typename T, int Width, bool Active>
+    struct Selector { T primary; };
+
+    template <typename T, bool Active>
+    struct Selector<T, 1, Active> { T row; };
+
+    template <typename T, int Width>
+    struct Selector<T, Width, true> { T active; };
+
+    Selector<int, 1, true> value;
+    """
+    ambiguous_output = (
+        preprocessor._materialize_explicit_template_struct_instantiations(
+            ambiguous,
+            allow_partial_object_specializations=True,
+        )
+    )
+    assert "Selector<int, 1, true> value;" in ambiguous_output
+    assert "struct Selector_int_1_true" not in ambiguous_output
+
+
 def test_preprocessor_mutating_method_uses_mutable_receiver_reference():
     code = """
     struct NestedState { int value; };
@@ -5633,6 +6032,126 @@ def test_preprocessor_static_initializer_substitution_respects_shadowing_and_con
     assert 'const char* label = "value";' in output
     assert "return (5) + other.value + self.instance_value;" in output
     assert "(11)" not in output
+
+
+def test_preprocessor_elides_used_static_constants_from_lowered_functors():
+    code = """
+    struct Pair {
+        float x;
+        int y;
+    };
+
+    struct Shadow {
+        float init;
+    };
+
+    struct ReduceOp {
+        static constexpr constant float init = float(0);
+        static constexpr constant bool enabled = true;
+        static constexpr constant int lane_count = 4;
+        static constexpr constant bfloat16_t bfloat_init = bfloat16_t(0);
+        static constexpr constant Pair pair_init = Pair{1.0f, 2};
+        static constexpr constant int first = second;
+        static constexpr constant int second = first;
+        static constant float runtime_value = 3.0f;
+
+        float operator()(float value) const {
+            return enabled ? value + init : value;
+        }
+    };
+
+    void use_constants() {
+        ReduceOp op;
+        ReduceOp* ptr = &op;
+        float before = op.init;
+        float indirect = ptr->init;
+        bool flag = op.enabled;
+        int lanes = ReduceOp::lane_count;
+        bfloat16_t bf = op.bfloat_init;
+        Pair pair = op.pair_init;
+        // op.init and ReduceOp::lane_count stay literal here.
+        const char* label = "op.init ReduceOp::lane_count";
+        {
+            Shadow op;
+            float shadowed = op.init;
+        }
+        float after = op.init;
+        float runtime = op.runtime_value;
+        int unresolved = op.first;
+        float applied = op(before);
+    }
+    """
+
+    output = MetalPreprocessor()._lower_struct_member_functions(code)
+
+    assert "static constexpr constant float init" not in output
+    assert "static constexpr constant bool enabled" not in output
+    assert "static constexpr constant int lane_count" not in output
+    assert "static constexpr constant bfloat16_t bfloat_init" not in output
+    assert "static constexpr constant Pair pair_init" not in output
+    assert "float before = (float(0));" in output
+    assert "float indirect = (float(0));" in output
+    assert "bool flag = true;" in output
+    assert "int lanes = 4;" in output
+    assert "bfloat16_t bf = (bfloat16_t(0));" in output
+    assert "Pair pair = (Pair{1.0f,2});" in output
+    assert "float shadowed = op.init;" in output
+    assert "float after = (float(0));" in output
+    assert "// op.init and ReduceOp::lane_count stay literal here." in output
+    assert 'const char* label = "op.init ReduceOp::lane_count";' in output
+    assert "static constant float runtime_value = 3.0f;" in output
+    assert "float runtime = op.runtime_value;" in output
+    assert "static constexpr constant int first = second;" in output
+    assert "static constexpr constant int second = first;" in output
+    assert "int unresolved = op.first;" in output
+    assert "ReduceOp__operator_call(op, before)" in output
+
+
+def test_preprocessor_preserves_storage_sensitive_static_constant_uses():
+    code = """
+    struct ReduceOp {
+        static constexpr constant int value = 7;
+
+        int operator()() const {
+            return *(&ReduceOp::value);
+        }
+    };
+
+    void observe() {
+        ReduceOp op;
+        constant int* qualified = &(ReduceOp::value);
+        constant int* receiver = &op.value;
+        constant int& alias = (ReduceOp::value);
+        constant int& direct(ReduceOp::value);
+        constant int& grouped((ReduceOp::value));
+        constant int& direct_list{ReduceOp::value};
+        constant int& copy_list = {ReduceOp::value};
+        int bytes = sizeof(ReduceOp::value);
+        int masked = 3 & op.value;
+        bool enabled = true && op.value;
+        int copied = op.value;
+    }
+    """
+
+    output = MetalPreprocessor()._lower_struct_member_functions(code)
+
+    storage = "_crosstl_metal_static_ReduceOp_value"
+    assert "static constexpr constant int value = 7;" not in output
+    assert f"constant int {storage} = 7;" in output
+    assert f"return *(&{storage});" in output
+    assert f"constant int* qualified = &({storage});" in output
+    assert f"constant int* receiver = &{storage};" in output
+    assert f"constant int& alias = ({storage});" in output
+    assert f"constant int& direct({storage});" in output
+    assert f"constant int& grouped(({storage}));" in output
+    assert f"constant int& direct_list{{{storage}}};" in output
+    assert f"constant int& copy_list = {{{storage}}};" in output
+    assert f"int bytes = sizeof({storage});" in output
+    assert "int masked = 3 & 7;" in output
+    assert "bool enabled = true && 7;" in output
+    assert "int copied = 7;" in output
+    assert "*(&7)" not in output
+    assert "&(7)" not in output
 
 
 def test_preprocessor_materialized_template_struct_constructor_is_left_in_place():
@@ -7659,6 +8178,63 @@ def test_preprocessor_instantiates_template_operator_call_from_temporary_functor
     assert "Select__operator_call__float__temporary(false, x, 2.0)" in output
     assert "Select{}(" not in output
     assert "Select()(" not in output
+
+
+def test_preprocessor_infers_materialized_free_template_call_argument():
+    # MLX reduce materializes ``cast_to<U>(in[i])`` before lowering the
+    # reduction functor.  The renamed helper remains an exact typed expression,
+    # so its substituted return type must participate in conservative member
+    # template deduction rather than producing a false un-inferable failure.
+    code = """
+    template <typename U, typename T>
+    inline U cast_to(T value) { return static_cast<U>(value); }
+
+    template <typename U>
+    struct ReduceOp {
+      template <typename T>
+      U operator()(T value, U total) { return U(value) + total; }
+    };
+
+    template <typename T, typename U, typename Op>
+    [[kernel]] void reduce(
+        const device T* in [[buffer(0)]],
+        device U* out [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+      Op op;
+      U total = U(0);
+      out[i] = op(cast_to<U, T>(in[i]), total);
+    }
+
+    template [[host_name("reduce_float32")]] [[kernel]]
+    decltype(reduce<float, float, ReduceOp<float>>)
+        reduce<float, float, ReduceOp<float>>;
+    """
+
+    preprocessor = MetalPreprocessor()
+    selected = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+        host_names={"reduce_float32"},
+    )
+    selected = preprocessor._materialize_explicit_template_function_calls(selected)
+    assert (
+        preprocessor._known_member_function_return_types["cast_to_float_float"]
+        == "float"
+    )
+    selected = preprocessor._materialize_explicit_template_struct_instantiations(
+        selected
+    )
+    output = preprocessor._lower_struct_member_functions(selected)
+
+    assert "float cast_to_float_float(float value)" in output
+    assert (
+        "float ReduceOp_float__operator_call__float("
+        "thread ReduceOp_float& self, float value, float total)"
+    ) in output
+    assert (
+        "ReduceOp_float__operator_call__float(" "op, cast_to_float_float(in[i]), total)"
+    ) in output
+    assert "could not be inferred" not in output
 
 
 def test_preprocessor_lowers_temporary_functor_call_with_arithmetic_and_functor_argument():
@@ -9907,6 +10483,39 @@ def test_preprocessor_instantiates_template_method_from_local_array_subscript():
     assert "Sum__reduce__float(op, totals[i])" in output
 
 
+def test_preprocessor_resolves_visible_aggregate_alias_for_local_array_subscript():
+    # A concrete operator overload that competes with a template fallback must
+    # type every argument exactly. The local stack array uses an alias whose
+    # unique visible target is a retained aggregate, matching MLX complex
+    # Max/Min reductions without treating arbitrary unknown aliases as types.
+    code = """
+    struct complex_t_float { float real; float imag; };
+    using complex64_t = complex_t_float;
+
+    struct Max_complex64_t {
+        template <typename T>
+        T operator()(T a, T b) thread { return a; }
+
+        complex64_t operator()(complex64_t a, complex64_t b) thread {
+            return a;
+        }
+    };
+
+    kernel void k(
+        device complex64_t* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Max_complex64_t op;
+        complex64_t totals[4];
+        totals[i] = op(out[i], totals[i]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Max_complex64_t__operator_call(op, out[i], totals[i])" in output
+    assert "could not be inferred conservatively" not in output
+
+
 def test_preprocessor_instantiates_template_method_from_threadgroup_array_subscript():
     # A `threadgroup U sh[N]` array local subscript is element-typed too.
     code = """
@@ -10779,10 +11388,69 @@ def test_sfinae_simd_reduce_selects_eq8_overload(elem):
     assert "op.simd_reduce(" not in output
 
 
-def test_sfinae_simd_reduce_unrecognized_type_clean_fails():
-    # A call whose concrete `T` is a non-scalar type (`complex64_t`) has no
-    # recognized sizeof, so no overload's constraint can be evaluated: the method
-    # clean-fails with MetalStructMethodError rather than guessing an overload.
+@pytest.mark.parametrize(
+    ("elem", "expected_call"),
+    [
+        ("long", "Select_long__operator_call__long(self, val, val)"),
+        (
+            "complex64_t",
+            "Select_complex64_t__operator_call(self, val, val)",
+        ),
+    ],
+)
+def test_sfinae_internal_operator_call_selects_exact_concrete_or_template_overload(
+    elem,
+    expected_call,
+):
+    # The sizeof==8 helper has both a concrete complex specialization and a
+    # constrained integral template available. Internal implicit-this calls must
+    # use the same exact argument matching as ordinary receiver calls: long takes
+    # the materialized template, while complex64_t takes the concrete body.
+    code = f"""
+    struct complex64_t {{
+      float real;
+      float imag;
+    }};
+
+    template <typename U>
+    struct Select {{
+      template <typename T, metal::enable_if_t<sizeof(T) == 8, bool> = true>
+      T reduce(T val) {{
+        return operator()(val, val);
+      }}
+
+      template <typename T>
+      metal::enable_if_t<metal::is_integral_v<T>, T> operator()(T a, T b) {{
+        return a < b ? a : b;
+      }}
+
+      template <>
+      complex64_t operator()(complex64_t a, complex64_t b) {{
+        return a;
+      }}
+    }};
+
+    kernel void reduce(
+        device const {elem}* in [[buffer(0)]],
+        device {elem}* out [[buffer(1)]]) {{
+      Select<{elem}> op;
+      out[0] = op.reduce(in[0]);
+    }}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert expected_call in output
+    if elem == "long":
+        reduce_body = output.split("long Select_long__reduce__long", 1)[1].split(
+            "}", 1
+        )[0]
+        assert "Select_long__operator_call(self," not in reduce_body
+
+
+def test_sfinae_simd_reduce_selects_eq8_for_proven_aggregate_layout():
+    # A concrete two-float aggregate has a proven Metal size/alignment contract,
+    # so sizeof(T) == 8 selects the same overload as an eight-byte scalar.
     code = (
         "#include <metal_stdlib>\n"
         "using namespace metal;\n"
@@ -10793,6 +11461,34 @@ def test_sfinae_simd_reduce_unrecognized_type_clean_fails():
         "  uint i [[thread_position_in_grid]]) {\n"
         "    Red<complex64_t> op;\n"
         "    complex64_t total = in[i];\n"
+        "    out[i] = op.simd_reduce(total);\n"
+        "}\n"
+    )
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "complex64_t Red_complex64_t__simd_reduce__complex64_t("
+        "thread Red_complex64_t& self, complex64_t val)" in output
+    )
+    assert "Red_complex64_t__operator_call(self," in output
+    assert "Red_complex64_t__simd_reduce_impl" not in output
+    assert "op.simd_reduce(" not in output
+
+
+def test_sfinae_simd_reduce_unproven_aggregate_layout_clean_fails():
+    # Pointer-bearing aggregate layout is deliberately not inferred.  The
+    # overload set therefore remains unresolved rather than guessing a size.
+    code = (
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct Opaque { device float* value; };\n"
+        + _SFINAE_SIMD_REDUCE_STRUCT
+        + "kernel void reduce(device const Opaque* in [[buffer(0)]],\n"
+        "  device Opaque* out [[buffer(1)]],\n"
+        "  uint i [[thread_position_in_grid]]) {\n"
+        "    Red<Opaque> op;\n"
+        "    Opaque total = in[i];\n"
         "    out[i] = op.simd_reduce(total);\n"
         "}\n"
     )
@@ -11063,3 +11759,28 @@ def test_preprocessor_stateless_global_proof_fails_closed(source, reason, effect
     assert diagnostic.source_location["line"] > 0
     assert diagnostic.source_location["column"] > 0
     assert diagnostic.source_location["length"] > 0
+
+
+def test_static_assertion_resolves_file_constant_after_preserved_directives():
+    source = """
+    #include <metal_atomic>
+    #include <metal_simdgroup>
+
+    static constant constexpr const uint8_t simd_size = 32;
+
+    kernel void reduce(device bool* out [[buffer(0)]]) {
+      constexpr int n_simdgroups = 8;
+      constexpr short tgp_size = n_simdgroups * simd_size;
+      constexpr short n_reads = (32 * 32) / tgp_size;
+      constexpr int n_outputs = 32 / n_simdgroups;
+      static_assert(
+          32 != 32 || n_outputs == n_reads,
+          "The tiled read counts must match.");
+      out[0] = n_reads == 4;
+    }
+    """
+
+    output = MetalPreprocessor()._evaluate_static_assertions(source)
+
+    assert "static_assert" not in output
+    assert "constexpr short n_reads" in output

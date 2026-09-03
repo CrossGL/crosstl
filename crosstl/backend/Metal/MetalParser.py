@@ -2266,7 +2266,10 @@ class MetalParser:
             return node
 
         if self.current_token[0] == "LPAREN":
-            node = AssignmentNode(var_node, self.parse_vector_constructor(vtype))
+            node = AssignmentNode(
+                var_node,
+                self.parse_parenthesized_declaration_initializer(vtype),
+            )
             if self.current_token[0] == "COMMA":
                 return self.parse_remaining_global_variable_declarations(
                     base_vtype,
@@ -2279,7 +2282,7 @@ class MetalParser:
             return node
 
         if self.current_token[0] == "LBRACE":
-            value = self.parse_initializer_list()
+            value = self.parse_braced_declaration_initializer(vtype)
             node = AssignmentNode(var_node, value)
             if self.current_token[0] == "COMMA":
                 return self.parse_remaining_global_variable_declarations(
@@ -2327,10 +2330,18 @@ class MetalParser:
                 nodes.append(AssignmentNode(var_node, self.parse_expression()))
             elif self.current_token[0] == "LPAREN":
                 nodes.append(
-                    AssignmentNode(var_node, self.parse_vector_constructor(decl_type))
+                    AssignmentNode(
+                        var_node,
+                        self.parse_parenthesized_declaration_initializer(decl_type),
+                    )
                 )
             elif self.current_token[0] == "LBRACE":
-                nodes.append(AssignmentNode(var_node, self.parse_initializer_list()))
+                nodes.append(
+                    AssignmentNode(
+                        var_node,
+                        self.parse_braced_declaration_initializer(decl_type),
+                    )
+                )
             else:
                 nodes.append(var_node)
 
@@ -4225,7 +4236,10 @@ class MetalParser:
             return node
 
         if self.current_token[0] == "LPAREN":
-            node = AssignmentNode(var_node, self.parse_vector_constructor(vtype))
+            node = AssignmentNode(
+                var_node,
+                self.parse_parenthesized_declaration_initializer(vtype),
+            )
             if self.current_token[0] == "COMMA":
                 return self.parse_remaining_variable_declarations(
                     base_vtype, qualifiers, [node]
@@ -4234,7 +4248,10 @@ class MetalParser:
             return node
 
         if self.current_token[0] == "LBRACE":
-            node = AssignmentNode(var_node, self.parse_initializer_list())
+            node = AssignmentNode(
+                var_node,
+                self.parse_braced_declaration_initializer(vtype),
+            )
             if self.current_token[0] == "COMMA":
                 return self.parse_remaining_variable_declarations(
                     base_vtype, qualifiers, [node]
@@ -4279,10 +4296,18 @@ class MetalParser:
                 nodes.append(AssignmentNode(var_node, self.parse_expression(), op))
             elif self.current_token[0] == "LPAREN":
                 nodes.append(
-                    AssignmentNode(var_node, self.parse_vector_constructor(vtype))
+                    AssignmentNode(
+                        var_node,
+                        self.parse_parenthesized_declaration_initializer(decl_type),
+                    )
                 )
             elif self.current_token[0] == "LBRACE":
-                nodes.append(AssignmentNode(var_node, self.parse_initializer_list()))
+                nodes.append(
+                    AssignmentNode(
+                        var_node,
+                        self.parse_braced_declaration_initializer(decl_type),
+                    )
+                )
             else:
                 nodes.append(var_node)
 
@@ -5330,6 +5355,25 @@ class MetalParser:
             start_token, self.tokens[self.pos - 1]
         )
         return node
+
+    @staticmethod
+    def declaration_type_is_reference(type_name):
+        return bool(re.search(r"&{1,2}\s*$", str(type_name)))
+
+    def parse_parenthesized_declaration_initializer(self, type_name):
+        initializer = self.parse_vector_constructor(type_name)
+        if self.declaration_type_is_reference(type_name) and len(initializer.args) == 1:
+            return initializer.args[0]
+        return initializer
+
+    def parse_braced_declaration_initializer(self, type_name):
+        initializer = self.parse_initializer_list()
+        if (
+            self.declaration_type_is_reference(type_name)
+            and len(initializer.elements) == 1
+        ):
+            return initializer.elements[0]
+        return initializer
 
     def parse_parenthesized_arguments(self):
         self.eat("LPAREN")

@@ -698,6 +698,9 @@ class MetalCodeGen:
         "WaveReadLaneAt",
         "WaveReadLaneFirst",
         "WaveActiveAllEqual",
+        "WaveShuffleDown",
+        "WaveShuffleUp",
+        "WaveShuffleXor",
         "QuadReadAcrossX",
         "QuadReadAcrossY",
         "QuadReadAcrossDiagonal",
@@ -745,6 +748,14 @@ class MetalCodeGen:
         ),
         "gl_SubgroupSize": (
             "threads_per_simdgroup",
+            "uint",
+        ),
+        "gl_SubgroupID": (
+            "simdgroup_index_in_threadgroup",
+            "uint",
+        ),
+        "gl_NumSubgroups": (
+            "simdgroups_per_threadgroup",
             "uint",
         ),
     }
@@ -1401,6 +1412,8 @@ class MetalCodeGen:
             "gl_NumWorkGroups": "threadgroups_per_grid",
             "gl_SubgroupInvocationID": "thread_index_in_simdgroup",
             "gl_SubgroupSize": "threads_per_simdgroup",
+            "gl_SubgroupID": "simdgroup_index_in_threadgroup",
+            "gl_NumSubgroups": "simdgroups_per_threadgroup",
             # Ray tracing / payload semantics
             "payload": "payload",
             "mesh_payload": "payload",
@@ -5513,6 +5526,8 @@ class MetalCodeGen:
             ("gl_NumWorkGroups", "uint3", "threadgroups_per_grid"),
             ("gl_SubgroupInvocationID", "uint", "thread_index_in_simdgroup"),
             ("gl_SubgroupSize", "uint", "threads_per_simdgroup"),
+            ("gl_SubgroupID", "uint", "simdgroup_index_in_threadgroup"),
+            ("gl_NumSubgroups", "uint", "simdgroups_per_threadgroup"),
         ]
 
     def compute_builtin_name_for_metal_attribute(self, attribute):
@@ -5596,6 +5611,8 @@ class MetalCodeGen:
             "gl_NumWorkGroups": "threadgroups_per_grid",
             "gl_SubgroupInvocationID": "thread_index_in_simdgroup",
             "gl_SubgroupSize": "threads_per_simdgroup",
+            "gl_SubgroupID": "simdgroup_index_in_threadgroup",
+            "gl_NumSubgroups": "simdgroups_per_threadgroup",
         }.get(builtin_name, attribute)
 
     def required_compute_builtin_parameters(
@@ -5664,6 +5681,8 @@ class MetalCodeGen:
             "gl_NumWorkGroups",
             "gl_SubgroupInvocationID",
             "gl_SubgroupSize",
+            "gl_SubgroupID",
+            "gl_NumSubgroups",
         }
         used_names = set()
         for node in self.iter_ast_nodes(body):
@@ -5726,6 +5745,8 @@ class MetalCodeGen:
             "threadgroups_per_grid": positional_builtin_types,
             "thread_index_in_simdgroup": "uint",
             "threads_per_simdgroup": "uint",
+            "simdgroup_index_in_threadgroup": "uint",
+            "simdgroups_per_threadgroup": "uint",
         }
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
@@ -7616,9 +7637,22 @@ class MetalCodeGen:
     def local_variable_type_node(self, stmt):
         return getattr(stmt, "var_type", None) or getattr(stmt, "vtype", None)
 
+    def array_indirect_element_type_node(self, raw_type):
+        if not self.is_array_type_node(raw_type):
+            return None
+        element_type = raw_type
+        while self.is_array_type_node(element_type):
+            element_type = getattr(element_type, "element_type", None)
+        return (
+            element_type
+            if isinstance(element_type, (PointerType, ReferenceType))
+            else None
+        )
+
     def local_variable_is_address_space_alias(self, node):
-        return isinstance(
-            self.local_variable_type_node(node), (PointerType, ReferenceType)
+        raw_type = self.local_variable_type_node(node)
+        return isinstance(raw_type, (PointerType, ReferenceType)) or (
+            self.array_indirect_element_type_node(raw_type) is not None
         )
 
     def local_variable_is_array_alias(self, node):
@@ -7645,11 +7679,39 @@ class MetalCodeGen:
             return False
         return self.assignment_target_root_name(initial_value) is not None
 
+    def expression_is_raw_pointer_identifier(self, value):
+        if not isinstance(value, (IdentifierNode, VariableNode, BackendVariableNode)):
+            return False
+        name = getattr(value, "name", getattr(value, "identifier", None))
+        if not name:
+            return False
+        for parameter in self.function_parameter_nodes.get(
+            self.current_function_name,
+            [],
+        ):
+            if getattr(parameter, "name", None) != name:
+                continue
+            raw_type = getattr(
+                parameter,
+                "param_type",
+                getattr(parameter, "vtype", None),
+            )
+            if isinstance(raw_type, PointerType):
+                return True
+        return any(
+            getattr(node, "name", None) == name
+            for node, _binding, _type, _size, _space in (
+                self.metal_buffer_resource_variables
+            )
+        )
+
     def pointer_assignment_needs_address(self, target, value):
         target_type = self.expression_result_type(target)
         if self.pointer_pointee_type_name(target_type) is None:
             return False
         if value is None:
+            return False
+        if self.expression_is_raw_pointer_identifier(value):
             return False
         if (
             isinstance(value, UnaryOpNode)
@@ -8095,6 +8157,14 @@ class MetalCodeGen:
         is_address_space_alias = self.local_variable_is_address_space_alias(node)
         is_array_alias = self.local_variable_is_array_alias(node)
         qualifiers = self.parameter_qualifier_names(node)
+        if (
+            self.array_indirect_element_type_node(self.local_variable_type_node(node))
+            is not None
+        ):
+            # In `const device T* values[N]`, prefix const/constant qualifies
+            # the pointee. The thread-local array slots and their pointer values
+            # remain assignable (MLX initializes and advances those slots).
+            qualifiers -= {"const", "constant"}
         if not (is_address_space_alias or is_array_alias):
             if "const" in qualifiers:
                 return "const-qualified local"
@@ -9350,54 +9420,22 @@ class MetalCodeGen:
 
         if_body = getattr(node, "then_branch", getattr(node, "if_body", None))
         code += self.generate_scoped_statement_body(if_body, indent + 1)
-
         code += f"{indent_str}}}"
 
         else_branch = getattr(node, "else_branch", None)
+        if isinstance(else_branch, IfNode):
+            nested = self.generate_if(else_branch, indent)
+            if not nested.startswith(f"{indent_str}if ("):
+                raise ValueError(
+                    "Metal else-if chain did not render as an if statement"
+                )
+            return code + " else " + nested[len(indent_str) :]
         if else_branch:
-            if hasattr(else_branch, "__class__") and "If" in str(else_branch.__class__):
-                elif_condition = self.generate_expression(
-                    else_branch.condition
-                    if hasattr(else_branch, "condition")
-                    else else_branch.if_condition
-                )
-                code += f" else if ({elif_condition}) {{\n"
+            code += " else {\n"
+            code += self.generate_scoped_statement_body(else_branch, indent + 1)
+            code += f"{indent_str}}}"
 
-                elif_body = getattr(
-                    else_branch, "then_branch", getattr(else_branch, "if_body", None)
-                )
-                code += self.generate_scoped_statement_body(elif_body, indent + 1)
-
-                code += f"{indent_str}}}"
-
-                nested_else = getattr(else_branch, "else_branch", None)
-                if nested_else:
-                    if hasattr(nested_else, "__class__") and "If" in str(
-                        nested_else.__class__
-                    ):
-                        remaining_code = self.generate_if(nested_else, indent)
-                        # Remove the "if" prefix and replace with "else if"
-                        remaining_lines = remaining_code.split("\n")
-                        if remaining_lines[0].strip().startswith("if ("):
-                            remaining_lines[0] = remaining_lines[0].replace(
-                                "if (", " else if (", 1
-                            )
-                        code += "\n".join(
-                            remaining_lines[1:]
-                        )  # Skip first line as we already handled it
-                    else:
-                        code += " else {\n"
-                        code += self.generate_scoped_statement_body(
-                            nested_else, indent + 1
-                        )
-                        code += f"{indent_str}}}"
-            else:
-                code += " else {\n"
-                code += self.generate_scoped_statement_body(else_branch, indent + 1)
-                code += f"{indent_str}}}"
-
-        code += "\n"
-        return code
+        return code + "\n"
 
     def generate_for(self, node, indent):
         indent_str = "    " * indent
@@ -9856,6 +9894,20 @@ class MetalCodeGen:
             )
             return f"{{{elements}}}"
         elif isinstance(expr, UnaryOpNode):
+            # In C++/Metal, ``9223372036854775808`` cannot be represented by a
+            # signed literal type, so spelling INT64_MIN as unary minus applied
+            # to that token first creates an unsigned value and triggers a
+            # warning-fatal conversion back to ``long``.  Keep the exact value
+            # in signed arithmetic using two representable long literals.
+            operand_value = getattr(getattr(expr, "operand", None), "value", None)
+            if (
+                getattr(expr, "op", getattr(expr, "operator", None)) == "-"
+                and not getattr(expr, "is_postfix", False)
+                and isinstance(operand_value, int)
+                and not isinstance(operand_value, bool)
+                and operand_value == 1 << 63
+            ):
+                return "(-9223372036854775807L - 1L)"
             local_reinterpret = self.generate_metal_local_reinterpret_read(expr)
             if local_reinterpret is not None:
                 return local_reinterpret
@@ -10700,6 +10752,8 @@ class MetalCodeGen:
 
     def metal_native_narrow_bitcast_storage_type(self, value_type):
         raw_type = self.resolve_metal_type_alias(self.type_name_string(value_type))
+        if not raw_type:
+            return None
         scalar_types = {
             "char": "char",
             "uchar": "uchar",
@@ -11229,7 +11283,12 @@ class MetalCodeGen:
                 operation, arguments, "is not recognized by the Metal backend"
             )
         args = ", ".join(self.generate_expression(arg) for arg in arguments)
-        return f"{mapped}({args})"
+        call_name = (
+            f"metal::{mapped}"
+            if self.metal_function_name_is_shadowed(mapped)
+            else mapped
+        )
+        return f"{call_name}({args})"
 
     def metal_wave_result_type(self, operation, arguments):
         if operation in self.METAL_WAVE_UINT_RESULT_INTRINSICS:
@@ -13028,6 +13087,8 @@ class MetalCodeGen:
         return str(rendered_arg).lstrip().startswith("&")
 
     def metal_type_is_pointer_like(self, vtype):
+        if self.is_structured_buffer_type(vtype):
+            return True
         type_name = self.type_name_string(vtype)
         if not type_name:
             return False
@@ -14738,6 +14799,8 @@ class MetalCodeGen:
         ):
             return None
         qualifiers = self.parameter_qualifier_names(node)
+        if self.array_indirect_element_type_node(raw_param_type) is not None:
+            qualifiers -= {"const", "constant"}
         if self.is_array_type_node(raw_param_type):
             resource_type = self.resource_base_type(raw_param_type)
             if self.structured_buffer_type_name(resource_type) == "StructuredBuffer":
@@ -14760,7 +14823,10 @@ class MetalCodeGen:
             or self.is_array_type_node(raw_param_type)
         ):
             return False
-        if self.parameter_qualifier_names(node) & {
+        qualifiers = self.parameter_qualifier_names(node)
+        if self.array_indirect_element_type_node(raw_param_type) is not None:
+            qualifiers -= {"const", "constant"}
+        if qualifiers & {
             "const",
             "constant",
             "in",
@@ -14843,6 +14909,21 @@ class MetalCodeGen:
                 continue
             arg_name = self.assignment_target_root_name(arg)
             if arg_name not in self.current_readonly_metal_parameters:
+                continue
+            reason = self.current_readonly_metal_parameter_reasons.get(
+                arg_name, "readonly"
+            )
+            if (
+                isinstance(arg, UnaryOpNode)
+                and getattr(arg, "operator", None) == "&"
+                and self.mutable_const_pointee_pointer_assignment(
+                    getattr(arg, "operand", None), arg_name, reason
+                )
+            ):
+                # ``const device T* row`` keeps a mutable thread-local pointer
+                # slot even though its pointee is const.  Passing ``&row`` to a
+                # mutable array/pointer parameter may rebind that slot; it does
+                # not grant write access through the device pointer.
                 continue
             parameter = parameter_nodes[index]
             raw_param_type = getattr(
@@ -15279,6 +15360,17 @@ class MetalCodeGen:
             f"'{root_name}' cannot be written */"
         )
 
+    def mutable_const_pointee_pointer_assignment(self, target, root_name, reason):
+        if reason not in {"const-qualified", "const-qualified local alias"}:
+            return False
+        if not isinstance(target, IdentifierNode):
+            return False
+        target_name = self.assignment_target_display_name(target)
+        if not root_name or target_name != root_name:
+            return False
+        local_type = self.type_name_string(self.local_variable_types.get(root_name))
+        return isinstance(local_type, str) and "*" in local_type
+
     def readonly_metal_parameter_assignment_diagnostic(self, target):
         root_name = self.assignment_target_root_name(target)
         if root_name not in self.current_readonly_metal_parameters:
@@ -15286,6 +15378,8 @@ class MetalCodeGen:
         reason = self.current_readonly_metal_parameter_reasons.get(
             root_name, "readonly"
         )
+        if self.mutable_const_pointee_pointer_assignment(target, root_name, reason):
+            return None
         return (
             "/* unsupported Metal parameter store: parameter "
             f"'{root_name}' is {reason} */"
@@ -24634,6 +24728,21 @@ class MetalCodeGen:
         resolved_alias = self.resolve_metal_type_alias(vtype_str)
         if resolved_alias != vtype_str:
             return self.map_type(resolved_alias)
+
+        # Some imported frontends retain a local pointer/reference declarator as
+        # text even though the CrossGL parser represented it structurally first.
+        # Map the value type before restoring that exact indirection; otherwise
+        # aliases such as bfloat16_t* and fixed-width spellings such as int16*
+        # leak into native Metal unchanged while equivalent parameter nodes map
+        # correctly through PointerType/ReferenceType above.
+        indirection = re.fullmatch(
+            r"(?P<base>.+?)(?P<suffix>[*&]+)",
+            vtype_str.strip(),
+        )
+        if indirection is not None:
+            base = indirection.group("base").strip()
+            if base:
+                return f"{self.map_type(base)}{indirection.group('suffix')}"
 
         tessellation_patch_type = self.metal_tessellation_patch_mapped_type(vtype)
         if tessellation_patch_type is not None:

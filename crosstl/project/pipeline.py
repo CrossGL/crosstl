@@ -16505,6 +16505,153 @@ def _metal_concrete_function_materializations(
     return signatures
 
 
+_METAL_FINGERPRINT_MULTI_CHARACTER_TOKENS = tuple(
+    sorted(
+        {
+            "%:%:",
+            "->*",
+            "<<=",
+            ">>=",
+            "<=>",
+            "...",
+            "##",
+            "::",
+            ".*",
+            "->",
+            "++",
+            "--",
+            "<<",
+            ">>",
+            "<=",
+            ">=",
+            "==",
+            "!=",
+            "&&",
+            "||",
+            "*=",
+            "/=",
+            "%=",
+            "+=",
+            "-=",
+            "&=",
+            "^=",
+            "|=",
+            "<:",
+            ":>",
+            "<%",
+            "%>",
+            "%:",
+        },
+        key=lambda token: (-len(token), token),
+    )
+)
+
+
+def _canonical_metal_function_fingerprint_text(source: str) -> bytes:
+    """Encode Metal preprocessing tokens without comments or formatting.
+
+    Fingerprints compare source identities rather than parsed semantics, so
+    literal spellings (including escapes and whitespace inside a literal) must
+    remain exact.  Length-prefixing each token makes boundaries unambiguous
+    after insignificant whitespace and comments are removed.
+    """
+
+    tokens: list[str] = []
+    i = 0
+    while i < len(source):
+        if source[i].isspace():
+            i += 1
+            continue
+        if source.startswith("//", i):
+            line_end = source.find("\n", i + 2)
+            i = len(source) if line_end == -1 else line_end + 1
+            continue
+        if source.startswith("/*", i):
+            comment_end = source.find("*/", i + 2)
+            i = len(source) if comment_end == -1 else comment_end + 2
+            continue
+        if source[i] in {"'", '"'}:
+            literal, consumed = _read_metal_string_for_project(source, i)
+            tokens.append(literal)
+            i += consumed
+            continue
+        if source[i].isalpha() or source[i] == "_":
+            end = i + 1
+            while end < len(source) and (source[end].isalnum() or source[end] == "_"):
+                end += 1
+            tokens.append(source[i:end])
+            i = end
+            continue
+        if source[i].isdigit() or (
+            source[i] == "." and i + 1 < len(source) and source[i + 1].isdigit()
+        ):
+            end = i + 1
+            while end < len(source):
+                current = source[end]
+                if current.isalnum() or current in {"_", ".", "'"}:
+                    end += 1
+                    continue
+                if current in {"+", "-"} and source[end - 1] in "eEpP":
+                    end += 1
+                    continue
+                break
+            tokens.append(source[i:end])
+            i = end
+            continue
+
+        token = next(
+            (
+                candidate
+                for candidate in _METAL_FINGERPRINT_MULTI_CHARACTER_TOKENS
+                if source.startswith(candidate, i)
+            ),
+            source[i],
+        )
+        tokens.append(token)
+        i += len(token)
+
+    encoded = bytearray()
+    for token in tokens:
+        token_bytes = token.encode("utf-8")
+        encoded.extend(len(token_bytes).to_bytes(8, "big"))
+        encoded.extend(token_bytes)
+    return bytes(encoded)
+
+
+def _metal_concrete_function_definition_fingerprints(
+    preprocessor: Any,
+    source: str,
+) -> set[tuple[str, str]]:
+    """Return comment/whitespace-insensitive identities for concrete functions.
+
+    Default fallback materialization can revisit an overload that a prior
+    signature-aware call-site pass already emitted.  Comparing the complete
+    header and body admits only an exact token-stream duplicate; distinct
+    overloads sharing one specialized name remain present for native overload
+    resolution.  Literal token bytes remain semantic in both the header and
+    body.
+    """
+
+    template_spans = preprocessor._find_template_declaration_spans(source)
+    fingerprints: set[tuple[str, str]] = set()
+    for function in preprocessor._find_non_template_function_definitions(
+        source,
+        template_spans,
+    ):
+        header = _canonical_metal_function_fingerprint_text(
+            source[function.span[0] : function.body_span[0] - 1]
+        )
+        body = _canonical_metal_function_fingerprint_text(
+            source[function.body_span[0] : function.body_span[1]]
+        )
+        digest = hashlib.sha256()
+        for part in (header, body):
+            digest.update(len(part).to_bytes(8, "big"))
+            digest.update(part)
+        fingerprints.add((function.name, digest.hexdigest()))
+    return fingerprints
+
+
 def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     statement_start = start
@@ -17774,6 +17921,23 @@ def _metal_expression_type(
     ):
         return _normalize_metal_type_text(c_style_cast.group("type"))
 
+    if text.startswith("*"):
+        operand = text[1:].strip()
+        if not operand:
+            return None
+        pointer_type = _metal_expression_type(
+            preprocessor,
+            operand,
+            type_environment,
+            return_types,
+        )
+        if pointer_type is None:
+            return None
+        # Require one explicitly address-spaced pointer.  Unqualified and
+        # multi-level pointer spellings remain unresolved rather than guessing
+        # which Metal storage domain the dereference names.
+        return preprocessor._pointer_pointee_value_type(pointer_type)
+
     member_match = re.fullmatch(
         r"(?P<object>[A-Za-z_][A-Za-z0-9_]*)\s*"
         r"(?P<access>\.|->)\s*"
@@ -17797,15 +17961,40 @@ def _metal_expression_type(
             if vector_member_type:
                 return vector_member_type
 
-    index_match = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\[", text)
-    if index_match is not None:
-        base_type = type_environment.get(index_match.group("name"))
-        if base_type:
-            return (
-                _metal_pointer_pointee_type(base_type)
-                or _metal_array_element_type(base_type)
-                or base_type
+    index_start = text.find("[")
+    if index_start > 0:
+        cursor = index_start
+        index_count = 0
+        while cursor < len(text):
+            while cursor < len(text) and text[cursor].isspace():
+                cursor += 1
+            if cursor >= len(text) or text[cursor] != "[":
+                break
+            close = preprocessor._find_matching_delimiter(text, cursor, "[", "]")
+            if close is None:
+                break
+            index_count += 1
+            cursor = close + 1
+        if index_count and not text[cursor:].strip():
+            indexed_type = _metal_expression_type(
+                preprocessor,
+                text[:index_start],
+                type_environment,
+                return_types,
             )
+            for _ in range(index_count):
+                if not indexed_type:
+                    return None
+                element_type = _metal_array_element_type(indexed_type)
+                if element_type is None:
+                    element_type = _metal_pointer_pointee_type(indexed_type)
+                if element_type is None:
+                    vector_type = _metal_template_vector_type(indexed_type)
+                    element_type = vector_type[0] if vector_type is not None else None
+                if element_type is None:
+                    return None
+                indexed_type = element_type
+            return indexed_type
 
     pointer_match = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*[+\-]", text)
     if pointer_match is not None and pointer_match.group("name") in type_environment:
@@ -18209,10 +18398,17 @@ def _infer_plain_template_helper_arguments(
         if inference_template_arguments
         else ({}, {})
     )
-    bindings: dict[str, str] = {
+    # Explicit template arguments are fixed before function-parameter overload
+    # viability is checked. A by-value parameter that is exactly one fixed type
+    # parameter may therefore accept ordinary source scalar conversion
+    # (`helper<int>(uint)`). Pointer/reference/nested uses and parameters still
+    # being deduced retain the stricter repeated-binding contract, so this does
+    # not turn `int* <- uint*` or `helper(T, T)` into a viable match.
+    explicit_parameter_bindings: dict[str, str] = {
         parameter: _strip_metal_type_qualifiers(value)
         for parameter, value in explicit_bindings.items()
     }
+    bindings: dict[str, str] = dict(explicit_parameter_bindings)
     variadic_bindings: dict[str, list[str]] = {
         parameter: [
             _strip_metal_type_qualifiers(str(value))
@@ -18251,6 +18447,15 @@ def _infer_plain_template_helper_arguments(
         actual_type = inferred_actual_type(inference_arguments[argument_index])
         argument_index += 1
         if not actual_type:
+            continue
+        expected_clean = _strip_metal_type_qualifiers(expected_type)
+        explicit_expected_type = explicit_parameter_bindings.get(expected_clean)
+        if explicit_expected_type is not None:
+            if not _metal_concrete_parameter_type_compatible(
+                explicit_expected_type,
+                actual_type,
+            ):
+                return None
             continue
         if not _collect_metal_template_type_bindings(
             preprocessor,
@@ -22111,6 +22316,14 @@ def _project_template_materialization_for_artifact(
 
     templates = preprocessor._find_template_functions(preprocessed)
     templates_by_name = {template.name: template for template in templates}
+    template_name_counts: dict[str, int] = {}
+    for template in templates:
+        template_name_counts[template.name] = (
+            template_name_counts.get(template.name, 0) + 1
+        )
+    overloaded_template_names = {
+        name for name, count in template_name_counts.items() if count > 1
+    }
     template_spans = preprocessor._find_template_declaration_spans(preprocessed)
     reachable_function_spans = preprocessor._reachable_function_spans(
         preprocessed, template_spans
@@ -22130,9 +22343,13 @@ def _project_template_materialization_for_artifact(
     call_site_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     for function_name, arguments, _span in calls:
         template = templates_by_name.get(function_name)
-        if template is None or not preprocessor._template_arguments_satisfy_parameters(
-            template,
-            list(arguments),
+        if (
+            template is None
+            or function_name in overloaded_template_names
+            or not preprocessor._template_arguments_satisfy_parameters(
+                template,
+                list(arguments),
+            )
         ):
             continue
         key = preprocessor._template_specialization_key(function_name, arguments)
@@ -22168,6 +22385,7 @@ def _project_template_materialization_for_artifact(
             preprocessed,
             work_budget=explicit_work_budget,
             materialized_names=explicit_materialized_names,
+            excluded_template_names=overloaded_template_names,
         )
     except MetalTemplateSpecializationError as exc:
         if explicit_work_budget is not None:
@@ -22297,6 +22515,7 @@ def _project_template_materialization_for_artifact(
     materialized = preprocessor._materialize_explicit_template_struct_instantiations(
         materialized,
         work_budget=explicit_work_budget,
+        allow_partial_object_specializations=True,
     )
     materialized = preprocessor._evaluate_static_assertions(materialized)
     materialized = preprocessor._materialize_free_operator_overloads(materialized)
@@ -22346,6 +22565,12 @@ def _project_template_materialization_for_artifact(
         current_template_spans,
     )
     remaining_templates = preprocessor._find_template_functions(materialized)
+    concrete_function_definition_fingerprints = (
+        _metal_concrete_function_definition_fingerprints(
+            preprocessor,
+            materialized,
+        )
+    )
     concrete_struct_member_spans = _metal_concrete_struct_member_spans(
         preprocessor,
         materialized,
@@ -22461,8 +22686,25 @@ def _project_template_materialization_for_artifact(
                 materialized_name,
                 host_name=None,
             )
+            candidate_fingerprints = (
+                _metal_concrete_function_definition_fingerprints(
+                    preprocessor,
+                    materialized_source,
+                )
+                if materialized_source
+                else set()
+            )
+            duplicate_materialization = bool(candidate_fingerprints) and (
+                candidate_fingerprints <= concrete_function_definition_fingerprints
+            )
+            if not duplicate_materialization:
+                concrete_function_definition_fingerprints.update(candidate_fingerprints)
             replacements.append(
-                (template.span[0], template.span[1], materialized_source)
+                (
+                    template.span[0],
+                    template.span[1],
+                    "" if duplicate_materialization else materialized_source,
+                )
             )
             parameters = {
                 parameter: available_parameters[parameter]
@@ -22508,6 +22750,8 @@ def _project_template_materialization_for_artifact(
                     if parameter in manifest_parameters
                 }
             )
+            if duplicate_materialization:
+                continue
             specializations.append(
                 _materialized_template_specialization_record(
                     name=template.name,
@@ -22581,6 +22825,7 @@ def _project_template_materialization_for_artifact(
             preprocessor._materialize_explicit_template_struct_instantiations(
                 canonicalized_aliases,
                 work_budget=explicit_work_budget,
+                allow_partial_object_specializations=True,
             )
         )
         materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
