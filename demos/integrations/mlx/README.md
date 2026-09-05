@@ -976,9 +976,9 @@ broader pointer-offset contract. The historical proof remains separately
 recorded under its own commit provenance; it is no longer being used as a
 substitute for current-corpus evidence.
 
-The current FFT source now also emits an 82,045-byte GLSL artifact with
+The current FFT source now also emits an 82,089-byte GLSL artifact with
 SHA-256
-`a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb`
+`cfc959ed6e2ede827516d8076c4adf4a5d87813c9de905cf3c75013b1e1c1608`
 and 84 source-remap mappings. OpenGL keeps the 21 reachable function constants
 as 21 deferred specialization constants and uses the same `[1, 1, 64]`
 workgroup contract. A fifth current-source index assertion bounds

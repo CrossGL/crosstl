@@ -1827,8 +1827,8 @@ Five unsigned index assertions and one 256-element workgroup-access assertion
 bound its host contract. Translation materializes 37 specializations from 42
 reachable records, prunes 2,120 candidates, and preserves 21 reachable
 function constants for deferred specialization. The deterministic GLSL is
-82,045 bytes with SHA-256
-``a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb``;
+82,089 bytes with SHA-256
+``cfc959ed6e2ede827516d8076c4adf4a5d87813c9de905cf3c75013b1e1c1608``;
 ``glslangValidator`` and ``spirv-val`` accept it, and its SPIR-V has 19 control
 barriers with no group-nonuniform instruction.
 
