@@ -1101,6 +1101,47 @@ def test_exact_subgroup_branch_proves_bounded_workgroup_view(tmp_path):
     )
 
 
+def test_unchanged_loop_preserves_refinable_workgroup_view(tmp_path):
+    shader = """
+    shader LoopBeforeRefinedWorkgroupView {
+        void accumulate(threadgroup float* values, uint subgroup_id) {
+            uint segment = subgroup_id % 8u;
+            threadgroup float* view = values + segment * 2u;
+            for (uint local = 0u; local < 1u; local++) {
+                view[local] += 1.0;
+            }
+            if (segment == 0u) {
+                for (uint peer = 1u; peer < 8u; peer++) {
+                    view[peer * 2u] += 1.0;
+                }
+            }
+        }
+
+        compute {
+            layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
+
+            void main(uint subgroup_id @ gl_SubgroupID) @ WaveSize(32) {
+                threadgroup float storage[16];
+                accumulate(storage, subgroup_id);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "uint segment = (subgroup_id % 8u);" in generated
+    assert "if ((segment == 0u))" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "loop_before_refined_workgroup_view",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
 def test_exact_subgroup_range_rejects_unconditional_out_of_bounds_view():
     shader = """
     shader ExactSubgroupOutOfBoundsWorkgroupView {

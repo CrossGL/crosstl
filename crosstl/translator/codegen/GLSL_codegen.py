@@ -10376,6 +10376,8 @@ class GLSLCodeGen:
                 if any(binding is None for binding in bindings):
                     target_aliases[name] = poison_alias(original)
                     continue
+                if all(binding == original for binding in bindings):
+                    continue
                 signatures = {
                     (
                         binding.get("kind"),
