@@ -2411,6 +2411,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--expected-entry-count 16446" in mlx_porting
     assert "Enumerate current MLX Metal entry points" in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
+    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
+    assert "timeout-minutes: 120" in matrix_job
     assert "timeout-minutes: 60" in mlx_porting
     assert re.search(r"\bschedule\s*:", mlx_porting)
     assert 'cron: "31 4 * * 1"' in mlx_porting
