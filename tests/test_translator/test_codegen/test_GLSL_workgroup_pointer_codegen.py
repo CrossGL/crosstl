@@ -196,6 +196,279 @@ def test_value_parameter_shadows_global_workgroup_storage(tmp_path):
     )
 
 
+_NULL_WORKGROUP_PARAMETER_LEXICAL_SHADOWS = (
+    (
+        "count_for_in",
+        "",
+        "for optionalValues in 2 { observe(optionalValues); }",
+    ),
+    (
+        "range_for_in",
+        "",
+        "for optionalValues in 0..2 { observe(optionalValues); }",
+    ),
+    (
+        "fixed_array_nested_for_in",
+        "int values[2] = {0, 1};",
+        (
+            "for outer in 1 { "
+            "for optionalValues in values { observe(optionalValues); } "
+            "}"
+        ),
+    ),
+    (
+        "nested_block_local",
+        "",
+        "if (true) { int optionalValues = 1; observe(optionalValues); }",
+    ),
+    (
+        "classic_for_local",
+        "",
+        (
+            "for (int optionalValues = 0; optionalValues < 2; "
+            "optionalValues++) { observe(optionalValues); }"
+        ),
+    ),
+    (
+        "switch_case_local",
+        "",
+        (
+            "switch (1) { case 1: int optionalValues = 1; "
+            "observe(optionalValues); break; default: break; }"
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("scope_name", "declarations", "shadowed_body"),
+    _NULL_WORKGROUP_PARAMETER_LEXICAL_SHADOWS,
+)
+def test_null_workgroup_parameter_lexical_shadow_is_not_pointer_use(
+    tmp_path,
+    scope_name,
+    declarations,
+    shadowed_body,
+):
+    shader = f"""
+    shader NullWorkgroupParameterLexicalShadow {{
+        void observe(int value) {{
+            float observed = float(value);
+        }}
+
+        void route(threadgroup float* optionalValues) {{
+            {declarations}
+            {shadowed_body}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                threadgroup float storage[1];
+                route(true ? nullptr : storage);
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "nullptr" not in generated
+    assert "optionalValues[" not in generated
+    assert "float observed = float(value);" in generated
+    assert re.search(r"\bobserve\w*\(optionalValues\);", generated), generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"null_workgroup_parameter_lexical_shadow_{scope_name}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("use_name", "route_body"),
+    (
+        (
+            "before_shadow",
+            (
+                "optionalValues[0] = 1.0; "
+                "for optionalValues in 2 { observe(optionalValues); }"
+            ),
+        ),
+        (
+            "in_iterable",
+            "for optionalValues in int(optionalValues[0]) { observe(optionalValues); }",
+        ),
+        (
+            "after_shadow",
+            (
+                "for optionalValues in 2 { observe(optionalValues); } "
+                "optionalValues[0] = 1.0;"
+            ),
+        ),
+    ),
+)
+def test_null_workgroup_parameter_true_use_outside_shadow_fails_closed(
+    use_name,
+    route_body,
+):
+    shader = f"""
+    shader NullWorkgroupParameterTrueUse {{
+        void observe(int value) {{
+            float observed = float(value);
+        }}
+
+        void route(threadgroup float* optionalValues) {{
+            {route_body}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                threadgroup float storage[1];
+                route(true ? nullptr : storage);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "route", use_name
+    assert error.reason == "call-backing-unresolved", use_name
+
+
+@pytest.mark.parametrize("int_uses_pointer", [False, True], ids=["safe", "unsafe"])
+@pytest.mark.parametrize("int_overload_first", [True, False])
+def test_null_workgroup_nested_forwarding_uses_call_lexical_type(
+    tmp_path,
+    int_uses_pointer,
+    int_overload_first,
+):
+    integer_leaf_body = (
+        "optionalValues[0] = float(selector + 1);"
+        if int_uses_pointer
+        else "float observed = float(selector);"
+    )
+    floating_forward_body = (
+        "float observed = selector;"
+        if int_uses_pointer
+        else "optionalValues[0] = float(int(selector) + 100);"
+    )
+    integer_leaf = f"""
+        void leaf(threadgroup float* optionalValues, int selector) {{
+            {integer_leaf_body}
+        }}
+    """
+    floating_leaf = """
+        void leaf(threadgroup float* optionalValues, float selector) {
+            optionalValues[0] = float(int(selector) + 200);
+        }
+    """
+    integer_forward = """
+        void forward(threadgroup float* optionalValues, int selector) {
+            leaf(optionalValues, selector);
+        }
+    """
+    floating_forward = f"""
+        void forward(threadgroup float* optionalValues, float selector) {{
+            {floating_forward_body}
+        }}
+    """
+    if int_overload_first:
+        overloads = integer_leaf + floating_leaf + integer_forward + floating_forward
+    else:
+        overloads = floating_leaf + integer_leaf + floating_forward + integer_forward
+    shader = f"""
+    shader NullWorkgroupNestedForInLexicalOverload {{
+        {overloads}
+
+        void dispatch(threadgroup float* optionalValues) {{
+            float selector = 7.0;
+            int selectors[2] = {{0, 1}};
+            for outer in 1 {{
+                for selector in selectors {{
+                    forward(optionalValues, selector);
+                }}
+            }}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                threadgroup float storage[1];
+                dispatch(true ? nullptr : storage);
+            }}
+        }}
+    }}
+    """
+
+    if int_uses_pointer:
+        with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+            GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+        error = exc_info.value
+        assert error.function_name == "dispatch"
+        assert error.reason == "call-backing-unresolved"
+        return
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "nullptr" not in generated
+    assert "optionalValues[" not in generated
+    assert "float observed = float(selector);" in generated
+    assert re.search(r"\bforward[A-Za-z0-9_]*\(selector\);", generated), generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"null_workgroup_nested_forwarding_{int_overload_first}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_null_workgroup_recursive_forwarding_fails_closed():
+    shader = """
+    shader NullWorkgroupRecursiveForwarding {
+        void first(threadgroup float* optionalValues) {
+            second(optionalValues);
+        }
+
+        void second(threadgroup float* optionalValues) {
+            first(optionalValues);
+        }
+
+        void dispatch(threadgroup float* optionalValues) {
+            first(optionalValues);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                dispatch(true ? nullptr : storage);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "dispatch"
+    assert error.reason == "call-backing-unresolved"
+
+
 def test_bare_workgroup_pointer_expression_reports_structured_error():
     shader = """
     shader BareWorkgroupPointerExpression {
@@ -398,6 +671,394 @@ def test_nested_workgroup_pointer_helpers_preserve_bounded_backing_view(tmp_path
     )
 
 
+@pytest.mark.parametrize("iterable", ("0..1", "1"), ids=("range", "count"))
+def test_for_in_range_and_count_patterns_prove_workgroup_access(
+    tmp_path,
+    iterable,
+):
+    shader = """
+    shader ForInWorkgroupPointerProvenIndex {
+        void fill(threadgroup float* values) {
+            int i = 7;
+            for i in ITERABLE {
+                values[i] = 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                fill(storage);
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int i = 7;" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"for_in_workgroup_interval_{iterable.replace('.', '_')}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "iterable",
+    (pytest.param("0..limit", id="range"), pytest.param("limit", id="count")),
+)
+def test_for_in_same_name_bound_preserves_workgroup_iteration(tmp_path, iterable):
+    shader = """
+    shader ForInWorkgroupPointerSameNameBound {
+        void fill(threadgroup float* values) {
+            int limit = 1;
+            for limit in ITERABLE {
+                values[limit] = 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                fill(storage);
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "for (int limit_crossgl_index = 0; "
+        "limit_crossgl_index < limit; ++limit_crossgl_index)" in generated
+    )
+    assert "int limit = limit_crossgl_index;" in generated
+    assert "for (int limit = 0; limit < limit;" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"for_in_workgroup_same_name_bound_{iterable.replace('.', '_')}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "iterable",
+    (pytest.param("0..1", id="range"), pytest.param("1", id="count")),
+)
+def test_for_in_pattern_shadows_workgroup_pointer_alias(tmp_path, iterable):
+    shader = """
+    shader WorkgroupPointerAliasShadowedByForIn {
+        void fill(threadgroup float* index, threadgroup float* values) {
+            for index in ITERABLE {
+                values[index] = 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float shadowed[1];
+                threadgroup float result[1];
+                fill(shadowed, result);
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "for (int index = 0; index < 1; ++index)" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"for_in_workgroup_pointer_alias_shadow_{iterable.replace('.', '_')}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+_WORKGROUP_FOR_IN_BOUND_MUTATIONS = (
+    pytest.param("", "limit = 4;", id="direct"),
+    pytest.param(
+        "",
+        "if (i == 0) { limit = 4; }",
+        id="conditional",
+    ),
+    pytest.param(
+        "void expand(int values[1]) { values[0] = 4; }",
+        "expand(&limit);",
+        id="addressed",
+    ),
+    pytest.param(
+        "void expand(out int value) { value = 4; }",
+        "expand(limit);",
+        id="out",
+    ),
+    pytest.param(
+        "void expand(inout int value) { value = 4; }",
+        "expand(limit);",
+        id="inout",
+    ),
+    pytest.param("", "atomicAdd(limit, 3);", id="atomic"),
+)
+
+
+@pytest.mark.parametrize(
+    "iterable",
+    (pytest.param("0..limit", id="range"), pytest.param("limit", id="count")),
+)
+@pytest.mark.parametrize(("helper", "mutation"), _WORKGROUP_FOR_IN_BOUND_MUTATIONS)
+def test_for_in_mutated_bound_invalidates_workgroup_access_interval(
+    iterable,
+    helper,
+    mutation,
+):
+    shader = """
+    shader ForInWorkgroupPointerMutatedBound {
+        HELPER
+
+        void fill(threadgroup float* values) {
+            int limit = 1;
+            for i in ITERABLE {
+                MUTATION
+                values[i] = 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                fill(storage);
+            }
+        }
+    }
+    """
+    shader = (
+        shader.replace("HELPER", helper)
+        .replace("ITERABLE", iterable)
+        .replace("MUTATION", mutation)
+    )
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.parameter_name == "values"
+    assert exc_info.value.reason == "unprovable-view-access"
+
+
+def test_for_in_vector_component_bound_mutation_invalidates_workgroup_access(
+    tmp_path,
+):
+    shader = """
+    shader ForInWorkgroupPointerVectorBound {
+        void fill(threadgroup float* values, int2 bounds) {
+            for i in 0..bounds.x {
+                MUTATION
+                values[i] = 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                fill(storage, int2(1, 0));
+            }
+        }
+    }
+    """
+
+    for case_name, mutation in (
+        ("unchanged", ""),
+        ("unrelated_component", "bounds.y = 4;"),
+    ):
+        stable = GLSLCodeGen().generate(
+            crosstl.translator.parse(shader.replace("MUTATION", mutation))
+        )
+        assert_glsl_compute_validates_if_available(
+            stable,
+            tmp_path,
+            f"for_in_workgroup_vector_bound_{case_name}",
+            spirv_target="spirv1.3",
+            validate_spirv=True,
+        )
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(
+            crosstl.translator.parse(shader.replace("MUTATION", "bounds.x = 4;"))
+        )
+
+    assert exc_info.value.parameter_name == "values"
+    assert exc_info.value.reason == "unprovable-view-access"
+
+
+@pytest.mark.parametrize("iterable", ("0..1", "1"), ids=("range", "count"))
+def test_for_in_pattern_mutation_after_workgroup_access_fails_closed(iterable):
+    shader = """
+    shader ForInWorkgroupPointerLatePatternMutation {
+        void fill(threadgroup float* values) {
+            for i in ITERABLE {
+                values[i] = 1.0;
+                i = 4;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                fill(storage);
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.parameter_name == "values"
+    assert exc_info.value.reason == "unprovable-view-access"
+
+
+def test_for_in_body_mutation_invalidates_post_loop_workgroup_interval():
+    shader = """
+    shader ForInWorkgroupPointerPostLoopMutation {
+        void expand(inout int value) {
+            value = 4;
+        }
+
+        void fill(threadgroup float* values) {
+            int limit = 0;
+            for i in 0..1 {
+                expand(limit);
+            }
+            values[limit] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                fill(storage);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.parameter_name == "values"
+    assert exc_info.value.reason == "unprovable-view-access"
+
+
+def test_for_in_fixed_array_pattern_cannot_inherit_workgroup_access_interval():
+    shader = """
+    shader ForInWorkgroupPointerShadowedIndex {
+        void fill(threadgroup float* values) {
+            int i = 0;
+            int selectors[1] = {7};
+            for i in selectors {
+                values[i] = 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                fill(storage);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.parameter_name == "values"
+    assert exc_info.value.reason == "unprovable-view-access"
+
+
+def test_for_in_fixed_array_vector_pattern_clears_workgroup_component_intervals():
+    shader = """
+    shader ForInWorkgroupPointerShadowedVectorIndex {
+        void fill(threadgroup float* values, uint3 lane) {
+            uint3 selectors[1] = {uint3(7u, 0u, 0u)};
+            for lane in selectors {
+                values[lane.x] = 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 lane @ gl_LocalInvocationID) {
+                threadgroup float storage[1];
+                fill(storage, lane);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.parameter_name == "values"
+    assert exc_info.value.reason == "unprovable-view-access"
+
+
+@pytest.mark.parametrize("iterable", ("0..2", "2"), ids=("range", "count"))
+def test_for_in_address_mutated_pattern_invalidates_workgroup_access_interval(
+    iterable,
+):
+    shader = """
+    shader ForInWorkgroupPointerMutatedIndex {
+        void advance(int values[1]) {
+            values[0] += 1;
+        }
+
+        void fill(threadgroup float* values) {
+            for i in ITERABLE {
+                advance(&i);
+                values[i] = 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[3];
+                fill(storage);
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.parameter_name == "values"
+    assert exc_info.value.reason == "unprovable-view-access"
+
+
 def test_exact_subgroup_branch_proves_bounded_workgroup_view(tmp_path):
     shader = """
     shader ExactSubgroupWorkgroupView {
@@ -576,6 +1237,127 @@ def test_nested_workgroup_pointer_helper_rejects_out_of_bounds_view():
     assert "8" in error.offset_expression
     assert error.materialization_name is not None
     assert error.reason == "view-out-of-bounds"
+
+
+def test_local_invocation_vector_components_prove_workgroup_access(tmp_path):
+    shader = """
+    shader LocalInvocationVectorWorkgroupAccess {
+        void fill(threadgroup float* values, uint3 lid) {
+            values[lid.x] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 lid @ gl_LocalInvocationID) {
+                threadgroup float sharedValues[8];
+                fill(sharedValues, lid);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "gl_LocalInvocationID" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "local_invocation_vector_workgroup_access",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_local_invocation_vector_components_reject_out_of_bounds_access():
+    shader = """
+    shader OutOfBoundsLocalInvocationVectorWorkgroupAccess {
+        void fill(threadgroup float* values, uint3 lid) {
+            values[lid.x] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 9, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 lid @ gl_LocalInvocationID) {
+                threadgroup float sharedValues[8];
+                fill(sharedValues, lid);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "fill"
+    assert error.parameter_name == "values"
+    assert error.reason == "view-out-of-bounds"
+
+
+def test_unbounded_workgroup_id_vector_component_remains_rejected():
+    shader = """
+    shader UnboundedWorkgroupIdVectorWorkgroupAccess {
+        void fill(threadgroup float* values, uint3 group) {
+            values[group.x] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 group @ gl_WorkGroupID) {
+                threadgroup float sharedValues[8];
+                fill(sharedValues, group);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "fill"
+    assert error.parameter_name == "values"
+    assert error.reason == "unprovable-view-access"
+
+
+def test_single_invocation_workgroup_proves_subgroup_index_and_count(tmp_path):
+    shader = """
+    shader SingleInvocationSubgroupWorkgroupAccess {
+        void fill(threadgroup float* values, uint group, uint groups) {
+            values[group] = 1.0;
+            values[groups - 1u] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                uint group @ gl_SubgroupID,
+                uint groups @ gl_NumSubgroups
+            ) {
+                threadgroup float sharedValues[1];
+                fill(sharedValues, group, groups);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "gl_SubgroupID" in generated
+    assert "gl_NumSubgroups" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "single_invocation_subgroup_workgroup_access",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
 
 
 def test_workgroup_pointer_helper_rejects_unbounded_runtime_offset():
@@ -1092,3 +1874,192 @@ def test_workgroup_pointer_helper_does_not_assume_shadowed_min_semantics():
         "sharedValues"
     )
     assert error.reason == "unprovable-view-access"
+
+
+_WORKGROUP_CONTROL_FLOW_DIRECT_ACCESS_CASES = (
+    pytest.param(
+        "{ values += 4u; } values[0] = 1.0;",
+        id="nested-block-pointer-mutation",
+    ),
+    pytest.param(
+        "for i in int(values[2]) { values[0] = float(i); }",
+        id="for-in-iterable-access",
+    ),
+    pytest.param(
+        "for (int i = 0; i < 1; i = int(values[2])) { " "values[0] = float(i); }",
+        id="classic-for-update-access",
+    ),
+    pytest.param(
+        "while (values[2] > 0.0) { values[0] = 1.0; break; }",
+        id="while-condition-access",
+    ),
+    pytest.param(
+        "do { values[0] = 1.0; } while (values[2] > 0.0);",
+        id="do-while-condition-access",
+    ),
+)
+
+
+@pytest.mark.parametrize("body", _WORKGROUP_CONTROL_FLOW_DIRECT_ACCESS_CASES)
+def test_workgroup_pointer_control_flow_subexpressions_reject_out_of_bounds_access(
+    body,
+):
+    shader = f"""
+    shader WorkgroupControlFlowDirectAccess {{
+        void fill(threadgroup float* values) {{
+            {body}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                threadgroup float storage[1];
+                fill(storage);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "fill"
+    assert error.parameter_name == "values"
+    assert error.reason == "view-out-of-bounds"
+
+
+_WORKGROUP_CONTROL_FLOW_CARRIED_STATE_CASES = (
+    pytest.param(
+        "if (flag) { values += 4u; } values[0] = 1.0;",
+        "view-out-of-bounds",
+        id="conditional-pointer-mutation",
+    ),
+    pytest.param(
+        "for (int i = 0; i < 1; i++) { values += 4u; } " "values[0] = 1.0;",
+        "view-out-of-bounds",
+        id="exact-for-pointer-mutation",
+    ),
+    pytest.param(
+        "for i in 1 { values += 4u; } values[0] = 1.0;",
+        "view-out-of-bounds",
+        id="exact-for-in-pointer-mutation",
+    ),
+    pytest.param(
+        "while (flag) { values += 4u; flag = false; } values[0] = 1.0;",
+        "unprovable-view-access",
+        id="while-pointer-mutation",
+    ),
+    pytest.param(
+        "do { values += 4u; } while (false); values[0] = 1.0;",
+        "view-out-of-bounds",
+        id="single-do-while-pointer-mutation",
+    ),
+    pytest.param(
+        "switch (selector) { case 0: values += 4u; break; default: break; } "
+        "values[0] = 1.0;",
+        "unprovable-view-access",
+        id="switch-pointer-mutation",
+    ),
+    pytest.param(
+        "loop { values[0] = 1.0; values += 4u; }",
+        "unprovable-view-access",
+        id="repeated-loop-pointer-mutation",
+    ),
+    pytest.param(
+        "int i = 0; i++; values[i] = 1.0;",
+        "view-out-of-bounds",
+        id="post-incremented-index",
+    ),
+    pytest.param(
+        "int i = 0; ++i; values[i] = 1.0;",
+        "view-out-of-bounds",
+        id="pre-incremented-index",
+    ),
+    pytest.param(
+        "int i = 0; for (int j = 0; j < 1; j++) { i = 4; } " "values[i] = 1.0;",
+        "unprovable-view-access",
+        id="loop-carried-index-mutation",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    _WORKGROUP_CONTROL_FLOW_CARRIED_STATE_CASES,
+)
+def test_workgroup_pointer_control_flow_carried_state_fails_closed(body, reason):
+    shader = f"""
+    shader WorkgroupControlFlowCarriedState {{
+        void fill(threadgroup float* values, bool flag, int selector) {{
+            {body}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                threadgroup float storage[1];
+                fill(storage, true, 0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "fill"
+    assert error.parameter_name == "values"
+    assert error.reason == reason
+
+
+@pytest.mark.parametrize(
+    ("scope_name", "body"),
+    (
+        pytest.param(
+            "scalar-index",
+            "int i = 0; { int i = 4; i++; } values[i] = 1.0;",
+            id="scalar-index",
+        ),
+        pytest.param(
+            "pointer-name",
+            "{ int values = 4; values++; } values[0] = 1.0;",
+            id="pointer-name",
+        ),
+    ),
+)
+def test_workgroup_pointer_nested_block_shadows_preserve_outer_bounds(
+    tmp_path,
+    scope_name,
+    body,
+):
+    shader = f"""
+    shader WorkgroupControlFlowLexicalShadow {{
+        void fill(threadgroup float* values) {{
+            {body}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                threadgroup float storage[1];
+                fill(storage);
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"workgroup_control_flow_lexical_shadow_{scope_name}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )

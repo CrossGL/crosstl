@@ -191,6 +191,59 @@ The current harness verifies:
   2,396 non-empty AIR objects. This is complete reduce translation, reflection,
   and native compiler coverage, not numerical execution or MLX host runtime
   redirection;
+- selected-entry translation of all 2,396 discovered current-pinned
+  `reduce.metal` entries to OpenGL. The compact schema-v2
+  `contracts/reduce.opengl-translation.json` contract spans the same 39 exact
+  ABI shapes, nine kernel templates, six operator families, 44 concrete
+  operator types, and 13 input/output types. It pins 9,216 exact
+  materializations, 31,155,122 generated GLSL bytes, and 25,088
+  resources across scalar-layout-aware one- through twelve-resource target ABIs.
+  Six explicit host/runtime index-range preconditions bound the source pointer
+  and output expressions required by wide-index shapes to signed 32-bit OpenGL
+  index space; they are deployment promises rather than inferred or generated
+  checks. Bounded unit-step loop-carried pointer-array initialization is proven
+  one exact iteration at a time; a non-singleton per-invocation dynamic target
+  remains a may-write and cannot establish full-array definite assignment,
+  while shadowed loop-index bindings remain fail-closed. For-in range and
+  scalar-count expressions are rendered in the outer lexical environment;
+  Fixed-array iterable expressions and compile-time extents resolve before
+  same-named pattern bindings enter scope. same-named patterns use
+  independent controllers and shadow pointer,
+  stage-builtin, and flattened stage-struct aliases in the loop body.
+  For-in resource specialization resolves overloads from exact lexical
+  pattern types. Dynamic for-in resource specialization resolves overloads
+  from exact call-site lexical types. Null storage-pointer reachability and
+  elision preserve exact lexical declaration identity. Null workgroup-pointer
+  reachability and elision preserve exact lexical declaration identity.
+  Nested resource-specialization discovery preserves deterministic lexical
+  order across Python hash seeds. Workgroup-pointer bounds analysis visits
+  every control-flow expression and preserves outer mutations across lexical
+  blocks. loop-local fixed-array
+  storage retains
+  flattened stage-input struct
+  declarations, and fixed-array patterns cannot inherit same-named outer
+  scalar or vector-component bounds. Repeated loop bounds and generated loop
+  controllers lose their proven
+  intervals when exact scalar or vector-component dependencies can mutate.
+  logical-offset mutation through resolved nested helpers is written back to
+  callers. Direct
+  element and addressed one-element forwarding through overload-resolved
+  scalar or fixed-array helpers preserves that writeback;
+  private scalar address views remain confined to their declaring lexical scopes;
+  nonlocal scalar address views remain fail-closed;
+  dynamic elements and unresolved, ambiguous, or recursive forwarding remain
+  fail-closed. Fixed-array storage cannot escape through local private pointer or
+  reference aliases; lexically shadowed arrays and condition-only reads are not
+  misattributed, while residual private pointer or reference syntax remains
+  fail-closed;
+  unsupported wide
+  indices, pointers, and recursion still fail closed. Twenty-four required
+  Linux CI shards retranslate every exact entry, verify deterministic artifact,
+  materialization, workgroup, and reflected ABI
+  identity, compile for OpenGL/SPIR-V 1.3 with `glslangValidator`, validate with
+  `spirv-val`, and require 2,396 non-empty SPIR-V modules. This is complete
+  reduce OpenGL translation, reflection, and native compiler coverage, not
+  numerical execution or MLX host runtime redirection;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains
