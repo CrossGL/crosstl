@@ -2205,9 +2205,9 @@ The generated HLSL is 6,795 bytes with SHA-256
 `7c1fe2a3c5f6d883b11b3fb17511663ebb3ead2a0931611229930c3f07035c9f`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, and compiles as `cs_6_6` with
-`-enable-16bit-types`. The generated software-subgroup GLSL is 7,771 bytes
+`-enable-16bit-types`. The generated software-subgroup GLSL is 7,768 bytes
 with SHA-256
-`2112adeb6c1693fa42c48fe3013cd57637f34a9393c0d468b547ed06ab42cf73`.
+`c26decbd3ce3fca934a9f07967728d4aeaf990c9df633a81d96a7936d484cf06`.
 It retains deferred OpenGL specialization constant `20`, emits six control
 barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
 instruction, and passes `glslangValidator` plus `spirv-val`.

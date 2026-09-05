@@ -10763,9 +10763,9 @@ def test_rms_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proo
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
-        "2112adeb6c1693fa42c48fe3013cd57637f34a9393c0d468b547ed06ab42cf73"
+        "c26decbd3ce3fca934a9f07967728d4aeaf990c9df633a81d96a7936d484cf06"
     )
-    assert opengl["size_bytes"] == 7771
+    assert opengl["size_bytes"] == 7768
     assert opengl["specialization_enforcement"] == (
         "deferred-opengl-spirv-specialization"
     )

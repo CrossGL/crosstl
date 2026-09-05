@@ -6270,8 +6270,8 @@
       },
       "opengl": {
         "target_entry_point": "main",
-        "sha256": "2112adeb6c1693fa42c48fe3013cd57637f34a9393c0d468b547ed06ab42cf73",
-        "size_bytes": 7771,
+        "sha256": "c26decbd3ce3fca934a9f07967728d4aeaf990c9df633a81d96a7936d484cf06",
+        "size_bytes": 7768,
         "subgroup_enforcement": "explicit-32-lane-software-subgroup",
         "specialization_enforcement": "deferred-opengl-spirv-specialization",
         "compiler": "glslangValidator",
