@@ -21342,7 +21342,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             argument_type_func_name = self.hlsl_materialized_function_name(func_name)
             args_str = ", ".join(
                 self.generate_call_arguments(
-                    call_argument_func_name, args, argument_type_func_name
+                    call_argument_func_name,
+                    args,
+                    argument_type_func_name,
+                    call_node=expr,
                 )
             )
             return f"{callee}({args_str})"
@@ -38123,10 +38126,47 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"{alias_name}{rendered[len(sampler_name):]}"
         return rendered
 
-    def generate_call_arguments(self, func_name, args, type_func_name=None):
-        parameter_types = self.function_parameter_types.get(type_func_name or func_name)
+    def generate_call_arguments(
+        self,
+        func_name,
+        args,
+        type_func_name=None,
+        *,
+        call_node=None,
+    ):
+        parameter_lookup_name = type_func_name or func_name
+        parameter_types = self.function_parameter_types.get(parameter_lookup_name)
         if not parameter_types and type_func_name != func_name:
             parameter_types = self.function_parameter_types.get(func_name)
+        if not parameter_types:
+
+            def resolved_parameter_overload(function_name):
+                try:
+                    return self.resolve_hlsl_function_overload(
+                        function_name,
+                        args,
+                        call_node=call_node,
+                    )
+                except DirectXMappedOverloadError:
+                    # HLSL can still resolve source overloads whose mapped target
+                    # signatures remain distinct. Only mapped-collision overloads
+                    # require CrossTL to choose a target declaration itself.
+                    if function_name in self.hlsl_mapped_overload_names:
+                        raise
+                    return None
+
+            resolved_overload = resolved_parameter_overload(parameter_lookup_name)
+            if resolved_overload is None and parameter_lookup_name != func_name:
+                resolved_overload = resolved_parameter_overload(func_name)
+            if resolved_overload is not None:
+                parameter_types = [
+                    self.function_parameter_type_name(parameter)
+                    for parameter in getattr(
+                        resolved_overload,
+                        "parameters",
+                        getattr(resolved_overload, "params", []),
+                    )
+                ]
         parameter_types = parameter_types or []
         workgroup_pointer_func_name = type_func_name or func_name
         workgroup_pointer_indices = (

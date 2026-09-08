@@ -4009,6 +4009,60 @@ def test_hlsl_void_tail_recursion_lowers_to_native_valid_loop(tmp_path):
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_overloaded_call_preserves_selected_uint16_parameter_conversion(
+    tmp_path,
+):
+    # Reduced from pinned MLX gemv.metal. Ordinary HLSL overloads retain one
+    # shared target name, but their selected source parameter types still have
+    # to drive warning-clean contextual conversions at each call site.
+    source = """
+    shader ComplexShuffleNarrowing {
+        struct complex_t_float {
+            float real;
+            float imag;
+        };
+
+        RWStructuredBuffer<complex_t_float> output @ binding(0);
+
+        bool simd_shuffle_down(bool value, uint16_t delta) {
+            return value;
+        }
+
+        uint64_t simd_shuffle_down(uint64_t value, uint16_t delta) {
+            return value;
+        }
+
+        complex_t_float simd_shuffle_down(
+            complex_t_float value,
+            uint16_t delta
+        ) {
+            return value;
+        }
+
+        compute {
+            @ numthreads(1, 1, 1)
+            void main(uvec3 tid @ gl_GlobalInvocationID) {
+                complex_t_float value;
+                value.real = float(tid.x);
+                value.imag = -value.real;
+                uint16_t sm = uint16_t(1u);
+                buffer_store(
+                    output,
+                    tid.x,
+                    simd_shuffle_down(value, 4 * int(sm))
+                );
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "simd_shuffle_down(value, uint16_t((4 * int(sm))))" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
