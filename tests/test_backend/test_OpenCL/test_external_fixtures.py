@@ -1,5 +1,10 @@
+import pytest
+
 from crosstl.backend.OpenCL.OpenCLAst import OpenCLBlockLiteralNode
-from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
+from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
+    OpenCLRecordSemanticError,
+    OpenCLToCrossGLConverter,
+)
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser
 from crosstl.translator.lexer import Lexer as CrossGLLexer
@@ -943,15 +948,24 @@ def test_external_pocl_core_math_typedef_union_designated_initializer_codegen_re
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
     union_node = ast.statements[0]
     init = ast.statements[1].body[0].value.elements[0]
 
     assert union_node.name == "b32u32_u"
     assert union_node.is_union is True
     assert init.designators == [("field", "f")]
-    assert "struct b32u32_u" in crossgl
-    assert "{.f = x}" in crossgl
+    with pytest.raises(
+        OpenCLRecordSemanticError, match="union overlapping storage access"
+    ) as error:
+        OpenCLToCrossGLConverter().generate(ast)
+    assert (
+        error.value.project_diagnostic_code
+        == "project.translate.opencl-record-semantics-unsupported"
+    )
+    assert error.value.missing_capabilities == (
+        "opencl.record-lifecycle-layout-lowering",
+    )
 
 
 def test_external_pocl_core_math_nested_designated_array_codegen_reparse():

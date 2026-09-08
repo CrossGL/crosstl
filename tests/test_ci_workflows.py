@@ -5131,3 +5131,67 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
     assert "Prove current MLX complete reduce family OpenGL translation" not in (
         matrix_job
     )
+
+
+def test_mlx_project_porting_workflow_runs_reduce_complete_directx_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_reduce_complete_directx.py"
+
+    reduce_directx_job = _workflow_job_section(
+        mlx_porting,
+        "mlx-reduce-complete-directx-translation",
+    )
+    assert (
+        "name: MLX complete reduce DirectX translation "
+        "(shard ${{ matrix.shard_index }} of 24)" in reduce_directx_job
+    )
+    assert "if: github.event_name != 'schedule'" in reduce_directx_job
+    assert "runs-on: windows-latest" in reduce_directx_job
+    assert "timeout-minutes: 240" in reduce_directx_job
+    assert "fail-fast: false" in reduce_directx_job
+    assert _matrix_values(reduce_directx_job, "shard_index") == {
+        str(index) for index in range(24)
+    }
+    assert 'python-version: "3.12"' in reduce_directx_job
+    assert "python -m pip install -e . pytest-xdist" in reduce_directx_job
+    assert "Install pinned Windows DirectX Shader Compiler" in reduce_directx_job
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in (
+        reduce_directx_job
+    )
+    assert (
+        'dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"'
+        in reduce_directx_job
+    )
+    assert "for ($attempt = 1; $attempt -le 5; $attempt++)" in reduce_directx_job
+    assert "Get-FileHash -Path $archive -Algorithm SHA256" in reduce_directx_job
+    assert "& $dxc.FullName --version" in reduce_directx_job
+    assert "Checkout current MLX reduce corpus" in reduce_directx_job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_directx_job
+
+    reduce_directx_step = ci_coverage.workflow_step_section(
+        reduce_directx_job,
+        "Prove current MLX complete reduce family DirectX translation",
+    )
+    assert "if: runner.os" not in reduce_directx_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
+        in reduce_directx_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_REDUCE_DIRECTX_TRANSLATION: "1"' in (reduce_directx_step)
+    assert (
+        "CROSTL_MLX_REDUCE_DIRECTX_SHARD_INDEX: ${{ matrix.shard_index }}"
+        in reduce_directx_step
+    )
+    assert 'CROSTL_MLX_REDUCE_DIRECTX_SHARD_COUNT: "24"' in reduce_directx_step
+    assert (
+        f"{test_path}::test_current_mlx_reduce_family_translates_to_directx"
+        in reduce_directx_step
+    )
+    assert "-n auto" in reduce_directx_step
+    assert "-k" not in reduce_directx_step
+    assert mlx_porting.count(f'- "{test_path}"') == 2
+    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
+    assert "Prove current MLX complete reduce family DirectX translation" not in (
+        matrix_job
+    )

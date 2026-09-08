@@ -7698,7 +7698,24 @@ class MetalToCrossGLConverter:
             if storage_type:
                 return storage_type
         resolved_type = self.resolve_type_alias(type_to_map)
-        if resolved_type != type_to_map and self.is_metal_resource_type(resolved_type):
+        resolved_pointer = self.pointer_element_type(resolved_type)
+        resolved_reference = self.reference_element_type(resolved_type)
+        if resolved_type != type_to_map and (
+            (
+                resolved_pointer is not None
+                and self.pointer_element_type(type_to_map) is None
+            )
+            or (
+                resolved_reference is not None
+                and self.reference_element_type(type_to_map) is None
+            )
+            or self.is_metal_resource_type(resolved_type)
+        ):
+            # Resolve aliases that introduce an ABI-relevant type category, but
+            # preserve logical pointee aliases on an already-explicit pointer or
+            # reference (for example ``threadgroup bfloat16_t*``). Erasing only
+            # the pointee spelling would make it disagree with an adjacent
+            # ``threadgroup bfloat16_t[N]`` backing declaration.
             return self.map_type(resolved_type)
         if resolved_type != type_to_map and type_to_map in getattr(
             self, "local_type_alias_names", set()
@@ -7910,14 +7927,15 @@ class MetalToCrossGLConverter:
         lowered_buffer_type = self.constant_buffer_pointer_type(
             var
         ) or self.structured_buffer_pointer_type(var)
+        resolved_effective_type = self.resolve_type_alias(
+            self.effective_metal_variable_type(var)
+        )
         const_device_indirection = bool(
             "const" in qualifiers
             and "device" in qualifiers
             and (
-                self.pointer_element_type(self.effective_metal_variable_type(var))
-                is not None
-                or self.reference_element_type(self.effective_metal_variable_type(var))
-                is not None
+                self.pointer_element_type(resolved_effective_type) is not None
+                or self.reference_element_type(resolved_effective_type) is not None
             )
         )
         const_str = (
@@ -13045,6 +13063,42 @@ class MetalToCrossGLConverter:
             )
         )
 
+    @staticmethod
+    def metal_decltype_expression_is_fully_parenthesized(expression_text):
+        text = str(expression_text or "").strip()
+        if not text.startswith("("):
+            return False
+        depth = 0
+        for index, character in enumerate(text):
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0:
+                    return index == len(text) - 1
+                if depth < 0:
+                    return False
+        return False
+
+    def metal_decltype_expression_is_lvalue(self, expression):
+        if isinstance(expression, VariableNode):
+            name = getattr(expression, "name", None)
+            return bool(
+                name
+                and (
+                    name in self.current_variable_types
+                    or name in self.global_variable_types
+                )
+            )
+        if isinstance(expression, ArrayAccessNode):
+            return True
+        if isinstance(expression, MemberAccessNode):
+            return self.metal_decltype_expression_is_lvalue(expression.object)
+        return (
+            isinstance(expression, UnaryOpNode)
+            and getattr(expression, "op", getattr(expression, "operator", None)) == "*"
+        )
+
     def resolve_metal_decltype_type(self, metal_type):
         text = str(metal_type or "").strip()
         prefix = next(
@@ -13092,7 +13146,14 @@ class MetalToCrossGLConverter:
         inferred_type = self.expression_metal_type(expression)
         if inferred_type is None:
             return None
-        return f"{self.resolve_type_alias(inferred_type)}{suffix}"
+        resolved_type = str(self.resolve_type_alias(inferred_type)).strip()
+        if (
+            self.metal_decltype_expression_is_fully_parenthesized(expression_text)
+            and self.metal_decltype_expression_is_lvalue(expression)
+            and not resolved_type.endswith("&")
+        ):
+            resolved_type += "&"
+        return f"{resolved_type}{suffix}"
 
     def map_type(self, metal_type):
         """Map a Metal type name to the closest CrossGL type name."""

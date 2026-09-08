@@ -1,10 +1,12 @@
 """HIP to CrossGL Code Generator"""
 
+import hashlib
 import re
 
 from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
+    BinaryOpNode,
     CastNode,
     DesignatedInitializerNode,
     EnumNode,
@@ -13,15 +15,36 @@ from .HipAst import (
     HipDevicePropertyNode,
     InitializerListNode,
     MemberAccessNode,
+    ReturnNode,
     StructNode,
+    TernaryOpNode,
     TypeAliasNode,
     UnaryOpNode,
     VariableNode,
 )
 
 
+class HipRecordSemanticError(ValueError):
+    """Raised when used C++ record semantics cannot survive CrossGL lowering."""
+
+    project_diagnostic_code = "project.translate.hip-record-semantics-unsupported"
+    missing_capabilities = ("hip.record-lifecycle-layout-lowering",)
+
+    def __init__(self, feature, record_name, context):
+        self.feature = feature
+        self.record_name = record_name
+        self.context = context
+        super().__init__(
+            f"HIP {feature} is unsupported for record '{record_name}' in {context}"
+        )
+
+
 class HipToCrossGLConverter:
     """Serialize HIP backend AST nodes back into CrossGL source."""
+
+    SOURCE_LANGUAGE_NAME = "HIP"
+    ERASE_CONCRETE_TYPE_ALIASES = True
+    RECORD_SEMANTIC_ERROR = HipRecordSemanticError
 
     CPP_NUMERIC_LITERAL_WITH_SEPARATOR = re.compile(
         r"^(?=.*')"
@@ -365,6 +388,114 @@ class HipToCrossGLConverter:
             )
         },
     }
+    HIP_FIXED_SCALAR_REPRESENTATION_BYTES = {
+        "bool": 1,
+        "char": 1,
+        "signed char": 1,
+        "unsigned char": 1,
+        "__int8": 1,
+        "signed __int8": 1,
+        "unsigned __int8": 1,
+        "int8": 1,
+        "uint8": 1,
+        "int8_t": 1,
+        "uint8_t": 1,
+        "i8": 1,
+        "u8": 1,
+        "short": 2,
+        "short int": 2,
+        "signed short": 2,
+        "signed short int": 2,
+        "unsigned short": 2,
+        "unsigned short int": 2,
+        "__int16": 2,
+        "signed __int16": 2,
+        "unsigned __int16": 2,
+        "int16": 2,
+        "uint16": 2,
+        "int16_t": 2,
+        "uint16_t": 2,
+        "i16": 2,
+        "u16": 2,
+        "half": 2,
+        "__half": 2,
+        "float16_t": 2,
+        "f16": 2,
+        "int": 4,
+        "signed": 4,
+        "signed int": 4,
+        "unsigned": 4,
+        "unsigned int": 4,
+        "int32": 4,
+        "uint32": 4,
+        "int32_t": 4,
+        "uint32_t": 4,
+        "i32": 4,
+        "u32": 4,
+        "float": 4,
+        "float32_t": 4,
+        "f32": 4,
+        "long long": 8,
+        "long long int": 8,
+        "signed long long": 8,
+        "signed long long int": 8,
+        "unsigned long long": 8,
+        "unsigned long long int": 8,
+        "__int64": 8,
+        "signed __int64": 8,
+        "unsigned __int64": 8,
+        "int64": 8,
+        "uint64": 8,
+        "int64_t": 8,
+        "uint64_t": 8,
+        "double": 8,
+        "float64_t": 8,
+        "f64": 8,
+    }
+    HIP_FIXED_SCALAR_EXPRESSION_TYPES = frozenset(
+        {
+            "bool",
+            "i8",
+            "u8",
+            "i16",
+            "u16",
+            "i32",
+            "f16",
+            "f32",
+            "f64",
+        }
+    )
+    HIP_EXTERNAL_RECORD_NARROW_INTEGER_TYPES = frozenset(
+        {
+            "char",
+            "char8_t",
+            "char16_t",
+            "signed char",
+            "unsigned char",
+            "short",
+            "short int",
+            "signed short",
+            "signed short int",
+            "unsigned short",
+            "unsigned short int",
+            "__int8",
+            "unsigned __int8",
+            "__int16",
+            "unsigned __int16",
+            "i8",
+            "u8",
+            "i16",
+            "u16",
+            "int8",
+            "uint8",
+            "int16",
+            "uint16",
+            "int8_t",
+            "uint8_t",
+            "int16_t",
+            "uint16_t",
+        }
+    )
 
     def __init__(self):
         self.indent_level = 0
@@ -373,6 +504,7 @@ class HipToCrossGLConverter:
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
+        self.concrete_type_alias_scopes = [{}]
         self.vector1_name_scopes = [{}]
         self.user_function_names = set()
         self.global_resource_object_type_hints = {}
@@ -390,6 +522,20 @@ class HipToCrossGLConverter:
         self.generated_matrix_helper_types = set()
         self.namespace_aliases = {}
         self.anonymous_enum_count = 0
+        self.function_local_record_definitions = {}
+        self.function_local_record_node_ids = set()
+        self.function_local_record_declaration_types = {}
+        self.record_name_stack = []
+        self.record_definitions = {}
+        self.record_qualified_names = {}
+        self.enum_value_aliases = {}
+        self.enum_underlying_types = {}
+        self.unsupported_record_static_constants = set()
+        self.function_definitions = {}
+        self.return_type_by_node_id = {}
+        self.union_active_member_scopes = [{}]
+        self.union_object_identity_scopes = [{}]
+        self.union_indirect_object_scopes = [set()]
 
     def generate(self, ast_node):
         self.output = []
@@ -398,6 +544,7 @@ class HipToCrossGLConverter:
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
+        self.concrete_type_alias_scopes = [{}]
         self.vector1_name_scopes = [{}]
         self.generated_matrix_helper_types = self.collect_generated_matrix_helper_types(
             ast_node
@@ -413,14 +560,243 @@ class HipToCrossGLConverter:
         self.device_attribute_source_scopes = [{}]
         self.device_query_source_scopes = [{}]
         self.member_query_source_scopes = [{}]
+        self.union_active_member_scopes = [{}]
+        self.union_object_identity_scopes = [{}]
+        self.union_indirect_object_scopes = [set()]
         self.suppress_device_property_member_access = 0
         self.suppress_device_attribute_value_access = 0
         self.suppress_device_query_value_access = 0
         self.suppress_identifier_name_rewrite = 0
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.anonymous_enum_count = 0
+        self.reset_function_local_record_materializations()
+        self.prepare_function_local_record_materializations(ast_node)
+        self.prepare_record_definitions(ast_node)
         self.visit(ast_node)
         return "\n".join(self.output)
+
+    def reset_function_local_record_materializations(self):
+        self.function_local_record_definitions = {}
+        self.function_local_record_node_ids = set()
+        self.function_local_record_declaration_types = {}
+
+    def prepare_record_definitions(self, ast_node):
+        self.record_name_stack = []
+        self.record_definitions = {}
+        self.record_qualified_names = {}
+        self.enum_value_aliases = {}
+        self.enum_underlying_types = {}
+        self.unsupported_record_static_constants = set()
+        self.function_definitions = {}
+        self.return_type_by_node_id = {}
+        for definitions in self.function_local_record_definitions.values():
+            for definition in definitions:
+                self.collect_record_definition(definition, ())
+        for statement in getattr(ast_node, "statements", []) or []:
+            if isinstance(statement, StructNode):
+                self.collect_record_definition(statement, ())
+            elif isinstance(statement, FunctionNode):
+                self.function_definitions.setdefault(statement.name, []).append(
+                    statement
+                )
+                self.register_function_return_nodes(statement)
+
+    def materialized_record_type_names(self):
+        return {
+            self.convert_hip_record_name_to_crossgl(node.name)
+            for node in self.record_definitions.values()
+            if node is not None and getattr(node, "name", None)
+        }
+
+    def collect_record_definition(self, node, owners):
+        name = getattr(node, "name", None)
+        if not name:
+            return
+        qualified_name = "::".join((*owners, name))
+        self.record_qualified_names[id(node)] = qualified_name
+        self.record_definitions[qualified_name] = node
+        existing = self.record_definitions.get(name)
+        if existing is None and name not in self.record_definitions:
+            self.record_definitions[name] = node
+        elif existing is not node:
+            self.record_definitions[name] = None
+        for member in getattr(node, "members", []) or []:
+            if isinstance(member, StructNode):
+                self.collect_record_definition(member, (*owners, name))
+
+    def prepare_function_local_record_materializations(self, ast_node):
+        for statement in getattr(ast_node, "statements", []) or []:
+            if not isinstance(statement, FunctionNode):
+                continue
+            definitions = []
+            self.collect_function_local_record_materializations(
+                getattr(statement, "body", None),
+                statement,
+                ("body",),
+                definitions,
+                set(),
+            )
+            if definitions:
+                self.function_local_record_definitions[id(statement)] = definitions
+
+    def collect_function_local_record_materializations(
+        self,
+        value,
+        function,
+        path,
+        definitions,
+        visited,
+    ):
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return
+        marker = id(value)
+        if marker in visited:
+            return
+        visited.add(marker)
+
+        if isinstance(value, list):
+            self.collect_function_local_records_from_statement_list(
+                value, function, path, definitions
+            )
+            for index, item in enumerate(value):
+                if isinstance(item, StructNode):
+                    continue
+                self.collect_function_local_record_materializations(
+                    item,
+                    function,
+                    (*path, str(index)),
+                    definitions,
+                    visited,
+                )
+            return
+        if isinstance(value, tuple):
+            for index, item in enumerate(value):
+                self.collect_function_local_record_materializations(
+                    item,
+                    function,
+                    (*path, str(index)),
+                    definitions,
+                    visited,
+                )
+            return
+        if isinstance(value, dict):
+            for key in sorted(value, key=str):
+                self.collect_function_local_record_materializations(
+                    value[key],
+                    function,
+                    (*path, str(key)),
+                    definitions,
+                    visited,
+                )
+            return
+        if isinstance(value, (StructNode, FunctionNode)):
+            return
+
+        for attribute, child in sorted(
+            getattr(value, "__dict__", {}).items(),
+            key=lambda item: item[0],
+        ):
+            self.collect_function_local_record_materializations(
+                child,
+                function,
+                (*path, attribute),
+                definitions,
+                visited,
+            )
+
+    def collect_function_local_records_from_statement_list(
+        self, statements, function, path, definitions
+    ):
+        for index, statement in enumerate(statements):
+            if not isinstance(statement, StructNode) or getattr(
+                statement, "name", None
+            ):
+                continue
+
+            prefix = self.nested_record_declarator_prefix(statement)
+            declarations = []
+            next_index = index + 1
+            while next_index < len(statements):
+                declaration = statements[next_index]
+                if not isinstance(declaration, VariableNode):
+                    break
+                if not self.nested_record_declarator_matches(declaration, prefix):
+                    break
+                declarations.append(declaration)
+                next_index += 1
+            if not declarations:
+                continue
+
+            materialized_name = self.function_local_record_name(
+                function,
+                statement,
+                declarations,
+                (*path, str(index)),
+            )
+            materialized = self.clone_ast_node(statement)
+            materialized.name = materialized_name
+            definitions.append(materialized)
+            self.function_local_record_node_ids.add(id(statement))
+            for declaration in declarations:
+                self.function_local_record_declaration_types[id(declaration)] = (
+                    self.rewrite_nested_record_declarator_type(
+                        getattr(declaration, "vtype", ""),
+                        prefix,
+                        materialized_name,
+                    )
+                )
+
+    def function_local_record_name(self, function, node, declarations, path):
+        keyword = "union" if getattr(node, "is_union", False) else "struct"
+        function_name = self.sanitize_crossgl_type_identifier(
+            getattr(function, "name", "function")
+        )
+        declarator_name = self.sanitize_crossgl_type_identifier(
+            getattr(declarations[0], "name", "local")
+        )
+        signature = [
+            str(getattr(function, "name", "")),
+            ".".join(path),
+            keyword,
+            *(str(getattr(declaration, "name", "")) for declaration in declarations),
+            self.function_local_record_signature(node),
+        ]
+        digest = hashlib.sha256("\0".join(signature).encode("utf-8")).hexdigest()[:12]
+        return (
+            f"CrossGLFunctionLocal_{function_name}_{declarator_name}_"
+            f"{keyword}_{digest}"
+        )
+
+    def function_local_record_signature(self, node):
+        parts = [
+            "union" if getattr(node, "is_union", False) else "struct",
+            str(getattr(node, "name", "")),
+        ]
+        for member in getattr(node, "members", []) or []:
+            if isinstance(member, StructNode):
+                parts.append(self.function_local_record_signature(member))
+                continue
+            parts.extend(
+                (
+                    type(member).__name__,
+                    str(getattr(member, "name", "")),
+                    str(getattr(member, "vtype", "")),
+                    " ".join(
+                        str(item) for item in getattr(member, "qualifiers", []) or []
+                    ),
+                )
+            )
+        return "\0".join(parts)
+
+    def emit_function_local_record_definitions(self, function):
+        for record in self.function_local_record_definitions.get(id(function), ()):
+            self.visit_StructNode(record)
+            self.emit("")
+
+    def function_local_materialized_variable_type(self, node):
+        return self.function_local_record_declaration_types.get(
+            id(node), getattr(node, "vtype", "int")
+        )
 
     def visit(self, node):
         """Dispatch a HIP backend AST node to its converter method."""
@@ -431,6 +807,9 @@ class HipToCrossGLConverter:
     def generic_visit(self, node):
         """Fallback converter for primitive values, lists, and unknown nodes."""
         if isinstance(node, str):
+            enum_value = self.resolve_enum_value_alias(node)
+            if enum_value is not None:
+                return enum_value
             string_literal = self.format_cpp_string_literal_expression(node)
             if string_literal is not None:
                 return string_literal
@@ -959,6 +1338,9 @@ class HipToCrossGLConverter:
         self.device_attribute_source_scopes.append({})
         self.device_query_source_scopes.append({})
         self.member_query_source_scopes.append({})
+        self.union_active_member_scopes.append({})
+        self.union_object_identity_scopes.append({})
+        self.union_indirect_object_scopes.append(set())
 
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
@@ -972,6 +1354,40 @@ class HipToCrossGLConverter:
             self.device_query_source_scopes.pop()
         if len(self.member_query_source_scopes) > 1:
             self.member_query_source_scopes.pop()
+        if len(self.union_active_member_scopes) > 1:
+            self.union_active_member_scopes.pop()
+        if len(self.union_object_identity_scopes) > 1:
+            self.union_object_identity_scopes.pop()
+        if len(self.union_indirect_object_scopes) > 1:
+            self.union_indirect_object_scopes.pop()
+
+    def register_union_object_declaration(self, name, definition, declaration):
+        if not name or definition is None or not getattr(definition, "is_union", False):
+            return
+        if name in self.union_object_identity_scopes[-1]:
+            self.raise_record_semantic(
+                ("union lexical shadowing with flattened scope", definition),
+                f"variable '{name}'",
+            )
+        self.union_object_identity_scopes[-1][name] = f"{name}#{id(declaration)}"
+
+    def register_union_indirect_object(self, name, raw_type, definition):
+        if not name or definition is None or not getattr(definition, "is_union", False):
+            return
+        compact = str(raw_type).replace(" ", "")
+        if "*" in compact or "&" in compact or compact.startswith("ptr<"):
+            self.union_indirect_object_scopes[-1].add(name)
+
+    def lookup_union_object_identity(self, name):
+        for scope in reversed(self.union_object_identity_scopes):
+            if name in scope:
+                return scope[name]
+        return name
+
+    def is_union_indirect_object(self, name):
+        return any(
+            name in scope for scope in reversed(self.union_indirect_object_scopes)
+        )
 
     def register_variable_type(self, name, type_name):
         if not name or not type_name:
@@ -1354,6 +1770,11 @@ class HipToCrossGLConverter:
         if isinstance(stmt, list):
             for item in stmt:
                 self.emit_statement(item)
+            return
+        if (
+            isinstance(stmt, StructNode)
+            and id(stmt) in self.function_local_record_node_ids
+        ):
             return
 
         if self.emit_hip_runtime_call_statement(stmt):
@@ -4593,10 +5014,9 @@ class HipToCrossGLConverter:
         if isinstance(stmt, list):
             return ", ".join(self.format_statement_fragment(item) for item in stmt)
         if isinstance(stmt, VariableNode):
-            var_type = self.convert_hip_variable_type_to_crossgl(
-                getattr(stmt, "vtype", "int"), stmt.name
-            )
-            self.register_vector1_name(stmt.name, getattr(stmt, "vtype", "int"))
+            raw_type = self.function_local_materialized_variable_type(stmt)
+            var_type = self.convert_hip_variable_type_to_crossgl(raw_type, stmt.name)
+            self.register_vector1_name(stmt.name, raw_type)
             self.register_variable_type(stmt.name, var_type)
             if hasattr(stmt, "value") and stmt.value:
                 value = self.format_variable_initializer_value(stmt.value)
@@ -4628,11 +5048,13 @@ class HipToCrossGLConverter:
                 if hasattr(stmt, "qualifiers") and "__global__" in getattr(
                     stmt, "qualifiers", []
                 ):
+                    self.emit_function_local_record_definitions(stmt)
                     self.emit(f"// Kernel: {stmt.name}")
                     self.visit_kernel_as_compute_shader(stmt)
                 else:
                     if has_kernel and stmt.name == "main":
                         continue
+                    self.emit_function_local_record_definitions(stmt)
                     self.emit(f"// Function: {stmt.name}")
                     self.visit(stmt)
                 self.emit("")
@@ -4676,9 +5098,12 @@ class HipToCrossGLConverter:
 
     def visit_FunctionNode(self, node):
         """Render a HIP function node as a CrossGL function."""
-        return_type = self.convert_hip_type_to_crossgl(
-            node.return_type if hasattr(node, "return_type") else "void"
+        raw_return_type = node.return_type if hasattr(node, "return_type") else "void"
+        self.validate_record_layout_use(
+            self.record_definition_from_type(raw_return_type),
+            f"return type of function '{getattr(node, 'name', '')}'",
         )
+        return_type = self.convert_hip_type_to_crossgl(raw_return_type)
 
         self.push_resource_object_hint_scope(
             self.collect_resource_object_type_hints(
@@ -4704,6 +5129,16 @@ class HipToCrossGLConverter:
                     )
                     param_type = self.convert_hip_variable_type_to_crossgl(
                         raw_type, param_name
+                    )
+                    parameter_record = self.record_definition_from_type(raw_type)
+                    self.validate_record_layout_use(
+                        parameter_record, f"parameter '{param_name}'"
+                    )
+                    self.register_union_object_declaration(
+                        param_name, parameter_record, param
+                    )
+                    self.register_union_indirect_object(
+                        param_name, raw_type, parameter_record
                     )
                     output_name = self.register_identifier_name(param_name)
                     self.register_vector1_name(param_name, raw_type)
@@ -4787,6 +5222,19 @@ class HipToCrossGLConverter:
                         raw_type = getattr(param, "vtype", "int")
                         param_name = getattr(param, "name", "param")
                     param_name = param_name or f"_param{index}"
+                    parameter_record = self.record_definition_from_type(raw_type)
+                    self.validate_record_layout_use(
+                        parameter_record, f"parameter '{param_name}'"
+                    )
+                    self.validate_record_kernel_parameter_semantics(
+                        raw_type, parameter_record, f"parameter '{param_name}'"
+                    )
+                    self.register_union_object_declaration(
+                        param_name, parameter_record, param
+                    )
+                    self.register_union_indirect_object(
+                        param_name, raw_type, parameter_record
+                    )
 
                     if "*" in raw_type:
                         element_type = self.convert_hip_pointer_element_type(raw_type)
@@ -4863,32 +5311,571 @@ class HipToCrossGLConverter:
         return str(type_name).strip() in self.CROSSL_SCALAR_TYPES
 
     def visit_StructNode(self, node):
-        if getattr(node, "is_union", False):
-            name = node.name or "anonymous"
-            self.emit(
-                f"// HIP union {name} represented as struct-like layout; "
-                "overlapping storage is not modeled"
+        output_name = (
+            self.convert_hip_record_name_to_crossgl(node.name) if node.name else None
+        )
+        if output_name:
+            qualified_name = self.record_qualified_names.get(id(node))
+            if qualified_name is None:
+                qualified_name = "::".join(
+                    [*self.record_name_stack, str(getattr(node, "name", output_name))]
+                )
+        else:
+            qualified_name = None
+        if (
+            output_name
+            and qualified_name != output_name
+            and output_name in self.record_definitions
+            and self.record_definitions[output_name] is None
+        ):
+            raise ValueError(
+                f"Conflicting HIP nested record output name '{output_name}'"
             )
-            if not node.name:
-                return
+        self.record_name_stack.append(qualified_name or "anonymous")
+        nested_records, nested_enums, members = self.materialize_nested_record_members(
+            node,
+            output_name or "anonymous",
+        )
+        (
+            inherited_aliases,
+            inherited_members,
+            inherited_enums,
+            inherited_records,
+            inherited_constants,
+        ) = self.collect_inherited_record_members(node)
+        own_aliases = [
+            member for member in members if isinstance(member, TypeAliasNode)
+        ]
+        aliases = [*inherited_aliases, *own_aliases]
+        storage_members = [*inherited_members, *members]
+        storage_names = [
+            member.name
+            for member in storage_members
+            if isinstance(member, VariableNode)
+            and member.name
+            and not hasattr(member, "bitfield_width")
+            and "static" not in set(getattr(member, "qualifiers", []) or [])
+        ]
+        if len(storage_names) != len(set(storage_names)):
+            raise ValueError(
+                f"HIP inherited record '{qualified_name or output_name}' has "
+                "colliding storage member names"
+            )
+        self.push_type_alias_scope()
+        try:
+            for alias in aliases:
+                self.register_type_alias(alias.name, alias.alias_type)
+            if output_name:
+                enclosing_scope = self.type_alias_scopes[-2]
+                global_scope = self.type_alias_scopes[0]
+                if qualified_name != output_name:
+                    global_scope[qualified_name] = output_name
+                for alias in aliases:
+                    resolved = self.resolve_record_member_type_alias(alias.alias_type)
+                    enclosing_scope[f"{output_name}::{alias.name}"] = resolved
+                    if qualified_name:
+                        global_scope[f"{qualified_name}::{alias.name}"] = resolved
+                for inherited_record in inherited_records:
+                    inherited_name = getattr(inherited_record, "name", None)
+                    if inherited_name and qualified_name:
+                        global_scope[f"{qualified_name}::{inherited_name}"] = (
+                            self.convert_hip_record_name_to_crossgl(inherited_name)
+                        )
+            own_constants = [
+                member
+                for member in members
+                if isinstance(member, VariableNode)
+                and "static" in set(getattr(member, "qualifiers", []) or [])
+            ]
+            constant_values = self.register_record_static_constants(
+                [*inherited_constants, *own_constants],
+                qualified_name or output_name,
+            )
+            for enum_node in [*inherited_enums, *nested_enums]:
+                self.register_nested_enum(
+                    enum_node,
+                    qualified_name or output_name,
+                    constant_values,
+                )
+            for nested_record in nested_records:
+                self.visit_StructNode(nested_record)
 
-        struct_name = self.convert_hip_record_name_to_crossgl(node.name)
-        self.emit(f"struct {struct_name} {{")
-        self.indent_level += 1
+            materialized = self.clone_ast_node(node)
+            materialized.name = output_name
+            materialized.members = storage_members
+            if getattr(materialized, "is_union", False):
+                name = materialized.name or "anonymous"
+                self.emit(
+                    f"// {self.SOURCE_LANGUAGE_NAME} union {name} represented as "
+                    "struct-like layout; overlapping storage is not modeled"
+                )
+                if not materialized.name:
+                    return
 
-        if hasattr(node, "members") and node.members:
-            for member in node.members:
-                if isinstance(member, VariableNode):
-                    member_type = self.convert_hip_type_to_crossgl(
+            self.emit(f"struct {materialized.name} {{")
+            self.indent_level += 1
+            for member in materialized.members:
+                if not isinstance(member, VariableNode) or "static" in set(
+                    getattr(member, "qualifiers", []) or []
+                ):
+                    continue
+                if self.record_member_layout_issue(node, member) is not None:
+                    continue
+                member_type = self.convert_hip_type_to_crossgl(
+                    self.resolve_record_member_type_alias(
                         getattr(member, "vtype", "int")
                     )
-                    self.emit(f"{member_type} {member.name};")
+                )
+                self.emit(f"{member_type} {member.name};")
+            self.indent_level -= 1
+            self.emit("};")
+        finally:
+            self.pop_type_alias_scope()
+            self.record_name_stack.pop()
 
-        self.indent_level -= 1
-        self.emit("};")
+    def collect_inherited_record_members(self, node, visiting=None):
+        visiting = set(visiting or ())
+        marker = id(node)
+        if marker in visiting:
+            raise ValueError("HIP record inheritance cycle is unsupported")
+        visiting.add(marker)
+        aliases = []
+        members = []
+        enums = []
+        records = []
+        constants = []
+        for base in getattr(node, "base_classes", []) or []:
+            if isinstance(base, dict):
+                base_name = base.get("type", "")
+                is_virtual = bool(base.get("is_virtual"))
+            else:
+                base_name = str(base)
+                is_virtual = False
+            if is_virtual:
+                raise ValueError(
+                    f"HIP virtual record inheritance is unsupported: {base_name}"
+                )
+            base_node = self.resolve_record_base_definition(node, base_name)
+            if base_node is None:
+                raise ValueError(
+                    f"HIP record '{getattr(node, 'name', '')}' has unresolved "
+                    f"base '{base_name}'"
+                )
+            (
+                base_aliases,
+                base_members,
+                base_enums,
+                base_records,
+                base_constants,
+            ) = self.collect_inherited_record_members(base_node, visiting)
+            aliases.extend(base_aliases)
+            members.extend(base_members)
+            enums.extend(base_enums)
+            records.extend(base_records)
+            constants.extend(base_constants)
+            local_enums = [
+                member
+                for member in getattr(base_node, "members", []) or []
+                if isinstance(member, EnumNode)
+            ]
+            for member in getattr(base_node, "members", []) or []:
+                if isinstance(member, TypeAliasNode):
+                    aliases.append(member)
+                elif isinstance(member, EnumNode):
+                    enums.append(member)
+                elif isinstance(member, StructNode):
+                    records.append(member)
+                elif isinstance(member, VariableNode) and "static" in set(
+                    getattr(member, "qualifiers", []) or []
+                ):
+                    constants.append(member)
+                elif isinstance(member, VariableNode):
+                    inherited_member = self.clone_ast_node(member)
+                    for enum_node in local_enums:
+                        prefix = self.nested_enum_declarator_prefix(enum_node)
+                        if not self.nested_record_declarator_matches(
+                            inherited_member, prefix
+                        ):
+                            continue
+                        underlying = (
+                            getattr(enum_node, "underlying_type", None) or "int"
+                        )
+                        inherited_member.vtype = (
+                            self.rewrite_nested_record_declarator_type(
+                                getattr(inherited_member, "vtype", ""),
+                                prefix,
+                                underlying,
+                            )
+                        )
+                        break
+                    members.append(inherited_member)
+        return aliases, members, enums, records, constants
+
+    def resolve_record_base_definition(self, node, base_name):
+        base_name = self.strip_elaborated_record_type_keyword(str(base_name).strip())
+        base_name = base_name.lstrip(":")
+        if not base_name:
+            return None
+        qualified_name = self.record_qualified_names.get(id(node), "")
+        owners = qualified_name.split("::")[:-1] if qualified_name else []
+        candidates = []
+        if "::" not in base_name:
+            for size in range(len(owners), 0, -1):
+                candidates.append("::".join([*owners[:size], base_name]))
+        candidates.append(base_name)
+        for candidate in candidates:
+            definition = self.record_definitions.get(candidate)
+            if definition is not None:
+                return definition
+        return None
+
+    def materialize_nested_record_members(self, node, parent_name):
+        pending = list(getattr(node, "members", []) or [])
+        nested_records = []
+        nested_enums = []
+        members = []
+        index = 0
+        while index < len(pending):
+            member = pending[index]
+            if isinstance(member, EnumNode):
+                prefix = self.nested_enum_declarator_prefix(member)
+                declarations = []
+                next_index = index + 1
+                while next_index < len(pending):
+                    declaration = pending[next_index]
+                    if not isinstance(declaration, VariableNode):
+                        break
+                    if not self.nested_record_declarator_matches(declaration, prefix):
+                        break
+                    declarations.append(declaration)
+                    next_index += 1
+                underlying = getattr(member, "underlying_type", None) or "int"
+                for declaration in declarations:
+                    rewritten = self.clone_ast_node(declaration)
+                    rewritten.vtype = self.rewrite_nested_record_declarator_type(
+                        getattr(declaration, "vtype", ""),
+                        prefix,
+                        underlying,
+                    )
+                    members.append(rewritten)
+                nested_enums.append(member)
+                index = next_index
+                continue
+            if not isinstance(member, StructNode):
+                members.append(member)
+                index += 1
+                continue
+
+            prefix = self.nested_record_declarator_prefix(member)
+            declarations = []
+            next_index = index + 1
+            while next_index < len(pending):
+                declaration = pending[next_index]
+                if not isinstance(declaration, VariableNode):
+                    break
+                if not self.nested_record_declarator_matches(declaration, prefix):
+                    break
+                declarations.append(declaration)
+                next_index += 1
+
+            if not getattr(member, "name", None) and not declarations:
+                pending[index : index + 1] = list(getattr(member, "members", []) or [])
+                continue
+
+            nested_name = getattr(member, "name", None)
+            if nested_name:
+                nested_name = self.convert_hip_record_name_to_crossgl(nested_name)
+            else:
+                nested_name = self.anonymous_nested_record_name(
+                    parent_name,
+                    member,
+                    declarations,
+                )
+
+            materialized = self.clone_ast_node(member)
+            materialized.name = nested_name
+            nested_records.append(materialized)
+            for declaration in declarations:
+                rewritten = self.clone_ast_node(declaration)
+                rewritten.vtype = self.rewrite_nested_record_declarator_type(
+                    getattr(declaration, "vtype", ""),
+                    prefix,
+                    nested_name,
+                )
+                members.append(rewritten)
+            index = next_index
+
+        return nested_records, nested_enums, members
+
+    def nested_enum_declarator_prefix(self, node):
+        name = getattr(node, "name", None) or "<anonymous>"
+        return f"enum {name}"
+
+    def register_record_static_constants(self, constants, owner_name):
+        values = {}
+        if not owner_name:
+            return values
+        for constant in constants:
+            qualifiers = set(getattr(constant, "qualifiers", []) or [])
+            qualified_name = f"{owner_name}::{constant.name}"
+            if not qualifiers.intersection({"const", "constexpr"}):
+                self.unsupported_record_static_constants.add(qualified_name)
+                continue
+            value = self.evaluate_enum_constant_expression(
+                getattr(constant, "value", None), values
+            )
+            if value is None:
+                self.unsupported_record_static_constants.add(qualified_name)
+                continue
+            values[constant.name] = value
+            self.enum_value_aliases[qualified_name] = str(value)
+            self.unsupported_record_static_constants.discard(qualified_name)
+        return values
+
+    def register_nested_enum(self, node, owner_name, enclosing_values=None):
+        underlying = getattr(node, "underlying_type", None) or "int"
+        enum_name = getattr(node, "name", None)
+        if enum_name:
+            self.enum_underlying_types.setdefault(enum_name, underlying)
+            self.register_type_alias(enum_name, underlying)
+            if owner_name:
+                qualified_name = f"{owner_name}::{enum_name}"
+                self.enum_underlying_types[qualified_name] = underlying
+                self.type_alias_scopes[0][qualified_name] = underlying
+        next_value = 0
+        local_values = dict(enclosing_values or {})
+        members = getattr(node, "members", None) or getattr(node, "variants", [])
+        for member in members:
+            if isinstance(member, tuple):
+                member_name, member_value = member
+            else:
+                member_name = getattr(member, "name", str(member))
+                member_value = getattr(member, "value", None)
+            if member_value is None:
+                if next_value is None:
+                    raise ValueError(
+                        f"HIP enum '{owner_name}' has an implicit value after an "
+                        "unsupported initializer"
+                    )
+                value = next_value
+            else:
+                value = self.evaluate_enum_constant_expression(
+                    member_value, local_values
+                )
+                if value is None:
+                    raise ValueError(
+                        f"HIP enum '{owner_name}' initializer for '{member_name}' "
+                        "cannot be represented exactly"
+                    )
+            if getattr(node, "is_scoped", False) and enum_name:
+                alias = f"{owner_name}::{enum_name}::{member_name}"
+            else:
+                alias = f"{owner_name}::{member_name}"
+            self.enum_value_aliases[alias] = str(value)
+            local_values[member_name] = value
+            if enum_name:
+                local_values[f"{enum_name}::{member_name}"] = value
+            next_value = value + 1
+
+    def evaluate_enum_constant_expression(self, value, local_values):
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            normalized = self.normalize_cpp_numeric_literal(value).strip()
+            if normalized in local_values:
+                return local_values[normalized]
+            resolved = self.resolve_enum_value_alias(normalized)
+            if resolved is not None:
+                try:
+                    return int(str(resolved).rstrip("uU"), 0)
+                except ValueError:
+                    return None
+            try:
+                return int(normalized.rstrip("uU"), 0)
+            except ValueError:
+                return None
+        if isinstance(value, UnaryOpNode):
+            operand = self.evaluate_enum_constant_expression(
+                value.operand, local_values
+            )
+            if operand is None:
+                return None
+            operations = {
+                "+": lambda item: item,
+                "-": lambda item: -item,
+                "~": lambda item: ~item,
+                "!": lambda item: int(not item),
+            }
+            operation = operations.get(value.op)
+            return operation(operand) if operation is not None else None
+        if isinstance(value, BinaryOpNode):
+            left = self.evaluate_enum_constant_expression(value.left, local_values)
+            right = self.evaluate_enum_constant_expression(value.right, local_values)
+            if left is None or right is None:
+                return None
+            operations = {
+                "+": lambda lhs, rhs: lhs + rhs,
+                "-": lambda lhs, rhs: lhs - rhs,
+                "*": lambda lhs, rhs: lhs * rhs,
+                "/": self.divide_enum_constant,
+                "%": self.modulo_enum_constant,
+                "<<": lambda lhs, rhs: lhs << rhs,
+                ">>": lambda lhs, rhs: lhs >> rhs,
+                "&": lambda lhs, rhs: lhs & rhs,
+                "|": lambda lhs, rhs: lhs | rhs,
+                "^": lambda lhs, rhs: lhs ^ rhs,
+                "&&": lambda lhs, rhs: int(bool(lhs) and bool(rhs)),
+                "||": lambda lhs, rhs: int(bool(lhs) or bool(rhs)),
+            }
+            operation = operations.get(value.op)
+            if operation is None:
+                return None
+            try:
+                return operation(left, right)
+            except (ArithmeticError, ValueError):
+                return None
+        return None
+
+    def divide_enum_constant(self, left, right):
+        if right == 0:
+            raise ZeroDivisionError
+        quotient = abs(left) // abs(right)
+        return -quotient if (left < 0) != (right < 0) else quotient
+
+    def modulo_enum_constant(self, left, right):
+        return left - self.divide_enum_constant(left, right) * right
+
+    def resolve_enum_value_alias(self, name, resolving=None):
+        lookup_name = self.canonical_record_static_member_name(name)
+        if (
+            isinstance(lookup_name, str)
+            and lookup_name in self.unsupported_record_static_constants
+        ):
+            owner_name = lookup_name.rsplit("::", 1)[0]
+            definition = self.record_definitions.get(owner_name)
+            if definition is None:
+                definition = self.record_definition_from_type(owner_name)
+            if definition is not None:
+                self.raise_record_semantic(
+                    (
+                        f"static record state '{name}' cannot be represented exactly",
+                        definition,
+                    ),
+                    "qualified member access",
+                )
+            raise ValueError(
+                f"HIP static record constant '{name}' cannot be represented exactly"
+            )
+        if (
+            not isinstance(lookup_name, str)
+            or lookup_name not in self.enum_value_aliases
+        ):
+            return None
+        resolving = set(resolving or ())
+        if lookup_name in resolving:
+            raise ValueError(f"recursive HIP enum value alias: {lookup_name}")
+        resolving.add(lookup_name)
+        value = self.enum_value_aliases[lookup_name]
+        nested = self.resolve_enum_value_alias(value, resolving)
+        return (
+            nested if nested is not None else self.normalize_cpp_numeric_literal(value)
+        )
+
+    def nested_record_declarator_prefix(self, node):
+        if getattr(node, "is_union", False):
+            keyword = "union"
+        elif getattr(node, "is_class", False):
+            keyword = "class"
+        else:
+            keyword = "struct"
+        name = getattr(node, "name", None) or "<anonymous>"
+        return f"{keyword} {name}"
+
+    def nested_record_declarator_matches(self, declaration, prefix):
+        return self.nested_record_type_matches(
+            getattr(declaration, "vtype", ""),
+            prefix,
+        )
+
+    def nested_record_type_matches(self, raw_type, prefix):
+        normalized = " ".join(str(raw_type).split())
+        return normalized == prefix or any(
+            normalized.startswith(prefix + suffix) for suffix in (" ", "*", "[")
+        )
+
+    def rewrite_nested_record_declarator_type(
+        self,
+        raw_type,
+        prefix,
+        nested_name,
+    ):
+        normalized = " ".join(str(raw_type).split())
+        if not self.nested_record_type_matches(normalized, prefix):
+            raise ValueError(
+                f"nested record declarator '{normalized}' does not match '{prefix}'"
+            )
+        return nested_name + normalized[len(prefix) :]
+
+    def anonymous_nested_record_name(self, parent_name, node, declarations):
+        if getattr(node, "is_union", False):
+            keyword = "union"
+        elif getattr(node, "is_class", False):
+            keyword = "class"
+        else:
+            keyword = "struct"
+        declarator_name = getattr(declarations[0], "name", "member")
+        signature = [parent_name, declarator_name, keyword]
+        for member in getattr(node, "members", []) or []:
+            signature.extend(
+                (
+                    type(member).__name__,
+                    str(getattr(member, "name", "")),
+                    str(getattr(member, "vtype", "")),
+                )
+            )
+        digest = hashlib.sha256("\0".join(signature).encode("utf-8")).hexdigest()[:12]
+        parent = self.sanitize_crossgl_type_identifier(parent_name)
+        declarator = self.sanitize_crossgl_type_identifier(declarator_name)
+        return f"CrossGLAnonymous_{parent}_{declarator}_{keyword}_{digest}"
+
+    def clone_ast_node(self, node):
+        cloned = node.__class__.__new__(node.__class__)
+        cloned.__dict__ = dict(getattr(node, "__dict__", {}))
+        return cloned
 
     def visit_VariableNode(self, node):
         raw_name = node.name
+        raw_type = self.function_local_materialized_variable_type(node)
+        record_definition = self.record_value_definition_from_type(raw_type)
+        referenced_record_definition = self.record_definition_from_type(raw_type)
+        if self.is_nonconst_record_reference_type(
+            raw_type, referenced_record_definition
+        ):
+            if self.record_contains_union_storage(referenced_record_definition):
+                feature = (
+                    "union indirect object access through non-const record "
+                    "reference alias/writeback"
+                )
+            else:
+                feature = "non-const record reference alias/writeback"
+            self.raise_record_semantic(
+                (feature, referenced_record_definition),
+                f"variable '{raw_name}'",
+            )
+        self.register_union_object_declaration(raw_name, record_definition, node)
+        self.register_union_indirect_object(
+            raw_name, raw_type, referenced_record_definition
+        )
+        if record_definition is None and getattr(node, "value", None) is not None:
+            self.validate_record_value_against_target(
+                node.value, raw_type, f"variable '{raw_name}'", copy_semantics=False
+            )
+        self.validate_record_variable_initialization(node, record_definition)
+        self.register_union_variable_initializer(
+            raw_name, record_definition, getattr(node, "value", None)
+        )
         output_name = self.register_variable_declaration_name(raw_name)
         cooperative_group = self.cooperative_group_declaration_metadata(node)
         if cooperative_group is not None:
@@ -4913,17 +5900,15 @@ class HipToCrossGLConverter:
                 )
             return
 
-        var_type = self.convert_hip_variable_type_to_crossgl(
-            getattr(node, "vtype", "int"), raw_name
-        )
+        var_type = self.convert_hip_variable_type_to_crossgl(raw_type, raw_name)
         qualifiers = set(getattr(node, "qualifiers", []) or [])
 
-        self.register_vector1_name(raw_name, getattr(node, "vtype", "int"))
+        self.register_vector1_name(raw_name, raw_type)
         self.register_packed_argument_list(node)
-        self.register_unique_ptr_name(raw_name, getattr(node, "vtype", "int"))
+        self.register_unique_ptr_name(raw_name, raw_type)
         self.register_variable_type(raw_name, var_type)
         if output_name != raw_name:
-            self.register_unique_ptr_name(output_name, getattr(node, "vtype", "int"))
+            self.register_unique_ptr_name(output_name, raw_type)
             self.register_variable_type(output_name, var_type)
         if "__shared__" in qualifiers:
             if getattr(node, "is_dynamic_shared_memory", False):
@@ -5137,13 +6122,18 @@ class HipToCrossGLConverter:
 
     def push_type_alias_scope(self):
         self.type_alias_scopes.append({})
+        self.concrete_type_alias_scopes.append({})
 
     def pop_type_alias_scope(self):
         if len(self.type_alias_scopes) > 1:
             self.type_alias_scopes.pop()
+            self.concrete_type_alias_scopes.pop()
 
     def register_type_alias(self, name, alias_type):
         self.type_alias_scopes[-1][name] = alias_type
+
+    def register_concrete_type_alias(self, name, alias_type):
+        self.concrete_type_alias_scopes[-1][name] = alias_type
 
     def resolve_type_alias(self, type_name):
         type_name = self.strip_type_qualifiers(type_name)
@@ -5151,6 +6141,81 @@ class HipToCrossGLConverter:
             if type_name in scope:
                 return scope[type_name]
         return type_name
+
+    def is_concrete_crossgl_alias_type(self, type_name):
+        if not isinstance(type_name, str):
+            return False
+        type_name = type_name.strip()
+        if self.is_crossgl_scalar_type(type_name):
+            return True
+        if type_name in self.materialized_record_type_names():
+            return True
+        base_name, template_args = self.parse_cpp_template(type_name)
+        if not template_args:
+            return False
+        concrete_bases = {
+            "array",
+            "atomic",
+            "mat2",
+            "mat3",
+            "mat4",
+            "pair",
+            "ptr",
+            "tuple",
+            "vec2",
+            "vec3",
+            "vec4",
+        }
+        return base_name in concrete_bases or base_name.startswith(
+            ("sampler", "texture")
+        )
+
+    def resolve_concrete_type_alias(self, type_name):
+        if not isinstance(type_name, str):
+            return type_name
+        original = self.strip_type_qualifiers(type_name)
+        current = original
+        resolving = set()
+        while current not in resolving:
+            resolving.add(current)
+            resolved = current
+            for scope in reversed(self.concrete_type_alias_scopes):
+                if current in scope:
+                    resolved = scope[current]
+                    break
+            if resolved == current:
+                return original
+            resolved = str(resolved).strip()
+            if self.is_concrete_crossgl_alias_type(resolved):
+                return resolved
+            current = resolved
+        raise ValueError(f"recursive HIP type alias: {type_name}")
+
+    def resolve_record_member_type_alias(self, type_name):
+        if not isinstance(type_name, str):
+            return type_name
+
+        aliases = {}
+        for scope in self.type_alias_scopes:
+            aliases.update(scope)
+        if not aliases:
+            return type_name
+
+        patterns = {
+            name: re.compile(rf"(?<![A-Za-z0-9_:]){re.escape(name)}(?![A-Za-z0-9_:])")
+            for name in aliases
+            if name
+        }
+
+        def expand(text, resolving):
+            for name in sorted(patterns, key=lambda value: (-len(value), value)):
+                if name in resolving or not patterns[name].search(text):
+                    continue
+                replacement = expand(str(aliases[name]), {*resolving, name})
+                text = patterns[name].sub(lambda _match: replacement, text)
+            return text
+
+        return expand(type_name, set())
 
     def register_unique_ptr_parameter(self, param):
         if isinstance(param, dict):
@@ -5234,6 +6299,7 @@ class HipToCrossGLConverter:
         return self.visit(arg)
 
     def visit_AssignmentNode(self, node):
+        self.validate_record_assignment(node)
         left = self.visit_lvalue_expression(node.left)
         operator = getattr(node, "operator", "=")
         runtime_status = (
@@ -5254,11 +6320,13 @@ class HipToCrossGLConverter:
         return f"{left} {operator} {right}"
 
     def visit_BinaryOpNode(self, node):
+        self.validate_record_operator_operands(node.op, (node.left, node.right))
         left = self.visit(node.left)
         right = self.visit(node.right)
         return f"({left} {node.op} {right})"
 
     def visit_UnaryOpNode(self, node):
+        self.validate_record_operator_operands(node.op, (node.operand,))
         mutates_operand = node.op in {"++", "--"} or (
             isinstance(node.op, str) and node.op.endswith("_POST")
         )
@@ -5275,7 +6343,1338 @@ class HipToCrossGLConverter:
         else:
             return f"({node.op}{operand})"
 
+    def record_definition_from_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+        type_name = self.strip_type_qualifiers(type_name)
+        for _ in range(16):
+            resolved = self.resolve_concrete_type_alias(type_name)
+            type_name = self.strip_elaborated_record_type_keyword(resolved).strip()
+            if self.has_array_suffix(type_name):
+                type_name = type_name.split("[", 1)[0].strip()
+                continue
+            base_name, template_args = self.parse_cpp_template(type_name)
+            if base_name in {"array", "ptr"} and template_args:
+                type_name = template_args[0]
+                continue
+            base_type, pointer_depth = self.split_pointer_declarators(type_name)
+            if pointer_depth:
+                type_name = base_type
+                continue
+            break
+        definition = self.record_definitions.get(type_name)
+        if definition is not None:
+            if self.is_generated_matrix_helper_struct(definition):
+                return None
+            return definition
+        matches = {
+            id(node): node
+            for node in self.record_definitions.values()
+            if node is not None
+            and not self.is_generated_matrix_helper_struct(node)
+            and getattr(node, "name", None)
+            and self.convert_hip_record_name_to_crossgl(node.name) == type_name
+        }
+        if len(matches) == 1:
+            return next(iter(matches.values()))
+        return None
+
+    def record_value_definition_from_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+        compact = type_name.replace(" ", "")
+        if "*" in compact or "&" in compact or compact.startswith("ptr<"):
+            return None
+        return self.record_definition_from_type(type_name)
+
+    def record_display_name(self, node):
+        if node is None:
+            return "unknown"
+        qualified_name = self.record_qualified_names.get(id(node))
+        if qualified_name:
+            return qualified_name
+        name = getattr(node, "name", None)
+        if name:
+            return str(name)
+        if getattr(node, "is_union", False):
+            return "anonymous union"
+        if getattr(node, "is_class", False):
+            return "anonymous class"
+        return "anonymous struct"
+
+    def raise_record_semantic(self, issue, context):
+        feature, record = issue
+        raise self.RECORD_SEMANTIC_ERROR(
+            feature, self.record_display_name(record), context
+        )
+
+    def record_base_definitions(self, node):
+        definitions = []
+        for base in getattr(node, "base_classes", []) or []:
+            base_name = base.get("type", "") if isinstance(base, dict) else str(base)
+            definition = self.resolve_record_base_definition(node, base_name)
+            if definition is not None:
+                definitions.append(definition)
+        return definitions
+
+    def record_own_constructors(self, node):
+        name = getattr(node, "name", None)
+        return [
+            member
+            for member in getattr(node, "members", []) or []
+            if isinstance(member, FunctionNode)
+            and (
+                getattr(member, "is_record_constructor", False)
+                or (
+                    getattr(member, "return_type", None) == ""
+                    and getattr(member, "name", None) == name
+                )
+            )
+        ]
+
+    def record_inherited_constructor_markers(self, node):
+        return [
+            member
+            for member in getattr(node, "members", []) or []
+            if isinstance(member, FunctionNode)
+            and getattr(member, "is_inherited_constructor", False)
+        ]
+
+    def record_direct_constructor_issue(self, node):
+        if self.record_own_constructors(node):
+            return ("record constructor use", node)
+        if self.record_inherited_constructor_markers(node):
+            return ("inherited record constructor use", node)
+        return None
+
+    def record_destructor_issue(self, node, visiting=None):
+        visiting = set(visiting or ())
+        if node is None or id(node) in visiting:
+            return None
+        visiting.add(id(node))
+        name = getattr(node, "name", None)
+        for member in getattr(node, "members", []) or []:
+            if not isinstance(member, FunctionNode):
+                continue
+            if (
+                getattr(member, "is_record_destructor", False)
+                or getattr(member, "name", None) == f"~{name}"
+            ):
+                return ("record destructor use", node)
+        for base in self.record_base_definitions(node):
+            issue = self.record_destructor_issue(base, visiting)
+            if issue is not None:
+                return issue
+        for member in self.record_storage_members(node, include_bases=False):
+            definition = self.record_value_definition_from_type(
+                getattr(member, "vtype", "")
+            )
+            issue = self.record_destructor_issue(definition, visiting)
+            if issue is not None:
+                return issue
+        return None
+
+    def record_default_construction_issue(self, node, visiting=None):
+        visiting = set(visiting or ())
+        if node is None or id(node) in visiting:
+            return None
+        visiting.add(id(node))
+        for constructor in self.record_own_constructors(node):
+            if not (getattr(constructor, "params", None) or []):
+                return ("record default constructor use", node)
+        for base in self.record_base_definitions(node):
+            issue = self.record_default_construction_issue(base, visiting)
+            if issue is not None:
+                return issue
+        for member in self.record_storage_members(node, include_bases=False):
+            if getattr(member, "value", None) is not None:
+                return (f"default member initializer '{member.name}'", node)
+            definition = self.record_value_definition_from_type(
+                getattr(member, "vtype", "")
+            )
+            issue = self.record_default_construction_issue(definition, visiting)
+            if issue is not None:
+                return issue
+        return None
+
+    def record_copy_constructor_issue(self, node, visiting=None):
+        visiting = set(visiting or ())
+        if node is None or id(node) in visiting:
+            return None
+        visiting.add(id(node))
+        for constructor in self.record_own_constructors(node):
+            params = getattr(constructor, "params", None) or []
+            if len(params) != 1:
+                continue
+            raw_type = (
+                params[0].get("type", "")
+                if isinstance(params[0], dict)
+                else getattr(params[0], "vtype", "")
+            )
+            if self.record_definition_from_type(raw_type) is node:
+                return ("record copy/move constructor use", node)
+        for base in self.record_base_definitions(node):
+            issue = self.record_copy_constructor_issue(base, visiting)
+            if issue is not None:
+                return issue
+        for member in self.record_storage_members(node, include_bases=False):
+            definition = self.record_value_definition_from_type(
+                getattr(member, "vtype", "")
+            )
+            issue = self.record_copy_constructor_issue(definition, visiting)
+            if issue is not None:
+                return issue
+        return None
+
+    def record_assignment_operator_issue(self, node, visiting=None):
+        visiting = set(visiting or ())
+        if node is None or id(node) in visiting:
+            return None
+        visiting.add(id(node))
+        for member in getattr(node, "members", []) or []:
+            if isinstance(member, FunctionNode) and getattr(member, "name", None) in {
+                "operator=",
+                f"{getattr(node, 'name', '')}::operator=",
+            }:
+                return ("record assignment operator use", node)
+        for base in self.record_base_definitions(node):
+            issue = self.record_assignment_operator_issue(base, visiting)
+            if issue is not None:
+                return issue
+        for member in self.record_storage_members(node, include_bases=False):
+            definition = self.record_value_definition_from_type(
+                getattr(member, "vtype", "")
+            )
+            issue = self.record_assignment_operator_issue(definition, visiting)
+            if issue is not None:
+                return issue
+        return None
+
+    def record_conversion_operator_issue(self, node, visiting=None):
+        visiting = set(visiting or ())
+        if node is None or id(node) in visiting:
+            return None
+        visiting.add(id(node))
+        if any(
+            isinstance(member, FunctionNode)
+            and getattr(member, "is_conversion_operator", False)
+            for member in getattr(node, "members", []) or []
+        ):
+            return ("record conversion operator use", node)
+        for base in self.record_base_definitions(node):
+            issue = self.record_conversion_operator_issue(base, visiting)
+            if issue is not None:
+                return issue
+        return None
+
+    def record_layout_aliases(self, node, visiting=None):
+        if node is None:
+            return {}
+        visiting = set(visiting or ())
+        if id(node) in visiting:
+            return {}
+        visiting.add(id(node))
+        aliases = {}
+        for base in self.record_base_definitions(node):
+            aliases.update(self.record_layout_aliases(base, visiting))
+        for member in getattr(node, "members", []) or []:
+            if isinstance(member, TypeAliasNode):
+                aliases[member.name] = member.alias_type
+        return aliases
+
+    def resolve_record_layout_member_type(self, owner, type_name):
+        if not isinstance(type_name, str):
+            return type_name
+        aliases = self.record_layout_aliases(owner)
+        text = self.resolve_record_member_type_alias(type_name)
+        resolving = set()
+        while text not in resolving:
+            resolving.add(text)
+            changed = False
+            for name in sorted(aliases, key=lambda value: (-len(value), value)):
+                pattern = re.compile(
+                    rf"(?<![A-Za-z0-9_:]){re.escape(name)}(?![A-Za-z0-9_:])"
+                )
+                replacement = str(aliases[name])
+                updated = pattern.sub(lambda _match: replacement, text)
+                if updated != text:
+                    text = updated
+                    changed = True
+            if not changed:
+                return text
+        raise ValueError(f"recursive HIP record type alias: {type_name}")
+
+    def record_member_layout_issue(self, owner, member):
+        if not isinstance(member, VariableNode) or "static" in set(
+            getattr(member, "qualifiers", []) or []
+        ):
+            return None
+        if hasattr(member, "bitfield_width"):
+            name = member.name or "<unnamed>"
+            return (f"record bitfield member '{name}' width", owner)
+        member_type = self.resolve_record_layout_member_type(
+            owner, getattr(member, "vtype", "")
+        )
+        if "&" in str(member_type):
+            name = member.name or "<unnamed>"
+            return (f"record reference member '{name}' aliasing", owner)
+        return None
+
+    def record_layout_issue(self, node, visiting=None):
+        if node is None:
+            return None
+        visiting = set(visiting or ())
+        if id(node) in visiting:
+            return None
+        visiting.add(id(node))
+        for base in self.record_base_definitions(node):
+            issue = self.record_layout_issue(base, visiting)
+            if issue is not None:
+                return issue
+        for member in getattr(node, "members", []) or []:
+            issue = self.record_member_layout_issue(node, member)
+            if issue is not None:
+                return issue
+            if not isinstance(member, VariableNode) or "static" in set(
+                getattr(member, "qualifiers", []) or []
+            ):
+                continue
+            member_type = self.resolve_record_layout_member_type(
+                node, getattr(member, "vtype", "")
+            )
+            nested = self.record_value_definition_from_type(member_type)
+            issue = self.record_layout_issue(nested, visiting)
+            if issue is not None:
+                return issue
+        return None
+
+    def validate_record_layout_use(self, definition, context):
+        issue = self.record_layout_issue(definition)
+        if issue is not None:
+            self.raise_record_semantic(issue, context)
+
+    def resolve_reference_type_aliases(self, type_name):
+        """Resolve aliases without erasing cv/reference declarator markers."""
+        if not isinstance(type_name, str):
+            return type_name
+        return self.resolve_record_member_type_alias(type_name)
+
+    def is_record_reference_type(self, type_name, definition=None):
+        resolved_type = self.resolve_reference_type_aliases(type_name)
+        if definition is None:
+            definition = self.record_definition_from_type(resolved_type)
+        return definition is not None and bool(re.search(r"&{1,2}", resolved_type))
+
+    def is_nonconst_record_reference_type(self, type_name, definition=None):
+        resolved_type = self.resolve_reference_type_aliases(type_name)
+        return self.is_record_reference_type(resolved_type, definition) and not bool(
+            re.search(r"(?:^|\s)const(?:\s|$)", resolved_type)
+        )
+
+    def record_layout_attribute_issue(self, attributes):
+        for attribute in attributes or []:
+            compact = re.sub(r"\s+", "", str(attribute)).lower()
+            if compact.startswith(("alignas(", "__align__(", "pragma_pack(")):
+                return str(attribute)
+            if compact.startswith("__attribute__(") and (
+                "packed" in compact or "aligned" in compact
+            ):
+                return str(attribute)
+            if compact.startswith("__declspec(") and (
+                "align" in compact or "pack" in compact
+            ):
+                return str(attribute)
+        return None
+
+    def record_member_uses_bool_storage(self, owner, member_type):
+        type_name = self.resolve_record_layout_member_type(owner, member_type)
+        type_name = self.resolve_reference_type_aliases(type_name).strip()
+        while self.has_array_suffix(type_name):
+            type_name = type_name.split("[", 1)[0].strip()
+        type_name = self.strip_elaborated_record_type_keyword(
+            self.strip_type_qualifiers(type_name)
+        ).strip()
+        base_name, template_args = self.parse_cpp_template(type_name)
+        if base_name in {"array", "std::array"} and template_args:
+            return self.record_member_uses_bool_storage(owner, template_args[0])
+        return type_name == "bool"
+
+    def record_member_narrow_external_storage_type(
+        self, owner, member_type, resolving=None
+    ):
+        """Return the source narrow type whose external ABI HLSL cannot retain."""
+        resolving = set(resolving or ())
+        type_name = self.resolve_record_layout_member_type(owner, member_type)
+        type_name = self.resolve_reference_type_aliases(type_name).strip()
+        while self.has_array_suffix(type_name):
+            type_name = type_name.split("[", 1)[0].strip()
+        type_name = self.strip_elaborated_record_type_keyword(
+            self.strip_type_qualifiers(type_name)
+        ).strip()
+
+        base_name, template_args = self.parse_cpp_template(type_name)
+        if base_name in {"array", "std::array"} and template_args:
+            return self.record_member_narrow_external_storage_type(
+                owner, template_args[0], resolving
+            )
+        if re.fullmatch(r"vec[1-4]", base_name) and len(template_args) == 1:
+            return self.record_member_narrow_external_storage_type(
+                owner, template_args[0], resolving
+            )
+
+        type_name = self.CPP_SCALAR_TYPE_ALIASES.get(type_name, type_name)
+        qualified_enum_name = (
+            f"{self.record_display_name(owner)}::{type_name}" if owner else type_name
+        )
+        underlying = self.enum_underlying_types.get(qualified_enum_name)
+        if underlying is None:
+            underlying = self.enum_underlying_types.get(type_name.lstrip(":"))
+        if underlying is not None and type_name not in resolving:
+            issue = self.record_member_narrow_external_storage_type(
+                owner, underlying, {*resolving, type_name}
+            )
+            return type_name if issue is not None else None
+
+        if type_name in self.HIP_EXTERNAL_RECORD_NARROW_INTEGER_TYPES:
+            return type_name
+        if re.fullmatch(
+            r"(?:char|uchar|short|ushort|i8|u8|i16|u16|int8|uint8|int16|uint16)(?:_t)?[1-4]",
+            type_name,
+        ):
+            return type_name
+        return None
+
+    def record_external_abi_issue(self, node, visiting=None):
+        if node is None:
+            return None
+        visiting = set(visiting or ())
+        if id(node) in visiting:
+            return None
+        visiting.add(id(node))
+
+        attribute = self.record_layout_attribute_issue(getattr(node, "attributes", []))
+        if attribute is not None:
+            return (f"external record layout attribute '{attribute}'", node)
+        if any(
+            isinstance(member, FunctionNode)
+            and "virtual" in set(getattr(member, "qualifiers", []) or [])
+            for member in getattr(node, "members", []) or []
+        ):
+            return ("external polymorphic record virtual member/vptr layout", node)
+        for base in self.record_base_definitions(node):
+            issue = self.record_external_abi_issue(base, visiting)
+            if issue is not None:
+                return issue
+        for member in self.record_storage_members(node, include_bases=False):
+            attribute = self.record_layout_attribute_issue(
+                getattr(member, "attributes", [])
+            )
+            if attribute is not None:
+                return (
+                    f"external record member layout attribute '{attribute}'",
+                    node,
+                )
+            member_type = getattr(member, "vtype", "")
+            if self.record_member_uses_bool_storage(node, member_type):
+                return (
+                    f"external record bool storage member '{member.name}' ABI",
+                    node,
+                )
+            narrow_type = self.record_member_narrow_external_storage_type(
+                node, member_type
+            )
+            if narrow_type is not None:
+                return (
+                    f"external record narrow integer storage member "
+                    f"'{member.name}' type '{narrow_type}' ABI",
+                    node,
+                )
+            nested = self.record_value_definition_from_type(
+                self.resolve_record_layout_member_type(node, member_type)
+            )
+            issue = self.record_external_abi_issue(nested, visiting)
+            if issue is not None:
+                return issue
+        return None
+
+    def validate_record_kernel_parameter_semantics(self, raw_type, definition, context):
+        if self.is_nonconst_record_reference_type(raw_type, definition):
+            self.raise_record_semantic(
+                ("non-const kernel record reference writeback", definition), context
+            )
+        issue = self.record_external_abi_issue(definition)
+        if issue is not None:
+            self.raise_record_semantic(issue, context)
+
+    def record_storage_members(self, node, include_bases=True, visiting=None):
+        visiting = set(visiting or ())
+        if node is None or id(node) in visiting:
+            return []
+        visiting.add(id(node))
+        members = []
+        if include_bases:
+            for base in self.record_base_definitions(node):
+                members.extend(self.record_storage_members(base, True, visiting))
+        members.extend(
+            member
+            for member in getattr(node, "members", []) or []
+            if isinstance(member, VariableNode)
+            and "static" not in set(getattr(member, "qualifiers", []) or [])
+        )
+        return members
+
+    def record_contains_union_storage(self, node, visiting=None):
+        if node is None:
+            return False
+        if getattr(node, "is_union", False):
+            return True
+        visiting = set(visiting or ())
+        if id(node) in visiting:
+            return False
+        visiting.add(id(node))
+        for member in self.record_storage_members(node, include_bases=False):
+            member_type = self.resolve_record_member_type_alias(
+                getattr(member, "vtype", "")
+            )
+            nested = self.record_definition_from_type(member_type)
+            if self.record_contains_union_storage(nested, visiting):
+                return True
+        return any(
+            self.record_contains_union_storage(base, visiting)
+            for base in self.record_base_definitions(node)
+        )
+
+    def validate_record_aggregate_initializer(self, node, initializer, context):
+        members = self.record_storage_members(node)
+        elements = list(getattr(initializer, "elements", []) or [])
+        if elements and self.record_base_definitions(node):
+            self.raise_record_semantic(
+                ("base subobject aggregate initialization", node), context
+            )
+        designated = {
+            target: element.value
+            for element in elements
+            if isinstance(element, DesignatedInitializerNode)
+            for kind, target in getattr(element, "designators", [])[:1]
+            if kind == "member"
+        }
+        positional = [
+            element
+            for element in elements
+            if not isinstance(element, DesignatedInitializerNode)
+        ]
+        for index, member in enumerate(members):
+            supplied = designated.get(member.name)
+            if supplied is None and index < len(positional):
+                supplied = positional[index]
+            if supplied is None:
+                if getattr(member, "value", None) is not None:
+                    self.raise_record_semantic(
+                        (f"default member initializer '{member.name}'", node), context
+                    )
+                nested = self.record_value_definition_from_type(
+                    getattr(member, "vtype", "")
+                )
+                issue = self.record_default_construction_issue(nested)
+                if issue is not None:
+                    self.raise_record_semantic(issue, context)
+                continue
+            nested = self.record_value_definition_from_type(
+                getattr(member, "vtype", "")
+            )
+            if nested is not None and isinstance(supplied, InitializerListNode):
+                issue = self.record_direct_constructor_issue(nested)
+                if issue is not None:
+                    self.raise_record_semantic(issue, context)
+                self.validate_record_aggregate_initializer(nested, supplied, context)
+
+    def validate_record_variable_initialization(self, variable, definition):
+        if definition is None:
+            return
+        context = f"variable '{getattr(variable, 'name', '')}'"
+        self.validate_record_layout_use(definition, context)
+        issue = self.record_destructor_issue(definition)
+        if issue is not None:
+            self.raise_record_semantic(issue, context)
+        value = getattr(variable, "value", None)
+        if value is None:
+            issue = self.record_default_construction_issue(definition)
+            if issue is not None:
+                self.raise_record_semantic(issue, context)
+            return
+        if isinstance(value, InitializerListNode):
+            issue = self.record_direct_constructor_issue(definition)
+            if issue is not None:
+                self.raise_record_semantic(issue, context)
+            self.validate_record_aggregate_initializer(definition, value, context)
+            return
+        if isinstance(value, FunctionCallNode):
+            constructed = self.record_definition_from_type(
+                value.name if isinstance(value.name, str) else ""
+            )
+            if constructed is definition:
+                issue = self.record_direct_constructor_issue(definition)
+                if issue is not None:
+                    self.raise_record_semantic(issue, context)
+        source = self.infer_record_expression_definition(value)
+        if source is definition:
+            if self.record_contains_union_storage(definition):
+                self.raise_record_semantic(
+                    ("union-containing copy construction active storage", definition),
+                    context,
+                )
+            issue = self.record_copy_constructor_issue(definition)
+            if issue is not None:
+                self.raise_record_semantic(issue, context)
+            return
+        if source is not None and self.record_is_derived_from(source, definition):
+            self.raise_record_semantic(
+                ("derived-to-base value conversion", source), context
+            )
+        if source is not definition:
+            issue = self.record_direct_constructor_issue(definition)
+            if issue is not None:
+                self.raise_record_semantic(issue, context)
+
+    def record_storage_member_info(self, node, member_name, visiting=None):
+        if node is None:
+            return None
+        visiting = set(visiting or ())
+        if id(node) in visiting:
+            return None
+        visiting.add(id(node))
+        for member in getattr(node, "members", []) or []:
+            if isinstance(member, VariableNode) and member.name == member_name:
+                return node, member
+        for member in getattr(node, "members", []) or []:
+            if not isinstance(member, StructNode) or getattr(member, "name", None):
+                continue
+            found = self.record_storage_member_info(member, member_name, visiting)
+            if found is not None:
+                return found
+        for base in self.record_base_definitions(node):
+            found = self.record_storage_member_info(base, member_name, visiting)
+            if found is not None:
+                return found
+        return None
+
+    def record_storage_member(self, node, member_name, visiting=None):
+        found = self.record_storage_member_info(node, member_name, visiting)
+        return found[1] if found is not None else None
+
+    def record_storage_object_path(self, expression):
+        if isinstance(expression, CastNode):
+            return self.record_storage_object_path(expression.expression)
+        if isinstance(expression, UnaryOpNode):
+            path = self.record_storage_object_path(expression.operand)
+            if path is None:
+                return None
+            if expression.op in {"*", "&"}:
+                return f"{expression.op}{path}"
+            return path
+        if isinstance(expression, MemberAccessNode):
+            path = self.record_storage_object_path(expression.object)
+            if path is None:
+                return None
+            operator = "->" if getattr(expression, "is_pointer", False) else "."
+            return f"{path}{operator}{expression.member}"
+        if isinstance(expression, ArrayAccessNode):
+            path = self.record_storage_object_path(expression.array)
+            index = self.evaluate_enum_constant_expression(expression.index, {})
+            if path is None or index is None:
+                return None
+            return f"{path}[{index}]"
+        if isinstance(expression, str):
+            return self.lookup_union_object_identity(expression)
+        return None
+
+    def union_state_key(self, object_path, node):
+        return object_path, id(node)
+
+    def lookup_union_active_member(self, key):
+        for scope in reversed(self.union_active_member_scopes):
+            if key in scope:
+                return scope[key]
+        return None
+
+    def register_union_active_member(self, key, member_name):
+        for scope in reversed(self.union_active_member_scopes):
+            if key in scope:
+                scope[key] = member_name
+                return
+        self.union_active_member_scopes[-1][key] = member_name
+
+    def register_union_variable_initializer(self, name, definition, value):
+        if definition is None or not getattr(definition, "is_union", False):
+            return
+        if not isinstance(value, InitializerListNode) or not value.elements:
+            return
+        members = self.record_storage_members(definition, include_bases=False)
+        if members:
+            active_member = members[0].name
+            first = value.elements[0]
+            if isinstance(first, DesignatedInitializerNode):
+                for kind, target in getattr(first, "designators", [])[:1]:
+                    if kind in {"field", "member"}:
+                        active_member = target
+            object_path = self.record_storage_object_path(name)
+            self.register_union_active_member(
+                self.union_state_key(object_path, definition), active_member
+            )
+
+    def validate_union_member_access(self, expression):
+        definition = self.infer_record_expression_definition(expression.object)
+        found = self.record_storage_member_info(definition, expression.member)
+        if found is None:
+            return
+        owner, _member = found
+        if not getattr(owner, "is_union", False):
+            return
+        root_name = self.get_lvalue_metadata_root_name(expression.object)
+        if root_name is not None and self.is_union_indirect_object(root_name):
+            self.raise_record_semantic(
+                ("union indirect object access with unprovable active storage", owner),
+                f"object '{root_name}'",
+            )
+        object_path = self.record_storage_object_path(expression.object)
+        if object_path is None:
+            self.raise_record_semantic(
+                ("union member access with unprovable active storage", owner),
+                f"member '{expression.member}'",
+            )
+        key = self.union_state_key(object_path, owner)
+        active = self.lookup_union_active_member(key)
+        if active is None:
+            self.register_union_active_member(key, expression.member)
+            return
+        if active != expression.member:
+            display_path = re.sub(r"#\d+", "", object_path)
+            self.raise_record_semantic(
+                (
+                    f"union overlapping storage access from '{active}' to "
+                    f"'{expression.member}'",
+                    owner,
+                ),
+                f"object '{display_path}'",
+            )
+
+    def format_record_static_member_access(self, expression):
+        definition = self.infer_record_expression_definition(expression.object)
+        found = self.record_storage_member_info(definition, expression.member)
+        if found is None:
+            return None
+        owner, member = found
+        if "static" not in set(getattr(member, "qualifiers", []) or []):
+            return None
+        owner_names = [
+            self.record_qualified_names.get(id(owner)),
+            self.convert_hip_record_name_to_crossgl(getattr(owner, "name", "")),
+        ]
+        for owner_name in owner_names:
+            if not owner_name:
+                continue
+            candidate = f"{owner_name}::{expression.member}"
+            value = self.resolve_enum_value_alias(candidate)
+            if value is not None:
+                return str(value)
+            if candidate in self.unsupported_record_static_constants:
+                self.raise_record_semantic(
+                    (
+                        f"static record state '{candidate}' cannot be represented "
+                        "exactly",
+                        owner,
+                    ),
+                    "member access",
+                )
+        self.raise_record_semantic(
+            (
+                f"static record state '{expression.member}' cannot be represented "
+                "exactly",
+                owner,
+            ),
+            "member access",
+        )
+
+    def register_function_return_nodes(self, function):
+        visited = set()
+
+        def walk(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            marker = id(value)
+            if marker in visited:
+                return
+            visited.add(marker)
+            if isinstance(value, ReturnNode):
+                self.return_type_by_node_id[id(value)] = getattr(
+                    function, "return_type", "void"
+                )
+            if isinstance(value, FunctionNode) and value is not function:
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    walk(item)
+                return
+            if isinstance(value, dict):
+                for item in value.values():
+                    walk(item)
+                return
+            for child in getattr(value, "__dict__", {}).values():
+                walk(child)
+
+        walk(getattr(function, "body", None))
+
+    def function_definition_candidates(self, name, argument_count):
+        if not isinstance(name, str):
+            return []
+        names = [name, name[2:] if name.startswith("::") else name]
+        base_name, template_args = self.parse_cpp_template(names[-1])
+        if template_args:
+            names.append(base_name)
+        candidates = []
+        seen = set()
+        for candidate_name in names:
+            for candidate in self.function_definitions.get(candidate_name, []):
+                if id(candidate) in seen:
+                    continue
+                seen.add(id(candidate))
+                if len(getattr(candidate, "params", None) or []) == argument_count:
+                    candidates.append(candidate)
+        return candidates
+
+    def function_return_record_definition(self, name, argument_count):
+        definitions = {
+            id(definition): definition
+            for function in self.function_definition_candidates(name, argument_count)
+            for definition in [
+                self.record_definition_from_type(getattr(function, "return_type", ""))
+            ]
+            if definition is not None
+        }
+        if len(definitions) == 1:
+            return next(iter(definitions.values()))
+        return None
+
+    def infer_record_expression_definition(self, expression):
+        if isinstance(expression, str):
+            return self.record_definition_from_type(
+                self.lookup_variable_type(expression) or ""
+            )
+        if isinstance(expression, MemberAccessNode):
+            parent = self.infer_record_expression_definition(expression.object)
+            member = self.record_storage_member(parent, expression.member)
+            if member is None:
+                return None
+            member_type = self.resolve_record_member_type_alias(
+                getattr(member, "vtype", "")
+            )
+            return self.record_definition_from_type(
+                self.convert_hip_type_to_crossgl(member_type)
+            )
+        if isinstance(expression, ArrayAccessNode):
+            return self.infer_record_expression_definition(expression.array)
+        if isinstance(expression, CastNode):
+            return self.record_definition_from_type(expression.target_type)
+        if isinstance(expression, UnaryOpNode):
+            return self.infer_record_expression_definition(expression.operand)
+        if isinstance(expression, TernaryOpNode):
+            left = self.infer_record_expression_definition(expression.true_expr)
+            right = self.infer_record_expression_definition(expression.false_expr)
+            return left if left is not None and left is right else None
+        if isinstance(expression, FunctionCallNode) and isinstance(
+            expression.name, str
+        ):
+            definition = self.record_definition_from_type(expression.name)
+            if definition is not None:
+                return definition
+            return self.function_return_record_definition(
+                expression.name, len(getattr(expression, "args", None) or [])
+            )
+        return None
+
+    def indexed_expression_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+        type_name = self.resolve_record_member_type_alias(type_name).strip()
+        type_name = self.resolve_concrete_type_alias(type_name)
+        if self.has_array_suffix(type_name):
+            return re.sub(r"\[[^\]]*\]", "", type_name, count=1).strip()
+        base_name, template_args = self.parse_cpp_template(type_name)
+        if base_name in {"array", "ptr"} and template_args:
+            return template_args[0]
+        base_type, pointer_depth = self.split_pointer_declarators(type_name)
+        if pointer_depth:
+            return base_type
+        return None
+
+    def expression_declared_type(self, expression):
+        if isinstance(expression, str):
+            return self.lookup_variable_type(expression)
+        if isinstance(expression, MemberAccessNode):
+            parent = self.infer_record_expression_definition(expression.object)
+            found = self.record_storage_member_info(parent, expression.member)
+            if found is None:
+                return None
+            owner, member = found
+            return self.resolve_record_layout_member_type(
+                owner, getattr(member, "vtype", "")
+            )
+        if isinstance(expression, ArrayAccessNode):
+            return self.indexed_expression_type(
+                self.expression_declared_type(expression.array)
+            )
+        if isinstance(expression, CastNode):
+            return expression.target_type
+        if isinstance(expression, UnaryOpNode):
+            operand_type = self.expression_declared_type(expression.operand)
+            if operand_type is None:
+                return None
+            if expression.op == "&":
+                return f"ptr<{operand_type}>"
+            if expression.op == "*":
+                return self.indexed_expression_type(operand_type)
+            return operand_type
+        if isinstance(expression, TernaryOpNode):
+            left = self.expression_declared_type(expression.true_expr)
+            right = self.expression_declared_type(expression.false_expr)
+            return left if left is not None and left == right else None
+        if isinstance(expression, FunctionCallNode) and isinstance(
+            expression.name, str
+        ):
+            candidates = self.function_definition_candidates(
+                expression.name, len(getattr(expression, "args", None) or [])
+            )
+            return_types = {
+                str(getattr(candidate, "return_type", ""))
+                for candidate in candidates
+                if getattr(candidate, "return_type", None)
+            }
+            if len(return_types) == 1:
+                return next(iter(return_types))
+            if self.record_definition_from_type(expression.name) is not None:
+                return expression.name
+        return None
+
+    def direct_record_definition_from_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+        type_name = self.resolve_record_member_type_alias(type_name).strip()
+        type_name = self.resolve_concrete_type_alias(type_name)
+        if self.has_array_suffix(type_name):
+            return None
+        base_name, template_args = self.parse_cpp_template(type_name)
+        if base_name in {"array", "ptr"} and template_args:
+            return None
+        base_type, pointer_depth = self.split_pointer_declarators(type_name)
+        if pointer_depth:
+            return None
+        type_name = re.sub(r"\s*&{1,2}\s*", " ", type_name).strip()
+        return self.record_definition_from_type(type_name)
+
+    def infer_direct_record_expression_definition(self, expression):
+        return self.direct_record_definition_from_type(
+            self.expression_declared_type(expression)
+        )
+
+    def record_is_derived_from(self, source, target, visiting=None):
+        if source is None or target is None or source is target:
+            return False
+        visiting = set(visiting or ())
+        if id(source) in visiting:
+            return False
+        visiting.add(id(source))
+        for base in self.record_base_definitions(source):
+            if base is target or self.record_is_derived_from(base, target, visiting):
+                return True
+        return False
+
+    def parameter_type(self, parameter):
+        if isinstance(parameter, dict):
+            return parameter.get("type", "")
+        return getattr(parameter, "vtype", "")
+
+    def parameter_is_by_value(self, parameter):
+        raw_type = str(self.parameter_type(parameter))
+        return not any(marker in raw_type for marker in ("*", "&", "["))
+
+    def validate_record_function_arguments(self, call):
+        if not isinstance(getattr(call, "name", None), str):
+            return
+        args = list(getattr(call, "args", None) or [])
+        candidates = self.function_definition_candidates(call.name, len(args))
+        if not candidates:
+            return
+        candidate_issues = []
+        for candidate in candidates:
+            issues = []
+            for parameter, argument in zip(candidate.params, args):
+                raw_parameter_type = self.parameter_type(parameter)
+                target = self.record_definition_from_type(raw_parameter_type)
+                source = self.infer_record_expression_definition(argument)
+                if source is not None and self.is_nonconst_record_reference_type(
+                    raw_parameter_type, target
+                ):
+                    issues.append(
+                        (
+                            "non-const record reference parameter writeback",
+                            target,
+                        )
+                    )
+                for definition in (source, target):
+                    issue = self.record_layout_issue(definition)
+                    if issue is not None:
+                        issues.append(issue)
+                if source is None:
+                    continue
+                if target is not None:
+                    if self.record_contains_union_storage(
+                        source
+                    ) or self.record_contains_union_storage(target):
+                        issues.append(
+                            ("union function argument active storage", source)
+                        )
+                    elif source is not target and self.record_is_derived_from(
+                        source, target
+                    ):
+                        issues.append(("derived-to-base argument conversion", source))
+                    elif source is target and self.parameter_is_by_value(parameter):
+                        issue = self.record_copy_constructor_issue(source)
+                        if issue is not None:
+                            issues.append(issue)
+                else:
+                    issue = self.record_conversion_operator_issue(source)
+                    if issue is not None:
+                        issues.append(issue)
+            if not issues:
+                return
+            candidate_issues.append(issues[0])
+        if candidate_issues:
+            self.raise_record_semantic(candidate_issues[0], f"call '{call.name}'")
+
+    def validate_record_reference_return_call(self, call):
+        if not isinstance(getattr(call, "name", None), str):
+            return
+        args = list(getattr(call, "args", None) or [])
+        candidates = self.function_definition_candidates(call.name, len(args))
+        if not candidates:
+            return
+        issues = []
+        for candidate in candidates:
+            return_type = getattr(candidate, "return_type", "")
+            definition = self.record_definition_from_type(return_type)
+            if not self.is_nonconst_record_reference_type(return_type, definition):
+                return
+            issues.append(("non-const record reference return aliasing", definition))
+        if issues:
+            self.raise_record_semantic(issues[0], f"call '{call.name}'")
+
+    def validate_record_representation_query(self, call):
+        name = getattr(call, "name", None)
+        if name not in {
+            "sizeof",
+            "alignof",
+            "__alignof",
+            "__alignof__",
+            "__builtin_offsetof",
+        }:
+            return
+        args = list(getattr(call, "args", None) or [])
+        if not args:
+            return
+        definition = None
+        first = args[0]
+        if isinstance(first, str):
+            definition = self.record_definition_from_type(first)
+        if definition is None:
+            definition = self.infer_record_expression_definition(first)
+        if definition is not None:
+            self.raise_record_semantic(
+                (f"source ABI query '{name}'", definition),
+                f"call '{name}'",
+            )
+
+    def format_fixed_scalar_representation_query(self, call):
+        """Fold source scalar ABI queries that have a platform-stable result."""
+        name = getattr(call, "name", None)
+        if name not in {"sizeof", "alignof", "__alignof", "__alignof__"}:
+            return None
+        args = list(getattr(call, "args", None) or [])
+        if len(args) != 1 or not isinstance(args[0], str):
+            return None
+
+        operand = args[0].strip()
+        variable_type = self.lookup_variable_type(operand)
+        if variable_type is not None:
+            type_name = str(variable_type).strip()
+            if type_name not in self.HIP_FIXED_SCALAR_EXPRESSION_TYPES:
+                return None
+        else:
+            type_name = self.resolve_record_member_type_alias(operand).strip()
+            type_name = self.strip_elaborated_record_type_keyword(
+                self.strip_type_qualifiers(type_name)
+            ).strip()
+            type_name = self.CPP_SCALAR_TYPE_ALIASES.get(type_name, type_name)
+
+        byte_count = self.HIP_FIXED_SCALAR_REPRESENTATION_BYTES.get(type_name)
+        return str(byte_count) if byte_count is not None else None
+
+    def validate_record_constructor_call(self, call):
+        if not isinstance(getattr(call, "name", None), str):
+            return
+        definition = self.record_definition_from_type(call.name)
+        if definition is not None:
+            args = list(getattr(call, "args", None) or [])
+            if self.record_contains_union_storage(definition) and any(
+                self.infer_record_expression_definition(argument) is not None
+                for argument in args
+            ):
+                self.raise_record_semantic(
+                    ("union-containing constructor value active storage", definition),
+                    f"call '{call.name}'",
+                )
+            issue = self.record_direct_constructor_issue(definition)
+            if issue is not None:
+                self.raise_record_semantic(issue, f"call '{call.name}'")
+            return
+        args = list(getattr(call, "args", None) or [])
+        if len(args) != 1:
+            return
+        target_type = self.convert_hip_type_to_crossgl(call.name)
+        if self.is_crossgl_scalar_type(target_type):
+            self.validate_record_conversion(
+                args[0], call.name, f"function-style conversion '{call.name}'"
+            )
+
+    def validate_record_value_against_target(
+        self, expression, target_type, context, copy_semantics
+    ):
+        source = self.infer_record_expression_definition(expression)
+        if source is None:
+            return
+        target = self.record_definition_from_type(target_type)
+        self.validate_record_layout_use(source, context)
+        self.validate_record_layout_use(target, context)
+        if target is None:
+            issue = self.record_conversion_operator_issue(source)
+            if issue is not None:
+                self.raise_record_semantic(issue, context)
+            return
+        if source is not target and self.record_is_derived_from(source, target):
+            self.raise_record_semantic(
+                ("derived-to-base value conversion", source), context
+            )
+        if source is target and copy_semantics:
+            if self.record_contains_union_storage(source):
+                self.raise_record_semantic(
+                    ("union-containing value flow active storage", source), context
+                )
+            issue = self.record_copy_constructor_issue(source)
+            if issue is not None:
+                self.raise_record_semantic(issue, context)
+
+    def record_operator_issue(
+        self, node, operator, visiting=None, require_record_semantics=True
+    ):
+        visiting = set(visiting or ())
+        if node is None or id(node) in visiting:
+            return None
+        visiting.add(id(node))
+        method_name = f"operator{operator}"
+        if any(
+            isinstance(member, FunctionNode)
+            and getattr(member, "name", None) == method_name
+            for member in getattr(node, "members", []) or []
+        ):
+            return (f"record overloaded operator '{operator}' use", node)
+        for base in self.record_base_definitions(node):
+            issue = self.record_operator_issue(
+                base, operator, visiting, require_record_semantics
+            )
+            if issue is not None:
+                return issue
+        if not require_record_semantics:
+            return None
+        conversion_issue = self.record_conversion_operator_issue(node)
+        if conversion_issue is not None:
+            return conversion_issue
+        return (f"record operator '{operator}' cannot be represented exactly", node)
+
+    def validate_record_operator_operands(self, operator, operands):
+        require_record_semantics = not (len(operands) == 1 and operator == "&")
+        for operand in operands:
+            definition = self.infer_direct_record_expression_definition(operand)
+            issue = self.record_operator_issue(
+                definition, operator, require_record_semantics=require_record_semantics
+            )
+            if issue is not None:
+                self.raise_record_semantic(issue, f"operator expression '{operator}'")
+
+    def validate_record_scalar_context(self, expression, context):
+        definition = self.infer_direct_record_expression_definition(expression)
+        if definition is None:
+            return
+        self.validate_record_layout_use(definition, context)
+        issue = self.record_conversion_operator_issue(definition)
+        if issue is None:
+            issue = (
+                "record scalar conversion cannot be represented exactly",
+                definition,
+            )
+        self.raise_record_semantic(issue, context)
+
+    def validate_record_subscript(self, expression):
+        definition = self.infer_direct_record_expression_definition(expression.array)
+        if definition is not None:
+            issue = self.record_operator_issue(definition, "[]")
+            self.raise_record_semantic(issue, "subscript expression")
+        self.validate_record_scalar_context(
+            expression.index, "subscript index expression"
+        )
+
+    def validate_record_call_operator(self, call):
+        name = getattr(call, "name", None)
+        if not isinstance(name, str):
+            return
+        definition = self.infer_direct_record_expression_definition(name)
+        if definition is None:
+            return
+        issue = self.record_operator_issue(definition, "()")
+        self.raise_record_semantic(issue, "call expression")
+
+    def validate_record_assignment(self, assignment):
+        operator = getattr(assignment, "operator", "=")
+        context = f"assignment '{operator}'"
+        if operator != "=":
+            definitions = []
+            for expression in (assignment.left, assignment.right):
+                definition = self.infer_direct_record_expression_definition(expression)
+                if definition is not None and all(
+                    definition is not item for item in definitions
+                ):
+                    definitions.append(definition)
+            for definition in definitions:
+                issue = self.record_operator_issue(definition, operator)
+                if issue is not None:
+                    self.raise_record_semantic(issue, context)
+
+        target = self.infer_record_expression_definition(assignment.left)
+        source = self.infer_record_expression_definition(assignment.right)
+        self.validate_record_layout_use(target, context)
+        self.validate_record_layout_use(source, context)
+        if source is None:
+            return
+        if target is None:
+            issue = self.record_conversion_operator_issue(source)
+            if issue is not None:
+                self.raise_record_semantic(issue, context)
+            return
+        if source is not target and self.record_is_derived_from(source, target):
+            self.raise_record_semantic(
+                ("derived-to-base assignment conversion", source), context
+            )
+        if source is target:
+            if self.record_contains_union_storage(target):
+                self.raise_record_semantic(
+                    ("union-containing assignment active storage", target), context
+                )
+            issue = self.record_assignment_operator_issue(target)
+            if issue is not None:
+                self.raise_record_semantic(issue, context)
+
+    def validate_record_conversion(self, expression, target_type, context):
+        source = self.infer_record_expression_definition(expression)
+        if source is None:
+            return
+        target = self.record_definition_from_type(target_type)
+        self.validate_record_layout_use(source, context)
+        self.validate_record_layout_use(target, context)
+        if target is not None:
+            if source is not target and self.record_is_derived_from(source, target):
+                self.raise_record_semantic(
+                    ("derived-to-base explicit conversion", source), context
+                )
+            return
+        issue = self.record_conversion_operator_issue(source)
+        if issue is not None:
+            self.raise_record_semantic(issue, context)
+
+    def record_defines_method(self, node, method_name, visiting=None):
+        if node is None:
+            return False
+        visiting = set(visiting or ())
+        if id(node) in visiting:
+            return False
+        visiting.add(id(node))
+        if any(
+            isinstance(member, FunctionNode)
+            and member.name == method_name
+            and not getattr(member, "is_record_constructor", False)
+            and not getattr(member, "is_record_destructor", False)
+            and not getattr(member, "is_conversion_operator", False)
+            and not getattr(member, "is_using_declaration", False)
+            for member in getattr(node, "members", []) or []
+        ):
+            return True
+        for base in self.record_base_definitions(node):
+            if self.record_defines_method(base, method_name, visiting):
+                return True
+        return False
+
+    def reject_unsupported_record_method_call(self, node):
+        call_name = getattr(node, "name", None)
+        if isinstance(call_name, MemberAccessNode):
+            definition = self.infer_record_expression_definition(call_name.object)
+            if self.record_defines_method(definition, call_name.member):
+                self.raise_record_semantic(
+                    (f"record method call '{call_name.member}'", definition),
+                    "call expression",
+                )
+            return
+        if not isinstance(call_name, str) or "::" not in call_name:
+            return
+        owner_name, method_name = call_name.rsplit("::", 1)
+        definition = self.record_definitions.get(owner_name)
+        if definition is None:
+            definition = self.record_definition_from_type(owner_name)
+        if self.record_defines_method(definition, method_name):
+            self.raise_record_semantic(
+                (f"record method call '{call_name}'", definition),
+                "call expression",
+            )
+
+    def canonical_record_static_member_name(self, name):
+        if not isinstance(name, str) or "::" not in name:
+            return name
+        owner_name, member_name = name.rsplit("::", 1)
+        definition = self.record_definition_from_type(owner_name)
+        if definition is None:
+            return name
+        owner_candidates = [
+            self.record_qualified_names.get(id(definition)),
+            self.convert_hip_record_name_to_crossgl(
+                getattr(definition, "name", owner_name)
+            ),
+        ]
+        for owner in owner_candidates:
+            if not owner:
+                continue
+            candidate = f"{owner}::{member_name}"
+            if candidate in self.unsupported_record_static_constants:
+                return candidate
+            if candidate in self.enum_value_aliases:
+                return candidate
+        return name
+
     def visit_FunctionCallNode(self, node):
+        self.validate_record_call_operator(node)
+        self.reject_unsupported_record_method_call(node)
+        self.validate_record_representation_query(node)
+        scalar_representation = self.format_fixed_scalar_representation_query(node)
+        if scalar_representation is not None:
+            return scalar_representation
+        self.validate_record_constructor_call(node)
+        self.validate_record_function_arguments(node)
+        self.validate_record_reference_return_call(node)
         if self.is_get_method_call(node):
             return self.visit(node.name.object)
 
@@ -6837,6 +9236,10 @@ class HipToCrossGLConverter:
             alias_type = node.alias_type
         else:
             alias_type = self.convert_hip_type_to_crossgl(node.alias_type)
+        if self.is_concrete_crossgl_alias_type(alias_type):
+            self.register_concrete_type_alias(node.name, alias_type)
+            if self.ERASE_CONCRETE_TYPE_ALIASES:
+                return
         if self.indent_level == 0:
             alias_type = self.normalize_top_level_type_alias(alias_type)
         self.emit(f"typedef {alias_type} {node.name};")
@@ -6938,6 +9341,19 @@ class HipToCrossGLConverter:
         return base_name, template_args
 
     def visit_MemberAccessNode(self, node):
+        self.validate_record_layout_use(
+            self.infer_record_expression_definition(node.object),
+            f"member access '{node.member}'",
+        )
+        if getattr(node, "is_pointer", False):
+            direct_record = self.infer_direct_record_expression_definition(node.object)
+            if direct_record is not None:
+                issue = self.record_operator_issue(direct_record, "->")
+                self.raise_record_semantic(issue, "pointer-member expression")
+        static_member = self.format_record_static_member_access(node)
+        if static_member is not None:
+            return static_member
+        self.validate_union_member_access(node)
         if self.suppress_device_property_member_access == 0:
             property_expression = self.format_hip_device_property_member_read(node)
             if property_expression is not None:
@@ -7058,6 +9474,7 @@ class HipToCrossGLConverter:
         return f"(/* HIP device query: {query_name}, device: {device_id} */ 0)"
 
     def visit_ArrayAccessNode(self, node):
+        self.validate_record_subscript(node)
         if self.suppress_device_query_value_access == 0:
             member_query_expression = self.format_hip_member_query_read(node)
             if member_query_expression is not None:
@@ -7143,6 +9560,11 @@ class HipToCrossGLConverter:
 
     def visit_ReturnNode(self, node):
         if hasattr(node, "value") and node.value:
+            target_type = self.return_type_by_node_id.get(id(node))
+            if target_type is not None:
+                self.validate_record_value_against_target(
+                    node.value, target_type, "return statement", copy_semantics=True
+                )
             value = self.visit(node.value)
             self.emit(f"return {value};")
         else:
@@ -7155,6 +9577,7 @@ class HipToCrossGLConverter:
         self.emit("continue;")
 
     def visit_IfNode(self, node):
+        self.validate_record_scalar_context(node.condition, "if condition")
         condition = self.visit(node.condition)
         self.emit(f"if ({condition}) {{")
 
@@ -7190,6 +9613,8 @@ class HipToCrossGLConverter:
             init = ""
         else:
             init = self.format_statement_fragment(init_node)
+        if hasattr(node, "condition") and node.condition:
+            self.validate_record_scalar_context(node.condition, "for condition")
         condition = (
             self.visit(node.condition)
             if hasattr(node, "condition") and node.condition
@@ -7231,6 +9656,7 @@ class HipToCrossGLConverter:
         self.emit("}")
 
     def visit_WhileNode(self, node):
+        self.validate_record_scalar_context(node.condition, "while condition")
         condition = self.visit(node.condition)
         self.emit(f"while ({condition}) {{")
 
@@ -7246,6 +9672,7 @@ class HipToCrossGLConverter:
         self.emit("}")
 
     def visit_DoWhileNode(self, node):
+        self.validate_record_scalar_context(node.condition, "do-while condition")
         condition = self.visit(node.condition)
         self.emit("do {")
 
@@ -7261,6 +9688,7 @@ class HipToCrossGLConverter:
         self.emit(f"}} while ({condition});")
 
     def visit_SwitchNode(self, node):
+        self.validate_record_scalar_context(node.expression, "switch expression")
         expression = self.visit(node.expression)
         self.emit(f"switch ({expression}) {{")
 
@@ -7300,12 +9728,16 @@ class HipToCrossGLConverter:
         self.indent_level -= 1
 
     def visit_TernaryOpNode(self, node):
+        self.validate_record_scalar_context(node.condition, "ternary condition")
         condition = self.visit(node.condition)
         true_expr = self.visit(node.true_expr)
         false_expr = self.visit(node.false_expr)
         return f"({condition} ? {true_expr} : {false_expr})"
 
     def visit_CastNode(self, node):
+        self.validate_record_conversion(
+            node.expression, node.target_type, "explicit conversion"
+        )
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
         expression = self.visit(node.expression)
         return f"{target_type}({expression})"
@@ -7386,7 +9818,12 @@ class HipToCrossGLConverter:
 
         hip_type = self.strip_type_qualifiers(hip_type)
         hip_type = self.strip_variadic_type_marker(hip_type)
-        hip_type = self.strip_union_type_keyword(hip_type)
+        concrete_alias = self.resolve_concrete_type_alias(hip_type)
+        if concrete_alias != hip_type:
+            hip_type = concrete_alias
+        elif "::" in hip_type:
+            hip_type = self.resolve_type_alias(hip_type)
+        hip_type = self.strip_elaborated_record_type_keyword(hip_type)
         hip_type = self.resolve_namespace_alias_name(hip_type)
         hip_type = self.CPP_SCALAR_TYPE_ALIASES.get(hip_type, hip_type)
         matrix_type = self.convert_native_matrix_helper_name_to_crossgl(hip_type)
@@ -7496,14 +9933,24 @@ class HipToCrossGLConverter:
     def is_decltype_type_name(self, type_name):
         return isinstance(type_name, str) and type_name.strip().startswith("decltype(")
 
-    def strip_union_type_keyword(self, hip_type):
-        if not isinstance(hip_type, str) or not hip_type.startswith("union "):
+    def strip_elaborated_record_type_keyword(self, hip_type):
+        if not isinstance(hip_type, str):
             return hip_type
 
-        union_type = hip_type[len("union ") :].strip()
-        if union_type.startswith("<anonymous>"):
-            union_type = f"hip_anonymous_union{union_type[len('<anonymous>') :]}"
-        return union_type
+        for keyword in ("struct", "class", "union"):
+            prefix = f"{keyword} "
+            if not hip_type.startswith(prefix):
+                continue
+
+            record_type = hip_type[len(prefix) :].strip()
+            if not record_type.startswith("<anonymous>"):
+                return record_type
+            if keyword == "union":
+                suffix = record_type[len("<anonymous>") :]
+                return f"hip_anonymous_union{suffix}"
+            return hip_type
+
+        return hip_type
 
     def convert_hip_resource_type(self, hip_type):
         base_name, template_args = self.parse_cpp_template(hip_type)
@@ -7873,6 +10320,8 @@ class HipToCrossGLConverter:
     def visit_EnumNode(self, node):
         name = node.name or self.next_anonymous_enum_name()
         underlying = getattr(node, "underlying_type", None)
+        if getattr(node, "name", None):
+            self.enum_underlying_types[node.name] = underlying or "int"
         suffix = (
             f" : {self.convert_hip_type_to_crossgl(underlying)}" if underlying else ""
         )

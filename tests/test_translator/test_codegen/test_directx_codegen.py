@@ -134,12 +134,15 @@ def assert_directx_warnings_clean_if_available(
     tmp_path,
     *,
     profile="cs_6_0",
-    compiler_arguments=(),
+    compiler_arguments=None,
 ):
     dxc = shutil.which("dxc")
     if dxc is None:
         return
 
+    profile = dxc_profile_for_source(profile, hlsl_code)
+    if compiler_arguments is None:
+        compiler_arguments = dxc_compiler_arguments_for_source(hlsl_code)
     shader_path = tmp_path / "warnings-clean-shader.hlsl"
     output_path = tmp_path / "warnings-clean-shader.dxil"
     shader_path.write_text(hlsl_code, encoding="utf-8")
@@ -161,6 +164,73 @@ def assert_directx_warnings_clean_if_available(
         check=False,
     )
     assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
+
+
+def assert_metal_warnings_clean_if_available(shader_path, air_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        return
+    result = subprocess.run(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-Werror",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(air_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert air_path.stat().st_size > 0
+
+
+def assert_opencl_warnings_clean_if_available(shader_path):
+    clang = shutil.which("clang")
+    if clang is None:
+        return
+    result = subprocess.run(
+        [
+            clang,
+            "-x",
+            "cl",
+            "-cl-std=CL2.0",
+            "-Werror",
+            "-fsyntax-only",
+            str(shader_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def assert_hip_cpp_warnings_clean_if_available(shader_path):
+    clang = shutil.which("clang++") or shutil.which("clang")
+    if clang is None:
+        return
+    result = subprocess.run(
+        [
+            clang,
+            "-x",
+            "c++",
+            "-std=c++17",
+            "-Werror",
+            "-D__global__=",
+            "-fsyntax-only",
+            str(shader_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def assert_directx_native_16_bit_compute_validates_if_available(hlsl_code, tmp_path):
@@ -345,6 +415,54 @@ def test_hlsl_unresolved_standard_math_variable_uses_exact_double_literal():
 )
 def test_hlsl_unknown_math_identifier_is_preserved(node):
     assert HLSLCodeGen().generate_expression(node) == node.name
+
+
+def test_hlsl_unshadowed_nan_identifier_uses_portable_quiet_binary32_value():
+    assert (
+        HLSLCodeGen().generate_expression(IdentifierNode("NAN"))
+        == "asfloat(0x7fc00000u)"
+    )
+
+
+def test_hlsl_nan_parameter_shadow_is_preserved():
+    source = """
+    shader NanParameterShadow {
+        float preserve(float NAN) {
+            return NAN;
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "float preserve(float NAN)" in generated
+    assert "return NAN;" in generated
+    assert "asfloat(0x7fc00000u)" not in generated
+
+
+def test_hlsl_unshadowed_nan_native_compute_validates(tmp_path):
+    source = """
+    shader PortableQuietNan {
+        float nan_value() {
+            return NAN;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @ binding(0)) {
+                output[0] = nan_value();
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "return asfloat(0x7fc00000u);" in generated
+    assert re.search(r"\bNAN\b", generated) is None
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
 
 
 def test_hlsl_copysign_preserves_ieee_payload_bits_and_validates(tmp_path):
@@ -1098,6 +1216,60 @@ def test_hlsl_metal_union_float_uint_alias_uses_native_bitcasts(tmp_path):
     assert "bits.CrossGLUnionStorage = asuint(value);" in generated
     assert "return bits.CrossGLUnionStorage;" in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_metal_union_bool4_uint_alias_preserves_packed_bytes(tmp_path):
+    shader_path = tmp_path / "bool4-word-union.metal"
+    shader_path.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        union bool4_or_uint {
+            bool4 b;
+            unsigned int i;
+        };
+
+        kernel void union_bool4(
+            device uint* output [[buffer(0)]],
+            uint lane [[thread_position_in_grid]]) {
+            bool4_or_uint update;
+            update.b = {true, true, true, true};
+            update.b[lane & 3u] = false;
+            output[0] = update.i;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "struct bool4_or_uint {\n    uint CrossGLUnionStorage;\n};" in generated
+    assert "bool4 b;" not in generated
+    assert "uint i;" not in generated
+    assert "bool4 __crossgl_union_unpack_bool4(uint word)" in generated
+    assert "uint __crossgl_union_pack_bool4(bool4 value)" in generated
+    assert "bool __crossgl_union_set_bool4_lane(" in generated
+    assert (
+        "update.CrossGLUnionStorage = "
+        "__crossgl_union_pack_bool4(bool4(true, true, true, true));"
+    ) in generated
+    assert (
+        "__crossgl_union_set_bool4_lane("
+        "update.CrossGLUnionStorage, (lane & 3u), false);"
+    ) in generated
+    assert "output[0] = update.CrossGLUnionStorage;" in generated
+
+    packed_true = sum(1 << shift for shift in (0, 8, 16, 24))
+    assert packed_true == 0x01010101
+    assert packed_true & ~(0xFF << 16) == 0x01000101
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -3743,6 +3915,171 @@ def test_hlsl_complex_compound_and_subgroup_operations_validate(tmp_path):
     )
     assert "return __crossgl_complex64_mul(beta, bias.Load(index));" in generated
     assert "__crossgl_complex64_make(bias.Load(index), 0.0)" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_preserves_explicit_complex_simd_shuffle_overload_and_compiles(
+    tmp_path,
+):
+    source = """
+    shader ComplexSourceShuffle {
+        struct complex_t_float {
+            float real;
+            float imag;
+        };
+
+        RWStructuredBuffer<complex_t_float> output @ binding(0);
+
+        complex_t_float simd_shuffle_down(
+            complex_t_float value,
+            uint delta
+        ) {
+            complex_t_float result;
+            result.real = WaveShuffleDown(value.real, delta);
+            result.imag = WaveShuffleDown(value.imag, delta);
+            return result;
+        }
+
+        compute {
+            @ numthreads(1, 1, 1)
+            void main(uvec3 tid @ gl_GlobalInvocationID) {
+                complex_t_float value;
+                value.real = float(tid.x);
+                value.imag = -value.real;
+                buffer_store(
+                    output,
+                    tid.x,
+                    simd_shuffle_down(value, 1u)
+                );
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert (
+        "complex_t_float simd_shuffle_down(complex_t_float value, uint delta)"
+        in generated
+    )
+    assert "simd_shuffle_down(value, 1u)" in generated
+    assert "WaveReadLaneAt(value.real" in generated
+    assert "WaveReadLaneAt(value.imag" in generated
+    assert "WaveReadLaneAt(value," not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_void_tail_recursion_lowers_to_native_valid_loop(tmp_path):
+    source = """
+    shader TailRecursion {
+        RWStructuredBuffer<int> output @ binding(0);
+
+        void advance(inout int value, int remaining) {
+            if (remaining <= 0) {
+                return;
+            }
+            value += remaining;
+            advance(value, remaining - 1);
+        }
+
+        compute {
+            @ numthreads(1, 1, 1)
+            void main(uvec3 tid @ gl_GlobalInvocationID) {
+                int value = int(tid.x);
+                advance(value, 3);
+                buffer_store(output, tid.x, value);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "while (true) {" in generated
+    assert "int remaining_tail_value = (remaining - 1);" in generated
+    assert "remaining = remaining_tail_value;" in generated
+    assert "continue;" in generated
+    assert "advance(value, (remaining - 1));" not in generated
+    # Prototype, definition, and the entry-point call remain; the direct
+    # self-call is the only call removed by tail-recursion lowering.
+    assert generated.count("advance(") == 3
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (
+            "if (value > 0) { int value = 0; recurse(value); }",
+            "tail-parameter-shadowed",
+        ),
+        (
+            "if (value > 0) { recurse(value); value -= 1; }",
+            "non-tail-recursion-unsupported",
+        ),
+    ],
+    ids=["shadowed-parameter", "non-tail-call"],
+)
+def test_hlsl_unsafe_void_recursion_fails_closed_with_diagnostic(body, reason):
+    from crosstl.translator.codegen.directx_codegen import (
+        DirectXRecursiveFunctionError,
+    )
+
+    source = f"""
+    shader UnsafeRecursion {{
+        void recurse(inout int value) {{
+            {body}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXRecursiveFunctionError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    error = exc_info.value
+    assert (
+        error.project_diagnostic_code
+        == "project.translate.directx-recursion-unsupported"
+    )
+    assert error.missing_capabilities == ("directx.function-recursion",)
+    assert error.function_name == "recurse"
+    assert error.cycle == ("recurse", "recurse")
+    assert error.reason == reason
+
+
+def test_hlsl_recursion_detection_distinguishes_same_name_overload_dispatch(
+    tmp_path,
+):
+    source = """
+    shader SameNameOverload {
+        RWStructuredBuffer<float> output @ binding(0);
+
+        void adjust(int value) {
+            adjust(float(value));
+        }
+
+        void adjust(float value) {
+            buffer_store(output, 0u, value);
+        }
+
+        compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                adjust(3);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "void adjust(int value)" in generated
+    assert "void adjust(float value)" in generated
+    assert "adjust(float(value));" in generated
+    assert "while (true)" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
@@ -9473,6 +9810,3303 @@ def test_hlsl_metal_device_pointer_array_rejects_element_escape(tmp_path):
         )
 
     assert excinfo.value.reason == "pointer-element-escape"
+
+
+def test_hlsl_metal_device_pointer_array_parameter_expands_resource_and_offsets(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance_row(
+        const device float* rows[1],
+        device float* output) {
+      output[0] = rows[0][0];
+      rows[0] += 1;
+      output[1] = rows[0][0];
+    }
+
+    kernel void pointer_array_parameter(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* row = input + 2;
+      advance_row(&row, output);
+      output[2] = row[0];
+    }
+    """
+    shader_path = tmp_path / "pointer_array_parameter.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "StructuredBuffer<float> rows, inout int64_t rows_offset_0" in generated
+    assert "int64_t rows_offsets[1];" in generated
+    assert "rows_offsets[uint(rows_base)] += int(1);" in generated
+    assert "rows_offset_0 = rows_offsets[0];" in generated
+    assert (
+        "advance_row(input, row_offset, int64_t(0), output, int64_t(0));" in generated
+    )
+    assert "output[2] = input[uint(row_offset)];" in generated
+    assert "StructuredBuffer<float*>" not in generated
+    assert "&row" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_pointer_array_parameter_base_shift_preserves_local_view(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void consume_shifted_rows(
+        const device float* rows[2],
+        device float* output) {
+      rows += 1;
+      output[0] = rows[0][0];
+    }
+
+    kernel void pointer_array_parameter_base_shift(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = input + i * 2;
+      }
+      consume_shifted_rows(rows, output);
+      output[1] = rows[0][0];
+    }
+    """
+    shader_path = tmp_path / "pointer_array_parameter_base_shift.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "pointer_array_parameter_base_shift.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "void consume_shifted_rows(StructuredBuffer<float> rows, "
+        "int64_t rows_offset_0, int64_t rows_offset_1, "
+        "int64_t rows_base_offset" in generated
+    )
+    assert "int64_t rows_base = int64_t(rows_base_offset);" in generated
+    assert "rows_base += int(1);" in generated
+    assert "rows[uint(rows_offsets[uint(rows_base)])]" in generated
+    assert (
+        "consume_shifted_rows(input, int64_t(rows_offsets[0]), "
+        "int64_t(rows_offsets[1]), int64_t(0), output" in generated
+    )
+    assert "output[1] = input[uint(rows_offsets[uint(0)])];" in generated
+    assert "0 += int(1);" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_pointer_array_parameter_base_statement_operators(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void exercise_base_moves(
+        const device float* rows[4],
+        device float* output) {
+      rows += 1;
+      output[0] = rows[0][0];
+      rows -= 1;
+      output[1] = rows[0][0];
+      ++rows;
+      output[2] = rows[0][0];
+      --rows;
+      output[3] = rows[0][0];
+      rows++;
+      output[4] = rows[0][0];
+      rows--;
+      output[5] = rows[0][0];
+    }
+
+    kernel void pointer_array_base_moves(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* rows[4];
+      for (int i = 0; i < 4; ++i) {
+        rows[i] = input + i * 2;
+      }
+      exercise_base_moves(rows, output);
+      output[6] = rows[0][0];
+    }
+    """
+    shader_path = tmp_path / "pointer_array_base_operators.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "pointer_array_base_operators.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "rows_base += int(1);" in generated
+    assert "rows_base -= int(1);" in generated
+    assert "++rows_base;" in generated
+    assert "--rows_base;" in generated
+    assert "rows_base++;" in generated
+    assert "rows_base--;" in generated
+    assert generated.count("rows_offsets[uint(rows_base)]") == 6
+    assert "output[6] = input[uint(rows_offsets[uint(0)])];" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_shifted_pointer_array_forwarding_carries_base_by_value(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_shifted(
+        const device float* rows[2],
+        device float* output) {
+      output[0] = rows[0][0];
+    }
+
+    void shift_and_forward(
+        const device float* rows[2],
+        device float* output) {
+      rows += 1;
+      read_shifted(rows, output);
+      output[1] = rows[0][0];
+    }
+
+    kernel void pointer_array_shifted_forwarding(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = input + i * 2;
+      }
+      shift_and_forward(rows, output);
+      output[2] = rows[0][0];
+    }
+    """
+    shader_path = tmp_path / "pointer_array_shifted_forwarding.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "pointer_array_shifted_forwarding.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert generated.count("int64_t rows_base_offset") == 4
+    assert "int64_t rows_base = int64_t(rows_base_offset);" in generated
+    assert "rows_base += int(1);" in generated
+    assert (
+        "read_shifted(rows, int64_t(rows_offsets[0]), "
+        "int64_t(rows_offsets[1]), int64_t(rows_base), output" in generated
+    )
+    assert (
+        "shift_and_forward(input, int64_t(rows_offsets[0]), "
+        "int64_t(rows_offsets[1]), int64_t(0), output" in generated
+    )
+    assert "output[2] = input[uint(rows_offsets[uint(0)])];" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("helper", "operation", "expected_reason"),
+    [
+        (
+            "",
+            "output[0] = (rows += 1)[0][0];",
+            "base-assignment-value-unsupported",
+        ),
+        (
+            """
+            void read_shifted_value(
+                const device float* rows[2],
+                device float* output) {
+              output[0] = rows[0][0];
+            }
+            """,
+            "read_shifted_value(rows++, output);",
+            "call-backing-unresolved",
+        ),
+        (
+            "",
+            "output[0] = (rows + 1)[0][0];",
+            "pointer-array-escape",
+        ),
+    ],
+    ids=("compound-assignment-value", "postincrement-value", "indexed-base-value"),
+)
+def test_hlsl_metal_pointer_array_base_value_forms_fail_closed(
+    tmp_path,
+    helper,
+    operation,
+    expected_reason,
+):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    {helper}
+
+    void consume_base_value(
+        const device float* rows[2],
+        device float* output) {{
+      {operation}
+      output[1] = rows[0][0];
+    }}
+
+    kernel void pointer_array_base_value(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {{
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {{
+        rows[i] = input + i * 2;
+      }}
+      consume_base_value(rows, output);
+    }}
+    """
+    shader_path = tmp_path / f"pointer_array_base_value_{expected_reason}.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / f"pointer_array_base_value_{expected_reason}.air"
+    )
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name in {
+        "consume_base_value",
+        "read_shifted_value",
+    }
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.reason == expected_reason
+
+
+def test_hlsl_metal_readonly_pointer_array_forwarding_allows_early_return(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_rows(
+        const device float* rows[1],
+        device float* output) {
+      output[0] = rows[0][0];
+    }
+
+    void wrapper(
+        const device float* rows[1],
+        device float* output,
+        bool stop) {
+      read_rows(rows, output);
+      if (stop) {
+        return;
+      }
+      output[1] = rows[0][0];
+    }
+
+    kernel void readonly_forward_early_return(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        constant bool& stop [[buffer(2)]]) {
+      const device float* row = input + 2;
+      wrapper(&row, output, stop);
+      output[2] = row[0];
+    }
+    """
+    shader_path = tmp_path / "readonly_pointer_array_early_return.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "readonly_pointer_array_early_return.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "void read_rows(StructuredBuffer<float> rows, int64_t rows_offset_0"
+        in generated
+    )
+    assert (
+        "void wrapper(StructuredBuffer<float> rows, int64_t rows_offset_0" in generated
+    )
+    assert (
+        "read_rows(rows, int64_t(rows_offsets[0]), "
+        "int64_t(rows_base), output" in generated
+    )
+    assert "inout int64_t rows_offset_0" not in generated
+    assert "rows_offset_0 = rows_offsets[0];" not in generated
+    assert "wrapper(input, int64_t(row_offset), int64_t(0), output" in generated
+    assert "output[2] = input[uint(row_offset)];" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_pointer_array_whole_array_mutation_reaches_fixed_point(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance_rows(const device float* rows[1]) {
+      rows[0] += 1;
+    }
+
+    void relay_rows(const device float* rows[1]) {
+      advance_rows(rows);
+    }
+
+    void consume_rows(
+        const device float* rows[1],
+        device float* output) {
+      relay_rows(rows);
+      output[0] = rows[0][0];
+    }
+
+    kernel void transitive_whole_array(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* row = input + 2;
+      consume_rows(&row, output);
+      output[1] = row[0];
+    }
+    """
+    shader_path = tmp_path / "transitive_whole_pointer_array.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "transitive_whole_pointer_array.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    for function_name in ("advance_rows", "relay_rows", "consume_rows"):
+        assert (
+            f"void {function_name}(StructuredBuffer<float> rows, "
+            "inout int64_t rows_offset_0" in generated
+        )
+    assert "advance_rows(rows, rows_offsets[0], int64_t(rows_base));" in generated
+    assert "relay_rows(rows, rows_offsets[0], int64_t(rows_base));" in generated
+    assert (
+        "consume_rows(input, row_offset, int64_t(0), output, int64_t(0));" in generated
+    )
+    assert generated.count("rows_offset_0 = rows_offsets[0];") == 3
+    assert "output[1] = input[uint(row_offset)];" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_pointer_array_whole_array_mutation_uses_exact_overload(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void inspect_rows(
+        const device float* rows[1],
+        device float* output,
+        int delta) {
+      output[0] = rows[0][delta];
+    }
+
+    void inspect_rows(
+        const device float* rows[1],
+        device float* output,
+        uint delta) {
+      rows[0] += delta;
+      output[0] = rows[0][0];
+    }
+
+    void wrapper_rows(
+        const device float* rows[1],
+        device float* output,
+        bool stop) {
+      inspect_rows(rows, output, int(0));
+      if (stop) {
+        return;
+      }
+      output[1] = rows[0][0];
+    }
+
+    kernel void overloaded_whole_array(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        constant bool& stop [[buffer(2)]]) {
+      const device float* row = input + 2;
+      wrapper_rows(&row, output, stop);
+      output[2] = row[0];
+    }
+    """
+    shader_path = tmp_path / "overloaded_whole_pointer_array.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "overloaded_whole_pointer_array.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "void inspect_rows_float_1_float_int(StructuredBuffer<float> rows, "
+        "int64_t rows_offset_0" in generated
+    )
+    assert (
+        "void inspect_rows_float_1_float_uint(StructuredBuffer<float> rows, "
+        "inout int64_t rows_offset_0" in generated
+    )
+    assert (
+        "void wrapper_rows(StructuredBuffer<float> rows, int64_t rows_offset_0"
+        in generated
+    )
+    assert (
+        "inspect_rows_float_1_float_int(rows, "
+        "int64_t(rows_offsets[0]), int64_t(rows_base), output" in generated
+    )
+    assert "wrapper_rows(input, int64_t(row_offset), int64_t(0), output" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_pointer_array_overload_mutation_uses_lexical_shadow_type(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void inspect_shadowed(
+        const device float* rows[1],
+        device float* output,
+        int delta) {
+      output[0] = rows[0][delta];
+    }
+
+    void inspect_shadowed(
+        const device float* rows[1],
+        device float* output,
+        uint delta) {
+      rows[0] += delta;
+      output[0] = rows[0][0];
+    }
+
+    void wrapper_shadowed_type(
+        const device float* rows[1],
+        device float* output,
+        uint delta,
+        bool stop) {
+      {
+        int delta = 0;
+        inspect_shadowed(rows, output, delta);
+      }
+      if (stop) {
+        return;
+      }
+      output[1] = rows[0][0];
+    }
+
+    kernel void shadowed_overload_type(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        constant uint& delta [[buffer(2)]],
+        constant bool& stop [[buffer(3)]]) {
+      const device float* row = input + 2;
+      wrapper_shadowed_type(&row, output, delta, stop);
+    }
+    """
+    shader_path = tmp_path / "shadowed_pointer_array_overload_type.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "shadowed_pointer_array_overload_type.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "void inspect_shadowed_float_1_float_int(StructuredBuffer<float> rows, "
+        "int64_t rows_offset_0" in generated
+    )
+    assert (
+        "void inspect_shadowed_float_1_float_uint(StructuredBuffer<float> rows, "
+        "inout int64_t rows_offset_0" in generated
+    )
+    assert (
+        "void wrapper_shadowed_type(StructuredBuffer<float> rows, "
+        "int64_t rows_offset_0" in generated
+    )
+    assert (
+        "inspect_shadowed_float_1_float_int(rows, "
+        "int64_t(rows_offsets[0]), int64_t(rows_base), output" in generated
+    )
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_pointer_array_recursive_mutation_fixed_point_fails_closed(
+    tmp_path,
+):
+    from crosstl.translator.codegen.directx_codegen import (
+        DirectXRecursiveFunctionError,
+    )
+
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance_recursive(const device float* rows[1], uint depth) {
+      if (depth > 0) {
+        advance_recursive(rows, depth - 1);
+      }
+      rows[0] += 1;
+    }
+
+    void consume_recursive(
+        const device float* rows[1],
+        device float* output) {
+      advance_recursive(rows, 0);
+      output[0] = rows[0][0];
+    }
+
+    kernel void recursive_whole_array(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* row = input + 2;
+      consume_recursive(&row, output);
+      output[1] = row[0];
+    }
+    """
+    shader_path = tmp_path / "recursive_whole_pointer_array.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "recursive_whole_pointer_array.air"
+    )
+
+    with pytest.raises(DirectXRecursiveFunctionError) as exc_info:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    error = exc_info.value
+    assert (
+        error.project_diagnostic_code
+        == "project.translate.directx-recursion-unsupported"
+    )
+    assert error.missing_capabilities == ("directx.function-recursion",)
+    assert error.function_name == "advance_recursive"
+    assert error.cycle == ("advance_recursive", "advance_recursive")
+    assert error.reason == "non-tail-recursion-unsupported"
+
+
+def test_hlsl_metal_pointer_array_element_reference_mutation_writes_back(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance(const device float*& row) {
+      row += 1;
+    }
+
+    void consume(
+        const device float* rows[1],
+        device float* output) {
+      advance(rows[0]);
+      output[0] = rows[0][0];
+    }
+
+    kernel void pointer_array_element_forwarding(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* row = input + 2;
+      consume(&row, output);
+      output[1] = row[0];
+    }
+    """
+    shader_path = tmp_path / "pointer_array_element_reference_mutation.metal"
+    shader_path.write_text(shader)
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        air_path = tmp_path / "pointer_array_element_reference_mutation.air"
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(shader_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "void consume(StructuredBuffer<float> rows, "
+        "inout int64_t rows_offset_0" in generated
+    )
+    assert "advance(rows, rows_offsets[uint(rows_base)]);" in generated
+    assert "rows_offset_0 = rows_offsets[0];" in generated
+    assert "consume(input, row_offset, int64_t(0), output, int64_t(0));" in generated
+    assert "output[1] = input[uint(row_offset)];" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_pointer_array_element_mutation_uses_exact_overload(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void adjust(const device float* row, int delta) {
+      row += delta;
+    }
+
+    void adjust(const device float*& row, uint delta) {
+      row += delta;
+    }
+
+    void consume(
+        const device float* rows[1],
+        device float* output) {
+      adjust(rows[0], uint(1));
+      output[0] = rows[0][0];
+    }
+
+    kernel void pointer_array_overload(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* row = input + 2;
+      consume(&row, output);
+      output[1] = row[0];
+    }
+    """
+    shader_path = tmp_path / "pointer_array_element_mutation_overload.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "void adjust_float_int(StructuredBuffer<float> row, "
+        "int64_t row_offset, int delta)" in generated
+    )
+    assert (
+        "void adjust_float_uint(StructuredBuffer<float> row, "
+        "inout int64_t row_offset, uint delta)" in generated
+    )
+    assert (
+        "adjust_float_uint(rows, rows_offsets[uint(rows_base)], uint(1));" in generated
+    )
+    assert "inout int64_t rows_offset_0" in generated
+    assert "rows_offset_0 = rows_offsets[0];" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_pointer_array_element_by_value_does_not_write_back(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance_local(const device float* row) {
+      row += 1;
+    }
+
+    void consume(
+        const device float* rows[1],
+        device float* output) {
+      advance_local(rows[0]);
+      output[0] = rows[0][0];
+    }
+
+    kernel void pointer_array_element_by_value(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* row = input + 2;
+      consume(&row, output);
+      output[1] = row[0];
+    }
+    """
+    shader_path = tmp_path / "pointer_array_element_by_value.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "void consume(StructuredBuffer<float> rows, int64_t rows_offset_0" in generated
+    )
+    assert "advance_local(rows, int64_t(rows_offsets[uint(rows_base)]));" in generated
+    assert "rows_offset_0 = rows_offsets[0];" not in generated
+    assert (
+        "consume(input, int64_t(row_offset), int64_t(0), "
+        "output, int64_t(0));" in generated
+    )
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_transitively_mutated_pointer_array_rejects_early_return(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance(const device float*& row) {
+      row += 1;
+    }
+
+    void consume(
+        const device float* rows[1],
+        device float* output,
+        bool stop) {
+      advance(rows[0]);
+      if (stop) {
+        return;
+      }
+      output[0] = rows[0][0];
+    }
+
+    kernel void pointer_array_element_early_return(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        constant bool& stop [[buffer(2)]]) {
+      const device float* row = input + 2;
+      consume(&row, output, stop);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_element_early_return.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "consume"
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.reason == "pointer-array-early-return-unsupported"
+
+
+@pytest.mark.parametrize(
+    ("alias_definition", "row_type"),
+    [
+        ("", "const device float*"),
+        ("typedef const device float* InputPointer;", "InputPointer"),
+    ],
+    ids=("direct", "typedef-alias"),
+)
+def test_hlsl_metal_multidimensional_pointer_array_parameter_fails_closed(
+    tmp_path,
+    alias_definition,
+    row_type,
+):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    {alias_definition}
+
+    void read_matrix(
+        {row_type} rows[2][2],
+        device float* output) {{
+      output[0] = rows[1][1][0];
+    }}
+
+    kernel void pointer_matrix(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {{
+      {row_type} rows[2][2];
+      rows[0][0] = input;
+      rows[0][1] = input + 1;
+      rows[1][0] = input + 2;
+      rows[1][1] = input + 3;
+      read_matrix(rows, output);
+    }}
+    """
+    shader_path = tmp_path / "multidimensional_pointer_array_parameter.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "multidimensional_pointer_array_parameter.air"
+    )
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "read_matrix"
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.reason == "multidimensional-pointer-array-unsupported"
+
+
+def test_hlsl_metal_multidimensional_pointer_array_local_fails_closed(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void local_pointer_matrix(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* rows[2][2];
+      rows[0][0] = input;
+      rows[0][1] = input + 1;
+      rows[1][0] = input + 2;
+      rows[1][1] = input + 3;
+      output[0] = rows[1][1][0];
+    }
+    """
+    shader_path = tmp_path / "multidimensional_pointer_array_local.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "multidimensional_pointer_array_local.air"
+    )
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "local_pointer_matrix"
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.reason == "multidimensional-pointer-array-unsupported"
+
+
+def test_hlsl_opencl_global_pointer_array_without_address_contract_fails_closed(
+    tmp_path,
+):
+    shader = """
+    kernel void global_pointer_array(
+        global const int* input,
+        global int* output) {
+      global const int* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = input + i;
+      }
+      output[0] = rows[1][0];
+    }
+    """
+    shader_path = tmp_path / "global_pointer_array.cl"
+    shader_path.write_text(shader)
+    assert_opencl_warnings_clean_if_available(shader_path)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="opencl",
+        )
+
+    assert excinfo.value.function_name == "global_pointer_array"
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.address_space == "unresolved"
+    assert excinfo.value.reason == "pointer-array-address-space-unresolved"
+
+
+def test_hlsl_metal_constant_pointer_array_lowers_to_readonly_offsets(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_rows(const constant int* rows[2], device int* output) {
+      output[0] = rows[1][0];
+    }
+
+    kernel void constant_pointer_array(
+        const constant int* input [[buffer(0)]],
+        device int* output [[buffer(1)]]) {
+      const constant int* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = input + i;
+      }
+      read_rows(rows, output);
+    }
+    """
+    shader_path = tmp_path / "constant_pointer_array.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "constant_pointer_array.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "StructuredBuffer<int> rows" in generated
+    assert "int64_t rows_offsets[2];" in generated
+    assert "rows_offsets[uint(i)] = int64_t(i);" in generated
+    assert "read_rows(input, int64_t(rows_offsets[0])" in generated
+    assert "StructuredBuffer<int*>" not in generated
+    assert "int* rows" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_constant_pointer_array_unplanned_initialization_fails_closed(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void constant_pointer_array_unplanned(
+        const constant int* input [[buffer(0)]],
+        device int* output [[buffer(1)]]) {
+      const constant int* rows[2];
+      rows[0] = input;
+      rows[1] = input + 1;
+      output[0] = rows[1][0];
+    }
+    """
+    shader_path = tmp_path / "constant_pointer_array_unplanned.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "constant_pointer_array_unplanned.air"
+    )
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "constant_pointer_array_unplanned"
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.address_space == "constant"
+    assert excinfo.value.reason == "initialization-unproven"
+
+
+@pytest.mark.parametrize(
+    ("case_name", "shader", "function_name", "address_space"),
+    [
+        (
+            "thread-local",
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+            kernel void thread_pointer_array(device float* output [[buffer(0)]]) {
+              float values[2] = {1.0f, 2.0f};
+              thread float* rows[2];
+              rows[0] = &values[0];
+              rows[1] = &values[1];
+              output[0] = rows[1][0];
+            }
+            """,
+            "thread_pointer_array",
+            "thread",
+        ),
+        (
+            "thread-parameter",
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+            void read_rows(thread float* rows[2], device float* output) {
+              output[0] = rows[1][0];
+            }
+            kernel void thread_pointer_array_parameter(
+                device float* output [[buffer(0)]]) {
+              float values[2] = {1.0f, 2.0f};
+              thread float* rows[2];
+              rows[0] = &values[0];
+              rows[1] = &values[1];
+              read_rows(rows, output);
+            }
+            """,
+            "read_rows",
+            "thread",
+        ),
+        (
+            "threadgroup-local",
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+            kernel void threadgroup_pointer_array(
+                device float* output [[buffer(0)]],
+                uint lid [[thread_index_in_threadgroup]]) {
+              threadgroup float values[2];
+              threadgroup float* rows[2];
+              rows[0] = &values[0];
+              rows[1] = &values[1];
+              if (lid == 0) {
+                output[0] = rows[1][0];
+              }
+            }
+            """,
+            "threadgroup_pointer_array",
+            "threadgroup",
+        ),
+    ],
+)
+def test_hlsl_metal_unsupported_address_space_pointer_arrays_fail_closed(
+    tmp_path,
+    case_name,
+    shader,
+    function_name,
+    address_space,
+):
+    shader_path = tmp_path / f"{case_name}.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(shader_path, tmp_path / f"{case_name}.air")
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == function_name
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.address_space == address_space
+    assert excinfo.value.reason == "pointer-array-address-space-unsupported"
+
+
+@pytest.mark.parametrize(
+    ("alias_definition", "member_declaration", "assignments", "read_expression"),
+    [
+        (
+            "",
+            "const device float* row;",
+            "state.row = input + 1;",
+            "state.row[0]",
+        ),
+        (
+            "",
+            "const device float* rows[2];",
+            "state.rows[0] = input; state.rows[1] = input + 1;",
+            "state.rows[1][0]",
+        ),
+        (
+            "",
+            "const device float* rows[2][2];",
+            """
+            state.rows[0][0] = input;
+            state.rows[0][1] = input + 1;
+            state.rows[1][0] = input + 2;
+            state.rows[1][1] = input + 3;
+            """,
+            "state.rows[1][1][0]",
+        ),
+        (
+            "typedef const device float* InputPointer;",
+            "InputPointer rows[2][2];",
+            """
+            state.rows[0][0] = input;
+            state.rows[0][1] = input + 1;
+            state.rows[1][0] = input + 2;
+            state.rows[1][1] = input + 3;
+            """,
+            "state.rows[1][1][0]",
+        ),
+    ],
+    ids=("direct", "one-dimensional", "multidimensional", "typedef-alias"),
+)
+def test_hlsl_metal_struct_pointer_member_fails_closed(
+    tmp_path,
+    alias_definition,
+    member_declaration,
+    assignments,
+    read_expression,
+):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    {alias_definition}
+    struct PointerState {{
+      {member_declaration}
+    }};
+
+    kernel void struct_pointer_member(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {{
+      PointerState state;
+      {assignments}
+      output[0] = {read_expression};
+    }}
+    """
+    shader_path = tmp_path / "struct_pointer_member.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "struct_pointer_member.air"
+    )
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.array_name in {"row", "rows"}
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.reason == "struct-pointer-member-unsupported"
+
+
+def test_hlsl_metal_generic_struct_pointer_member_fails_closed(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T>
+    struct Holder {
+      T value;
+    };
+
+    kernel void generic_struct_pointer_member(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      Holder<const device float*> holder;
+      holder.value = input + 1;
+      output[0] = holder.value[0];
+    }
+    """
+    shader_path = tmp_path / "generic_struct_pointer_member.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "generic_struct_pointer_member.air"
+    )
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.array_name == "value"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.reason == "struct-pointer-member-unsupported"
+
+
+@pytest.mark.parametrize(
+    ("case_name", "shader"),
+    [
+        (
+            "struct_direct",
+            """
+            typedef struct PointerRows {
+              global const int* rows[2];
+            } PointerRows;
+            kernel void probe(global const int* input, global int* output) {
+              PointerRows state;
+              state.rows[0] = input;
+              state.rows[1] = input + 1;
+              output[0] = state.rows[1][0];
+            }
+            """,
+        ),
+        (
+            "struct_typedef_array",
+            """
+            typedef global const int* row_array[2];
+            typedef struct PointerRows { row_array rows; } PointerRows;
+            kernel void probe(global const int* input, global int* output) {
+              PointerRows state;
+              state.rows[0] = input;
+              state.rows[1] = input + 1;
+              output[0] = state.rows[1][0];
+            }
+            """,
+        ),
+        (
+            "nested_struct_direct",
+            """
+            typedef struct Inner { global const int* rows[2]; } Inner;
+            typedef struct Outer { Inner inner; } Outer;
+            kernel void probe(global const int* input, global int* output) {
+              Outer state;
+              state.inner.rows[0] = input;
+              state.inner.rows[1] = input + 1;
+              output[0] = state.inner.rows[1][0];
+            }
+            """,
+        ),
+        (
+            "array_of_struct",
+            """
+            typedef struct PointerRows {
+              global const int* rows[2];
+            } PointerRows;
+            kernel void probe(global const int* input, global int* output) {
+              PointerRows states[2];
+              states[1].rows[0] = input;
+              states[1].rows[1] = input + 1;
+              output[0] = states[1].rows[1][0];
+            }
+            """,
+        ),
+        (
+            "union_direct",
+            """
+            typedef union PointerRows {
+              global const int* rows[2];
+              ulong bits[2];
+            } PointerRows;
+            kernel void probe(global const int* input, global int* output) {
+              PointerRows state;
+              state.rows[0] = input;
+              state.rows[1] = input + 1;
+              output[0] = state.rows[1][0];
+            }
+            """,
+        ),
+    ],
+    ids=(
+        "direct-struct",
+        "typedef-array-member",
+        "nested-struct",
+        "array-of-struct",
+        "union",
+    ),
+)
+def test_hlsl_opencl_aggregate_pointer_arrays_fail_closed(
+    tmp_path,
+    case_name,
+    shader,
+):
+    shader_path = tmp_path / f"{case_name}.cl"
+    shader_path.write_text(shader)
+    assert_opencl_warnings_clean_if_available(shader_path)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="opencl",
+        )
+
+    assert excinfo.value.array_name.split(".")[-1] == "rows"
+    assert excinfo.value.address_space == "unresolved"
+    assert excinfo.value.reason == "struct-pointer-member-unsupported"
+
+
+@pytest.mark.parametrize(
+    ("case_name", "shader"),
+    [
+        (
+            "struct_direct_pointer",
+            """
+            typedef struct PointerState {
+              global const int* row;
+            } PointerState;
+            kernel void probe(global const int* input, global int* output) {
+              PointerState state;
+              state.row = input + 1;
+              output[0] = state.row[0];
+            }
+            """,
+        ),
+        (
+            "struct_typedef_pointer",
+            """
+            typedef global const int* InputPointer;
+            typedef struct PointerState { InputPointer row; } PointerState;
+            kernel void probe(global const int* input, global int* output) {
+              PointerState state;
+              state.row = input + 1;
+              output[0] = state.row[0];
+            }
+            """,
+        ),
+        (
+            "nested_struct_direct_pointer",
+            """
+            typedef struct Inner { global const int* row; } Inner;
+            typedef struct Outer { Inner inner; } Outer;
+            kernel void probe(global const int* input, global int* output) {
+              Outer state;
+              state.inner.row = input + 1;
+              output[0] = state.inner.row[0];
+            }
+            """,
+        ),
+        (
+            "array_of_struct_direct_pointer",
+            """
+            typedef struct PointerState {
+              global const int* row;
+            } PointerState;
+            kernel void probe(global const int* input, global int* output) {
+              PointerState states[2];
+              states[1].row = input + 1;
+              output[0] = states[1].row[0];
+            }
+            """,
+        ),
+        (
+            "union_direct_pointer",
+            """
+            typedef union PointerState {
+              global const int* row;
+              ulong bits;
+            } PointerState;
+            kernel void probe(global const int* input, global int* output) {
+              PointerState state;
+              state.row = input + 1;
+              output[0] = state.row[0];
+            }
+            """,
+        ),
+        (
+            "nested_anonymous_struct_direct_pointer",
+            """
+            typedef struct Outer {
+              struct { global const int* row; } inner;
+            } Outer;
+            kernel void probe(global const int* input, global int* output) {
+              Outer state;
+              state.inner.row = input + 1;
+              output[0] = state.inner.row[0];
+            }
+            """,
+        ),
+        (
+            "nested_anonymous_union_direct_pointer",
+            """
+            typedef struct Outer {
+              union { global const int* row; ulong bits; } payload;
+            } Outer;
+            kernel void probe(global const int* input, global int* output) {
+              Outer state;
+              state.payload.row = input + 1;
+              output[0] = state.payload.row[0];
+            }
+            """,
+        ),
+    ],
+    ids=(
+        "direct-struct",
+        "typedef-pointer-member",
+        "nested-struct",
+        "array-of-struct",
+        "union",
+        "nested-anonymous-struct",
+        "nested-anonymous-union",
+    ),
+)
+def test_hlsl_opencl_aggregate_direct_pointer_members_fail_closed(
+    tmp_path,
+    case_name,
+    shader,
+):
+    shader_path = tmp_path / f"{case_name}.cl"
+    shader_path.write_text(shader)
+    assert_opencl_warnings_clean_if_available(shader_path)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="opencl",
+        )
+
+    assert excinfo.value.array_name.split(".")[-1] == "row"
+    assert excinfo.value.address_space == "unresolved"
+    assert excinfo.value.reason == "struct-pointer-member-unsupported"
+
+
+def test_hlsl_recursive_generic_pointer_member_detection_is_cycle_safe():
+    generator = HLSLCodeGen()
+    generator.struct_member_types = {
+        "InnerArray": {"rows": "array<ptr<i32>, 2>"},
+        "OuterArray": {"inner": "InnerArray"},
+        "InnerPointer": {"row": "ptr<i32>"},
+        "OuterPointer": {"inner": "InnerPointer"},
+        "CycleA": {"next": "CycleB"},
+        "CycleB": {"next": "CycleA"},
+        "CycleWithPointerA": {"next": "CycleWithPointerB"},
+        "CycleWithPointerB": {
+            "next": "CycleWithPointerA",
+            "row": "ptr<u32>",
+        },
+    }
+
+    assert generator.hlsl_unresolved_generic_pointer_member("array<OuterArray, 2>") == {
+        "array_depth": 1,
+        "member_path": ("inner", "rows"),
+        "pointee_type": "i32",
+        "type_name": "array<ptr<i32>, 2>",
+    }
+    assert generator.hlsl_unresolved_generic_pointer_member("OuterPointer") == {
+        "array_depth": 0,
+        "member_path": ("inner", "row"),
+        "pointee_type": "i32",
+        "type_name": "ptr<i32>",
+    }
+    assert generator.hlsl_unresolved_generic_pointer_member("array<CycleA, 2>") is None
+    assert generator.hlsl_unresolved_generic_pointer_member("CycleWithPointerA") == {
+        "array_depth": 0,
+        "member_path": ("next", "row"),
+        "pointee_type": "u32",
+        "type_name": "ptr<u32>",
+    }
+
+
+def test_hlsl_opencl_nested_scalar_aggregates_remain_supported(tmp_path):
+    shader = """
+    typedef struct Inner { int value; } Inner;
+    typedef union Payload { Inner inner; int flat; } Payload;
+    kernel void probe(global const int* input, global int* output) {
+      Payload state;
+      state.inner.value = input[0];
+      output[0] = state.inner.value;
+    }
+    """
+    shader_path = tmp_path / "nested_scalar_aggregates.cl"
+    shader_path.write_text(shader)
+    assert_opencl_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    assert "struct Inner" in generated
+    assert "struct Payload" in generated
+    assert "array<ptr<" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_opencl_anonymous_nested_struct_array_uses_hlsl_declarator(tmp_path):
+    shader = """
+    typedef struct Outer {
+      struct { int value; } items[2][3];
+    } Outer;
+    kernel void probe(global const int* input, global int* output) {
+      Outer state;
+      state.items[1][2].value = input[0];
+      output[0] = state.items[1][2].value;
+    }
+    """
+    shader_path = tmp_path / "anonymous_nested_struct_array.cl"
+    shader_path.write_text(shader)
+    assert_opencl_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    assert re.search(r"CrossGLAnonymous_\w+ items\[2\]\[3\];", generated)
+    assert "array<CrossGLAnonymous_" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_struct_dependencies_unwrap_generic_and_c_style_arrays():
+    generator = HLSLCodeGen()
+    names = ("Inner", "Outer")
+
+    assert generator.hlsl_struct_dependency_names("array<Inner, 2>", names) == {"Inner"}
+    assert generator.hlsl_struct_dependency_names(
+        "array<array<Inner, 3>, 2>", names
+    ) == {"Inner"}
+    assert generator.hlsl_struct_dependency_names("Inner[2][3]", names) == {"Inner"}
+    assert generator.hlsl_struct_dependency_name("array<Inner, 2>", names) == "Inner"
+
+
+def test_hlsl_opencl_anonymous_union_array_dependency_is_declared_first(tmp_path):
+    shader = """
+    typedef struct Outer {
+      union {
+        struct { int value; } item;
+        uint bits;
+      } payloads[2];
+    } Outer;
+    kernel void probe(global const int* input, global int* output) {
+      Outer state;
+      state.payloads[1].item.value = input[0];
+      output[0] = state.payloads[1].item.value;
+    }
+    """
+    shader_path = tmp_path / "anonymous_union_array_dependency.cl"
+    shader_path.write_text(shader)
+    assert_opencl_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    match = re.search(
+        r"struct (CrossGLAnonymous_Outer_payloads_union_[A-Za-z0-9_]+) \{",
+        generated,
+    )
+    assert match is not None
+    union_name = match.group(1)
+    assert generated.index(f"struct {union_name} {{") < generated.index(
+        "struct Outer {"
+    )
+    assert f"{union_name} payloads[2];" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_opencl_function_local_anonymous_records_materialize(tmp_path):
+    shader = """
+    kernel void probe(global const int* input, global int* output) {
+      struct { int value; } left, right;
+      union { int selected; uint bits; } payloads[2][3];
+      left.value = input[0];
+      right.value = input[1];
+      payloads[1][2].selected = left.value + right.value;
+      output[0] = payloads[1][2].selected;
+    }
+    """
+    shader_path = tmp_path / "function_local_anonymous_records.cl"
+    shader_path.write_text(shader)
+    assert_opencl_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    assert "CrossGLFunctionLocal_probe_left_struct_" in generated
+    assert "CrossGLFunctionLocal_probe_payloads_union_" in generated
+    assert re.search(
+        r"CrossGLFunctionLocal_probe_payloads_union_\w+ payloads\[2\]\[3\];",
+        generated,
+    )
+    assert "array<CrossGLFunctionLocal_" not in generated
+    assert "struct None" not in generated
+    assert "struct <anonymous>" not in generated
+    assert "union <anonymous>" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_opencl_nested_function_local_anonymous_records_are_distinct(tmp_path):
+    shader = """
+    kernel void probe(global const int* input, global int* output) {
+      if (input[0] != 0) {
+        struct { int value; } state;
+        state.value = input[0];
+        output[0] = state.value;
+      } else {
+        union { int value; uint bits; } state;
+        state.value = input[1];
+        output[0] = state.value;
+      }
+    }
+    """
+    shader_path = tmp_path / "nested_function_local_anonymous_records.cl"
+    shader_path.write_text(shader)
+    assert_opencl_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    struct_match = re.search(
+        r"struct (CrossGLFunctionLocal_probe_state_struct_\w+) \{", generated
+    )
+    union_match = re.search(
+        r"struct (CrossGLFunctionLocal_probe_state_union_\w+) \{", generated
+    )
+    assert struct_match is not None
+    assert union_match is not None
+    struct_name = struct_match.group(1)
+    union_name = union_match.group(1)
+    assert struct_name != union_name
+    assert f"{struct_name} state;" in generated
+    assert f"{union_name} state;" in generated
+    assert "struct None" not in generated
+    assert "struct <anonymous>" not in generated
+    assert "union <anonymous>" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("declarator", "assignment", "read"),
+    [
+        ("state", "state.row = input + 1;", "state.row[0]"),
+        ("states[2]", "states[1].row = input + 1;", "states[1].row[0]"),
+    ],
+    ids=("scalar", "array"),
+)
+def test_hlsl_opencl_function_local_anonymous_pointer_records_fail_closed(
+    tmp_path,
+    declarator,
+    assignment,
+    read,
+):
+    shader = f"""
+    kernel void probe(global const int* input, global int* output) {{
+      struct {{ global const int* row; }} {declarator};
+      {assignment}
+      output[0] = {read};
+    }}
+    """
+    shader_path = tmp_path / "function_local_anonymous_pointer_record.cl"
+    shader_path.write_text(shader)
+    assert_opencl_warnings_clean_if_available(shader_path)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="opencl",
+        )
+
+    assert excinfo.value.array_name.split(".")[-1] == "row"
+    assert excinfo.value.address_space == "unresolved"
+    assert excinfo.value.reason == "struct-pointer-member-unsupported"
+
+
+@pytest.mark.parametrize("outer_keyword", ["class", "struct"])
+@pytest.mark.parametrize("nested_keyword", ["class", "struct"])
+def test_hlsl_hip_nested_record_trailing_declarators_are_preserved(
+    tmp_path, outer_keyword, nested_keyword
+):
+    shader = f"""
+    {outer_keyword} Outer {{
+    public:
+      {nested_keyword} Inner {{ public: int value; }} item, other;
+    }};
+
+    __global__ void probe(const int* input, int* output) {{
+      Outer state;
+      state.item.value = input[0];
+      state.other.value = input[1];
+      output[0] = state.item.value + state.other.value;
+    }}
+    """
+    shader_path = tmp_path / f"nested_{outer_keyword}_{nested_keyword}_record.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="hip",
+    )
+
+    assert "struct Inner {\n    int value;\n};" in generated
+    assert "struct Outer {\n    Inner item;\n    Inner other;\n};" in generated
+    assert generated.index("struct Inner {") < generated.index("struct Outer {")
+    assert "struct Outer {\n};" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_hip_top_level_class_object_list_is_preserved(tmp_path):
+    shader = """
+    class Item { public: int value; } first, second;
+
+    __global__ void probe(const int* input, int* output) {
+      Item local;
+      local.value = input[0];
+      output[0] = local.value;
+    }
+    """
+    shader_path = tmp_path / "top_level_class_objects.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="hip",
+    )
+
+    assert "struct Item {\n    int value;\n};" in generated
+    assert "Item first;" in generated
+    assert "Item second;" in generated
+    assert "class Item" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_hip_record_local_aliases_lower_to_native_member_types(tmp_path):
+    shader = """
+    class Outer {
+    public:
+      using Scalar = int;
+      typedef Scalar Value;
+      Value values[2];
+      class Inner {
+      public:
+        using Item = int;
+        Item value;
+      } item;
+    };
+
+    Outer::Value pass_value(Outer::Value value) { return value; }
+
+    __global__ void probe(const int* input, int* output) {
+      Outer state;
+      state.values[0] = input[0];
+      state.values[1] = input[1];
+      state.item.value = pass_value(input[2]);
+      output[0] = state.values[0] + state.values[1] + state.item.value;
+    }
+    """
+    shader_path = tmp_path / "record_local_aliases.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="hip",
+    )
+
+    assert "struct Inner {\n    int value;\n};" in generated
+    assert "struct Outer {\n    int values[2];\n    Inner item;\n};" in generated
+    assert "Scalar values" not in generated
+    assert "Value values" not in generated
+    assert "Item value" not in generated
+    assert "int pass_value(int value)" in generated
+    assert "Outer::Value" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_hip_nested_final_class_with_base_preserves_object_field(tmp_path):
+    shader = """
+    struct Base { int ignored; };
+    class Outer {
+    public:
+      class Inner final : public Base { public: int value; } item;
+    };
+
+    __global__ void probe(const int* input, int* output) {
+      Outer state;
+      state.item.ignored = input[0];
+      state.item.value = input[1];
+      output[0] = state.item.ignored + state.item.value;
+    }
+    """
+    shader_path = tmp_path / "nested_final_class.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="hip",
+    )
+
+    assert "struct Inner {\n    int ignored;\n    int value;\n};" in generated
+    assert "struct Outer {\n    Inner item;\n};" in generated
+    assert "Inner final;" not in generated
+    assert "state.item.value" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_struct_multidimensional_scalar_array_remains_supported(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct ScalarState {
+      float values[2][2];
+    };
+
+    kernel void struct_scalar_matrix(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      ScalarState state;
+      state.values[0][0] = input[0];
+      state.values[0][1] = input[1];
+      state.values[1][0] = input[2];
+      state.values[1][1] = input[3];
+      output[0] = state.values[1][1];
+    }
+    """
+    shader_path = tmp_path / "struct_scalar_matrix.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "struct_scalar_matrix.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "float values[2][2];" in generated
+    assert "float* values" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_bfloat_pointer_array_parameter_uses_physical_storage(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void load_row(
+        const device bfloat16_t* rows[1],
+        device float* output) {
+      output[0] = float(rows[0][0]);
+    }
+
+    kernel void bfloat_pointer_array_parameter(
+        const device bfloat16_t* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device bfloat16_t* row = input + 1;
+      load_row(&row, output);
+    }
+    """
+    shader_path = tmp_path / "bfloat_pointer_array_parameter.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "StructuredBuffer<uint16_t> rows, int64_t rows_offset_0" in generated
+    assert "__crossgl_bfloat16_to_float" in generated
+    assert "StructuredBuffer<bfloat16_t*>" not in generated
+    assert "StructuredBuffer<uint16_t*>" not in generated
+    assert "&row" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(("operation_name", "comparison"), [("max", ">"), ("min", "<")])
+@pytest.mark.parametrize(
+    ("scalar_type", "storage_type", "narrow_kind"),
+    [
+        ("int8_t", "int", "signed"),
+        ("uint8_t", "uint", "unsigned"),
+        ("int16_t", "int16_t", None),
+        ("uint16_t", "uint16_t", None),
+    ],
+)
+def test_hlsl_metal_nested_physical_storage_pointer_array_preserves_logical_type(
+    tmp_path,
+    operation_name,
+    comparison,
+    scalar_type,
+    storage_type,
+    narrow_kind,
+):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void reduce_rows_{operation_name}(
+        const device {scalar_type}* inputs[4],
+        device int* output,
+        uint lsize_x) {{
+      {scalar_type} total = inputs[0][0];
+      for (int j = 0; j < 4; ++j) {{
+        {scalar_type} value = inputs[j][0];
+        total = value {comparison} total ? value : total;
+        inputs[j] += lsize_x * 4;
+      }}
+      output[0] = int(total);
+    }}
+
+    void prepare_rows_{operation_name}(
+        const device {scalar_type}* input,
+        device int* output,
+        const constant size_t& reduction_size,
+        uint lsize_x) {{
+      const device {scalar_type}* inputs[4];
+      inputs[0] = input;
+      for (int i = 1; i < 4; ++i) {{
+        inputs[i] = inputs[i - 1] + reduction_size;
+      }}
+      reduce_rows_{operation_name}(inputs, output, lsize_x);
+    }}
+
+    kernel void row_reduce_simple_{operation_name}(
+        const device {scalar_type}* input [[buffer(0)]],
+        device int* output [[buffer(1)]],
+        const constant size_t& reduction_size [[buffer(2)]],
+        uint lsize_x [[threads_per_threadgroup]]) {{
+      prepare_rows_{operation_name}(input, output, reduction_size, lsize_x);
+    }}
+    """
+    shader_path = tmp_path / f"row_reduce_simple_{operation_name}_{scalar_type}.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        f"StructuredBuffer<{storage_type}> inputs, "
+        "inout int64_t inputs_offset_0" in generated
+    )
+    assert "int64_t inputs_offsets[4];" in generated
+    assert (
+        "inputs_offsets[uint((inputs_base + int64_t(j)))] += "
+        "uint((lsize_x * 4));" in generated
+    )
+    assert f"{scalar_type}* inputs" not in generated
+    if narrow_kind == "signed":
+        assert "/ 4" in generated
+        assert "% 4) * 8" in generated
+        assert ">> 24" in generated
+    elif narrow_kind == "unsigned":
+        assert "/ 4" in generated
+        assert "% 4) * 8" in generated
+        assert "& 255u" in generated
+    else:
+        assert "% 4) * 8" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_pointer_array_rejects_explicit_narrow_reinterpret_backing(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_rows(
+        const device uint8_t* inputs[2],
+        device uint* output) {
+      output[0] = uint(inputs[0][0]) + uint(inputs[1][0]);
+    }
+
+    void prepare_rows(
+        const device uint* words,
+        device uint* output) {
+      const device uint8_t* bytes = (const device uint8_t*)words;
+      const device uint8_t* inputs[2];
+      for (int i = 0; i < 2; ++i) {
+        inputs[i] = bytes + i;
+      }
+      read_rows(inputs, output);
+    }
+
+    kernel void explicit_narrow_pointer_array(
+        const device uint* words [[buffer(0)]],
+        device uint* output [[buffer(1)]]) {
+      prepare_rows(words, output);
+    }
+    """
+    shader_path = tmp_path / "explicit_narrow_pointer_array.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.array_name == "inputs"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.reason == "backing-contract-unproven"
+
+
+def test_hlsl_metal_pointer_array_call_rejects_same_physical_explicit_reinterpret(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void load_bytes(
+        const device uint8_t* rows[1],
+        device uint* output) {
+      output[0] = uint(rows[0][0]);
+    }
+
+    kernel void explicit_direct_pointer_array_reinterpret(
+        const device uint* words [[buffer(0)]],
+        device uint* output [[buffer(1)]]) {
+      const device uint8_t* row = (const device uint8_t*)words;
+      load_bytes(&row, output);
+    }
+    """
+    shader_path = tmp_path / "same_physical_explicit_pointer_array.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "load_bytes"
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.backing_root == "words"
+    assert excinfo.value.reason == "backing-contract-unproven"
+
+
+def test_hlsl_metal_pointer_array_call_rejects_physical_element_mismatch(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void load_signed(
+        const device int8_t* rows[1],
+        device int* output) {
+      output[0] = int(rows[0][0]);
+    }
+
+    kernel void physical_pointer_array_mismatch(
+        const device uint8_t* input [[buffer(0)]],
+        device int* output [[buffer(1)]]) {
+      const device int8_t* row = (const device int8_t*)input;
+      load_signed(&row, output);
+    }
+    """
+    shader_path = tmp_path / "physical_pointer_array_mismatch.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "load_signed"
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.backing_root == "input"
+    assert excinfo.value.reason == "element-type-mismatch"
+
+
+def test_hlsl_metal_pointer_array_rejects_cross_parameter_object_alias(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance(const device float*& row) {
+      row += 1;
+    }
+
+    void consume_aliasing_arrays(
+        const device float* read_rows[1],
+        const device float* mutate_rows[1],
+        device float* output) {
+      advance(mutate_rows[0]);
+      output[0] = read_rows[0][0];
+    }
+
+    kernel void pointer_array_cross_parameter_alias(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* row = input + 2;
+      consume_aliasing_arrays(&row, &row, output);
+      output[1] = row[0];
+    }
+    """
+    shader_path = tmp_path / "pointer_array_cross_parameter_alias.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "pointer_array_cross_parameter_alias.air"
+    )
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "consume_aliasing_arrays"
+    assert excinfo.value.array_name == "mutate_rows"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.backing_root == "input"
+    assert excinfo.value.conflicting_root == "input"
+    assert excinfo.value.reason == "cross-parameter-alias-unsupported"
+
+
+def test_hlsl_metal_pointer_array_rejects_pointer_reference_object_alias(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void consume_array_and_reference(
+        const device float* rows[1],
+        const device float*& mutate_row,
+        device float* output) {
+      mutate_row += 1;
+      output[0] = rows[0][0];
+    }
+
+    kernel void pointer_array_reference_alias(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* row = input + 2;
+      consume_array_and_reference(&row, row, output);
+      output[1] = row[0];
+    }
+    """
+    shader_path = tmp_path / "pointer_array_reference_alias.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "pointer_array_reference_alias.air"
+    )
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "consume_array_and_reference"
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.reason == "cross-parameter-alias-unsupported"
+
+
+def test_hlsl_metal_pointer_references_reject_cross_parameter_object_alias(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void consume_two_references(
+        const device float*& read_row,
+        const device float*& mutate_row,
+        device float* output) {
+      mutate_row += 1;
+      output[0] = read_row[0];
+    }
+
+    kernel void pointer_reference_alias(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* row = input + 2;
+      consume_two_references(row, row, output);
+      output[1] = row[0];
+    }
+    """
+    shader_path = tmp_path / "pointer_reference_alias.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "pointer_reference_alias.air"
+    )
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "consume_two_references"
+    assert excinfo.value.parameter_name == "read_row"
+    assert excinfo.value.address_space == "device"
+    assert excinfo.value.reason == "cross-parameter-alias-unsupported"
+
+
+def test_hlsl_metal_pointer_array_allows_distinct_equal_pointer_objects(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance_distinct(const device float*& row) {
+      row += 1;
+    }
+
+    void consume_distinct(
+        const device float* read_rows[1],
+        const device float* mutate_rows[1],
+        device float* output) {
+      advance_distinct(mutate_rows[0]);
+      output[0] = read_rows[0][0];
+    }
+
+    kernel void distinct_pointer_objects(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* read_row = input + 2;
+      const device float* mutate_row = input + 2;
+      consume_distinct(&read_row, &mutate_row, output);
+      output[1] = read_row[0];
+      output[2] = mutate_row[0];
+    }
+    """
+    shader_path = tmp_path / "distinct_pointer_objects.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "distinct_pointer_objects.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "consume_distinct(input, int64_t(read_row_offset), int64_t(0), "
+        "input, mutate_row_offset, int64_t(0), output" in generated
+    )
+    assert "output[1] = input[uint(read_row_offset)];" in generated
+    assert "output[2] = input[uint(mutate_row_offset)];" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_seeded_device_pointer_array_lowers_recurrent_offsets(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_rows(
+        const device float* input,
+        device float* output,
+        constant int& row_stride) {
+      const device float* rows[4];
+      rows[0] = input + 1;
+      for (int i = 1; i < 4; ++i) {
+        rows[i] = rows[i - 1] + row_stride;
+      }
+      for (int i = 0; i < 4; ++i) {
+        output[i] = rows[i][0];
+      }
+    }
+
+    kernel void seeded_pointer_array(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        constant int& row_stride [[buffer(2)]]) {
+      read_rows(input, output, row_stride);
+    }
+    """
+    shader_path = tmp_path / "seeded_pointer_array.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "rows_offsets[uint(0)] = int64_t((input_offset + 1));" in generated
+    assert "rows_offsets[uint(i)] = int64_t(" in generated
+    assert "rows_offsets[uint((i - 1))]" in generated
+    assert "float* rows" not in generated
+    assert "input +" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_deferred_device_pointer_binds_before_branch_local_use(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_selected(
+        const device float* input,
+        device float* output,
+        bool second) {
+      const device float* row;
+      if (second) {
+        row = input + 2;
+        output[0] = row[0];
+      } else {
+        row = input + 3;
+        output[0] = row[0];
+      }
+    }
+
+    kernel void deferred_pointer(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        constant bool& second [[buffer(2)]]) {
+      read_selected(input, output, second);
+    }
+    """
+    shader_path = tmp_path / "deferred_pointer.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t row_offset = int64_t(0);" in generated
+    assert "row_offset = int64_t((input_offset + 2));" in generated
+    assert "row_offset = int64_t((input_offset + 3));" in generated
+    assert "float* row" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_deferred_device_pointer_rejects_use_before_assignment(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_unbound(device float* output) {
+      const device float* row;
+      output[0] = row[0];
+    }
+
+    kernel void deferred_pointer_unbound(device float* output [[buffer(0)]]) {
+      read_unbound(output);
+    }
+    """
+    shader_path = tmp_path / "deferred_pointer_unbound.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.parameter_name == "row"
+    assert excinfo.value.reason == "deferred-use-before-assignment"
+
+
+def test_hlsl_metal_extent_one_thread_array_preserves_fixed_abi_for_array_call(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void fill(thread float values[1]) {
+      values[0] += 1.0f;
+    }
+
+    kernel void array_backing(device float* output [[buffer(0)]]) {
+      float values[1] = {2.0f};
+      fill(values);
+      output[0] = values[0];
+    }
+    """
+    shader_path = tmp_path / "extent_one_fixed_thread_array.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "void fill(inout float values[1])" in generated
+    assert "values_base" not in generated
+    assert "fill(values);" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_thread_array_accepts_extent_one_scalar_address(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void increment(thread float values[1]) {
+      values[0] += 1.0f;
+    }
+
+    kernel void scalar_thread_array(device float* output [[buffer(0)]]) {
+      float value = 2.0f;
+      increment(&value);
+      output[0] = value;
+    }
+    """
+    shader_path = tmp_path / "scalar_thread_array.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "void increment(inout float values)" in generated
+    assert "values += 1.0;" in generated
+    assert "increment(value);" in generated
+    assert "&value" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_private_pointer_local_alias_fails_closed(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void increment(thread float values[1]) {
+      values[0] += 1.0f;
+    }
+
+    kernel void local_pointer_alias(device float* output [[buffer(0)]]) {
+      float value = 2.0f;
+      thread float* alias = &value;
+      increment(alias);
+      output[0] = value;
+    }
+    """
+    shader_path = tmp_path / "private_pointer_local_alias.metal"
+    shader_path.write_text(shader)
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        air_path = tmp_path / "private_pointer_local_alias.air"
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(shader_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0
+
+    with pytest.raises(DirectXPrivatePointerParameterError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "local_pointer_alias"
+    assert excinfo.value.parameter_name == "alias"
+    assert excinfo.value.reason == "local-pointer-declaration-unsupported"
+
+
+def test_hlsl_metal_private_reference_local_alias_fails_closed(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void local_reference_alias(device float* output [[buffer(0)]]) {
+      float value = 2.0f;
+      thread float& alias = value;
+      alias += 1.0f;
+      output[0] = value;
+    }
+    """
+    shader_path = tmp_path / "private_reference_local_alias.metal"
+    shader_path.write_text(shader)
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        air_path = tmp_path / "private_reference_local_alias.air"
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(shader_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0
+
+    with pytest.raises(DirectXPrivatePointerParameterError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "local_reference_alias"
+    assert excinfo.value.parameter_name == "alias"
+    assert excinfo.value.reason == "local-reference-declaration-unsupported"
+
+
+@pytest.mark.parametrize(
+    (
+        "alias_definition",
+        "alias_declaration",
+        "mutation",
+        "expected_reason",
+    ),
+    [
+        (
+            "",
+            "thread auto& alias = value;",
+            "alias += 1.0f;",
+            "local-reference-declaration-unsupported",
+        ),
+        (
+            "",
+            "thread decltype((value)) alias = value;",
+            "alias += 1.0f;",
+            "local-reference-declaration-unsupported",
+        ),
+        (
+            "typedef thread float* FloatAlias;",
+            "FloatAlias alias = &value;",
+            "*alias += 1.0f;",
+            "local-pointer-declaration-unsupported",
+        ),
+        (
+            "using FloatAlias = thread float*;",
+            "FloatAlias alias = &value;",
+            "*alias += 1.0f;",
+            "local-pointer-declaration-unsupported",
+        ),
+        (
+            "typedef thread float& FloatAlias;",
+            "FloatAlias alias = value;",
+            "alias += 1.0f;",
+            "local-reference-declaration-unsupported",
+        ),
+        (
+            "using FloatAlias = thread float&;",
+            "FloatAlias alias = value;",
+            "alias += 1.0f;",
+            "local-reference-declaration-unsupported",
+        ),
+    ],
+    ids=(
+        "thread-auto-reference",
+        "parenthesized-decltype-reference",
+        "typedef-thread-pointer",
+        "using-thread-pointer",
+        "typedef-thread-reference",
+        "using-thread-reference",
+    ),
+)
+def test_hlsl_metal_inferred_or_aliased_private_local_fails_closed(
+    tmp_path,
+    alias_definition,
+    alias_declaration,
+    mutation,
+    expected_reason,
+):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    {alias_definition}
+
+    kernel void hidden_local_alias(device float* output [[buffer(0)]]) {{
+      float value = 2.0f;
+      {alias_declaration}
+      {mutation}
+      output[0] = value;
+    }}
+    """
+    shader_path = tmp_path / "hidden_private_local_alias.metal"
+    shader_path.write_text(shader)
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        air_path = tmp_path / "hidden_private_local_alias.air"
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(shader_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0
+
+    with pytest.raises(DirectXPrivatePointerParameterError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "hidden_local_alias"
+    assert excinfo.value.parameter_name == "alias"
+    assert excinfo.value.reason == expected_reason
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "thread decltype(value) copy = value;",
+        "thread decltype((value + 1.0f)) copy = value + 1.0f;",
+    ),
+    ids=("unparenthesized-identifier", "parenthesized-rvalue"),
+)
+def test_hlsl_metal_decltype_value_locals_remain_values(tmp_path, declaration):
+    shader = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void decltype_value_local(device float* output [[buffer(0)]]) {{
+      float value = 2.0f;
+      {declaration}
+      copy += 1.0f;
+      output[0] = value;
+      output[1] = copy;
+    }}
+    """
+    shader_path = tmp_path / "decltype_value_local.metal"
+    shader_path.write_text(shader)
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        air_path = tmp_path / "decltype_value_local.air"
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(shader_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "float copy =" in generated
+    assert "copy += 1.0;" in generated
+    assert "output[0] = value;" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_typedef_device_pointer_local_alias_preserves_resource_lowering(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef const device float* InputPointer;
+
+    kernel void typedef_resource_alias(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      InputPointer alias = input + 1;
+      output[0] = alias[0];
+    }
+    """
+    shader_path = tmp_path / "typedef_device_pointer_local_alias.metal"
+    shader_path.write_text(shader)
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        air_path = tmp_path / "typedef_device_pointer_local_alias.air"
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(shader_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "StructuredBuffer<float> input : register(t0);" in generated
+    assert "int64_t alias_offset = int64_t(1);" in generated
+    assert "output[0] = input[uint(alias_offset)];" in generated
+    assert "InputPointer" not in generated
+    assert "float* alias" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_multi_element_thread_array_preserves_fixed_abi(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void fill(thread float values[4], thread const float source[4]) {
+      values[0] = source[0];
+    }
+    """
+    shader_path = tmp_path / "fixed_thread_array.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "void fill(inout float values[4], float source[4])" in generated
+    assert "values_base" not in generated
+    assert "source_base" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_metal_multi_element_thread_array_accepts_scalar_address(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void touch(thread float values[4]) {
+      values[0] += 1.0f;
+    }
+
+    kernel void scalar_backing(device float* output [[buffer(0)]]) {
+      float value = 2.0f;
+      touch(&value);
+      output[0] = value;
+    }
+    """
+    shader_path = tmp_path / "multi_element_scalar_backing.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "void touch(inout float values)" in generated
+    assert "values += 1.0;" in generated
+    assert "touch(value);" in generated
+    assert "&value" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        air_path = tmp_path / "multi_element_scalar_backing.air"
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(shader_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0
+
+
+def test_hlsl_metal_multi_element_thread_array_scalar_address_is_transitive(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void leaf(thread float values[4]) {
+      values[0] += 1.0f;
+    }
+
+    void middle(thread float values[4]) {
+      leaf(values);
+    }
+
+    kernel void scalar_backing(device float* output [[buffer(0)]]) {
+      float value = 2.0f;
+      middle(&value);
+      output[0] = value;
+    }
+    """
+    shader_path = tmp_path / "transitive_multi_element_scalar_backing.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "void leaf(inout float values)" in generated
+    assert "void middle(inout float values)" in generated
+    assert "leaf(values);" in generated
+    assert "middle(value);" in generated
+    assert "&value" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_multi_element_thread_array_pointer_update_fails_closed(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void advance(thread float values[4]) {
+      values += 1;
+      values[0] += 1.0f;
+    }
+
+    kernel void array_backing(device float* output [[buffer(0)]]) {
+      float values[5] = {0};
+      advance(values);
+      output[0] = values[1];
+    }
+    """
+    shader_path = tmp_path / "unsupported_fixed_array_pointer_update.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXPrivatePointerParameterError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "advance"
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "assignment-operator-unsupported"
+
+
+def test_hlsl_metal_multi_element_thread_array_pointer_arithmetic_escape_fails_closed(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    bool compare(thread float values[4]) {
+      values[0] += 0.0f;
+      return (values + 1) != values;
+    }
+
+    kernel void array_backing(device uint* output [[buffer(0)]]) {
+      float values[4] = {0};
+      output[0] = compare(values) ? 1u : 0u;
+    }
+    """
+    shader_path = tmp_path / "unsupported_fixed_array_pointer_arithmetic.metal"
+    shader_path.write_text(shader)
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        air_path = tmp_path / "unsupported_fixed_array_pointer_arithmetic.air"
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(shader_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0
+
+    with pytest.raises(DirectXPrivatePointerParameterError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.function_name == "compare"
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "bare-pointer-expression"
+
+
+def test_hlsl_metal_multi_element_thread_array_direct_decay_escapes_fail_closed(
+    tmp_path,
+):
+    cases = [
+        (
+            "comparison",
+            """
+            bool compare(thread float left[4], thread float right[4]) {
+              left[0] += 0.0f;
+              right[0] += 0.0f;
+              return left != right;
+            }
+
+            kernel void probe(device uint* output [[buffer(0)]]) {
+              float left[4] = {0};
+              float right[4] = {1};
+              output[0] = compare(left, right) ? 1u : 0u;
+            }
+            """,
+            "compare",
+            "left",
+        ),
+        (
+            "local_alias",
+            """
+            float read_alias(thread float values[4]) {
+              values[0] += 0.0f;
+              thread float* alias = values;
+              return alias[0];
+            }
+
+            kernel void probe(device float* output [[buffer(0)]]) {
+              float values[4] = {0};
+              output[0] = read_alias(values);
+            }
+            """,
+            "read_alias",
+            "values",
+        ),
+        (
+            "pointer_return",
+            """
+            thread float* leak(thread float values[4]) {
+              values[0] += 0.0f;
+              return values;
+            }
+
+            kernel void probe(device float* output [[buffer(0)]]) {
+              float values[4] = {0};
+              output[0] = *leak(values);
+            }
+            """,
+            "leak",
+            "values",
+        ),
+    ]
+
+    xcrun = shutil.which("xcrun")
+    for name, helper, function_name, parameter_name in cases:
+        shader = f"""
+        #include <metal_stdlib>
+        using namespace metal;
+        {helper}
+        """
+        shader_path = tmp_path / f"fixed_array_direct_decay_{name}.metal"
+        shader_path.write_text(shader)
+
+        if xcrun is not None:
+            air_path = tmp_path / f"fixed_array_direct_decay_{name}.air"
+            result = subprocess.run(
+                [
+                    xcrun,
+                    "-sdk",
+                    "macosx",
+                    "metal",
+                    "-Werror",
+                    "-c",
+                    str(shader_path),
+                    "-o",
+                    str(air_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert air_path.stat().st_size > 0
+
+        with pytest.raises(DirectXPrivatePointerParameterError) as excinfo:
+            crosstl.translate(
+                str(shader_path),
+                backend="directx",
+                format_output=False,
+                source_backend="metal",
+            )
+
+        assert excinfo.value.function_name == function_name
+        assert excinfo.value.parameter_name == parameter_name
+        assert excinfo.value.reason == "bare-pointer-expression"
+
+
+def test_hlsl_metal_storage_pointer_postincrement_loads_before_advancing(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    uint consume(const device uint8_t* values) {
+      return uint(*values++);
+    }
+
+    kernel void storage_pointer_postincrement(
+        const device uint8_t* input [[buffer(0)]],
+        device uint* output [[buffer(1)]]) {
+      const device uint8_t* row = input;
+      output[0] = consume(row);
+    }
+    """
+    shader_path = tmp_path / "storage_pointer_postincrement.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "uint __crossgl_resource_pointer_postincrement_" in generated
+    assert "inout int64_t offset" in generated
+    assert "offset += int64_t(1);" in generated
+    assert "*values++" not in generated
+    assert "StructuredBuffer<uint8_t*>" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("pointer_type", "expected_type"),
+    [
+        ("bfloat16_t*", "bfloat16_t"),
+        ("bfloat16_t**", "bfloat16_t*"),
+        ("thread bfloat16_t*&", "thread bfloat16_t"),
+    ],
+)
+def test_hlsl_postincrement_dereference_type_removes_one_pointer_layer(
+    pointer_type,
+    expected_type,
+):
+    codegen = HLSLCodeGen()
+    codegen.local_variable_types["row"] = pointer_type
+    codegen.local_variable_source_types["row"] = pointer_type
+    postincrement = UnaryOpNode("++", IdentifierNode("row"), is_postfix=True)
+    dereference = UnaryOpNode("*", postincrement)
+
+    assert codegen.expression_result_type(dereference) == expected_type
+    assert codegen.hlsl_source_expression_type(dereference) == expected_type
+
+
+def test_hlsl_metal_bfloat_storage_pointer_postincrement_uses_pointee_type(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+    typedef bfloat bfloat16_t;
+
+    bfloat16_t select_max(bfloat16_t left, bfloat16_t right) {
+      return left > right ? left : right;
+    }
+
+    bfloat16_t consume(const device bfloat16_t* values) {
+      bfloat16_t current = *values++;
+      return select_max(current, *values);
+    }
+
+    kernel void bfloat_pointer_postincrement(
+        const device bfloat16_t* input [[buffer(0)]],
+        device bfloat16_t* output [[buffer(1)]]) {
+      output[0] = consume(input);
+    }
+    """
+    shader_path = tmp_path / "bfloat_pointer_postincrement.metal"
+    shader_path.write_text(shader, encoding="utf-8")
+    assert_metal_warnings_clean_if_available(
+        shader_path,
+        tmp_path / "bfloat_pointer_postincrement.air",
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "StructuredBuffer<uint16_t> input : register(t0);" in generated
+    assert "RWStructuredBuffer<uint16_t> output : register(u1);" in generated
+    assert "uint __crossgl_resource_pointer_postincrement_" in generated
+    assert "uint current = __crossgl_resource_pointer_postincrement_" in generated
+    assert "return select_max(current, values[uint(values_offset)]);" in generated
+    assert (
+        "__crossgl_bfloat16_to_float(uint(left)) > "
+        "__crossgl_bfloat16_to_float(uint(right))" in generated
+    )
+    assert "output[0] = uint16_t(consume(input, int64_t(0)));" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(
+        generated,
+        tmp_path,
+        profile="cs_6_2",
+        compiler_arguments=("-enable-16bit-types",),
+    )
 
 
 def test_hlsl_resource_pointer_alias_rejects_readonly_write():
@@ -44823,6 +48457,99 @@ def test_hlsl_private_pointer_if_preserves_assignment_before_shadowing():
     assert "float read_selected(inout float values[8], int values_base)" in generated
 
 
+def test_hlsl_metal_bfloat_workgroup_pointer_preserves_logical_pointee_alias(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef bfloat bfloat16_t;
+
+    void update(
+        threadgroup bfloat16_t* shared_vals,
+        uint lane) {
+      shared_vals[lane] = bfloat16_t(float(shared_vals[lane]) + 1.0f);
+    }
+
+    kernel void bfloat_workgroup_alias(
+        device float* output [[buffer(0)]],
+        uint lane [[thread_index_in_threadgroup]]) {
+      threadgroup bfloat16_t shared_vals[32];
+      shared_vals[lane] = bfloat16_t(float(lane));
+      update(shared_vals, lane);
+      output[lane] = float(shared_vals[lane]);
+    }
+    """
+    shader_path = tmp_path / "bfloat_workgroup_alias.metal"
+    shader_path.write_text(shader)
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        air_path = tmp_path / "bfloat_workgroup_alias.air"
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(shader_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "groupshared uint16_t bfloat_workgroup_alias_shared_vals[32];" in generated
+    assert "__crosstl_workgroup_shared_vals_" in generated
+    assert "int shared_vals_offset" in generated
+    assert "__crossgl_bfloat16_to_float" in generated
+    assert "bfloat16*" not in generated
+    assert "bfloat16_t*" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_workgroup_pointer_rejects_true_element_reinterpretation():
+    shader = """
+    shader WorkgroupPointerElementTypeMismatch {
+        void update(threadgroup float* values) {
+            values[0] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup uint storage[1];
+                update(storage);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXWorkgroupPointerError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "update"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.reason == "element-type-mismatch"
+
+
 def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes(tmp_path):
     shader = """
     shader WorkgroupPointerViews {
@@ -46215,3 +49942,291 @@ def test_hlsl_software_subgroup_requires_explicit_relative_fallback_policy():
         )
 
     assert excinfo.value.reason == "out-of-range-policy-unproven"
+
+
+@pytest.mark.parametrize(
+    "shader",
+    [
+        """
+        using Scalar = int;
+        Scalar pass(Scalar value) { return value; }
+        __global__ void probe(const int* input, int* output) {
+          output[0] = pass(input[0]);
+        }
+        """,
+        """
+        __global__ void probe(const int* input, int* output) {
+          using Scalar = int;
+          Scalar value = input[0];
+          output[0] = value;
+        }
+        """,
+    ],
+    ids=("top-level", "function-local"),
+)
+def test_hlsl_hip_concrete_unqualified_aliases_lower_completely(tmp_path, shader):
+    shader_path = tmp_path / "concrete_unqualified_alias.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="hip",
+    )
+
+    assert "Scalar" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_hip_qualified_nested_record_type_and_alias_validate(tmp_path):
+    shader = """
+    class Outer { public: class Inner { public: int value; } item; };
+    using Qualified = Outer::Inner;
+    Outer::Inner pass_direct(Outer::Inner value) { return value; }
+    Qualified pass_alias(Qualified value) { return value; }
+
+    __global__ void probe(const int* input, int* output) {
+      Outer state;
+      state.item.value = input[0];
+      state.item = pass_direct(state.item);
+      state.item = pass_alias(state.item);
+      output[0] = state.item.value;
+    }
+    """
+    shader_path = tmp_path / "qualified_nested_record_alias.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="hip",
+    )
+
+    assert "Inner pass_direct(Inner value)" in generated
+    assert "Inner pass_alias(Inner value)" in generated
+    assert "Outer::Inner" not in generated
+    assert "Qualified" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_hip_inherited_fields_aliases_and_enums_validate(tmp_path):
+    shader = """
+    class Base {
+    public:
+      using Scalar = int;
+      enum Kind { Zero = 2, One = Zero + 1, Two } kind;
+      enum class Mode : int { First = 5, Second } mode;
+      Scalar base;
+    };
+    class Right { public: int right; };
+    class Derived : public Base, public Right { public: Scalar own; };
+
+    __global__ void probe(const int* input, int* output) {
+      Derived state;
+      state.kind = Derived::Two;
+      state.mode = Derived::Mode::Second;
+      state.base = input[0];
+      state.right = input[1];
+      state.own = input[2];
+      output[0] = int(state.kind) + state.base + state.right + state.own;
+    }
+    """
+    shader_path = tmp_path / "inherited_fields_aliases_enums.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="hip",
+    )
+
+    assert (
+        "struct Derived {\n    int kind;\n    int mode;\n    int base;\n"
+        "    int right;\n    int own;\n};" in generated
+    )
+    assert "state.kind = 4;" in generated
+    assert "state.mode = 6;" in generated
+    assert "Derived::" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("case_name", "records", "body"),
+    [
+        (
+            "inherited-instance",
+            "class Base { public: int value; int get() { return value; } }; "
+            "class Derived : public Base { public: int own; };",
+            "Derived state; state.value = input[0]; state.own = input[1]; "
+            "output[0] = state.get() + state.own;",
+        ),
+        (
+            "nested-instance",
+            "class Outer { public: class Inner { public: int value; "
+            "int get() { return value; } } item; };",
+            "Outer state; state.item.value = input[0]; "
+            "output[0] = state.item.get();",
+        ),
+        (
+            "own-instance",
+            "class State { public: int value; int get() { return value; } };",
+            "State state; state.value = input[0]; output[0] = state.get();",
+        ),
+        (
+            "inherited-static",
+            "class Base { public: static int twice(int value) { return value * 2; } }; "
+            "class Derived : public Base {};",
+            "output[0] = Derived::twice(input[0]);",
+        ),
+    ],
+)
+def test_hlsl_hip_dropped_record_method_calls_fail_closed(
+    tmp_path, case_name, records, body
+):
+    shader = f"""
+    {records}
+    __global__ void probe(const int* input, int* output) {{ {body} }}
+    """
+    shader_path = tmp_path / f"record_method_{case_name}.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    with pytest.raises(ValueError, match="HIP record method call"):
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="hip",
+        )
+
+
+def test_hlsl_hip_inherited_nested_record_type_validates(tmp_path):
+    shader = """
+    class Base { public: class Item { public: int value; } item; };
+    class Derived : public Base {};
+    Derived::Item pass(Derived::Item value) { return value; }
+
+    __global__ void probe(const int* input, int* output) {
+      Derived state;
+      state.item.value = input[0];
+      state.item = pass(state.item);
+      output[0] = state.item.value;
+    }
+    """
+    shader_path = tmp_path / "inherited_nested_record_type.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="hip",
+    )
+
+    assert "Item pass(Item value)" in generated
+    assert "Derived::Item" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_hip_inherited_static_constant_is_inlined(tmp_path):
+    shader = """
+    class Base { public: static constexpr int Value = 3; };
+    class Derived : public Base {};
+
+    __global__ void probe(const int*, int* output) {
+      output[0] = Derived::Value;
+    }
+    """
+    shader_path = tmp_path / "inherited_static_constant.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="hip",
+    )
+
+    assert "output[0] = 3;" in generated
+    assert "Derived::Value" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_hip_unrepresentable_static_constant_use_fails_closed(tmp_path):
+    shader = """
+    class State { public: static constexpr int Value = true ? 3 : 4; };
+    __global__ void probe(const int*, int* output) { output[0] = State::Value; }
+    """
+    shader_path = tmp_path / "unsupported_static_constant.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    with pytest.raises(ValueError, match="cannot be represented exactly"):
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="hip",
+        )
+
+
+@pytest.mark.parametrize(
+    ("case_name", "records", "body", "message"),
+    [
+        (
+            "virtual",
+            "class Base { public: int value; }; "
+            "class Derived : virtual public Base { public: int own; };",
+            "Derived state; state.own = input[0]; output[0] = state.own;",
+            "virtual record inheritance is unsupported",
+        ),
+        (
+            "diamond",
+            "class Base { public: int value; }; class Left : public Base {}; "
+            "class Right : public Base {}; "
+            "class Diamond : public Left, public Right { public: int own; };",
+            "Diamond state; state.own = input[0]; output[0] = state.own;",
+            "colliding storage member names",
+        ),
+        (
+            "sibling-nested-name",
+            "class Left { public: class Inner { public: int left; } item; }; "
+            "class Right { public: class Inner { public: int right; } item; };",
+            "Left left; Right right; left.item.left = input[0]; "
+            "right.item.right = input[1]; "
+            "output[0] = left.item.left + right.item.right;",
+            "Conflicting HIP nested record output name",
+        ),
+    ],
+)
+def test_hlsl_hip_unsafe_record_layouts_fail_closed(
+    tmp_path, case_name, records, body, message
+):
+    shader = f"""
+    {records}
+    __global__ void probe(const int* input, int* output) {{ {body} }}
+    """
+    shader_path = tmp_path / f"unsafe_record_{case_name}.hip"
+    shader_path.write_text(shader)
+    assert_hip_cpp_warnings_clean_if_available(shader_path)
+
+    with pytest.raises(ValueError, match=message):
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="hip",
+        )

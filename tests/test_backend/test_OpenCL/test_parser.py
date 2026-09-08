@@ -340,3 +340,67 @@ def test_clspv_line_broken_private_qualifier_declaration_parses():
     assert tab.qualifiers == ["__private__"]
     assert tab.vtype == "unsigned char[128]"
     assert tab.name == "tab"
+
+
+def test_nested_anonymous_record_declarators_are_preserved():
+    from crosstl.backend.common_ast import StructNode, VariableNode
+
+    cases = (
+        (
+            "struct",
+            "inner",
+            """
+            typedef struct Outer {
+              struct { int value; } inner;
+            } Outer;
+            """,
+        ),
+        (
+            "union",
+            "payload",
+            """
+            typedef struct Outer {
+              union { int value; uint bits; } payload;
+            } Outer;
+            """,
+        ),
+    )
+
+    for keyword, declarator_name, source in cases:
+        ast = parse_code(source)
+        outer = ast.statements[0]
+        nested, declarator = outer.members
+
+        assert isinstance(nested, StructNode)
+        assert nested.name is None
+        assert getattr(nested, "is_union", False) is (keyword == "union")
+        assert isinstance(declarator, VariableNode)
+        assert declarator.vtype == f"{keyword} <anonymous>"
+        assert declarator.name == declarator_name
+
+
+def test_function_local_anonymous_record_declarators_are_preserved():
+    from crosstl.backend.common_ast import StructNode, VariableNode
+
+    ast = parse_code("""
+        kernel void probe(global int* output) {
+          struct { int value; } left, right;
+          union { int selected; uint bits; } payloads[2];
+          output[0] = left.value + right.value + payloads[1].selected;
+        }
+        """)
+
+    body = ast.statements[0].body
+    struct_node, left, right, union_node, payloads = body[:5]
+    assert isinstance(struct_node, StructNode)
+    assert struct_node.name is None
+    assert getattr(struct_node, "is_union", False) is False
+    assert isinstance(left, VariableNode)
+    assert (left.vtype, left.name) == ("struct <anonymous>", "left")
+    assert isinstance(right, VariableNode)
+    assert (right.vtype, right.name) == ("struct <anonymous>", "right")
+    assert isinstance(union_node, StructNode)
+    assert union_node.name is None
+    assert getattr(union_node, "is_union", False) is True
+    assert isinstance(payloads, VariableNode)
+    assert (payloads.vtype, payloads.name) == ("union <anonymous>[2]", "payloads")

@@ -425,3 +425,138 @@ def test_pocl_statement_expression_macro_block_codegen_reparse():
 
     assert "// OpenCL macro block: DEFINE_BODY_G(" in crossgl
     assert "test_rotate" in crossgl
+
+
+def test_opencl_nested_anonymous_records_materialize_named_crossgl_types():
+    cases = (
+        (
+            "inner",
+            "struct",
+            """
+            typedef struct Outer {
+              struct { int value; } inner;
+            } Outer;
+            kernel void probe(global const int* input, global int* output) {
+              Outer state;
+              state.inner.value = input[0];
+              output[0] = state.inner.value;
+            }
+            """,
+        ),
+        (
+            "payload",
+            "union",
+            """
+            typedef struct Outer {
+              union { int value; uint bits; } payload;
+            } Outer;
+            kernel void probe(global const int* input, global int* output) {
+              Outer state;
+              state.payload.value = input[0];
+              output[0] = state.payload.value;
+            }
+            """,
+        ),
+    )
+
+    for member_name, keyword, source in cases:
+        crossgl = generate_crossgl(source)
+        assert crossgl == generate_crossgl(source)
+        synthetic_prefix = f"CrossGLAnonymous_Outer_{member_name}_{keyword}_"
+        assert f"struct {synthetic_prefix}" in crossgl
+        assert f"{synthetic_prefix}" in crossgl
+        assert f" {member_name};" in crossgl
+        assert "hip_anonymous_union" not in crossgl
+        assert "struct Outer {\n};" not in crossgl
+        assert f"state.{member_name}.value" in crossgl
+
+
+def test_opencl_nested_anonymous_struct_declarators_share_materialized_type():
+    crossgl = generate_crossgl("""
+        typedef struct Outer {
+          struct { int value; } left, right;
+        } Outer;
+        kernel void probe(global const int* input, global int* output) {
+          Outer state;
+          state.left.value = input[0];
+          state.right.value = input[1];
+          output[0] = state.left.value + state.right.value;
+        }
+        """)
+
+    declaration_lines = [
+        line.strip()
+        for line in crossgl.splitlines()
+        if "CrossGLAnonymous_Outer_left_struct_" in line and "struct " not in line
+    ]
+    assert len(declaration_lines) == 2
+    assert declaration_lines[0].split()[0] == declaration_lines[1].split()[0]
+    assert declaration_lines[0].endswith(" left;")
+    assert declaration_lines[1].endswith(" right;")
+
+
+def test_opencl_nested_record_materialization_handles_named_injected_and_arrays():
+    crossgl = generate_crossgl("""
+        typedef struct Outer {
+          struct Named { int named_value; } named;
+          struct { int injected_value; };
+          union { int selected; uint bits; };
+          struct { int item_value; } items[2];
+        } Outer;
+        kernel void probe(global const int* input, global int* output) {
+          Outer state;
+          state.named.named_value = input[0];
+          state.injected_value = input[1];
+          state.selected = input[2];
+          state.items[1].item_value = input[3];
+          output[0] = state.named.named_value + state.injected_value
+              + state.selected + state.items[1].item_value;
+        }
+        """)
+
+    assert "struct Named {" in crossgl
+    assert "Named named;" in crossgl
+    assert "i32 injected_value;" in crossgl
+    assert "i32 selected;" in crossgl
+    assert "u32 bits;" in crossgl
+    assert "array<CrossGLAnonymous_Outer_items_struct_" in crossgl
+    assert ", 2> items;" in crossgl
+    assert "struct <anonymous>" not in crossgl
+    assert "hip_anonymous_union" not in crossgl
+    assert "state.named.named_value" in crossgl
+    assert "state.injected_value" in crossgl
+    assert "state.selected" in crossgl
+    assert "state.items[1].item_value" in crossgl
+
+
+def test_opencl_function_local_anonymous_records_materialize_named_types():
+    source = """
+        kernel void probe(global const int* input, global int* output) {
+          struct { int value; } left, right;
+          union { int selected; uint bits; } payloads[2];
+          left.value = input[0];
+          right.value = input[1];
+          payloads[1].selected = left.value + right.value;
+          output[0] = payloads[1].selected;
+        }
+        """
+
+    crossgl = generate_crossgl(source)
+    assert crossgl == generate_crossgl(source)
+
+    definitions = {
+        line.split()[1]: line
+        for line in crossgl.splitlines()
+        if line.startswith("struct CrossGLFunctionLocal_probe_")
+    }
+    struct_name = next(name for name in definitions if "_left_struct_" in name)
+    union_name = next(name for name in definitions if "_payloads_union_" in name)
+
+    assert crossgl.index(f"struct {struct_name} {{") < crossgl.index("fn probe(")
+    assert crossgl.index(f"struct {union_name} {{") < crossgl.index("fn probe(")
+    assert f"var left: {struct_name};" in crossgl
+    assert f"var right: {struct_name};" in crossgl
+    assert f"var payloads: array<{union_name}, 2>;" in crossgl
+    assert "struct None" not in crossgl
+    assert "struct <anonymous>" not in crossgl
+    assert "union <anonymous>" not in crossgl

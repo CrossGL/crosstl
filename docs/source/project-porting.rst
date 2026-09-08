@@ -856,6 +856,46 @@ reflection, and native compiler coverage; it does not claim numerical
 execution, DirectX whole-family translation, MLX host-runtime redirection, or
 MLX test-suite parity.
 
+The DirectX path translates the same 2,396 reduction entries to standalone
+``CSMain`` artifacts. Its compact schema-v2
+``reduce.directx-translation.json`` contract preserves all 39 shapes, nine
+kernel templates, six operator families, 44 concrete operator types, 13
+input/output types, and 9,216 exact materializations. Every entry pins both its
+HLSL source and non-empty DXIL identity, byte count, materialization digest, and
+resource digest. Exact target reflection contains 27,382 resources across
+one- through thirteen-resource interfaces. The 37 shapes other than ``init``
+and ``all`` additionally expose generated ``CrossGLDispatchInfo`` metadata;
+the source data, shape, stride, rank, and reduction constants retain their
+shape-specific coordinates and exact HLSL storage types.
+
+The shared DirectX lowering emits a portable quiet binary32 value for
+unshadowed ``NAN``, preserves explicit componentwise complex SIMD shuffle
+overloads, and converts only proven direct void tail recursion to an iterative
+loop. Device and constant pointer arrays lower to bounded resource offsets with
+transitive whole-array and element writeback only after exact lexical overload,
+alias, and backing-object provenance resolution. Logical bfloat pointee types
+remain distinct from their physical ``uint16_t`` storage, and postfix
+pointer-dereference typing removes exactly one pointer layer. Unresolved
+aggregate pointer members or arrays, unsafe recursion, ambiguous pointer-array
+aliasing or reinterpretation, and unsupported HIP record lifecycle or layout
+remain fail-closed. Nested and function-local anonymous records are
+materialized deterministically when their complete layout is representable.
+Unlike the OpenGL lowering, the native HLSL path introduces no additional
+source-scoped 32-bit index-range portability promise.
+
+The pre-release native proof preserves one HLSL and one DXIL artifact for each
+entry and independently recompiles all 2,396 HLSL artifacts with
+checksum-pinned DXC, requiring byte-identical non-empty DXIL before accepting
+the compact contract. Required Windows CI partitions the contract into 24
+disjoint shards: 20 contain 100 entries and four contain 99. Each shard
+retranslates its exact entries, verifies deterministic HLSL identity,
+materialization provenance, ``CSMain`` workgroup metadata, and exact reflected
+ABI, then compiles with ``-enable-16bit-types -WX -T cs_6_2 -E CSMain`` and
+requires a non-empty DXIL module. Together with the Metal and OpenGL contracts
+this closes complete discovered-reduce translation, reflection, and native
+compiler coverage on all three targets; it does not claim numerical execution,
+MLX host-runtime redirection, or MLX test-suite parity.
+
 OpenGL Software Subgroup Specialization
 ----------------------------------------
 
