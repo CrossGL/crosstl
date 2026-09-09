@@ -3829,7 +3829,7 @@ def test_metal_texture_proj_grad_offset_emits_division_with_gradient_and_offset(
     assert "textureProjGradOffset(" not in generated_code
 
 
-def test_metal_shared_local_variables_use_threadgroup_address_space():
+def test_metal_shared_local_variables_use_threadgroup_address_space(tmp_path):
     shader = """
     shader SharedLocalStorage {
         compute {
@@ -3849,6 +3849,63 @@ def test_metal_shared_local_variables_use_threadgroup_address_space():
     assert "threadgroup int scratch[4];" in generated_code
     assert "\n    int data[4];" not in generated_code
     assert "\n    int scratch[4];" not in generated_code
+
+    shader_path = tmp_path / "threadgroup-native-widths.metal"
+    shader_path.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+void consume_i8(threadgroup int8_t* values) { values[0] = int8_t(1); }
+void consume_u8(threadgroup uint8_t* values) { values[0] = uint8_t(1); }
+void consume_i16(threadgroup int16_t* values) { values[0] = int16_t(1); }
+void consume_u16(threadgroup uint16_t* values) { values[0] = uint16_t(1); }
+void consume_i32(threadgroup int* values) { values[0] = 1; }
+void consume_f32(threadgroup float* values) { values[0] = 1.0f; }
+
+kernel void native_width_probe(uint lid [[thread_index_in_threadgroup]]) {
+  threadgroup int8_t i8_values[4];
+  threadgroup uint8_t u8_values[4];
+  threadgroup int16_t i16_values[4];
+  threadgroup uint16_t u16_values[4];
+  threadgroup int i32_values[4];
+  threadgroup float f32_values[4];
+  if (lid == 0) {
+    consume_i8(i8_values);
+    consume_u8(u8_values);
+    consume_i16(i16_values);
+    consume_u16(u16_values);
+    consume_i32(i32_values);
+    consume_f32(f32_values);
+  }
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    for declaration in (
+        "threadgroup char i8_values[4];",
+        "threadgroup uchar u8_values[4];",
+        "threadgroup short i16_values[4];",
+        "threadgroup ushort u16_values[4];",
+        "threadgroup int i32_values[4];",
+        "threadgroup float f32_values[4];",
+    ):
+        assert declaration in generated_code
+    for widened_declaration in (
+        "threadgroup int i8_values[4];",
+        "threadgroup uint u8_values[4];",
+        "threadgroup int i16_values[4];",
+        "threadgroup uint u16_values[4];",
+    ):
+        assert widened_declaration not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_stage_local_shared_variables_emit_inside_kernel():

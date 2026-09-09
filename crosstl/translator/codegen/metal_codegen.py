@@ -7331,7 +7331,7 @@ class MetalCodeGen:
 
             local_name = self.metal_local_identifier_name(stmt.name)
             declaration = format_c_style_array_declaration(
-                self.map_type(var_type), local_name
+                self.metal_local_storage_declaration_type(stmt, var_type), local_name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             declaration = self.maybe_format_unused_local_declaration(
@@ -7797,6 +7797,26 @@ class MetalCodeGen:
 
     def local_variable_type_node(self, stmt):
         return getattr(stmt, "var_type", None) or getattr(stmt, "vtype", None)
+
+    def metal_local_storage_declaration_type(self, node, declared_type):
+        """Map a local type while preserving native threadgroup storage width.
+
+        Arithmetic values intentionally use CrossGL's widened fixed-width integer
+        mapping, but Metal threadgroup storage has a physical ABI.  In particular,
+        an array passed to a ``threadgroup T*`` helper must retain the source
+        ``char``/``uchar``/``short``/``ushort`` element width rather than decay
+        from a widened ``int``/``uint`` array.
+        """
+        mapped_type = self.map_type(declared_type)
+        if self.local_variable_address_space(node) != "threadgroup":
+            return mapped_type
+
+        source_type = self.type_name_string(declared_type)
+        base_type, array_suffix = split_array_type_suffix(source_type)
+        native_type = self.metal_native_narrow_bitcast_storage_type(base_type)
+        if native_type is None:
+            return mapped_type
+        return f"{native_type}{array_suffix}"
 
     def array_indirect_element_type_node(self, raw_type):
         if not self.is_array_type_node(raw_type):
