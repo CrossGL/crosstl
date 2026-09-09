@@ -1093,7 +1093,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "35a7f1de77b178cc459651431336b987a336e11827ff46b2c8ac38221ab0e741",
+      "sha256": "a99ca6fbe0a4cc1462b7f9e0c85cd17206c5ebed0ea02f75b4166f879ad3ad91",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1237,11 +1237,11 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 1321546,
+      "generated_size_bytes_total": 1321996,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint8int8",
-          "sizeBytes": 972
+          "sizeBytes": 974
         },
         "maximum": {
           "entryPoint": "gn4large_ArcTancomplex64complex64",
@@ -1730,7 +1730,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
       "schema_version": 1,
-      "sha256": "afb4d74c25d07203ded397df7f740d9721f9611b0c9bae64ee629a9043296e83",
+      "sha256": "259815d4802aef0932911a14d9096b3597f5e2bd35cc76ac484fd1668a05b4b2",
       "entry_identity_fields": [
         "entryPoint",
         "operator",
@@ -1826,11 +1826,11 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 189047,
+      "generated_size_bytes_total": 189353,
       "generated_size_range": {
         "minimum": {
-          "entryPoint": "ss_Addint8",
-          "sizeBytes": 668
+          "entryPoint": "ss_Addbool_",
+          "sizeBytes": 670
         },
         "maximum": {
           "entryPoint": "ss_LogAddExpcomplex64",
@@ -1887,7 +1887,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "01fb47137f7a330cad3404a5c81abd677b455ae010aceb3d88e92f01d257ca5e",
+      "sha256": "5540c68fde6b3b3b39f5bdb7100523a4d45896a78d0c746d5a71cc5754c451c5",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1900,7 +1900,7 @@
         "sizeBytes"
       ],
       "scalar_subset_path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
-      "scalar_subset_sha256": "afb4d74c25d07203ded397df7f740d9721f9611b0c9bae64ee629a9043296e83"
+      "scalar_subset_sha256": "259815d4802aef0932911a14d9096b3597f5e2bd35cc76ac484fd1668a05b4b2"
     },
     "shape_counts": {
       "g1": 238,
@@ -1998,11 +1998,11 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 5140983,
+      "generated_size_bytes_total": 5146491,
       "generated_size_range": {
         "minimum": {
-          "entryPoint": "ss_Addint8",
-          "sizeBytes": 668
+          "entryPoint": "ss_Addbool_",
+          "sizeBytes": 670
         },
         "maximum": {
           "entryPoint": "gn4large_LogAddExpcomplex64",
@@ -2442,8 +2442,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/copy.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "5efd3b2b238ba4022e75fcf6848aedb6623af9d50ed1a9bf4e94cbd48aa3ef4f",
-      "size_bytes": 2596398,
+      "sha256": "648e989cacb5e9567ef889531c7bf9d3dd488bb0fb77f2aa924a9b032c47d564",
+      "size_bytes": 2599160,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2580,13 +2580,17 @@
       "resource_type_counts": {
         "const device bfloat*": 192,
         "const device bool*": 192,
+        "const device char*": 192,
         "const device complex_t_float*": 192,
         "const device float*": 192,
         "const device half*": 192,
-        "const device int*": 576,
+        "const device int*": 192,
         "const device int64_t*": 192,
-        "const device uint*": 576,
+        "const device short*": 192,
+        "const device uchar*": 192,
+        "const device uint*": 192,
         "const device uint64_t*": 192,
+        "const device ushort*": 192,
         "constant int&": 390,
         "constant int*": 390,
         "constant int64_t&": 988,
@@ -2594,13 +2598,17 @@
         "constant uint&": 598,
         "device bfloat*": 198,
         "device bool*": 198,
+        "device char*": 198,
         "device complex_t_float*": 172,
         "device float*": 198,
         "device half*": 198,
-        "device int*": 594,
+        "device int*": 198,
         "device int64_t*": 172,
-        "device uint*": 594,
-        "device uint64_t*": 172
+        "device short*": 198,
+        "device uchar*": 198,
+        "device uint*": 198,
+        "device uint64_t*": 172,
+        "device ushort*": 198
       },
       "resource_abi_fields": [
         "name",
@@ -2618,7 +2626,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 2152028,
+      "generated_size_bytes_total": 2154368,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "g1_copybool_bool_",
@@ -2680,8 +2688,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "0b00b118c0fc2137a60d28400abe3b48de1ccb7a27193273b7b83d3119330abc",
-      "size_bytes": 1476769,
+      "sha256": "5f392b62222ee5a75a1c2b05cb5b40850e55d39023c95778dea036bc4cb705ba",
+      "size_bytes": 1477019,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2741,14 +2749,14 @@
         "complex64_t": "complex_t_float",
         "float": "float",
         "float16_t": "half",
-        "int16_t": "int",
+        "int16_t": "short",
         "int32_t": "int",
         "int64_t": "int64_t",
-        "int8_t": "int",
-        "uint16_t": "uint",
+        "int8_t": "char",
+        "uint16_t": "ushort",
         "uint32_t": "uint",
         "uint64_t": "uint64_t",
-        "uint8_t": "uint"
+        "uint8_t": "uchar"
       },
       "resource_abi_fields": [
         "name",
@@ -2765,7 +2773,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 19829720,
+      "generated_size_bytes_total": 19833148,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "init_reduce_andbool_",

@@ -11678,7 +11678,7 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "35a7f1de77b178cc459651431336b987a336e11827ff46b2c8ac38221ab0e741",
+        "sha256": "a99ca6fbe0a4cc1462b7f9e0c85cd17206c5ebed0ea02f75b4166f879ad3ad91",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -11787,14 +11787,10 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 1321546,
-        "generated_size_range": {
-            "minimum": {"entryPoint": "v_Absint8int8", "sizeBytes": 972},
-            "maximum": {
-                "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 4468,
-            },
-        },
+        "generated_size_bytes_total": contract["artifactContract"][
+            "generatedSizeBytesTotal"
+        ],
+        "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
     }
     assert status["native_validation"] == {
         "platform": "macos-latest",
@@ -12296,7 +12292,7 @@ def test_binary_scalar_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
         "schema_version": 1,
-        "sha256": "afb4d74c25d07203ded397df7f740d9721f9611b0c9bae64ee629a9043296e83",
+        "sha256": "259815d4802aef0932911a14d9096b3597f5e2bd35cc76ac484fd1668a05b4b2",
         "entry_identity_fields": [
             "entryPoint",
             "operator",
@@ -12376,14 +12372,10 @@ def test_binary_scalar_metal_roundtrip_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 189047,
-        "generated_size_range": {
-            "minimum": {"entryPoint": "ss_Addint8", "sizeBytes": 668},
-            "maximum": {
-                "entryPoint": "ss_LogAddExpcomplex64",
-                "sizeBytes": 3490,
-            },
-        },
+        "generated_size_bytes_total": contract["artifactContract"][
+            "generatedSizeBytesTotal"
+        ],
+        "generated_size_range": contract["artifactContract"]["generatedSizeRange"],
     }
     assert status["native_validation"] == {
         "platform": "macos-latest",
@@ -12461,7 +12453,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "01fb47137f7a330cad3404a5c81abd677b455ae010aceb3d88e92f01d257ca5e",
+        "sha256": "5540c68fde6b3b3b39f5bdb7100523a4d45896a78d0c746d5a71cc5754c451c5",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12477,7 +12469,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
             "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json"
         ),
         "scalar_subset_sha256": (
-            "afb4d74c25d07203ded397df7f740d9721f9611b0c9bae64ee629a9043296e83"
+            "259815d4802aef0932911a14d9096b3597f5e2bd35cc76ac484fd1668a05b4b2"
         ),
     }
     contract_path = ROOT / status["contract"]["path"]
@@ -12559,19 +12551,6 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
             "reflectedResourceCountsByShape"
         ],
         "host_dispatch_workgroup_size": [1, 1, 1],
-    }
-    assert status["artifacts"] == {
-        "generated_size_bytes_total": 5140983,
-        "generated_size_range": {
-            "minimum": {
-                "entryPoint": "ss_Addint8",
-                "sizeBytes": 668,
-            },
-            "maximum": {
-                "entryPoint": "gn4large_LogAddExpcomplex64",
-                "sizeBytes": 4717,
-            },
-        },
     }
     assert status["artifacts"] == {
         "generated_size_bytes_total": contract["artifactContract"][
@@ -16247,14 +16226,14 @@ def test_reduce_metal_roundtrip_evidence_records_complete_family():
         "complex64_t": "complex_t_float",
         "float": "float",
         "float16_t": "half",
-        "int16_t": "int",
+        "int16_t": "short",
         "int32_t": "int",
         "int64_t": "int64_t",
-        "int8_t": "int",
-        "uint16_t": "uint",
+        "int8_t": "char",
+        "uint16_t": "ushort",
         "uint32_t": "uint",
         "uint64_t": "uint64_t",
-        "uint8_t": "uint",
+        "uint8_t": "uchar",
     }
     assert contract["selection"] == {
         "entryCount": 2396,

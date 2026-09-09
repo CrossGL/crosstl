@@ -38,7 +38,7 @@ REDUCE_METAL_CONTRACT_PATH = (
 )
 REDUCE_METAL_CONTRACT_SHA256 = (
     # Replaced by the guarded proof integrator.
-    "0b00b118c0fc2137a60d28400abe3b48de1ccb7a27193273b7b83d3119330abc"
+    "5f392b62222ee5a75a1c2b05cb5b40850e55d39023c95778dea036bc4cb705ba"
 )
 RESOURCE_ABI_FIELDS = ("name", "kind", "set", "binding", "access", "type")
 REDUCE_METAL_TYPE_NAMES = {
@@ -47,14 +47,14 @@ REDUCE_METAL_TYPE_NAMES = {
     "complex64_t": "complex_t_float",
     "float": "float",
     "float16_t": "half",
-    "int16_t": "int",
+    "int16_t": "short",
     "int32_t": "int",
     "int64_t": "int64_t",
-    "int8_t": "int",
-    "uint16_t": "uint",
+    "int8_t": "char",
+    "uint16_t": "ushort",
     "uint32_t": "uint",
     "uint64_t": "uint64_t",
-    "uint8_t": "uint",
+    "uint8_t": "uchar",
 }
 ENTRY_FIELDS = (
     "entryPoint",

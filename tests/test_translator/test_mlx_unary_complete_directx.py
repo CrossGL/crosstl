@@ -44,7 +44,7 @@ UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "35a7f1de77b178cc459651431336b987a336e11827ff46b2c8ac38221ab0e741"
+    "a99ca6fbe0a4cc1462b7f9e0c85cd17206c5ebed0ea02f75b4166f879ad3ad91"
 )
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
