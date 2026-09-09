@@ -17130,7 +17130,16 @@ def test_translate_project_metal_materializes_quantized_uint64_conditional_alias
     )
     payload = report.to_json()
 
-    assert payload["diagnostics"] == []
+    optional_toolchain_warnings = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic.get("severity") == "warning"
+        and diagnostic.get("code") == "project.validate.toolchain-unavailable"
+        and diagnostic.get("target") == "metal"
+        and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
+    ]
+    assert optional_toolchain_warnings == payload["diagnostics"]
+    assert len(optional_toolchain_warnings) == (0 if shutil.which("xcrun") else 1)
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     artifact = payload["artifacts"][0]
