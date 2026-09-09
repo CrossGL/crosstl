@@ -16414,6 +16414,272 @@ def test_reduce_metal_roundtrip_evidence_records_complete_family():
     assert "does not claim Metal numerical execution" in guide
 
 
+def test_quantized_metal_roundtrip_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["quantized_metal_roundtrip_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/quantized.metal"
+    assert status["source_sha256"] == (
+        "292aab5a98e3fc047b8ed91343fc10b66e5a92e12c258cde168929520ab2abfd"
+    )
+    assert status["target"] == "metal"
+    assert status["scope"] == {
+        "discovered_quantized_instantiation_count": 2052,
+        "entry_count": 2052,
+        "template_count": 17,
+        "variant_count": 38,
+        "data_type_count": 3,
+        "group_size_count": 3,
+        "bit_width_count": 6,
+        "entries_per_data_type_group_size_bit_width": 38,
+        "uncovered_quantized_metal_entry_count": 0,
+        "all_discovered_quantized_instantiations_included": True,
+    }
+
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    entry_fields = [
+        "entryPoint",
+        "templateName",
+        "templateArguments",
+        "variant",
+        "dataType",
+        "groupSize",
+        "bitWidth",
+        "sha256",
+        "sizeBytes",
+        "specializationCount",
+        "materializationSha256",
+        "resourceCount",
+        "resourcesSha256",
+    ]
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/quantized.metal-roundtrip.json",
+        "schema_version": 2,
+        "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "size_bytes": len(contract_bytes),
+        "resource_contract_count": 30,
+        "entry_identity_fields": entry_fields,
+    }
+    contract = json.loads(contract_bytes)
+    assert set(contract) == {
+        "schemaVersion",
+        "kind",
+        "commit",
+        "source",
+        "sourceSha256",
+        "target",
+        "selection",
+        "classifications",
+        "resourceContracts",
+        "artifactContract",
+        "proof",
+        "entries",
+    }
+    assert contract["schemaVersion"] == status["contract"]["schema_version"]
+    assert contract["kind"] == "crosstl-mlx-quantized-metal-roundtrip-contract"
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == status["target"]
+    assert contract["selection"] == {
+        "entryCount": 2052,
+        "templateCount": 17,
+        "variantCount": 38,
+        "dataTypeCount": 3,
+        "groupSizeCount": 3,
+        "bitWidthCount": 6,
+        "variantsPerDataTypeGroupSizeBitWidth": 38,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    entries = contract["entries"]
+    assert len(entries) == 2052
+    assert [entry["entryPoint"] for entry in entries] == sorted(
+        entry["entryPoint"] for entry in entries
+    )
+    assert len({entry["entryPoint"] for entry in entries}) == 2052
+    assert len({entry["sha256"] for entry in entries}) == 2052
+    assert len({entry["materializationSha256"] for entry in entries}) == 2052
+    assert all(list(entry) == entry_fields for entry in entries)
+
+    classifications = contract["classifications"]
+    assert set(classifications) == {
+        "templates",
+        "variants",
+        "dataTypes",
+        "groupSizes",
+        "bitWidths",
+        "specializationCounts",
+        "resourceCounts",
+        "entryClassificationSha256",
+    }
+    for field, expected_count in {
+        "templates": 17,
+        "variants": 38,
+        "dataTypes": 3,
+        "groupSizes": 3,
+        "bitWidths": 6,
+        "specializationCounts": 8,
+        "resourceCounts": 7,
+    }.items():
+        assert len(classifications[field]) == expected_count
+        assert sum(classifications[field].values()) == 2052
+    assert classifications["entryClassificationSha256"] == (
+        "5c7001d6e8eaa0135da1228044f22fd7cad8ef70def36d7ea15db94ef7fb24c6"
+    )
+
+    def canonical_json_sha256(value):
+        payload = (
+            json.dumps(
+                value,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    resource_contracts = contract["resourceContracts"]
+    assert len(resource_contracts) == status["contract"]["resource_contract_count"]
+    assert set(resource_contracts) == {entry["resourcesSha256"] for entry in entries}
+    for digest, resources in resource_contracts.items():
+        assert canonical_json_sha256(resources) == digest
+    assert all(
+        entry["resourceCount"] == len(resource_contracts[entry["resourcesSha256"]])
+        for entry in entries
+    )
+
+    artifact = contract["artifactContract"]
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 2052,
+        "artifact_count": 2052,
+        "translated_count": 2052,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": artifact["specializationCount"],
+        "unsupported_specialization_count": 0,
+        "reachable_kernel_count_per_artifact": 1,
+        "exact_materialization_digests_included": True,
+        "residual_template_syntax": False,
+        "residual_quantized_helper_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert artifact["specializationCount"] == 14904
+    assert sum(entry["specializationCount"] for entry in entries) == 14904
+    assert status["implementation_contracts"] == {
+        "nested_aggregate_contextual_type_resolution": True,
+        "namespace_scoped_template_constexpr_materialization": True,
+        "remove_cv_and_standard_type_alias_canonicalization": True,
+        "materialized_array_parameter_reconstruction": True,
+        "relocated_member_template_alias_canonicalization": True,
+        "static_struct_method_call_rebinding": True,
+        "readonly_scalar_conversion_selection": True,
+        "pointer_address_space_argument_deduction": True,
+        "static_struct_constant_alignment": True,
+        "integral_pointer_compound_offset_checks": True,
+        "thread_pointer_return_surrogates": True,
+        "same_arity_overload_selection": True,
+        "proven_storage_pointer_reinterpret_views": True,
+        "unproven_storage_pointer_reinterpretation_fails_closed": True,
+        "exact_reflected_resource_types": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": 4,
+        "maximum_resource_count_per_artifact": 22,
+        "reflected_resource_count": artifact["reflectedResourceCount"],
+        "resource_contract_count": artifact["resourceContractCount"],
+        "exact_resource_digests_included": True,
+        "exact_resource_contracts_included": True,
+        "resource_abi_fields": [
+            "name",
+            "kind",
+            "set",
+            "binding",
+            "access",
+            "type",
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert artifact["reflectedResourceCount"] == 31374
+    assert sum(entry["resourceCount"] for entry in entries) == 31374
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": artifact["generatedSizeBytesTotal"],
+        "generated_size_range": artifact["generatedSizeRange"],
+    }
+    assert artifact["generatedSizeBytesTotal"] == 39638916
+
+    assert status["terminal_proof"] == {
+        "candidate_base_commit": contract["proof"]["candidateBaseCommit"],
+        "candidate_manifest_sha256": contract["proof"]["candidateManifestSha256"],
+        "candidate_patch_sha256": contract["proof"]["candidatePatchSha256"],
+        "row_identity_sha256": contract["proof"]["rowIdentitySha256"],
+        "terminal_crosscheck_sha256": contract["proof"]["terminalCrosscheckSha256"],
+        "independent_audit_sha256": contract["proof"]["independentAuditSha256"],
+        "adversarial_summary_sha256": contract["proof"]["adversarialSummarySha256"],
+        "native_compile_count": 2052,
+        "independent_native_recompile_count": 2052,
+        "independent_air_byte_identity": True,
+        "native_compiler_streams_empty": True,
+    }
+    assert status["native_validation"] == {
+        "platform": "macos-latest",
+        "compiler": "xcrun -sdk macosx metal -std=metal3.1 -Werror -c",
+        "source_warning_exemption": None,
+        "status": "required-on-ci",
+        "ci_shard_count": 24,
+        "shard_entry_counts": [86] * 12 + [85] * 12,
+        "compiled_artifact_count": 2052,
+        "all_air_artifacts_nonempty": True,
+        "discovery_test": (
+            "tests/test_translator/"
+            "test_mlx_quantized_complete_metal_roundtrip.py::"
+            "test_current_mlx_quantized_metal_discovery_matches_contract"
+        ),
+        "test": (
+            "tests/test_translator/"
+            "test_mlx_quantized_complete_metal_roundtrip.py::"
+            "test_current_mlx_quantized_family_roundtrips_through_metal"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["metal_numerical_runtime_included"] is False
+    assert status["opengl_complete_family_translation_included"] is False
+    assert status["directx_complete_family_translation_included"] is False
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "uncovered_quantized_metal_entry_count": 0,
+        "metal_numerical_execution_included": False,
+        "opengl_whole_family_included": False,
+        "directx_whole_family_included": False,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "all 2,052 host-named entries from `quantized.metal`" in readme
+    assert "38 normalized variants over 17 source templates" in readme
+    assert "contain 31,374 reflected resources in aggregate" in readme
+    assert "requires all 2,052 AIR outputs" in readme
+    assert "does not claim Metal numerical execution" in readme
+
+
 def test_reduce_opengl_translation_evidence_records_complete_family():
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(

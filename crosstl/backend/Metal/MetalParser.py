@@ -448,6 +448,7 @@ class MetalParser:
         self.last_struct_type_aliases = []
         self.last_struct_constructors = []
         self.last_struct_call_operator_declarations = []
+        self.last_struct_nested_aggregates = []
 
     def skip_comments(self):
         while self.pos < len(self.tokens) and self.current_token[0] in [
@@ -2817,6 +2818,7 @@ class MetalParser:
         struct_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
+        struct_node.nested_structs = list(self.last_struct_nested_aggregates)
         for constructor in struct_node.constructors:
             constructor.owner_name = name
             constructor.name = name
@@ -2875,6 +2877,7 @@ class MetalParser:
         class_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
+        class_node.nested_structs = list(self.last_struct_nested_aggregates)
         for constructor in class_node.constructors:
             constructor.owner_name = name
             constructor.name = name
@@ -2953,6 +2956,7 @@ class MetalParser:
         union_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
+        union_node.nested_structs = list(self.last_struct_nested_aggregates)
         for constructor in union_node.constructors:
             constructor.owner_name = name
             constructor.name = name
@@ -3010,6 +3014,15 @@ class MetalParser:
         type_aliases = []
         constructors = []
         call_operator_declarations = []
+        nested_aggregates = []
+
+        def capture_nested_aggregate(nested):
+            if nested is None:
+                return
+            nested.lexical_owner_name = owner_name
+            nested_aggregates.append(nested)
+            members.extend(getattr(nested, "trailing_declarations", ()) or ())
+
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
@@ -3018,7 +3031,8 @@ class MetalParser:
                 self.parse_access_specifier_label()
                 continue
             if self.is_nested_aggregate_declaration_start():
-                self.skip_nested_aggregate_declaration()
+                nested = self.parse_nested_aggregate_declaration()
+                capture_nested_aggregate(nested)
                 continue
             if self.current_token == ("IDENTIFIER", "friend"):
                 self.skip_struct_method()
@@ -3060,7 +3074,8 @@ class MetalParser:
                 continue
             member_alignas = self.parse_alignas_specifiers()
             if self.is_nested_aggregate_declaration_start():
-                self.skip_nested_aggregate_declaration()
+                nested = self.parse_nested_aggregate_declaration(member_alignas)
+                capture_nested_aggregate(nested)
                 continue
             if owner_name and self.is_struct_call_operator_declaration_start():
                 declaration = self.parse_function(preserve_declaration=True)
@@ -3130,6 +3145,7 @@ class MetalParser:
         self.last_struct_type_aliases = type_aliases
         self.last_struct_constructors = constructors
         self.last_struct_call_operator_declarations = call_operator_declarations
+        self.last_struct_nested_aggregates = nested_aggregates
         return members
 
     def is_struct_call_operator_declaration_start(self):
@@ -3445,6 +3461,38 @@ class MetalParser:
             if idx < len(self.tokens) and self.tokens[idx][0] == "LPAREN":
                 idx = self.skip_balanced_tokens_at(idx, "LPAREN", "RPAREN")
         return idx
+
+    def parse_nested_aggregate_declaration(self, pre_alignas=None):
+        self.skip_gnu_extension_prefix_tokens()
+        declaration_start = self.pos
+        if self.current_token[0] in {"STRUCT", "CLASS"} or self.current_token == (
+            "IDENTIFIER",
+            "union",
+        ):
+            name_index = self.skip_leading_attribute_tokens_at(declaration_start + 1)
+            name_index = self.skip_alignas_specifier_tokens_at(name_index)
+            while (
+                name_index < len(self.tokens)
+                and self.tokens[name_index][0] == "IDENTIFIER"
+                and self.tokens[name_index][1] in AGGREGATE_ALIGNMENT_MACROS
+            ):
+                name_index += 1
+            if name_index >= len(self.tokens) or not self.is_name_token_at(name_index):
+                self.skip_nested_aggregate_declaration()
+                return None
+
+        if self.current_token[0] == "STRUCT":
+            return self.parse_struct(pre_alignas)
+        if self.current_token[0] == "CLASS":
+            return self.parse_class(pre_alignas)
+        if self.current_token == ("IDENTIFIER", "union"):
+            nested = self.parse_union()
+            if nested is not None and pre_alignas:
+                nested.alignas = list(pre_alignas)
+            return nested
+        raise SyntaxError(
+            f"Expected nested aggregate declaration, got {self.current_token[0]}"
+        )
 
     def skip_nested_aggregate_declaration(self):
         paren_depth = 0

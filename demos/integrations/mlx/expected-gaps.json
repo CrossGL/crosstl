@@ -2831,6 +2831,184 @@
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
+  "quantized_metal_roundtrip_status": {
+    "status": "selected-entry-complete-family-native-compilation-validated",
+    "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+    "source": "mlx/backend/metal/kernels/quantized.metal",
+    "source_sha256": "292aab5a98e3fc047b8ed91343fc10b66e5a92e12c258cde168929520ab2abfd",
+    "target": "metal",
+    "scope": {
+      "discovered_quantized_instantiation_count": 2052,
+      "entry_count": 2052,
+      "template_count": 17,
+      "variant_count": 38,
+      "data_type_count": 3,
+      "group_size_count": 3,
+      "bit_width_count": 6,
+      "entries_per_data_type_group_size_bit_width": 38,
+      "uncovered_quantized_metal_entry_count": 0,
+      "all_discovered_quantized_instantiations_included": true
+    },
+    "contract": {
+      "path": "demos/integrations/mlx/contracts/quantized.metal-roundtrip.json",
+      "schema_version": 2,
+      "sha256": "bdf470101f52a18d7b131542be091697cec1d667bc56e1282229720398adaa27",
+      "size_bytes": 1546482,
+      "resource_contract_count": 30,
+      "entry_identity_fields": [
+        "entryPoint",
+        "templateName",
+        "templateArguments",
+        "variant",
+        "dataType",
+        "groupSize",
+        "bitWidth",
+        "sha256",
+        "sizeBytes",
+        "specializationCount",
+        "materializationSha256",
+        "resourceCount",
+        "resourcesSha256"
+      ]
+    },
+    "project_translation": {
+      "selected_entry_run_count": 2052,
+      "artifact_count": 2052,
+      "translated_count": 2052,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "provenance": "entry-scoped-translate",
+      "intermediate": "crossgl",
+      "specialization_count": 14904,
+      "unsupported_specialization_count": 0,
+      "reachable_kernel_count_per_artifact": 1,
+      "exact_materialization_digests_included": true,
+      "residual_template_syntax": false,
+      "residual_quantized_helper_syntax": false,
+      "residual_decltype_syntax": false,
+      "residual_call_operator_syntax": false,
+      "unsupported_placeholder_count": 0
+    },
+    "implementation_contracts": {
+      "nested_aggregate_contextual_type_resolution": true,
+      "namespace_scoped_template_constexpr_materialization": true,
+      "remove_cv_and_standard_type_alias_canonicalization": true,
+      "materialized_array_parameter_reconstruction": true,
+      "relocated_member_template_alias_canonicalization": true,
+      "static_struct_method_call_rebinding": true,
+      "readonly_scalar_conversion_selection": true,
+      "pointer_address_space_argument_deduction": true,
+      "static_struct_constant_alignment": true,
+      "integral_pointer_compound_offset_checks": true,
+      "thread_pointer_return_surrogates": true,
+      "same_arity_overload_selection": true,
+      "proven_storage_pointer_reinterpret_views": true,
+      "unproven_storage_pointer_reinterpretation_fails_closed": true,
+      "exact_reflected_resource_types": true
+    },
+    "host_interface": {
+      "status": "ready",
+      "minimum_resource_count_per_artifact": 4,
+      "maximum_resource_count_per_artifact": 22,
+      "reflected_resource_count": 31374,
+      "resource_contract_count": 30,
+      "exact_resource_digests_included": true,
+      "exact_resource_contracts_included": true,
+      "resource_abi_fields": [
+        "name",
+        "kind",
+        "set",
+        "binding",
+        "access",
+        "type"
+      ],
+      "host_dispatch_workgroup_size": [
+        1,
+        1,
+        1
+      ]
+    },
+    "artifacts": {
+      "generated_size_bytes_total": 39638916,
+      "generated_size_range": {
+        "minimum": {
+          "entryPoint": "affine_dequantize_float16_t_gs_32_b_2",
+          "sizeBytes": 2860
+        },
+        "maximum": {
+          "entryPoint": "affine_gather_qmm_rhs_nt_bfloat16_t_gs_128_b_8_bm_16_bn_32_bk_32_wm_1_wn_2",
+          "sizeBytes": 40290
+        }
+      }
+    },
+    "terminal_proof": {
+      "candidate_base_commit": "6f68e09951ee3eee768eb638960b4baf9bad9259",
+      "candidate_manifest_sha256": "ecf5316aba8aecfdec90fb2d9e3efe9c95d75ab32d6d6b940c312ad95e41c4c3",
+      "candidate_patch_sha256": "414a3ac6075666bb6464fb1e04cc191aa496201a088911cdb1f736e89193db25",
+      "row_identity_sha256": "50b74eebe51c3fd368743f4d5448a5c9a88c60c918da153aa1550def00c7d766",
+      "terminal_crosscheck_sha256": "b8eacc95af8fb2bc162eb7f4c2d9381850aa58139b3d69d7c404806b39445e62",
+      "independent_audit_sha256": "e5b1d0b6e082808e8d9c715f130279527062ca27f2812098b3ac4ab098ffb7da",
+      "adversarial_summary_sha256": "118e7720c530a917a53d85fd9cd708fe839fe6292532644fc84ea35b1d127492",
+      "native_compile_count": 2052,
+      "independent_native_recompile_count": 2052,
+      "independent_air_byte_identity": true,
+      "native_compiler_streams_empty": true
+    },
+    "native_validation": {
+      "platform": "macos-latest",
+      "compiler": "xcrun -sdk macosx metal -std=metal3.1 -Werror -c",
+      "source_warning_exemption": null,
+      "status": "required-on-ci",
+      "ci_shard_count": 24,
+      "shard_entry_counts": [
+        86,
+        86,
+        86,
+        86,
+        86,
+        86,
+        86,
+        86,
+        86,
+        86,
+        86,
+        86,
+        85,
+        85,
+        85,
+        85,
+        85,
+        85,
+        85,
+        85,
+        85,
+        85,
+        85,
+        85
+      ],
+      "compiled_artifact_count": 2052,
+      "all_air_artifacts_nonempty": true,
+      "discovery_test": "tests/test_translator/test_mlx_quantized_complete_metal_roundtrip.py::test_current_mlx_quantized_metal_discovery_matches_contract",
+      "test": "tests/test_translator/test_mlx_quantized_complete_metal_roundtrip.py::test_current_mlx_quantized_family_roundtrips_through_metal"
+    },
+    "host_interface_reflection_included": true,
+    "metal_roundtrip_included": true,
+    "metal_numerical_runtime_included": false,
+    "opengl_complete_family_translation_included": false,
+    "directx_complete_family_translation_included": false,
+    "mlx_host_runtime_included": false,
+    "runtime_integration_included": false,
+    "full_mlx_test_suite_included": false,
+    "remaining_scope": {
+      "uncovered_quantized_metal_entry_count": 0,
+      "metal_numerical_execution_included": false,
+      "opengl_whole_family_included": false,
+      "directx_whole_family_included": false,
+      "mlx_host_runtime_redirection_included": false
+    },
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "reduce_opengl_translation_status": {
     "status": "selected-entry-complete-family-native-compilation-validated",
     "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",

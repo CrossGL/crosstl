@@ -58,9 +58,13 @@ from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
-from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_codegen import (
+    MetalCodeGen,
+    UnsupportedMetalFeatureError,
+)
 from crosstl.translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
+    scalar_storage_layout,
 )
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
@@ -1277,6 +1281,120 @@ def test_codegen_writable_c_array_parameter_preserves_aliasing():
     )
 
 
+def test_metal_target_pointer_compound_offsets_accept_wide_integer_ternary(
+    tmp_path,
+):
+    source = """
+    void copy_offset(
+        const device uint8_t* input,
+        device uint8_t* output,
+        uint64_t wide_offset,
+        uint narrow_offset,
+        bool use_wide) {
+      const device uint8_t* cursor = input;
+      cursor += use_wide ? wide_offset : narrow_offset;
+      output[0] = cursor[0];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    normalized = normalize(metal)
+
+    assert "cursor += use_wide ? wide_offset : narrow_offset;" in normalized
+    assert "unsupported Metal pointer offset assignment" not in metal
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        "wide-ternary-pointer-offset",
+    )
+
+
+def test_metal_target_overload_metadata_uses_unique_arity_and_ulong_members(tmp_path):
+    # Reduced from MLX quantized.metal elem_to_loc_broadcast overloads. The
+    # later six-argument overload must not overwrite the five-argument return
+    # and parameter contracts used by this call.
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    ulong2 locate(
+        uint elem,
+        constant int* shape,
+        constant int64_t* a,
+        constant int64_t* b,
+        int ndim) {
+      return ulong2(elem + uint(shape[0] + a[0] + b[0] + ndim));
+    }
+
+    ulong3 locate(
+        uint elem,
+        constant int* shape,
+        constant int64_t* a,
+        constant int64_t* b,
+        constant int64_t* c,
+        int ndim) {
+      return ulong3(elem + uint(shape[0] + a[0] + b[0] + c[0] + ndim));
+    }
+
+    void adjust(
+        device uint* data,
+        constant int* shape,
+        constant int64_t* a,
+        constant int64_t* b,
+        constant int& ndim) {
+      ulong2 idx = locate(0, shape, a, b, ndim);
+      data += idx.x;
+      data[0] = uint(idx.y);
+    }
+
+    kernel void run(
+        device uint* data [[buffer(0)]],
+        constant int* shape [[buffer(1)]],
+        constant int64_t* a [[buffer(2)]],
+        constant int64_t* b [[buffer(3)]],
+        constant int& ndim [[buffer(4)]]) {
+      adjust(data, shape, a, b, ndim);
+    }
+    """
+
+    crossgl = convert(source)
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    normalized = normalize(metal)
+
+    assert "ulong2 idx = locate(0, shape, a, b, ndim);" in normalized
+    assert "data += idx.x;" in normalized
+    assert "unsupported Metal address-space call" not in metal
+    assert "unsupported Metal pointer offset assignment" not in metal
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        "unique-arity-overload-and-ulong-members",
+    )
+
+
+def test_metal_target_pointer_compound_offsets_reject_floating_value():
+    source = """
+    void copy_offset(
+        const device uint8_t* input,
+        device uint8_t* output,
+        float amount) {
+      const device uint8_t* cursor = input;
+      cursor += amount;
+      output[0] = cursor[0];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+
+    assert (
+        "unsupported Metal pointer offset assignment: value 'amount' is not an "
+        "integer scalar for target 'cursor'" in metal
+    )
+    assert "cursor += amount;" not in metal
+
+
 def test_codegen_const_device_pointer_array_slots_round_trip_to_native_metal(tmp_path):
     code = """
     #include <metal_stdlib>
@@ -1595,6 +1713,93 @@ def test_codegen_fails_closed_for_ambiguous_lowered_sibling_overload():
         "Reader__post_in(int64_t)",
     )
     assert "qualify the intended call" in str(error)
+
+
+def test_codegen_rebinds_lowered_static_helpers_through_owner_alias(tmp_path):
+    lowered = """
+    struct BaseHelper { int tag; };
+
+    int2 BaseHelper__get_coord(uint lane) {
+        return int2(int(lane & 1u), int(lane >> 1u));
+    }
+
+    void BaseHelper__mma(thread float& d, thread float& a,
+                         thread float& b, thread float& c) {
+        d = a * b + c;
+    }
+
+    void BaseHelper__mma(thread int& d, thread int& a,
+                         thread int& b, thread int& c) {
+        d = a * b + c;
+    }
+
+    int BaseHelper__dispatch(int value) {
+        int d = 0;
+        int a = value;
+        int b = 2;
+        int c = 1;
+        mma(d, a, b, c);
+        return d;
+    }
+
+    struct Block {
+        using Helper = BaseHelper;
+        int2 coord;
+        Block(uint lane) : coord(Helper::get_coord(lane)) {}
+    };
+
+    kernel void static_helpers(
+        device int2* coords [[buffer(0)]],
+        device int* values [[buffer(1)]],
+        uint lane [[thread_index_in_threadgroup]]) {
+        Block block(lane);
+        coords[0] = block.coord;
+        values[0] = BaseHelper__dispatch(int(lane));
+    }
+    """
+
+    crossgl = convert(lowered)
+    normalized = normalize(crossgl)
+    constructor_body = normalized.split("crosstl_ctor_Block_1", 1)[1].split("}", 1)[0]
+    dispatch_body = normalized.split("BaseHelper__dispatch", 1)[1].split("}", 1)[0]
+
+    assert "BaseHelper__get_coord(lane)" in constructor_body
+    assert "Helper_u3a_u3aget_coord" not in normalized
+    assert "BaseHelper__mma(d, a, b, c);" in dispatch_body
+    assert not re.search(r"(?<![\w:])mma\s*\(", dispatch_body)
+
+    regenerated = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "BaseHelper__get_coord(lane)" in regenerated
+    assert "BaseHelper__mma(d, a, b, c);" in regenerated
+    assert_metal_compute_validates_if_available(
+        regenerated,
+        tmp_path,
+        "lowered-static-helpers",
+    )
+
+
+def test_codegen_does_not_rebind_free_call_from_lowered_static_helper():
+    lowered = """
+    struct BaseHelper { int tag; };
+
+    int transform(int value) {
+        return value * 2;
+    }
+
+    int BaseHelper__transform(int value) {
+        return value + 1;
+    }
+
+    int BaseHelper__dispatch(int value) {
+        return transform(value);
+    }
+    """
+
+    crossgl = convert(lowered)
+    dispatch_body = crossgl.split("BaseHelper__dispatch", 1)[1].split("}", 1)[0]
+
+    assert "return transform(value);" in dispatch_body
+    assert "BaseHelper__transform(value)" not in dispatch_body
 
 
 def test_codegen_rebinds_nested_lowered_sibling_calls():
@@ -3271,6 +3476,61 @@ def test_codegen_address_of_device_buffer_element_preserves_lvalue():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_thread_pointer_return_surrogate_round_trips_as_lvalue(tmp_path):
+    # Reduced from MLX steel/gemm/mma.h MMATile::elems(). CrossGL has no
+    # direct pointer-return syntax, so the importer carries the return through
+    # a buffer surrogate while the PointerReinterpretNode retains the exact
+    # source address space and pointee mutability.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Tile {
+        float2 val_frags[2];
+
+        thread float* elems() thread {
+            return reinterpret_cast<thread float*>(val_frags);
+        }
+
+        const thread float* elems() const thread {
+            return reinterpret_cast<const thread float*>(val_frags);
+        }
+    };
+
+    kernel void run(device float* out [[buffer(0)]]) {
+        Tile tile;
+        for (int i = 0; i < 4; ++i) {
+            tile.elems()[i] = float(i + 1);
+        }
+        const thread Tile& readonly_tile = tile;
+        for (int i = 0; i < 4; ++i) {
+            out[i] = readonly_tile.elems()[i];
+        }
+    }
+    """
+
+    crossgl = convert(code)
+
+    assert "RWStructuredBuffer<float> Tile__elems" in crossgl
+    assert "StructuredBuffer<float> Tile__elems" in crossgl
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert (
+        "thread float* Tile__elems__metal_receiver_mutable_thread_unqualified" in metal
+    )
+    assert (
+        "const thread float* "
+        "Tile__elems__metal_receiver_const_thread_unqualified" in metal
+    )
+    assert "RWStructuredBuffer<float> Tile__elems" not in metal
+    assert "StructuredBuffer<float> Tile__elems" not in metal
+    assert "Tile__elems__metal_receiver_mutable_thread_unqualified(tile)[i] =" in metal
+    assert (
+        "Tile__elems__metal_receiver_const_thread_unqualified(readonly_tile)[i]"
+        in metal
+    )
+    assert_metal_compute_validates_if_available(metal, tmp_path, "thread-pointer-view")
+
+
 def test_codegen_preserves_readonly_device_helper_parameters_for_hlsl(tmp_path):
     code = """
     #include <metal_stdlib>
@@ -4099,6 +4359,32 @@ def test_codegen_lowers_simdgroup_barrier_from_apple_silicon_sync_sample():
     assert "threadgroup_barrier" not in crossgl
     assert "mem_flags" not in crossgl
     parse_crossgl(crossgl)
+
+
+def test_codegen_execution_only_simdgroup_barrier_round_trips_to_metal(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void synchronize_simdgroup() {
+        simdgroup_barrier(mem_flags::mem_none);
+    }
+    """
+
+    crossgl = convert(code)
+
+    assert "subgroupExecutionBarrier();" in crossgl
+    assert "simdgroup_barrier" not in crossgl
+    assert "mem_flags_u3a_u3amem_none" not in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "simdgroup_barrier(mem_flags::mem_none);" in metal
+    assert "subgroupExecutionBarrier" not in metal
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        "execution-only-simdgroup-barrier",
+    )
 
 
 def test_codegen_lowers_execution_only_threadgroup_barrier_from_mlx_gemv():
@@ -6198,7 +6484,7 @@ def test_codegen_hoists_function_local_typedef_struct_for_project_targets(tmp_pa
     assert f"struct {canonical} {{" in crossgl
     assert "uint[2] values;" in crossgl
     assert f"thread {canonical} local" in crossgl
-    assert f"({canonical}*)input" in crossgl
+    assert f"(const device {canonical}*)input" in crossgl
     assert "local.values[0]" in crossgl
     assert "WordBlock" not in crossgl.replace(canonical, "")
     assert "Word values" not in crossgl
@@ -6214,6 +6500,61 @@ def test_codegen_hoists_function_local_typedef_struct_for_project_targets(tmp_pa
     assert "local.values[0]" in glsl
     HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
     assert_opengl_compute_validates_if_available(glsl, tmp_path, "local-typedef-struct")
+
+
+def test_codegen_preserves_function_local_uint8_array_layout(tmp_path):
+    crossgl = convert("""
+        kernel void copy_bytes(
+            const device uint8_t* input [[buffer(0)]],
+            device uint8_t* output [[buffer(1)]]) {
+            typedef struct {
+                uint8_t wi[3 * 4];
+            } vec_w;
+            thread vec_w local;
+            local = *((device vec_w*)input);
+            output[0] = local.wi[0];
+        }
+        """)
+
+    canonical = "MetalLocal_copy_bytes_vec_w"
+    assert f"@metal_alignas(1)\n    struct {canonical}" in crossgl
+    assert "uint8[12] wi;" in crossgl
+    strict_ast = CrossGLParser(
+        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
+    ).parse()
+    metal = MetalCodeGen().generate(strict_ast)
+    normalized = normalize(metal)
+    assert f"struct alignas(1) {canonical}" in normalized
+    assert "uchar wi[12];" in normalized
+    assert f"reinterpret_cast<const device {canonical}*>(input)" in normalized
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        "metal-function-local-uint8-array",
+    )
+
+
+def test_codegen_rejects_unproven_narrow_local_aggregate_alignment():
+    with pytest.raises(MetalFunctionLocalTypeResolutionError) as exc_info:
+        convert("""
+            struct Payload {
+                uint value;
+            };
+
+            void prepare() {
+                typedef struct {
+                    uint8_t bytes[4];
+                    Payload payloads[2];
+                } LocalValue;
+                thread LocalValue local;
+            }
+            """)
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "prepare"
+    assert diagnostic.type_name == "LocalValue"
+    assert "native member storage alignment cannot be proven" in diagnostic.reason
+    assert "Payload[2]" in diagnostic.reason
 
 
 def test_codegen_hoists_named_local_struct_with_qualified_pointer_cast():
@@ -6234,7 +6575,10 @@ def test_codegen_hoists_named_local_struct_with_qualified_pointer_cast():
     canonical = "MetalLocal_copy_words_WordBlock"
     assert f"struct {canonical} {{" in crossgl
     assert "uint[2] values;" in crossgl
-    assert f"thread {canonical} local = (*({canonical}*)input);" in crossgl
+    assert (
+        f"thread {canonical} local = "
+        f"(*(const device {canonical}*)input);" in crossgl
+    )
     assert "const device WordBlock" not in crossgl
     strict_ast = CrossGLParser(
         CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
@@ -6694,16 +7038,18 @@ def test_codegen_parses_materialized_owner_alias_pointer_casts():
     int_helper = crossgl.split("Tile_int__elems", 1)[1].split("}", 1)[0]
     int_const_helper = crossgl.split("Tile_int__const_elems", 1)[1].split("}", 1)[0]
 
-    assert "return (float*)self.values;" in float_helper
-    assert "return (float*)self.values;" in float_const_helper
-    assert "return (int*)self.values;" in int_helper
-    assert "return (int*)self.values;" in int_const_helper
+    assert "return (thread float*)self.values;" in float_helper
+    assert "return (const thread float*)self.values;" in float_const_helper
+    assert "return (thread int*)self.values;" in int_helper
+    assert "return (const thread int*)self.values;" in int_const_helper
     assert "elem_type" not in float_helper
     assert "elem_type" not in float_const_helper
     assert "elem_type" not in int_helper
     assert "elem_type" not in int_const_helper
-    assert "thread float*" not in crossgl
-    assert "thread int*" not in crossgl
+    assert "return (thread float*)self.values;" in crossgl
+    assert "return (const thread float*)self.values;" in crossgl
+    assert "return (thread int*)self.values;" in crossgl
+    assert "return (const thread int*)self.values;" in crossgl
     strict_ast = CrossGLParser(
         CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
     ).parse()
@@ -8981,7 +9327,14 @@ def test_codegen_constructor_binding_preserves_cast_and_array_qualifiers():
     crossgl = convert_without_preprocessing(source)
     normalized = normalize(crossgl)
 
-    assert "const device uint8* weights = (uint8*)raw_weights;" in normalized
+    assert (
+        "const device uint8* weights = "
+        "(const device uint8*)raw_weights;" in normalized
+    )
+    assert (
+        "device uint8* mutable_weights = "
+        "(device uint8*)mutable_raw_weights;" in normalized
+    )
     assert (
         "Loader fixed_loader = crosstl_ctor_Loader_1("
         "weights + lane, fixed_shared, lane);" in normalized
@@ -8995,6 +9348,57 @@ def test_codegen_constructor_binding_preserves_cast_and_array_qualifiers():
         "mutable_weights + lane, fixed_shared, lane);" in normalized
     )
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_constructor_factory_folds_owner_constants_and_preserves_pointer_initializers(
+    tmp_path,
+):
+    source = """
+    struct Loader {
+      static constant constexpr int width = 4;
+      static constant constexpr int stride = width * 2;
+      device float* dst;
+      const device uchar* src;
+      threadgroup float* shared;
+
+      Loader(
+          device float* dst_,
+          const device uchar* src_,
+          threadgroup float* local,
+          uint width)
+          : dst(dst_ + stride + width),
+            src(src_ + stride),
+            shared(local + stride) {}
+    };
+
+    kernel void build_loader(
+        device float* output [[buffer(0)]],
+        const device uchar* input [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+      threadgroup float local[16];
+      Loader loader(output, input, local, gid);
+      loader.dst[0] = float(loader.src[0]) + loader.shared[0];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "crosstl_ctor_value.dst = dst_ + 8 + width;" in normalized
+    assert "crosstl_ctor_value.src = src_ + 8;" in normalized
+    assert "crosstl_ctor_value.shared = local + 8;" in normalized
+    assert "float*(" not in normalized
+    assert "uchar*(" not in normalized
+
+    shader = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(shader)
+    assert "float * (" not in metal
+    assert "uchar * (" not in metal
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        "constructor-owner-constants-and-pointers",
+    )
 
 
 def test_codegen_constructor_factory_initializes_const_value_members(tmp_path):
@@ -9825,6 +10229,132 @@ def test_codegen_preserves_builtin_aggregate_pointer_arithmetic(tmp_path):
     )
 
 
+def test_codegen_uses_unique_readonly_scalar_conversion_before_unrelated_operator():
+    source = """
+    struct integral_constant_int_36 {};
+    int integral_constant_int_36__operator_int(
+        const thread integral_constant_int_36& self) {
+      return 36;
+    }
+    struct Payload { float value; };
+
+    Payload crosstl_metal_operator_multiply__short__Payload(
+        short lane, Payload value) {
+      return value;
+    }
+
+    int scaled(short lane, integral_constant_int_36 stride) {
+      return lane * stride;
+    }
+    """
+
+    normalized = normalize(convert_without_preprocessing(source))
+    assert "return lane * integral_constant_int_36__operator_int(stride);" in normalized
+    assert "crosstl_metal_operator_multiply__short__Payload(lane, stride)" not in (
+        normalized
+    )
+
+
+def test_codegen_uses_unique_owner_alias_scalar_conversion_before_unrelated_operator():
+    source = """
+    int scaled(short lane, integral_constant_int_40 stride) {
+      return lane * stride;
+    }
+
+    struct integral_constant_int_40 { using value_type = int; };
+    int integral_constant_int_40__operator_value_type(
+        const thread integral_constant_int_40& self) {
+      return 40;
+    }
+    struct complex_t_float { float value; };
+
+    complex_t_float
+    crosstl_metal_operator_multiply__complex_t_float__complex_t_float(
+        complex_t_float left, complex_t_float right) {
+      return left;
+    }
+    """
+
+    normalized = normalize(convert_without_preprocessing(source))
+    assert (
+        "return lane * "
+        "integral_constant_int_40__operator_value_type(stride);" in normalized
+    )
+    assert (
+        "crosstl_metal_operator_multiply__complex_t_float__complex_t_float("
+        "lane, stride)" not in normalized
+    )
+
+
+@pytest.mark.parametrize(
+    "box_declarations",
+    [
+        "struct Box { using value_type = short; };",
+        """
+        struct Box { using value_type = int; };
+        struct Box { using value_type = short; };
+        """,
+    ],
+    ids=("alias-result-mismatch", "conflicting-owner-aliases"),
+)
+def test_codegen_rejects_unproven_owner_alias_scalar_conversions(box_declarations):
+    source = f"""
+    {box_declarations}
+    int Box__operator_value_type(const thread Box& self) {{ return 1; }}
+    struct Payload {{ float value; }};
+    Payload crosstl_metal_operator_multiply__short__Payload(
+        short lane, Payload value) {{
+      return value;
+    }}
+    int scaled(short lane, Box stride) {{ return lane * stride; }}
+    """
+
+    with pytest.raises(MetalSourceOverloadResolutionError) as exc_info:
+        convert_without_preprocessing(source)
+    error = exc_info.value
+    assert error.function_name == "operator *"
+    assert error.argument_types == ("short", "Box")
+    assert error.reason == (
+        "no source-compatible materialized free operator matches the inferred "
+        "argument types"
+    )
+
+
+@pytest.mark.parametrize(
+    "conversion_helpers",
+    [
+        """
+        int Box__operator_int(const thread Box& self) { return 1; }
+        short Box__operator_short(const thread Box& self) { return 1; }
+        """,
+        "int Box__operator_int(thread Box& self) { return 1; }",
+        "int Box__operator_negate(const thread Box& self) { return 1; }",
+    ],
+    ids=("ambiguous-readonly", "mutating", "unrelated-unary-operator"),
+)
+def test_codegen_rejects_unproven_lowered_scalar_conversions(conversion_helpers):
+    source = f"""
+    struct Box {{}};
+    struct Payload {{ float value; }};
+    {conversion_helpers}
+    Payload crosstl_metal_operator_multiply__short__Payload(
+        short lane, Payload value) {{
+      return value;
+    }}
+    int scaled(short lane, Box stride) {{ return lane * stride; }}
+    """
+
+    with pytest.raises(MetalSourceOverloadResolutionError) as exc_info:
+        convert_without_preprocessing(source)
+    error = exc_info.value
+    assert error.function_name == "operator *"
+    assert error.argument_types == ("short", "Box")
+    assert error.reason == (
+        "no source-compatible materialized free operator matches the inferred "
+        "argument types"
+    )
+
+
 def test_codegen_rejects_nonintegral_aggregate_pointer_arithmetic():
     source = """
     struct Payload { float value; };
@@ -10082,6 +10612,292 @@ def test_metal_target_uses_native_narrow_storage_for_explicit_as_type(tmp_path):
     )
 
 
+def test_codegen_nested_struct_type_shadows_same_named_global(tmp_path):
+    source = """
+    struct Inner {
+      uint global_value;
+    };
+
+    struct Outer {
+      struct Inner {
+        uint nested_value;
+      };
+      Inner value;
+    };
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    nested_name = "Outer_u3a_u3aInner"
+    assert f"struct {nested_name}" in crossgl
+    assert re.search(rf"^\s*{nested_name} value;", crossgl, re.MULTILINE)
+    assert re.search(r"^\s*Inner value;", crossgl, re.MULTILINE) is None
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    normalized = normalize(metal)
+    assert f"struct {nested_name}" in normalized
+    assert f"{nested_name} value;" in normalized
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        "metal-nested-struct-shadowing",
+    )
+
+
+def test_codegen_hoists_nested_aligned_byte_view_for_storage_copy(tmp_path):
+    source = """
+    struct Loader {
+      threadgroup float* dst;
+      const device float* src;
+
+      struct alignas(sizeof(float)) ReadVector {
+        uchar v[sizeof(float) * 2];
+      } cached;
+
+      Loader(threadgroup float* dst_, const device float* src_)
+          : dst(dst_), src(src_) {}
+    };
+
+    void Loader__copy(const thread Loader& self) {
+      *((threadgroup ReadVector*)(&self.dst[0])) =
+          *((const device ReadVector*)(&self.src[0]));
+    }
+
+    kernel void copy_values(const device float* src [[buffer(0)]]) {
+      threadgroup float dst[2];
+      Loader loader(dst, src);
+      Loader__copy(loader);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    nested_name = "Loader_u3a_u3aReadVector"
+    assert f"@metal_alignas(4)\n    struct {nested_name}" in crossgl
+    assert f"{nested_name} cached;" in crossgl
+    assert f"threadgroup {nested_name}*" in crossgl
+    assert f"const device {nested_name}*" in crossgl
+    assert "threadgroup ReadVector*" not in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    normalized = normalize(metal)
+    assert f"struct alignas(4) {nested_name}" in normalized
+    assert f"{nested_name} cached;" in normalized
+    assert "uchar v[4 * 2];" in normalized
+    assert f"reinterpret_cast<threadgroup {nested_name}*>" in normalized
+    assert f"reinterpret_cast<const device {nested_name}*>" in normalized
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        "metal-nested-aligned-byte-view",
+    )
+
+
+@pytest.mark.parametrize(
+    ("native_type", "alias_type"),
+    (("half", "float16_t"), ("bfloat", "bfloat16_t")),
+)
+def test_codegen_hoists_narrow_float_aligned_byte_view_for_storage_copy(
+    native_type, alias_type, tmp_path
+):
+    source = f"""
+    typedef {native_type} {alias_type};
+
+    struct Loader {{
+      threadgroup {alias_type}* dst;
+      const device {alias_type}* src;
+
+      struct alignas(sizeof({alias_type})) ReadVector {{
+        uchar v[sizeof({alias_type}) * 4];
+      }} cached;
+
+      Loader(threadgroup {alias_type}* dst_, const device {alias_type}* src_)
+          : dst(dst_), src(src_) {{}}
+    }};
+
+    void Loader__copy(const thread Loader& self) {{
+      *((threadgroup ReadVector*)(&self.dst[0])) =
+          *((const device ReadVector*)(&self.src[0]));
+    }}
+
+    kernel void copy_values(
+        const device {alias_type}* src [[buffer(0)]]) {{
+      threadgroup {alias_type} dst[4];
+      Loader loader(dst, src);
+      Loader__copy(loader);
+    }}
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    nested_name = "Loader_u3a_u3aReadVector"
+    assert f"@metal_alignas(2)\n    struct {nested_name}" in crossgl
+    assert f"threadgroup {nested_name}*" in crossgl
+    assert f"const device {nested_name}*" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    normalized = normalize(metal)
+    assert f"struct alignas(2) {nested_name}" in normalized
+    assert "uchar v[2 * 4];" in normalized
+    assert f"threadgroup {native_type}* dst;" in normalized
+    assert f"const device {native_type}* src;" in normalized
+    assert f"reinterpret_cast<threadgroup {nested_name}*>" in normalized
+    assert f"reinterpret_cast<const device {nested_name}*>" in normalized
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        f"metal-narrow-{native_type}-aligned-byte-view",
+    )
+
+
+def test_narrow_float_storage_layouts_preserve_kind_identity():
+    half_layout = scalar_storage_layout("const device float16_t*")
+    bfloat_layout = scalar_storage_layout("metal::bfloat16_t")
+
+    assert half_layout == scalar_storage_layout("half")
+    assert bfloat_layout == scalar_storage_layout("bfloat")
+    assert half_layout.name == "float16"
+    assert bfloat_layout.name == "bfloat16"
+    assert half_layout.byte_width == bfloat_layout.byte_width == 2
+    assert half_layout != bfloat_layout
+
+
+def test_metal_target_rejects_unaligned_source_for_aligned_byte_view():
+    ast = parse_crossgl("""
+        shader main {
+            @metal_alignas(4)
+            struct ReadVector { uint8[8] v; }
+
+            void invalid(const device uint8* source) {
+                ReadVector value = *((const device ReadVector*)source);
+            }
+        }
+        """)
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        MetalCodeGen().generate(ast)
+    error = exc_info.value
+    assert error.target_backend == "metal"
+    assert error.target_type == "ReadVector"
+    assert error.reason == "source-alignment-unproven"
+
+
+def test_metal_target_rejects_extra_aligned_byte_view_struct_attribute():
+    ast = parse_crossgl("""
+        shader main {
+            @metal_alignas(4)
+            @custom_layout
+            struct ReadVector { uint8[8] v; }
+
+            void invalid(const device uint* source) {
+                ReadVector value = *((const device ReadVector*)source);
+            }
+        }
+        """)
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        MetalCodeGen().generate(ast)
+    error = exc_info.value
+    assert error.target_backend == "metal"
+    assert error.target_type == "ReadVector"
+    assert error.reason == "target-lowering-unavailable"
+
+
+def test_metal_target_preserves_homogeneous_scalar_array_struct_storage_read(
+    tmp_path,
+):
+    source = """
+    typedef struct {
+      uint32_t wi[2];
+    } vec_w;
+
+    kernel void load_words(
+        const device uint32_t* words [[buffer(0)]],
+        device uint32_t* output [[buffer(1)]]) {
+      const device uint32_t* ws = (const device uint32_t*)words;
+      thread vec_w local;
+      local = *((device vec_w*)ws);
+      output[0] = local.wi[0] + local.wi[1];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    assert "struct vec_w" in crossgl
+    assert "uint[2] wi;" in crossgl
+    assert "local = (*(device vec_w*)ws);" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    normalized = normalize(metal)
+    assert "struct vec_w { uint wi[2]; };" in normalized
+    assert "local = *reinterpret_cast<const device vec_w*>(ws);" in normalized
+    assert "local.wi[0] =" not in metal
+    assert "PointerReinterpretNode" not in metal
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        "metal-homogeneous-scalar-array-storage-read",
+    )
+
+
+@pytest.mark.parametrize(
+    ("members", "parameter", "body", "reason"),
+    [
+        (
+            "uint[2] values;",
+            "const device float* source",
+            "Pair local; local = *((device Pair*)source);",
+            "source-element-layout-mismatch",
+        ),
+        (
+            "uint[2] values;",
+            "const threadgroup uint* source",
+            "Pair local; local = *((device Pair*)source);",
+            "address-space-mismatch",
+        ),
+        (
+            "uint first; uint second;",
+            "const device uint* source",
+            "Pair local; local = *((device Pair*)source);",
+            "target-lowering-unavailable",
+        ),
+        (
+            "uint[2] values;",
+            "device uint* source, Pair local",
+            "*((device Pair*)source) = local;",
+            "target-lowering-unavailable",
+        ),
+        (
+            "uint[2] values;",
+            "const device uint* source",
+            "const device Pair* view = (const device Pair*)source;",
+            "target-lowering-unavailable",
+        ),
+    ],
+    ids=(
+        "same-width-different-scalar-kind",
+        "address-space-change",
+        "mixed-member-record",
+        "writable-dereference",
+        "pointer-escape",
+    ),
+)
+def test_metal_target_rejects_unproven_aggregate_storage_pointer_views(
+    members, parameter, body, reason
+):
+    ast = parse_crossgl(f"""
+        shader main {{
+            struct Pair {{ {members} }}
+            void invalid({parameter}) {{ {body} }}
+        }}
+        """)
+
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        MetalCodeGen().generate(ast)
+    error = exc_info.value
+    assert error.target_backend == "metal"
+    assert error.target_type == "Pair"
+    assert error.reason == reason
+    if reason in {"source-element-layout-mismatch", "address-space-mismatch"}:
+        assert error.access == "read"
+
+
 def test_metal_target_lowers_local_single_field_parameter_reinterpret_read(tmp_path):
     metal = MetalCodeGen().generate(parse_crossgl("""
             shader main {
@@ -10138,6 +10954,150 @@ def test_metal_target_rejects_unproven_local_single_field_reinterpret_views(
     assert error.target_backend == "metal"
     assert error.target_type == "ByteView"
     assert error.reason == "target-lowering-unavailable"
+
+
+def test_metal_target_emits_static_struct_constants_without_pseudo_attributes(
+    tmp_path,
+):
+    ast = parse_crossgl("""
+        shader main {
+            struct Config {
+                static constant int width = 8;
+                static constant int doubled = width * 2;
+                const device float* source;
+                device float* output;
+            }
+
+            int read_width() {
+                return Config.width;
+            }
+        }
+        """)
+
+    metal = MetalCodeGen().generate(ast)
+    normalized = normalize(metal)
+
+    assert "static constant constexpr int width = 8;" in normalized
+    assert "static constant constexpr int doubled = width * 2;" in normalized
+    assert "const device float* source;" in normalized
+    assert "device float* output;" in normalized
+    assert "return Config::width;" in normalized
+    assert "[[static]]" not in metal
+    assert "[[const]]" not in metal
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        "metal-static-struct-constants",
+    )
+
+
+def test_metal_target_keeps_global_value_access_when_name_matches_static_owner():
+    ast = parse_crossgl("""
+        shader main {
+            struct Config {
+                static constant int width = 8;
+            }
+            struct Carrier {
+                int width;
+            }
+            Carrier Config;
+
+            int read_width() {
+                return Config.width;
+            }
+        }
+        """)
+
+    metal = MetalCodeGen().generate(ast)
+    normalized = normalize(metal)
+
+    assert "return Config.width;" in normalized
+    assert "return Config::width;" not in normalized
+
+
+def test_metal_target_rejects_static_struct_member_without_constant_storage():
+    ast = parse_crossgl("""
+        shader main {
+            struct Counter {
+                static int value = 1;
+            }
+        }
+        """)
+
+    with pytest.raises(UnsupportedMetalFeatureError) as exc_info:
+        MetalCodeGen().generate(ast)
+    error = exc_info.value
+    assert error.feature == "static-struct-member"
+    assert error.reason == "constant-address-space-required"
+    assert error.missing_capabilities == ("metal.static-struct-constant-storage",)
+
+
+def test_metal_target_preserves_qualified_storage_pointer_views(tmp_path):
+    source = """
+    void consume_bytes(const device uint8_t* values) {}
+
+    void view_storage(
+        const device uint32_t* words,
+        const device uint8_t* source_bytes,
+        threadgroup uint32_t* scratch) {
+      const device uint8_t* bytes = (const device uint8_t*)words;
+      threadgroup float* floats = (threadgroup float*)scratch;
+      consume_bytes((device uint8_t*)source_bytes);
+      float observed = float(bytes[0]) + floats[0];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    assert "(const device uint8*)words" in crossgl
+    assert "(threadgroup float*)scratch" in crossgl
+    assert "(device uint8*)source_bytes" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    normalized = normalize(metal)
+    assert (
+        "const device uchar* bytes = "
+        "reinterpret_cast<const device uchar*>(words);" in normalized
+    )
+    assert (
+        "threadgroup float* floats = "
+        "reinterpret_cast<threadgroup float*>(scratch);" in normalized
+    )
+    assert "consume_bytes(source_bytes);" in normalized
+    assert "PointerReinterpretNode" not in metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-qualified-storage-pointer-views"
+    )
+
+
+@pytest.mark.parametrize(
+    ("parameter", "body", "reason"),
+    [
+        (
+            "const device uint* words",
+            "thread uint8* bytes = (thread uint8*)words;",
+            "address-space-mismatch",
+        ),
+        (
+            "const device uint* words",
+            "device uint8* bytes = (device uint8*)words;",
+            "const-removal",
+        ),
+        (
+            "uint value",
+            "thread uint8* bytes = (thread uint8*)value;",
+            "source-not-pointer-storage",
+        ),
+    ],
+    ids=("address-space-change", "const-removal", "non-pointer-source"),
+)
+def test_metal_target_rejects_unproven_storage_pointer_views(parameter, body, reason):
+    ast = parse_crossgl(f"shader main {{ void invalid({parameter}) {{ {body} }} }}")
+    with pytest.raises(PointerReinterpretationError) as exc_info:
+        MetalCodeGen().generate(ast)
+    error = exc_info.value
+    assert error.target_backend == "metal"
+    assert error.target_type == "uint8"
+    assert error.reason == reason
 
 
 def test_codegen_prefers_qualified_bfloat_builtin_overload_result():
@@ -12302,6 +13262,64 @@ def test_codegen_resolves_local_conditional_t_alias_to_integer_pack_type():
     assert "uint output = 0" in result
     assert "OutType" not in result
     assert parse_crossgl(result) is not None
+
+
+def test_codegen_resolves_concrete_64_bit_conditional_alias_and_round_trips_to_native_metal(
+    tmp_path,
+):
+    # Reduced from MLX affine_quantize after entry materialization replaces
+    # ``bits`` with 5. The true branch maps through the native-width spelling
+    # ``uint64`` and must be admitted via its canonical CrossGL source type
+    # ``u64`` rather than leaving the local alias unresolved.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void pack(
+        const device uchar* input [[buffer(0)]],
+        device ulong* output [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        using OutType = metal::conditional_t<5 == 5, uint64_t, uint32_t>;
+        OutType packed = static_cast<OutType>(input[gid]);
+        output[gid] = packed << 32;
+    }
+    """
+
+    crossgl = convert(code)
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "uint64 packed = (uint64)buffer_load(input, gid);" in crossgl
+    assert "OutType" not in crossgl
+    assert "uint64_t packed = uint64_t(input[gid]);" in metal
+    assert "OutType" not in metal
+    assert_metal_compute_validates_if_available(
+        metal,
+        tmp_path,
+        "concrete-uint64-conditional-alias",
+    )
+
+
+def test_codegen_does_not_admit_unresolved_conditional_alias_as_scalar():
+    converter = MetalToCrossGLConverter()
+    alias_type = "metal::conditional_t<5 == 5, MissingPackType, uint32_t>"
+    alias = type(
+        "LocalAlias",
+        (),
+        {
+            "alias_type": alias_type,
+            "array_sizes": [],
+            "declarator_type_suffix": "",
+            "name": "OutType",
+            "qualifiers": [],
+            "source_location": None,
+        },
+    )()
+
+    converter.register_local_type_alias(alias)
+
+    assert "OutType" not in converter.type_aliases
+    assert "OutType" not in converter.local_type_alias_names
+    assert converter.local_struct_type_aliases["OutType"] == alias_type
 
 
 @pytest.mark.parametrize(

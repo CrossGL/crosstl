@@ -94,14 +94,16 @@ def test_explicit_compute_stage_entry_preserves_pointer_reinterpretation():
 
 
 @pytest.mark.parametrize(
-    ("cast_type", "address_space"),
+    ("cast_type", "address_space", "is_mutable"),
     [
-        ("uint8_t*", None),
-        ("thread uint8_t*", "thread"),
+        ("uint8_t*", None, True),
+        ("thread uint8_t*", "thread", True),
+        ("const device uint8_t*", "device", False),
+        ("device const uint8_t*", "device", False),
     ],
 )
 def test_call_argument_pointer_reinterpretation_preserves_compute_body(
-    cast_type, address_space
+    cast_type, address_space, is_mutable
 ):
     code = f"""
     shader main {{
@@ -133,6 +135,7 @@ def test_call_argument_pointer_reinterpretation_preserves_compute_body(
     assert isinstance(reinterpret.target_type, PointerType)
     assert reinterpret.target_type.pointee_type.name == "uint8_t"
     assert reinterpret.target_type.address_space == address_space
+    assert reinterpret.target_type.is_mutable is is_mutable
     assert body[2].initial_value.name == "observed"
 
 

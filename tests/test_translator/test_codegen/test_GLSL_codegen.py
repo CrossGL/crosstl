@@ -9954,7 +9954,7 @@ def test_glsl_metal_storage_byte_alias_reaches_storage_helper(tmp_path):
         source_backend="metal",
     )
 
-    assert "load_word((uint*)bytes)" in intermediate
+    assert "load_word((const device uint*)bytes)" in intermediate
     helper = re.search(
         r"\buint\s+(?P<name>load_word[A-Za-z0-9_]*)\s*"
         r"\(int values_offset, int values_byte_offset\)\s*\{(?P<body>.*?)^\}",
