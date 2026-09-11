@@ -795,6 +795,67 @@ compiler coverage; it does not claim Metal numerical execution, DirectX or
 OpenGL whole-family coverage, MLX host-runtime redirection, or MLX test-suite
 parity.
 
+The same selected-entry pipeline translates all 2,396 reduction entries to
+standalone OpenGL ``main`` artifacts. The compact schema-v2
+``reduce.opengl-translation.json`` contract preserves the 39 shapes, nine
+kernel templates, six operator families, 44 concrete operator types, and 13
+input/output types while pinning 9,216 exact materializations,
+31,155,122 generated GLSL bytes, and 25,088 resources across
+scalar-layout-aware one- through twelve-resource target ABIs.
+
+OpenGL's signed 32-bit logical buffer offsets require six explicit
+source-expression portability preconditions: the one-, two-, and
+five-dimensional ``LoopedElemToLoc`` source pointer expressions,
+``inputs[i - 1] + reduction_size``, the long-column output expression, and
+``out_idx``. Each is host-bounded to ``[0, 2147483647]``. These bounds are not
+inferred and no runtime check is generated; missing, mismatched, negative, or
+over-wide assertions remain fail-closed. Bounded unit-step loop-carried
+pointer-array initialization is evaluated one exact iteration at a time. A
+non-singleton per-invocation dynamic target remains a may-write and cannot
+establish full-array definite assignment, while a shadowed loop-index binding
+disables the serial-loop proof and remains fail-closed. For-in range and
+scalar-count expressions are rendered in the outer lexical environment;
+Fixed-array iterable expressions and compile-time extents resolve before
+same-named pattern bindings enter scope. same-named patterns use independent
+controllers and shadow pointer,
+stage-builtin, and flattened stage-struct aliases in the loop body. For-in
+resource specialization resolves overloads from exact lexical pattern types.
+Dynamic for-in resource specialization resolves overloads from exact call-site
+lexical types. Null storage-pointer reachability and elision preserve exact
+lexical declaration identity. Null workgroup-pointer reachability and
+elision preserve exact lexical declaration identity. Nested
+resource-specialization discovery preserves deterministic lexical order across Python
+hash seeds. Workgroup-pointer bounds analysis visits every control-flow
+expression and preserves outer mutations across lexical blocks. loop-local
+fixed-array
+storage retains flattened
+stage-input
+struct declarations, and
+fixed-array patterns cannot inherit same-named outer scalar or vector-component
+bounds. Repeated loop bounds and generated loop controllers lose their proven intervals when
+exact scalar or vector-component dependencies can mutate. logical-offset
+mutation through resolved nested helpers is written back to callers. Direct
+element and addressed one-element forwarding through overload-resolved scalar
+or fixed-array helpers preserves that writeback;
+private scalar address views remain confined to their declaring lexical scopes;
+nonlocal scalar address views remain fail-closed;
+dynamic elements and unresolved, ambiguous, or recursive forwarding remain
+fail-closed. Fixed-array storage cannot escape through local private pointer or
+reference aliases; lexically shadowed arrays and condition-only reads are not
+misattributed, while residual private pointer or reference syntax remains
+fail-closed.
+
+Required Linux CI partitions the family into 24 disjoint shards: 20 contain
+100 entries and four contain 99. Every shard verifies deterministic artifact,
+materialization, workgroup, and scalar-layout-aware reflected ABI identity,
+compiles with
+``glslangValidator --target-env opengl --target-env spirv1.3 -S comp``, validates
+with ``spirv-val --target-env spv1.3``, and requires a non-empty SPIR-V module
+for every entry. This closes complete discovered-reduce OpenGL translation,
+reflection, and native compiler coverage; it does not claim numerical
+execution, DirectX whole-family translation, MLX host-runtime redirection, or
+MLX test-suite parity.
+
 OpenGL Software Subgroup Specialization
 ----------------------------------------
 
@@ -1766,8 +1827,8 @@ Five unsigned index assertions and one 256-element workgroup-access assertion
 bound its host contract. Translation materializes 37 specializations from 42
 reachable records, prunes 2,120 candidates, and preserves 21 reachable
 function constants for deferred specialization. The deterministic GLSL is
-82,045 bytes with SHA-256
-``a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb``;
+82,089 bytes with SHA-256
+``cfc959ed6e2ede827516d8076c4adf4a5d87813c9de905cf3c75013b1e1c1608``;
 ``glslangValidator`` and ``spirv-val`` accept it, and its SPIR-V has 19 control
 barriers with no group-nonuniform instruction.
 

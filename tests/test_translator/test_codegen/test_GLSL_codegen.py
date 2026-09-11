@@ -56,6 +56,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLIsFiniteError,
     OpenGLMappedOverloadError,
     OpenGLPrivatePointerParameterError,
+    OpenGLRecursiveFunctionError,
     OpenGLReferenceParameterError,
     OpenGLResourceMemoryQualifierError,
     OpenGLScalarConversionError,
@@ -112,11 +113,12 @@ def assert_glsl_compute_validates_if_available(
     spirv_target=None,
     *,
     validate_spirv=False,
+    stage="comp",
 ):
     glslang = shutil.which("glslangValidator")
     if glslang is None:
         return
-    source_path = tmp_path / f"{name}.comp"
+    source_path = tmp_path / f"{name}.{stage}"
     output_path = tmp_path / f"{name}.spv"
     source_path.write_text(generated_code, encoding="utf-8")
     command = [glslang]
@@ -124,7 +126,7 @@ def assert_glsl_compute_validates_if_available(
         command.append("-G")
     else:
         command.extend(["--target-env", "opengl", "--target-env", spirv_target])
-    command.extend(["-S", "comp", str(source_path), "-o", str(output_path)])
+    command.extend(["-S", stage, str(source_path), "-o", str(output_path)])
     result = subprocess.run(
         command,
         check=False,
@@ -1218,6 +1220,67 @@ def test_glsl_standard_math_constant_respects_constant_enum_and_alias_shadows():
     assert "3.14159265358979323846264338327950288f" not in constant_glsl
     assert "3.14159265358979323846264338327950288f" not in enum_glsl
     assert aliased_codegen.generate_expression(IdentifierNode("M_PI_F")) == "source_pi"
+
+
+def test_glsl_unshadowed_nan_uses_portable_quiet_binary32_value(tmp_path):
+    shader = """
+    shader PortableQuietNan {
+        float nan_value() {
+            return NAN;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @buffer(0)) {
+                output[0] = nan_value();
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return uintBitsToFloat(0x7fc00000u);" in generated
+    assert re.search(r"\bNAN\b", generated) is None
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "portable_quiet_nan",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_nan_parameter_shadow_is_preserved(tmp_path):
+    shader = """
+    shader NanParameterShadow {
+        float preserve(float NAN) {
+            return NAN;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @buffer(0)) {
+                output[0] = preserve(3.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float preserve(float NAN)" in generated
+    assert "return NAN;" in generated
+    assert "uintBitsToFloat(0x7fc00000u)" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "nan_parameter_shadow",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
 
 
 def test_glsl_unknown_identifier_is_preserved():
@@ -3653,6 +3716,429 @@ def test_opengl_emits_every_overloaded_resource_specialization_body(tmp_path):
     )
 
 
+def test_opengl_nested_resource_specialization_names_are_hash_seed_stable(tmp_path):
+    import os
+    import sys
+
+    shader = """
+    shader NestedOverloadedStoragePointerSpecializations {
+        void writeValue(device float* values) {
+            values[0] = 1.0;
+        }
+
+        void writeValue(device float* values, float scale) {
+            values[1] = scale;
+        }
+
+        void callOne(device float* values) {
+            writeValue(values);
+        }
+
+        void callTwo(device float* values) {
+            writeValue(values, 2.0);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @binding(0)) {
+                callOne(output);
+                callTwo(output);
+            }
+        }
+    }
+    """
+    script = (
+        "import crosstl.translator\n"
+        "from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen\n"
+        f"shader = {shader!r}\n"
+        "print(GLSLCodeGen().generate(crosstl.translator.parse(shader)), end='')\n"
+    )
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+    generated_by_seed = []
+    for seed in ("0", "2"):
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "PYTHONHASHSEED": seed,
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+            }
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=root,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        generated_by_seed.append(result.stdout)
+
+    assert generated_by_seed[0] == generated_by_seed[1]
+    generated = generated_by_seed[0]
+    assert "void writeValue_glsl_values_output_float(int values_offset)" in generated
+    assert (
+        "void writeValue_glsl_values_output_float_2(float scale, int values_offset)"
+        in generated
+    )
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "nested_resource_specialization_hash_seed_stability",
+    )
+
+
+_RESOURCE_SPECIALIZATION_FOR_IN_ITERABLES = (
+    ("count", "", "1"),
+    ("range", "", "0..1"),
+    ("fixed_array", "int items[1] = {0};", "items"),
+)
+
+
+@pytest.mark.parametrize("scalar_overload_first", [True, False])
+@pytest.mark.parametrize(
+    ("iterable_name", "iterable_declaration", "iterable"),
+    _RESOURCE_SPECIALIZATION_FOR_IN_ITERABLES,
+)
+@pytest.mark.parametrize("global_name", ["values", "global_values"])
+def test_opengl_resource_specialization_for_in_uses_lexical_pattern_type(
+    tmp_path,
+    scalar_overload_first,
+    iterable_name,
+    iterable_declaration,
+    iterable,
+    global_name,
+):
+    scalar_overload = "int pick(int value) { return value + 10; }"
+    resource_overload = "int pick(device float* value) { return int(value[0]) + 20; }"
+    overloads = (
+        f"{scalar_overload}\n{resource_overload}"
+        if scalar_overload_first
+        else f"{resource_overload}\n{scalar_overload}"
+    )
+    shader = f"""
+    shader LexicalResourceOverload {{
+        RWStructuredBuffer<float> {global_name}[1] @ binding(0);
+        RWStructuredBuffer<int> output @ binding(1);
+        {overloads}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                {iterable_declaration}
+                for values in {iterable} {{
+                    output[0] = pick(values);
+                }}
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "output_[0] = pick(values);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        (
+            f"resource_specialization_for_in_{global_name}_{iterable_name}_"
+            f"{scalar_overload_first}"
+        ),
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize("scalar_overload_first", [True, False])
+def test_opengl_resource_specialization_for_in_lexical_type_overrides_flat_hint(
+    tmp_path,
+    scalar_overload_first,
+):
+    scalar_overload = "int pick(int value) { return value + 10; }"
+    resource_overload = "int pick(device float* value) { return int(value[0]) + 20; }"
+    overloads = (
+        f"{scalar_overload}\n{resource_overload}"
+        if scalar_overload_first
+        else f"{resource_overload}\n{scalar_overload}"
+    )
+    shader = f"""
+    shader LexicalResourceOverloadFlatHint {{
+        RWStructuredBuffer<float> global_values[1] @ binding(0);
+        RWStructuredBuffer<int> output @ binding(1);
+        {overloads}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                float values = 3.0;
+                for values in 1 {{
+                    output[0] = pick(values);
+                }}
+                output[1] = int(values);
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float values = 3.0;" in generated
+    assert "output_[0] = pick(values);" in generated
+    assert "output_[1] = int(values);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"resource_specialization_for_in_flat_hint_{scalar_overload_first}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+_DYNAMIC_RESOURCE_FOR_IN_OUTER_SCOPES = (
+    (
+        "same_name_local",
+        "",
+        "float layer = 1.0;",
+        "output[2] = int(layer);",
+    ),
+    (
+        "renamed_local",
+        "",
+        "float outer_layer = 1.0;",
+        "output[2] = int(outer_layer);",
+    ),
+    (
+        "same_name_global_resource",
+        "RWStructuredBuffer<float> layer[2] @ binding(3);",
+        "",
+        "",
+    ),
+)
+
+
+@pytest.mark.parametrize("integer_overload_first", [True, False])
+@pytest.mark.parametrize(
+    ("iterable_name", "iterable_declaration", "iterable"),
+    _RESOURCE_SPECIALIZATION_FOR_IN_ITERABLES,
+)
+@pytest.mark.parametrize(
+    ("outer_name", "outer_global", "outer_local", "outer_use"),
+    _DYNAMIC_RESOURCE_FOR_IN_OUTER_SCOPES,
+)
+def test_opengl_dynamic_resource_specialization_for_in_uses_call_lexical_types(
+    tmp_path,
+    integer_overload_first,
+    iterable_name,
+    iterable_declaration,
+    iterable,
+    outer_name,
+    outer_global,
+    outer_local,
+    outer_use,
+):
+    integer_overload = """
+        int sampleValue(image2D image @rgba32f, int value) {
+            return imageSize(image).x + value;
+        }
+    """
+    floating_overload = """
+        int sampleValue(image2D image @rgba32f, float value) {
+            return imageSize(image).x + int(value) + 100;
+        }
+    """
+    overloads = (
+        integer_overload + floating_overload
+        if integer_overload_first
+        else floating_overload + integer_overload
+    )
+    shader = f"""
+    shader DynamicResourceForInLexicalScope {{
+        image2D images @rgba32f[2];
+        RWStructuredBuffer<int> output @ binding(2);
+        {outer_global}
+        {overloads}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                {outer_local}
+                {iterable_declaration}
+                for layer in {iterable} {{
+                    output[0] = sampleValue(images[0], layer);
+                    output[1] = sampleValue(images[layer], layer);
+                }}
+                {outer_use}
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    specialized_parameters = re.findall(
+        r"\bint\s+sampleValue_glsl_image_images_[01][A-Za-z0-9_]*" r"\s*\(([^)]*)\)",
+        generated,
+    )
+    assert specialized_parameters, generated
+    assert set(specialized_parameters) == {"int value"}, generated
+    assert re.search(
+        r"output_\[0\]\s*=\s*sampleValue_glsl_image_images_0[A-Za-z0-9_]*"
+        r"\(layer\);",
+        generated,
+    ), generated
+    dynamic_cases = re.findall(
+        r"output_\[1\]\s*=\s*sampleValue_glsl_image_images_([01])"
+        r"[A-Za-z0-9_]*\(layer\);",
+        generated,
+    )
+    assert set(dynamic_cases) == {"0", "1"}, generated
+    assert "sampleValue_glsl_image_images_0(float value)" not in generated
+    assert "sampleValue_glsl_image_images_1(float value)" not in generated
+    assert "float(layer)" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        (
+            "dynamic_resource_for_in_"
+            f"{outer_name}_{iterable_name}_{integer_overload_first}"
+        ),
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize("integer_overload_first", [True, False])
+def test_opengl_dynamic_resource_specialization_uses_nested_for_in_lexical_type(
+    tmp_path,
+    integer_overload_first,
+):
+    integer_overload = """
+        int sampleValue(image2D image @rgba32f, int value) {
+            return imageSize(image).x + value;
+        }
+    """
+    floating_overload = """
+        int sampleValue(image2D image @rgba32f, float value) {
+            return imageSize(image).x + int(value) + 100;
+        }
+    """
+    overloads = (
+        integer_overload + floating_overload
+        if integer_overload_first
+        else floating_overload + integer_overload
+    )
+    shader = f"""
+    shader NestedDynamicResourceForInLexicalScope {{
+        image2D images @rgba32f[2];
+        RWStructuredBuffer<int> output @ binding(2);
+        {overloads}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                float layer = 7.0;
+                int layer_values[2] = {{0, 1}};
+                for outer_index in 1 {{
+                    for layer in layer_values {{
+                        output[0] = sampleValue(images[layer], layer);
+                    }}
+                }}
+                output[1] = int(layer);
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    specialized_parameters = re.findall(
+        r"\bint\s+sampleValue_glsl_image_images_[01][A-Za-z0-9_]*" r"\s*\(([^)]*)\)",
+        generated,
+    )
+    assert specialized_parameters, generated
+    assert set(specialized_parameters) == {"int value"}, generated
+    assert set(
+        re.findall(
+            r"output_\[0\]\s*=\s*sampleValue_glsl_image_images_([01])"
+            r"[A-Za-z0-9_]*\(layer\);",
+            generated,
+        )
+    ) == {"0", "1"}, generated
+    assert "float(layer)" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"nested_dynamic_resource_for_in_{integer_overload_first}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize("mutating_overload_first", [True, False])
+def test_opengl_fixed_array_mutation_analysis_uses_for_in_lexical_call_type(
+    tmp_path,
+    mutating_overload_first,
+):
+    mutating_overload = """
+        void touch(float values[1], int selector) {
+            values[0] = 9.0;
+        }
+    """
+    readonly_overload = """
+        void touch(float values[1], float selector) {
+            float copy = values[0] + selector;
+        }
+    """
+    overloads = (
+        mutating_overload + readonly_overload
+        if mutating_overload_first
+        else readonly_overload + mutating_overload
+    )
+    shader = f"""
+    shader FixedArrayForInLexicalMutation {{
+        RWStructuredBuffer<float> output @ binding(0);
+        {overloads}
+
+        void forward(float values[1]) {{
+            float selector = 3.0;
+            for selector in 1 {{
+                touch(values, selector);
+            }}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                float values[1] = {{1.0}};
+                forward(values);
+                output[0] = values[0];
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void forward(inout float values[1])" in generated
+    assert "void touch(inout float values[1], int selector)" in generated
+    assert "touch(values, selector);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"fixed_array_for_in_lexical_mutation_{mutating_overload_first}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
 def test_glsl_decodes_encoded_materialized_generic_vector_constructor():
     ast = ShaderNode(
         "EncodedGenericVectorConstructor",
@@ -3683,6 +4169,365 @@ def test_glsl_decodes_encoded_materialized_generic_vector_constructor():
 
     assert "return vec2(x, y);" in generated
     assert "vec_u3cfloat_u2c2_u3e" not in generated
+
+
+_NULL_STORAGE_FOR_IN_LEXICAL_SCOPES = (
+    (
+        "count_renamed_outer",
+        "float unrelated = 3.0;",
+        "for layer in 2 { route(optionalValues, layer); }",
+    ),
+    (
+        "range_shadowed_outer",
+        "float layer = 3.0;",
+        "for layer in 0..2 { route(optionalValues, layer); }",
+    ),
+    (
+        "fixed_array_nested_shadow",
+        "float layer = 3.0; int layers[2] = {0, 1};",
+        "for outer in 1 { for layer in layers { route(optionalValues, layer); } }",
+    ),
+)
+
+
+def _null_storage_for_in_overload_shader(
+    *,
+    int_uses_pointer,
+    int_overload_first,
+    declarations,
+    loop,
+):
+    int_body = (
+        "optionalValues[0] = float(layer + 1);"
+        if int_uses_pointer
+        else "float observed = float(layer);"
+    )
+    float_body = (
+        "float observed = layer;"
+        if int_uses_pointer
+        else "optionalValues[0] = float(int(layer) + 1);"
+    )
+    integer_overload = f"""
+        void route(device float* optionalValues, int layer) {{
+            {int_body}
+        }}
+    """
+    floating_overload = f"""
+        void route(device float* optionalValues, float layer) {{
+            {float_body}
+        }}
+    """
+    overloads = (
+        integer_overload + floating_overload
+        if int_overload_first
+        else floating_overload + integer_overload
+    )
+    return f"""
+    shader NullStorageForInLexicalOverload {{
+        {overloads}
+
+        void dispatch(device float* optionalValues) {{
+            {declarations}
+            {loop}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                dispatch(nullptr);
+            }}
+        }}
+    }}
+    """
+
+
+@pytest.mark.parametrize("int_uses_pointer", [False, True], ids=["safe", "unsafe"])
+@pytest.mark.parametrize("int_overload_first", [True, False])
+@pytest.mark.parametrize(
+    ("scope_name", "declarations", "loop"),
+    _NULL_STORAGE_FOR_IN_LEXICAL_SCOPES,
+)
+def test_opengl_null_storage_for_in_reachability_uses_call_lexical_type(
+    tmp_path,
+    int_uses_pointer,
+    int_overload_first,
+    scope_name,
+    declarations,
+    loop,
+):
+    shader = _null_storage_for_in_overload_shader(
+        int_uses_pointer=int_uses_pointer,
+        int_overload_first=int_overload_first,
+        declarations=declarations,
+        loop=loop,
+    )
+
+    if int_uses_pointer:
+        with pytest.raises(OpenGLStoragePointerError) as exc_info:
+            GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+        error = exc_info.value
+        assert error.function_name == "dispatch"
+        assert error.reason == "call-backing-unresolved"
+        return
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "nullptr" not in generated
+    assert "optionalValues[" not in generated
+    helper = re.search(
+        r"void\s+(route[A-Za-z0-9_]*)\s*\(int layer\)\s*" r"\{(?P<body>.*?)\}",
+        generated,
+        re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert "float observed = float(layer);" in helper.group("body")
+    assert f"{helper.group(1)}(layer);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        ("null_storage_for_in_lexical_" f"{scope_name}_{int_overload_first}"),
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize("int_uses_pointer", [False, True], ids=["safe", "unsafe"])
+@pytest.mark.parametrize("int_overload_first", [True, False])
+def test_opengl_null_storage_nested_forwarding_uses_call_lexical_type(
+    tmp_path,
+    int_uses_pointer,
+    int_overload_first,
+):
+    integer_leaf_body = (
+        "optionalValues[0] = float(selector + 1);"
+        if int_uses_pointer
+        else "float observed = float(selector);"
+    )
+    floating_forward_body = (
+        "float observed = selector;"
+        if int_uses_pointer
+        else "optionalValues[0] = float(int(selector) + 100);"
+    )
+    integer_leaf = f"""
+        void leaf(device float* optionalValues, int selector) {{
+            {integer_leaf_body}
+        }}
+    """
+    floating_leaf = """
+        void leaf(device float* optionalValues, float selector) {
+            optionalValues[0] = float(int(selector) + 200);
+        }
+    """
+    integer_forward = """
+        void forward(device float* optionalValues, int selector) {
+            leaf(optionalValues, selector);
+        }
+    """
+    floating_forward = f"""
+        void forward(device float* optionalValues, float selector) {{
+            {floating_forward_body}
+        }}
+    """
+    if int_overload_first:
+        overloads = integer_leaf + floating_leaf + integer_forward + floating_forward
+    else:
+        overloads = floating_leaf + integer_leaf + floating_forward + integer_forward
+    shader = f"""
+    shader NullStorageNestedForInLexicalOverload {{
+        {overloads}
+
+        void dispatch(device float* optionalValues) {{
+            float selector = 7.0;
+            int selectors[2] = {{0, 1}};
+            for outer in 1 {{
+                for selector in selectors {{
+                    forward(optionalValues, selector);
+                }}
+            }}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                dispatch(nullptr);
+            }}
+        }}
+    }}
+    """
+
+    if int_uses_pointer:
+        with pytest.raises(OpenGLStoragePointerError) as exc_info:
+            GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+        error = exc_info.value
+        assert error.function_name == "dispatch"
+        assert error.reason == "call-backing-unresolved"
+        return
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "nullptr" not in generated
+    assert "optionalValues[" not in generated
+    assert "float observed = float(selector);" in generated
+    assert re.search(r"\bforward[A-Za-z0-9_]*\(selector\);", generated), generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"null_storage_nested_forwarding_{int_overload_first}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+_NULL_STORAGE_PARAMETER_LEXICAL_SHADOWS = (
+    (
+        "count_for_in",
+        "",
+        "for optionalValues in 2 { observe(optionalValues); }",
+    ),
+    (
+        "range_for_in",
+        "",
+        "for optionalValues in 0..2 { observe(optionalValues); }",
+    ),
+    (
+        "fixed_array_nested_for_in",
+        "int values[2] = {0, 1};",
+        (
+            "for outer in 1 { "
+            "for optionalValues in values { observe(optionalValues); } "
+            "}"
+        ),
+    ),
+    (
+        "nested_block_local",
+        "",
+        "if (true) { int optionalValues = 1; observe(optionalValues); }",
+    ),
+    (
+        "classic_for_local",
+        "",
+        (
+            "for (int optionalValues = 0; optionalValues < 2; "
+            "optionalValues++) { observe(optionalValues); }"
+        ),
+    ),
+    (
+        "switch_case_local",
+        "",
+        (
+            "switch (1) { case 1: int optionalValues = 1; "
+            "observe(optionalValues); break; default: break; }"
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("scope_name", "declarations", "shadowed_body"),
+    _NULL_STORAGE_PARAMETER_LEXICAL_SHADOWS,
+)
+def test_opengl_null_storage_parameter_lexical_shadow_is_not_pointer_use(
+    tmp_path,
+    scope_name,
+    declarations,
+    shadowed_body,
+):
+    shader = f"""
+    shader NullStorageParameterLexicalShadow {{
+        void observe(int value) {{
+            float observed = float(value);
+        }}
+
+        void route(device float* optionalValues) {{
+            {declarations}
+            {shadowed_body}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                route(nullptr);
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "nullptr" not in generated
+    assert "optionalValues[" not in generated
+    assert "float observed = float(value);" in generated
+    assert re.search(r"\bobserve\w*\(optionalValues\);", generated), generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"null_storage_parameter_lexical_shadow_{scope_name}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("use_name", "route_body"),
+    (
+        (
+            "before_shadow",
+            (
+                "optionalValues[0] = 1.0; "
+                "for optionalValues in 2 { observe(optionalValues); }"
+            ),
+        ),
+        (
+            "in_iterable",
+            "for optionalValues in int(optionalValues[0]) { observe(optionalValues); }",
+        ),
+        (
+            "after_shadow",
+            (
+                "for optionalValues in 2 { observe(optionalValues); } "
+                "optionalValues[0] = 1.0;"
+            ),
+        ),
+    ),
+)
+def test_opengl_null_storage_parameter_true_use_outside_shadow_fails_closed(
+    use_name,
+    route_body,
+):
+    shader = f"""
+    shader NullStorageParameterTrueUse {{
+        void observe(int value) {{
+            float observed = float(value);
+        }}
+
+        void route(device float* optionalValues) {{
+            {route_body}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                route(nullptr);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "route", use_name
+    assert error.reason == "call-backing-unresolved", use_name
 
 
 def test_opengl_statically_null_unused_storage_pointer_can_share_specialization_with_workgroup_pointer(
@@ -6162,6 +7007,487 @@ def test_glsl_private_pointer_helper_uses_fixed_local_array_extent():
     assert "uint8*" not in generated
 
 
+@pytest.mark.parametrize("iterable", ("2..3", "3"), ids=("range", "count"))
+def test_glsl_private_pointer_for_in_pattern_interval_proves_view_extent(
+    tmp_path,
+    iterable,
+):
+    code = """
+    shader PrivatePointerForInProvenView {
+        void increment(thread int* value) {
+            value[0] += 1;
+        }
+
+        void apply(thread int* values) {
+            int i = 7;
+            for i in ITERABLE {
+                increment(values + i);
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int values[3] = {0, 0, 0};
+                apply(values);
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "int i = 7;" in generated
+    assert "increment(values, (values_base + int(i)));" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"private_pointer_for_in_{iterable.replace('.', '_')}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("iterable", "expected_start", "expected_end", "case_name"),
+    (
+        ("0..limit", "0", "limit", "range-end"),
+        ("0..=limit", "0", "limit", "inclusive-range-end"),
+        ("limit", "0", "limit", "count"),
+        ("limit..(limit + 1)", "limit", "(limit + 1)", "range-start-end"),
+    ),
+)
+def test_glsl_private_pointer_for_in_same_name_bound_uses_independent_controller(
+    tmp_path,
+    iterable,
+    expected_start,
+    expected_end,
+    case_name,
+):
+    code = """
+    shader PrivatePointerForInSameNameBound {
+        void increment(thread int* value) {
+            value[0] += 1;
+        }
+
+        void apply(thread int* values) {
+            int limit = 1;
+            for limit in ITERABLE {
+                increment(values + limit);
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int values[2] = {0, 0};
+                apply(values);
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert f"for (int limit_crossgl_index = {expected_start}; " in generated
+    comparator = "<=" if "..=" in iterable else "<"
+    assert f"limit_crossgl_index {comparator} {expected_end}" in generated
+    assert "++limit_crossgl_index)" in generated
+    assert "int limit = limit_crossgl_index;" in generated
+    assert "for (int limit = 0; limit < limit;" not in generated
+    assert "increment(values, (values_base + int(limit)));" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"private_pointer_for_in_same_name_{case_name}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_for_in_same_name_component_bound_preserves_outer_type(tmp_path):
+    code = """
+    shader ForInSameNameComponentBound {
+        int accumulate() {
+            int2 lane = int2(0, 1);
+            int total = 0;
+            for lane in lane.x..lane.y {
+                total += lane;
+            }
+            return total;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int total = accumulate();
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert (
+        "for (int lane_crossgl_index = lane.x; "
+        "lane_crossgl_index < lane.y; ++lane_crossgl_index)" in generated
+    )
+    assert "int lane = lane_crossgl_index;" in generated
+    assert "total += lane;" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "for_in_same_name_component_bound",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_for_in_pattern_shadows_and_restores_stage_builtin_alias(tmp_path):
+    code = """
+    shader ForInBuiltinAliasShadow {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                uint lane @ gl_LocalInvocationIndex,
+                RWStructuredBuffer<int> result @buffer(0)
+            ) {
+                for lane in 1..2 {
+                    result[0] = int(lane);
+                }
+                for lane in 0..int(lane + 1u) {
+                    result[1] = lane;
+                }
+                result[2] = int(lane);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "for (int lane = 1; lane < 2; ++lane)" in generated
+    assert "result[0] = int(lane);" in generated
+    assert "result[0] = int(gl_LocalInvocationIndex);" not in generated
+    assert (
+        "for (int lane_crossgl_index = 0; "
+        "lane_crossgl_index < int((gl_LocalInvocationIndex + 1u)); "
+        "++lane_crossgl_index)" in generated
+    )
+    assert "int lane = lane_crossgl_index;" in generated
+    assert "result[1] = lane;" in generated
+    assert "result[2] = int(gl_LocalInvocationIndex);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "for_in_stage_builtin_alias_shadow",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_fixed_array_for_in_shadows_and_restores_stage_struct(tmp_path):
+    code = """
+    shader ForInStageStructShadow {
+        vertex {
+            struct VertexInput {
+                position: vec3 @location(0)
+            }
+            struct VertexOutput {
+                position: vec4 @gl_Position
+            }
+
+            VertexOutput main(VertexInput item) {
+                VertexInput choices[1];
+                choices[0].position = vec3(1.0, 2.0, 3.0);
+                VertexOutput output;
+                for item in choices {
+                    output.position = vec4(item.position, 1.0);
+                }
+                output.position += vec4(item.position, 0.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "struct VertexInput {" in generated
+    assert "VertexInput item = item_crossgl_iterable[item_crossgl_index];" in generated
+    assert "gl_Position = vec4(item.position, 1.0);" in generated
+    assert "gl_Position = vec4(position, 1.0);" not in generated
+    assert "gl_Position += vec4(position, 0.0);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "for_in_stage_struct_shadow",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+        stage="vert",
+    )
+
+
+def test_glsl_fixed_array_for_in_resolves_same_name_extent_before_pattern_scope(
+    tmp_path,
+):
+    code = """
+    shader ForInSameNameFixedArrayExtent {
+        int accumulate() {
+            const int extent = 2;
+            int values[extent] = {3, 4};
+            int total = 0;
+            for extent in values {
+                total += extent;
+            }
+            int after[extent] = {5, 6};
+            return total + after[0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int total = accumulate();
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "int extent_crossgl_iterable[extent] = values;" in generated
+    assert "extent_crossgl_index < 2" in generated
+    assert "int extent = extent_crossgl_iterable[extent_crossgl_index];" in generated
+    assert "int after[extent] = int[2](5, 6);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "for_in_same_name_fixed_array_extent",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_fixed_array_for_in_captures_same_name_iterable_before_binding(tmp_path):
+    code = """
+    shader ForInSameNameFixedArrayIterable {
+        int accumulate() {
+            int values[2] = {3, 4};
+            int total = 0;
+            for values in values {
+                total += values;
+            }
+            return total + values[0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int total = accumulate();
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "int values_crossgl_iterable[2] = values;" in generated
+    assert "values_crossgl_index < 2" in generated
+    assert "int values = values_crossgl_iterable[values_crossgl_index];" in generated
+    assert "return (total + values[0]);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "for_in_same_name_fixed_array_iterable",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_private_pointer_fixed_array_for_in_shadow_fails_closed():
+    code = """
+    shader PrivatePointerForInShadowedView {
+        void increment(thread int* value) {
+            value[0] += 1;
+        }
+
+        void apply(thread int* values) {
+            int i = 0;
+            int selectors[1] = {2};
+            for i in selectors {
+                increment(values + i);
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int values[3] = {0, 0, 0};
+                apply(values);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert exc_info.value.parameter_name == "value"
+    assert exc_info.value.reason == "unprovable-view-offset"
+
+
+def test_glsl_private_pointer_address_mutated_for_in_pattern_fails_closed():
+    code = """
+    shader PrivatePointerForInMutatedView {
+        void advance(int values[1]) {
+            values[0] += 1;
+        }
+
+        void increment(thread int* value) {
+            value[0] += 1;
+        }
+
+        void apply(thread int* values) {
+            for i in 2 {
+                advance(&i);
+                increment(values + i);
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int values[3] = {0, 0, 0};
+                apply(values);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert exc_info.value.parameter_name == "value"
+    assert exc_info.value.reason == "unprovable-view-offset"
+
+
+_FOR_IN_REPEATED_BOUND_MUTATIONS = (
+    pytest.param("", "limit = 4;", id="direct"),
+    pytest.param(
+        "",
+        "if (i == 0) { limit = 4; }",
+        id="conditional",
+    ),
+    pytest.param(
+        "void expand(int values[1]) { values[0] = 4; }",
+        "expand(&limit);",
+        id="addressed",
+    ),
+    pytest.param(
+        "void expand(out int value) { value = 4; }",
+        "expand(limit);",
+        id="out",
+    ),
+    pytest.param(
+        "void expand(inout int value) { value = 4; }",
+        "expand(limit);",
+        id="inout",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "iterable",
+    (pytest.param("0..limit", id="range"), pytest.param("limit", id="count")),
+)
+@pytest.mark.parametrize(("helper", "mutation"), _FOR_IN_REPEATED_BOUND_MUTATIONS)
+def test_glsl_private_pointer_for_in_mutated_bound_fails_closed(
+    iterable,
+    helper,
+    mutation,
+):
+    code = """
+    shader PrivatePointerForInMutatedBound {
+        HELPER
+
+        void increment(thread int* value) {
+            value[0] += 1;
+        }
+
+        void apply(thread int* values) {
+            int limit = 1;
+            for i in ITERABLE {
+                MUTATION
+                increment(values + i);
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int values[1] = {0};
+                apply(values);
+            }
+        }
+    }
+    """
+    code = (
+        code.replace("HELPER", helper)
+        .replace("ITERABLE", iterable)
+        .replace("MUTATION", mutation)
+    )
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert exc_info.value.parameter_name == "value"
+    assert exc_info.value.reason == "unprovable-view-offset"
+
+
+@pytest.mark.parametrize("iterable", ("0..1", "1"), ids=("range", "count"))
+def test_glsl_private_pointer_for_in_pattern_mutation_after_access_fails_closed(
+    iterable,
+):
+    code = """
+    shader PrivatePointerForInLatePatternMutation {
+        void increment(thread int* value) {
+            value[0] += 1;
+        }
+
+        void apply(thread int* values) {
+            for i in ITERABLE {
+                increment(values + i);
+                i = 4;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int values[1] = {0};
+                apply(values);
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert exc_info.value.parameter_name == "value"
+    assert exc_info.value.reason == "unprovable-view-offset"
+
+
 def test_glsl_private_scalar_pointer_preserves_zero_access_writeback(tmp_path):
     code = """
     shader PrivateScalarPointer {
@@ -6567,6 +7893,194 @@ def test_glsl_private_scalar_pointer_rejects_pointer_escape():
     assert excinfo.value.reason == "pointer-escape"
 
 
+@pytest.mark.parametrize(
+    ("function_name", "parameter", "alias_statements"),
+    [
+        (
+            "update",
+            "float values[1]",
+            "thread float* alias = values;\n            alias[0] += 1.0;",
+        ),
+        (
+            "inspect",
+            "const float values[1]",
+            "const thread float* alias = values;\n            float observed = alias[0];",
+        ),
+        (
+            "update",
+            "float values[1]",
+            "thread float* alias;\n            alias = values;\n            alias[0] += 1.0;",
+        ),
+        (
+            "update",
+            "float values[1]",
+            "float other[1];\n            bool choose = true;\n            thread float* alias = choose ? values : other;",
+        ),
+        (
+            "update",
+            "float values[1]",
+            "thread float* alias = &values[0];",
+        ),
+        (
+            "update",
+            "float values[1]",
+            "thread float* alias = values + 0;",
+        ),
+    ],
+    ids=(
+        "mutable",
+        "readonly",
+        "deferred-assignment",
+        "conditional-branch",
+        "addressed-element",
+        "pointer-arithmetic",
+    ),
+)
+def test_glsl_fixed_array_parameter_rejects_private_pointer_escape(
+    function_name,
+    parameter,
+    alias_statements,
+):
+    code = f"""
+    shader EscapedFixedArrayPointer {{
+        void {function_name}({parameter}) {{
+            {alias_statements}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match=(
+            rf"OpenGL fixed-array parameter '{function_name}\.values' escapes "
+            "through local private pointer 'alias'"
+        ),
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.function_name == function_name
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "pointer-escape"
+
+
+def test_glsl_fixed_array_parameter_rejects_private_reference_escape():
+    code = """
+    shader EscapedFixedArrayReference {
+        void mutate(float values[1]) {
+            thread float& alias = values[0];
+            alias = 2.0;
+        }
+    }
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match=(
+            "OpenGL fixed-array parameter 'mutate\\.values' escapes through "
+            "local private reference 'alias'"
+        ),
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.function_name == "mutate"
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "pointer-escape"
+
+
+def test_glsl_local_private_reference_without_array_view_fails_closed():
+    code = """
+    shader UnsupportedLocalReference {
+        void inspect() {
+            float value = 1.0;
+            thread float& alias = value;
+            alias = 2.0;
+        }
+    }
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match=(
+            "OpenGL cannot emit local private reference 'alias' without a "
+            "concrete array-view lowering"
+        ),
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.function_name == "inspect"
+    assert excinfo.value.parameter_name == "alias"
+    assert excinfo.value.reason == "unsupported-local-reference"
+
+
+@pytest.mark.parametrize(
+    "alias_statements",
+    [
+        """
+        {
+            float values[1];
+            thread float* alias = values;
+            alias[0] = 2.0;
+        }
+        """,
+        """
+        float left[1];
+        float right[1];
+        thread float* alias = (values[0] > 0.0) ? left : right;
+        alias[0] = 2.0;
+        """,
+    ],
+    ids=("shadowed-parameter", "condition-only-read"),
+)
+def test_glsl_fixed_array_pointer_escape_tracks_lexical_provenance(alias_statements):
+    code = f"""
+    shader FixedArrayPointerProvenance {{
+        void inspect(float values[1]) {{
+            {alias_statements}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.function_name == "inspect"
+    assert excinfo.value.parameter_name == "alias"
+    assert excinfo.value.reason == "unsupported-local-pointer"
+
+
+def test_glsl_fixed_array_pointer_escape_tracks_switch_case_scopes():
+    code = """
+    shader FixedArrayPointerSwitchProvenance {
+        void inspect(float values[1], int mode) {
+            switch (mode) {
+                case 0:
+                    float values[1];
+                    values[0] = 2.0;
+                    break;
+                case 1:
+                    thread float* escaped_alias = values;
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match=(
+            "OpenGL fixed-array parameter 'inspect\\.values' escapes through "
+            "local private pointer 'escaped_alias'"
+        ),
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.function_name == "inspect"
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "pointer-escape"
+
+
 def test_glsl_private_pointer_rejects_ambiguous_scalar_array_selection():
     code = """
     shader AmbiguousPrivatePointerShape {
@@ -6575,6 +8089,7 @@ def test_glsl_private_pointer_rejects_ambiguous_scalar_array_selection():
         }
 
         compute {
+
             layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
             void main(bool choose) {
@@ -9010,6 +10525,103 @@ def test_opengl_inferred_storage_alias_reads_stores_and_rebases(tmp_path):
     )
 
 
+def test_opengl_deferred_same_backing_storage_alias_is_lowered(tmp_path):
+    shader = """
+    shader DeferredStorageAlias {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* row;
+                for (uint i = 0u; i < 2u; i++) {
+                    row = source + i;
+                    result[i] = row[1u];
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int row_offset;" in generated
+    assert "row_offset = int(i);" in generated
+    assert "result[i] = source[(row_offset + int(1u))];" in generated
+    assert_glsl_storage_pointer_syntax_is_lowered(
+        generated,
+        "source",
+        "result",
+        "row",
+    )
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "deferred_same_backing_storage_alias",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_deferred_storage_alias_rejects_use_before_assignment():
+    shader = """
+    shader DeferredStorageAliasUseBeforeAssignment {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* row;
+                result[0] = row[0];
+                row = source;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "main"
+    assert error.parameter_name == "row"
+    assert error.reason == "deferred-use-before-assignment"
+
+
+def test_opengl_deferred_storage_alias_rejects_conflicting_backings():
+    shader = """
+    shader DeferredStorageAliasBackingConflict {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> first @buffer(0),
+                StructuredBuffer<float> second @buffer(1),
+                RWStructuredBuffer<float> result @buffer(2)
+            ) {
+                constant float* row;
+                row = first;
+                result[0] = row[0];
+                row = second;
+                result[1] = row[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "main"
+    assert error.parameter_name == "row"
+    assert error.reason == "deferred-backing-mismatch"
+
+
 def test_opengl_inferred_storage_alias_from_buffer_parameters(tmp_path):
     shader = """
     shader InferredStorageAliasParameter {
@@ -9159,6 +10771,2713 @@ def test_opengl_storage_pointer_helper_reads_local_alias_with_dynamic_base(tmp_p
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "storage_pointer_alias_dynamic_read"
     )
+
+
+def test_opengl_storage_pointer_helper_nonleading_argument_skips_texture_probe(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerNonleadingArgument {
+        float accumulate(float total, constant float* values, uint index) {
+            total += values[index];
+            return total + *values++;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                uint dynamicBase = tid.x + 3u;
+                constant float* row;
+                row = source + dynamicBase;
+                result[tid.x] = accumulate(1.0, row, 2u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert_glsl_storage_pointer_syntax_is_lowered(
+        generated,
+        "source",
+        "result",
+        "row",
+        "values",
+    )
+    helper = re.search(
+        r"\bfloat\s+(?P<name>accumulate[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    read = re.search(
+        r"(?P<target>[A-Za-z_]\w*)\s*\[(?P<index>[^]]+)\]",
+        helper.group("body"),
+    )
+    assert read is not None, generated
+    assert "total" in helper.group("body"), generated
+    assert re.search(
+        r"\[\([A-Za-z_]\w*\+\+\)\]",
+        helper.group("body"),
+    ), generated
+    assert glsl_expression_depends_on(
+        helper.group("body"), read.group("index"), "index"
+    ), generated
+    calls = re.findall(
+        rf"\b{re.escape(helper.group('name'))}\s*\(([^;\n]*)\)\s*;",
+        generated,
+    )
+    main_call = next((arguments for arguments in calls if "1.0" in arguments), None)
+    assert main_call is not None, generated
+    offset_argument = next(
+        (
+            name
+            for name in re.findall(r"\b[A-Za-z_]\w*\b", main_call)
+            if name.endswith("_offset")
+        ),
+        None,
+    )
+    assert offset_argument is not None, generated
+    assert re.search(
+        rf"\b{re.escape(offset_argument)}\s*=\s*int\(dynamicBase\)\s*;",
+        generated,
+    ), generated
+    assert "2u" in main_call, generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_nonleading_argument",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+OPENGL_WIDE_STORAGE_POINTER_ASSERTION_SHADER = """
+shader WideStoragePointerOffset {
+    float consume(constant float* values, uint64_t offset) {
+        constant float* row = values + offset;
+        return row[0];
+    }
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main(
+            StructuredBuffer<float> source @buffer(0),
+            RWStructuredBuffer<float> result @buffer(1),
+            uint64_t offset
+        ) {
+            result[0] = consume(source, offset);
+        }
+    }
+}
+"""
+
+
+def test_opengl_storage_pointer_source_range_assertion_propagates_to_offset(
+    tmp_path,
+):
+    generated = (
+        GLSLCodeGen()
+        .set_index_range_assertions(
+            [
+                {
+                    "expression": "values + offset",
+                    "function": "consume",
+                    "minimum": 0,
+                    "maximum": 2**31 - 1,
+                }
+            ]
+        )
+        .generate(
+            crosstl.translator.parse(OPENGL_WIDE_STORAGE_POINTER_ASSERTION_SHADER)
+        )
+    )
+
+    assert_glsl_storage_pointer_syntax_is_lowered(
+        generated,
+        "source",
+        "row",
+        "values",
+    )
+    assert "int row_offset = int(int((values_offset + offset)));" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_source_range_assertion",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("assertion", "reason"),
+    [
+        (None, "index-range-unproven"),
+        (
+            {
+                "expression": "values + other_offset",
+                "function": "consume",
+                "minimum": 0,
+                "maximum": 2**31 - 1,
+            },
+            "index-range-unproven",
+        ),
+        (
+            {
+                "expression": "values + offset",
+                "function": "consume",
+                "minimum": -1,
+                "maximum": 2**31 - 1,
+            },
+            "negative-index",
+        ),
+        (
+            {
+                "expression": "values + offset",
+                "function": "consume",
+                "minimum": 0,
+                "maximum": 2**31,
+            },
+            "index-range-out-of-target-range",
+        ),
+        (
+            {
+                "expression": "values + offset",
+                "function": "consume",
+                "minimum": 0,
+                "maximum": 2**63,
+            },
+            "index-range-out-of-target-range",
+        ),
+    ],
+    ids=(
+        "missing-contract",
+        "unmatched-expression",
+        "negative-bound",
+        "signed-int-overflow",
+        "source-width-overflow",
+    ),
+)
+def test_opengl_storage_pointer_source_range_assertion_fails_closed(
+    assertion,
+    reason,
+):
+    generator = GLSLCodeGen()
+    if assertion is not None:
+        generator.set_index_range_assertions([assertion])
+
+    with pytest.raises(OpenGLIndexTypeError) as exc_info:
+        generator.generate(
+            crosstl.translator.parse(OPENGL_WIDE_STORAGE_POINTER_ASSERTION_SHADER)
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.index_type == "uint64_t"
+    assert diagnostic.target_index_type == "int"
+    assert diagnostic.indexed_value == "source"
+    assert diagnostic.index_expression == "values_offset + offset"
+    assert diagnostic.reason == reason
+
+
+def test_opengl_storage_pointer_array_same_backing_offsets_validate_natively(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerArrayLocal {
+        float consume(constant float* inputs[2]) {
+            float total = 0.0;
+            for (int j = 0; j < 2; j++) {
+                total += inputs[j][0];
+                inputs[j] += 1;
+                total += inputs[j][0];
+            }
+            return total;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[2];
+                inputs[0] = source + 1;
+                inputs[1] = inputs[0] + 4;
+                result[0] = consume(inputs);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert_glsl_storage_pointer_syntax_is_lowered(generated, "source", "inputs")
+    assert re.search(r"\bint\s+inputs_offsets\s*\[\s*2\s*\]\s*;", generated)
+    helper = re.search(
+        r"\bfloat\s+(?P<name>consume[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert (
+        len(re.findall(r"\binout\s+int\s+inputs_offset_\d+", helper.group("params")))
+        == 2
+    )
+    assert "if (int(j) == 0)" in helper.group("body")
+    assert "else if (int(j) == 1)" in helper.group("body")
+    assert re.search(
+        rf"\b{re.escape(helper.group('name'))}\s*\("
+        r"inputs_offsets\[0\],\s*inputs_offsets\[1\]\)",
+        generated,
+    )
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_same_backing",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_transitive_mutation_validates_natively(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerArrayTransitiveMutation {
+        void advance(constant float* inputs[1]) {
+            inputs[0] += 1;
+        }
+
+        void wrapper(constant float* inputs[1]) {
+            advance(inputs);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* row = source;
+                wrapper(&row);
+                result[0] = row[0];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    wrapper = re.search(
+        r"\bvoid\s+(?P<name>wrapper[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert wrapper is not None, generated
+    assert re.search(r"\binout\s+int\s+inputs_offset_0\b", wrapper.group("params"))
+    assert re.search(
+        r"\badvance[A-Za-z0-9_]*\s*\(inputs_offset_0\)\s*;",
+        wrapper.group("body"),
+    )
+    assert re.search(
+        rf"\b{re.escape(wrapper.group('name'))}\s*\(row_offset\)\s*;",
+        generated,
+    )
+    assert f"{wrapper.group('name')}(int(row_offset))" not in generated
+    assert "result[0] = source[row_offset];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_transitive_mutation",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_element_mutation_validates_natively(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerArrayElementMutation {
+        void advance(inout const device float* value) {
+            value += 1;
+        }
+
+        void wrapper(constant float* inputs[1]) {
+            advance(inputs[0]);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* row = source;
+                wrapper(&row);
+                result[0] = row[0];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    wrapper = re.search(
+        r"\bvoid\s+(?P<name>wrapper[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert wrapper is not None, generated
+    assert re.search(r"\binout\s+int\s+inputs_offset_0\b", wrapper.group("params"))
+    assert re.search(
+        r"\badvance[A-Za-z0-9_]*\s*\(inputs_offset_0\)\s*;",
+        wrapper.group("body"),
+    )
+    assert re.search(
+        rf"\b{re.escape(wrapper.group('name'))}\s*\(row_offset\)\s*;",
+        generated,
+    )
+    assert f"{wrapper.group('name')}(int(row_offset))" not in generated
+    assert "result[0] = source[row_offset];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_element_mutation",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_addressed_element_mutation_validates_natively(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerArrayAddressedElementMutation {
+        void advance(constant float* values[1]) {
+            values[0] += 1;
+        }
+
+        void wrapper(constant float* inputs[1]) {
+            advance(&inputs[0]);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* row = source;
+                wrapper(&row);
+                result[0] = row[0];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    wrapper = re.search(
+        r"\bvoid\s+(?P<name>wrapper[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert wrapper is not None, generated
+    assert re.search(r"\binout\s+int\s+inputs_offset_0\b", wrapper.group("params"))
+    assert re.search(
+        r"\badvance[A-Za-z0-9_]*\s*\(inputs_offset_0\)\s*;",
+        wrapper.group("body"),
+    )
+    assert re.search(
+        rf"\b{re.escape(wrapper.group('name'))}\s*\(row_offset\)\s*;",
+        generated,
+    )
+    assert "result[0] = source[row_offset];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_addressed_element_mutation",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_element_read_stays_by_value(tmp_path):
+    shader = """
+    shader StoragePointerArrayElementRead {
+        float readValue(constant float* value) {
+            return value[0];
+        }
+
+        float readWrapper(constant float* inputs[1]) {
+            return readValue(inputs[0]);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* row = source;
+                result[0] = readWrapper(&row);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    wrapper = re.search(
+        r"\bfloat\s+(?P<name>readWrapper[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{",
+        generated,
+    )
+    assert wrapper is not None, generated
+    assert "inout" not in wrapper.group("params")
+    assert re.search(
+        rf"\b{re.escape(wrapper.group('name'))}\s*\(int\(row_offset\)\)",
+        generated,
+    )
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_element_read",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_nested_access_retains_pointee_type(tmp_path):
+    shader = """
+    shader StoragePointerArrayNestedPointee {
+        struct complex_t_float {
+            float real;
+            float imag;
+        }
+
+        complex_t_float identity(complex_t_float value) {
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<complex_t_float> source @buffer(0),
+                RWStructuredBuffer<complex_t_float> result @buffer(1)
+            ) {
+                constant complex_t_float* inputs[1];
+                inputs[0] = source;
+                result[0] = identity(inputs[0][0]);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert_glsl_storage_pointer_syntax_is_lowered(generated, "source", "inputs")
+    assert "complex_t_float*" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_nested_pointee",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_element_mutation_rejects_unresolved_helper():
+    shader = """
+    shader StoragePointerArrayElementUnresolvedMutationCall {
+        void wrapper(constant float* inputs[1]) {
+            missingScalarPointerHelper(inputs[0]);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(StructuredBuffer<float> source @buffer(0)) {
+                constant float* row = source;
+                wrapper(&row);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "wrapper"
+    assert error.reason == "pointer-array-mutation-call-unresolved"
+
+
+@pytest.mark.parametrize("mutable_overload_first", [True, False])
+def test_opengl_storage_pointer_array_element_mutation_resolves_overload_order(
+    tmp_path,
+    mutable_overload_first,
+):
+    mutable = """
+        void advance(inout const device float* value) {
+            value += 1;
+        }
+    """
+    scalar = """
+        float advance(float value) {
+            return value + 1.0;
+        }
+    """
+    overloads = mutable + scalar if mutable_overload_first else scalar + mutable
+    shader = f"""
+    shader StoragePointerArrayElementMutationOverload {{
+        {overloads}
+
+        void wrapper(constant float* inputs[1]) {{
+            advance(inputs[0]);
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {{
+                constant float* row = source;
+                wrapper(&row);
+                result[0] = row[0];
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    wrapper = re.search(
+        r"\bvoid\s+(?P<name>wrapper[A-Za-z0-9_]*)\s*" r"\((?P<params>[^)]*)\)\s*\{",
+        generated,
+    )
+    assert wrapper is not None, generated
+    assert re.search(r"\binout\s+int\s+inputs_offset_0\b", wrapper.group("params"))
+    assert re.search(
+        r"\badvance[A-Za-z0-9_]*\s*\(inputs_offset_0\)\s*;",
+        generated,
+    )
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"storage_pointer_array_element_overload_{mutable_overload_first}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_dynamic_mutable_element_fails_closed():
+    shader = """
+    shader StoragePointerArrayDynamicElementMutation {
+        void advance(inout const device float* value) {
+            value += 1;
+        }
+
+        void wrapper(constant float* inputs[2], uint selected) {
+            advance(inputs[selected]);
+        }
+
+        compute {
+            layout(local_size_x = 2, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1),
+                uint3 lid @SV_GroupThreadID
+            ) {
+                constant float* rows[2];
+                rows[0] = source;
+                rows[1] = source + 2;
+                wrapper(rows, lid.x);
+                result[lid.x] = rows[lid.x][0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "advance"
+    assert error.parameter_name == "value"
+    assert error.reason == "mutable-offset-lvalue-unresolved"
+
+
+def test_opengl_storage_pointer_array_element_out_mutation_validates_natively(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerArrayElementOutMutation {
+        void reset(out const device float* value, const device float* source) {
+            value = source + 2;
+        }
+
+        void wrapper(
+            constant float* inputs[1],
+            const device float* source
+        ) {
+            reset(inputs[0], source);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* row = source;
+                wrapper(&row, source);
+                result[0] = row[0];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    wrapper = re.search(
+        r"\bvoid\s+(?P<name>wrapper[A-Za-z0-9_]*)\s*" r"\((?P<params>[^)]*)\)\s*\{",
+        generated,
+    )
+    assert wrapper is not None, generated
+    assert re.search(r"\binout\s+int\s+inputs_offset_0\b", wrapper.group("params"))
+    assert re.search(
+        r"\breset[A-Za-z0-9_]*\(inputs_offset_0,\s*int\(source_offset\)\)",
+        generated,
+    )
+    assert "result[0] = source[row_offset];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_element_out_mutation",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_mutation_rejects_shadowed_parameter():
+    shader = """
+    shader StoragePointerArrayShadowedParameter {
+        void advance(inout const device float* value) {
+            value += 1;
+        }
+
+        void wrapper(
+            constant float* inputs[1],
+            constant float* other[1]
+        ) {
+            {
+                constant float* inputs[1];
+                inputs[0] = other[0];
+                advance(inputs[0]);
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(StructuredBuffer<float> source @buffer(0)) {
+                constant float* row = source;
+                constant float* other = source + 2;
+                wrapper(&row, &other);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "wrapper"
+    assert error.parameter_name == "inputs"
+    assert error.reason == "pointer-array-mutation-shadowed-binding"
+
+
+def test_opengl_materialized_generic_pointer_array_element_mutation_validates_natively(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T>
+    METAL_FUNC void advance(const device T*& value) {
+        value += 1;
+    }
+
+    template <typename T>
+    METAL_FUNC void wrapper(const device T* inputs[1]) {
+        advance<T>(inputs[0]);
+    }
+
+    template <typename T>
+    [[kernel]] void run(
+        const device T* source [[buffer(0)]],
+        device T* result [[buffer(1)]]) {
+        const device T* row = source;
+        wrapper<T>(&row);
+        result[0] = row[0];
+    }
+
+    instantiate_kernel("run_float", run, float)
+    """
+    shader_path = tmp_path / "generic-pointer-array-element-mutation.metal"
+    shader_path.write_text(shader, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="opengl",
+        source_backend="metal",
+        format_output=False,
+    )
+
+    assert re.search(
+        r"\bvoid\s+wrapper_float[A-Za-z0-9_]*\s*" r"\(inout\s+int\s+inputs_offset_0\)",
+        generated,
+    )
+    assert re.search(r"\badvance_float[A-Za-z0-9_]*\(inputs_offset_0\)", generated)
+    assert re.search(r"\bwrapper_float[A-Za-z0-9_]*\(row_offset\)", generated)
+    assert "result[0] = source[row_offset];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "generic_pointer_array_element_mutation",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_transitive_read_stays_by_value(tmp_path):
+    shader = """
+    shader StoragePointerArrayTransitiveRead {
+        float readLeaf(constant float* inputs[1]) {
+            return inputs[0][0];
+        }
+
+        float readWrapper(constant float* inputs[1]) {
+            return readLeaf(inputs);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* row = source;
+                result[0] = readWrapper(&row);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    wrapper = re.search(
+        r"\bfloat\s+(?P<name>readWrapper[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{",
+        generated,
+    )
+    assert wrapper is not None, generated
+    assert "inout" not in wrapper.group("params")
+    assert re.search(
+        rf"\b{re.escape(wrapper.group('name'))}\s*\(int\(row_offset\)\)",
+        generated,
+    )
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_transitive_read",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_mutation_rejects_unresolved_forwarding_call():
+    shader = """
+    shader StoragePointerArrayUnresolvedMutationCall {
+        void wrapper(constant float* inputs[1]) {
+            missingPointerArrayHelper(inputs);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(StructuredBuffer<float> source @buffer(0)) {
+                constant float* row = source;
+                wrapper(&row);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "wrapper"
+    assert error.reason == "pointer-array-mutation-call-unresolved"
+
+
+def test_opengl_storage_pointer_array_mutation_rejects_recursive_forwarding_cycle():
+    shader = """
+    shader StoragePointerArrayMutationCycle {
+        void first(constant float* inputs[1]) {
+            second(inputs);
+        }
+
+        void second(constant float* inputs[1]) {
+            first(inputs);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(StructuredBuffer<float> source @buffer(0)) {
+                constant float* row = source;
+                first(&row);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "first"
+    assert error.parameter_name == "inputs"
+    assert error.reason == "pointer-array-mutation-cycle"
+
+
+def test_opengl_storage_pointer_array_loop_carried_initialization_validates_natively(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerArrayLoopCarriedInitialization {
+        float consume(constant float* inputs[4]) {
+            return inputs[0][0] + inputs[1][0] + inputs[2][0] + inputs[3][0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[4];
+                inputs[0] = source;
+                for (int i = 1; i < 4; i++) {
+                    inputs[i] = inputs[i - 1] + 2;
+                }
+                result[0] = consume(inputs);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert_glsl_storage_pointer_syntax_is_lowered(generated, "source", "inputs")
+    assert re.search(r"\bint\s+inputs_offsets\s*\[\s*4\s*\]\s*;", generated)
+    assert "inputs_offsets[0] = int(0);" in generated
+    assert "if (int(i) == 1)" in generated
+    assert "else if (int(i) == 3)" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_loop_carried_initialization",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_rejects_loop_carried_read_before_seed():
+    shader = """
+    shader StoragePointerArrayLoopCarriedReadBeforeSeed {
+        float consume(constant float* inputs[4]) {
+            return inputs[0][0] + inputs[1][0] + inputs[2][0] + inputs[3][0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[4];
+                inputs[3] = source;
+                for (int i = 1; i < 4; i++) {
+                    inputs[i] = inputs[i - 1] + 2;
+                }
+                inputs[0] = source;
+                result[0] = consume(inputs);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "main"
+    assert error.parameter_name == "inputs"
+    assert error.reason == "pointer-array-use-before-initialization"
+
+
+def test_opengl_storage_pointer_array_rejects_shadowed_loop_index_override():
+    shader = """
+    shader StoragePointerArrayShadowedLoopIndex {
+        float consume(constant float* inputs[4]) {
+            return inputs[0][0] + inputs[1][0] + inputs[2][0] + inputs[3][0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[4];
+                inputs[0] = source;
+                for (int i = 1; i < 4; i++) {
+                    if (true) {
+                        int i = 0;
+                        inputs[i] = source;
+                    }
+                }
+                result[0] = consume(inputs);
+                inputs[1] = source;
+                inputs[2] = source;
+                inputs[3] = source;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "main"
+    assert error.parameter_name == "inputs"
+    assert error.reason == "pointer-array-use-before-initialization"
+
+
+def test_opengl_storage_pointer_array_rejects_scalar_address_mutated_loop_index():
+    shader = """
+    shader StoragePointerArrayScalarViewLoopMutation {
+        void skip(int index[1]) {
+            index[0] = 2;
+        }
+
+        float consume(constant float* inputs[4]) {
+            return inputs[0][0] + inputs[1][0] + inputs[2][0] + inputs[3][0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[4];
+                inputs[0] = source;
+                for (int i = 1; i < 4; i++) {
+                    inputs[i] = source + i;
+                    skip(&i);
+                }
+                result[0] = consume(inputs);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "main"
+    assert error.parameter_name == "inputs"
+    assert error.reason == "pointer-array-use-before-initialization"
+
+
+def test_opengl_storage_pointer_array_rejects_per_invocation_dynamic_initialization():
+    shader = """
+    shader StoragePointerArrayPerInvocationDynamicInitialization {
+        float consume(constant float* inputs[2]) {
+            return inputs[0][0] + inputs[1][0];
+        }
+
+        compute {
+            layout(local_size_x = 2, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1),
+                uint3 lid @ gl_LocalInvocationID
+            ) {
+                constant float* inputs[2];
+                inputs[int(lid.x)] = source + int(lid.x);
+                result[lid.x] = consume(inputs);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "main"
+    assert error.parameter_name == "inputs"
+    assert error.reason == "pointer-array-use-before-initialization"
+    assert "[0, 1]" in str(error)
+
+
+def test_opengl_storage_pointer_array_singleton_dynamic_initialization_validates_natively(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerArraySingletonDynamicInitialization {
+        float consume(constant float* inputs[1]) {
+            return inputs[0][0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1),
+                uint3 lid @ gl_LocalInvocationID
+            ) {
+                constant float* inputs[1];
+                inputs[int(lid.x)] = source + 1;
+                result[0] = consume(inputs);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert_glsl_storage_pointer_syntax_is_lowered(generated, "source", "inputs")
+    assert re.search(r"\bint\s+inputs_offsets\s*\[\s*1\s*\]\s*;", generated)
+    assert "inputs_offsets[0] = int(1);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_singleton_dynamic_initialization",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_dynamic_reassignment_after_full_initialization_validates_natively(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerArrayDynamicReassignmentAfterFullInitialization {
+        float consume(constant float* inputs[2]) {
+            return inputs[0][0] + inputs[1][0];
+        }
+
+        compute {
+            layout(local_size_x = 2, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1),
+                uint3 lid @ gl_LocalInvocationID
+            ) {
+                constant float* inputs[2];
+                inputs[0] = source;
+                inputs[1] = source + 1;
+                inputs[int(lid.x)] = source + int(lid.x);
+                result[lid.x] = consume(inputs);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert_glsl_storage_pointer_syntax_is_lowered(generated, "source", "inputs")
+    assert re.search(r"\bint\s+inputs_offsets\s*\[\s*2\s*\]\s*;", generated)
+    assert "if (int(int(gl_LocalInvocationID.x)) == 0)" in generated
+    assert "else if (int(int(gl_LocalInvocationID.x)) == 1)" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_dynamic_reassignment",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_storage_pointer_array_extent_one_address_views_validate_natively(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerArrayAddress {
+        void consume(float totals[1], constant float* inputs[1]) {
+            totals[0] = inputs[0][0];
+            inputs[0] += 1;
+            totals[0] += inputs[0][0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                float total = 0.0;
+                constant float* row = source + 2;
+                consume(&total, &row);
+                result[0] = total;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert_glsl_storage_pointer_syntax_is_lowered(
+        generated,
+        "source",
+        "row",
+        "inputs",
+    )
+    assert re.search(r"\bfloat\s+total\s*\[\s*1\s*\]", generated)
+    assert re.search(
+        r"\bvoid\s+consume[A-Za-z0-9_]*\s*\(inout float totals\[1\]",
+        generated,
+    )
+    assert "result[0] = total[0];" in generated
+    assert re.search(
+        r"\bconsume[A-Za-z0-9_]*\s*\(total,\s*row_offset\)\s*;",
+        generated,
+    )
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_pointer_array_extent_one_address",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "helper_declarations",
+    (
+        """
+        void consume(float totals[1]) {
+            totals[0] += 1.0;
+        }
+        void consume(float value, int tag) {}
+        """,
+        """
+        void consume(float value, int tag) {}
+        void consume(float totals[1]) {
+            totals[0] += 1.0;
+        }
+        """,
+    ),
+    ids=("array-overload-first", "array-overload-last"),
+)
+def test_opengl_scalar_address_view_uses_resolved_overload_independent_of_order(
+    tmp_path,
+    helper_declarations,
+):
+    shader = """
+        shader ScalarAddressViewOverloadOrder {
+            HELPER_DECLARATIONS
+
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main(RWStructuredBuffer<float> result @buffer(0)) {
+                    float total = 2.0;
+                    consume(&total);
+                    result[0] = total;
+                }
+            }
+        }
+        """.replace("HELPER_DECLARATIONS", helper_declarations)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s+total\s*\[\s*1\s*\]", generated)
+    assert re.search(
+        r"\bvoid\s+consume[A-Za-z0-9_]*\s*\(inout float totals\[1\]\)",
+        generated,
+    )
+    assert "consume(total);" in generated
+    assert "result[0] = total[0];" in generated
+    assert "(&total)" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "scalar_address_view_overload_order",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize("array_overload_first", [True, False])
+def test_opengl_scalar_address_view_selects_same_arity_array_overload_natively(
+    tmp_path,
+    array_overload_first,
+):
+    array_overload = """
+        void consume(float totals[1]) {
+            totals[0] += 1.0;
+        }
+    """
+    scalar_overload = """
+        void consume(float value) {}
+    """
+    overloads = (
+        array_overload + scalar_overload
+        if array_overload_first
+        else scalar_overload + array_overload
+    )
+    shader = """
+    shader ScalarAddressViewSameArityOverload {
+        OVERLOADS
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float total = 2.0;
+                consume(&total);
+                result[0] = total;
+            }
+        }
+    }
+    """.replace("OVERLOADS", overloads)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void consume(inout float totals[1])" in generated
+    assert "void consume(float value)" in generated
+    assert "float total[1] = float[1](2.0);" in generated
+    assert "consume(total);" in generated
+    assert "result[0] = total[0];" in generated
+    assert "(&total)" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"scalar_address_same_arity_{array_overload_first}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_scalar_address_view_rejects_promoted_element_binding():
+    shader = """
+    shader ScalarAddressViewRejectsPromotedElement {
+        void consume(int values[1]) {
+            values[0] += 1;
+        }
+
+        void consume(uint values[1]) {
+            values[0] += 1u;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<int> result @buffer(0)) {
+                int16_t total = int16_t(2);
+                consume(&total);
+                result[0] = int(total);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLMappedOverloadError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.function_name == "consume"
+    assert exc_info.value.reason == "call-binding-ambiguous"
+    assert exc_info.value.argument_types == ("int16_t",)
+
+
+@pytest.mark.parametrize("extent_one_overload_first", [True, False])
+def test_opengl_addressed_fixed_array_element_binds_exact_extent_then_fails_closed(
+    extent_one_overload_first,
+):
+    extent_one = """
+        void update(float values[1]) {
+            values[0] += 1.0;
+        }
+    """
+    extent_two = """
+        void update(float values[2]) {}
+    """
+    overloads = (
+        extent_one + extent_two
+        if extent_one_overload_first
+        else extent_two + extent_one
+    )
+    shader = """
+    shader AddressedFixedArrayElementExactOverload {
+        OVERLOADS
+
+        void wrapper(float values[2]) {
+            update(&values[0]);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float values[2] = {2.0, 4.0};
+                wrapper(values);
+                result[0] = values[0];
+            }
+        }
+    }
+    """.replace("OVERLOADS", overloads)
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.function_name == "update"
+    assert exc_info.value.parameter_name == "values"
+    assert exc_info.value.reason == "fixed-array-addressed-element-view-unsupported"
+
+
+@pytest.mark.parametrize("extent_one_overload_first", [True, False])
+def test_opengl_storage_pointer_array_call_selects_exact_extent_natively(
+    tmp_path,
+    extent_one_overload_first,
+):
+    extent_one = """
+        float consume(constant float* inputs[1]) {
+            inputs[0] += 1;
+            return inputs[0][0];
+        }
+    """
+    extent_two = """
+        float consume(constant float* inputs[2]) {
+            return inputs[0][0] + inputs[1][0];
+        }
+    """
+    overloads = (
+        extent_one + extent_two
+        if extent_one_overload_first
+        else extent_two + extent_one
+    )
+    shader = """
+    shader StoragePointerArrayExactExtentOverload {
+        OVERLOADS
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[1];
+                inputs[0] = source;
+                result[0] = consume(inputs);
+            }
+        }
+    }
+    """.replace("OVERLOADS", overloads)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    helper = re.search(
+        r"float\s+(?P<name>consume_glsl_[A-Za-z0-9_]+)\s*"
+        r"\(inout int inputs_offset_0\)",
+        generated,
+    )
+    assert helper is not None, generated
+    assert re.search(
+        rf"result\[0\]\s*=\s*{re.escape(helper.group('name'))}"
+        r"\(inputs_offsets\[0\]\);",
+        generated,
+    )
+    assert "inputs_offset_1" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"pointer_array_exact_extent_{extent_one_overload_first}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize("extent_one_overload_first", [True, False])
+def test_opengl_fixed_array_storage_overload_without_source_extent_fails_closed(
+    extent_one_overload_first,
+):
+    extent_one = """
+        float consume(float values[1]) {
+            return values[0];
+        }
+    """
+    extent_two = """
+        float consume(float values[2]) {
+            return values[0] + values[1];
+        }
+    """
+    overloads = (
+        extent_one + extent_two
+        if extent_one_overload_first
+        else extent_two + extent_one
+    )
+    shader = """
+    shader FixedArrayStorageAmbiguousExtent {
+        OVERLOADS
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                result[0] = consume(source);
+            }
+        }
+    }
+    """.replace("OVERLOADS", overloads)
+
+    with pytest.raises(OpenGLMappedOverloadError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.function_name == "consume"
+    assert exc_info.value.reason == "call-binding-ambiguous"
+    assert set(exc_info.value.candidates) == {
+        "consume(float[1]) -> float",
+        "consume(float[2]) -> float",
+    }
+
+
+def test_opengl_fixed_array_mutation_cache_isolated_by_exact_overload(tmp_path):
+    shader = """
+    shader FixedArrayMutationCacheExactOverload {
+        void step(float values[1]) {}
+
+        void step(int values[1]) {
+            values[0] += 1;
+        }
+
+        void wrapper(float values[1]) {
+            step(values);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                RWStructuredBuffer<float> result @buffer(0),
+                RWStructuredBuffer<int> integerResult @buffer(1)
+            ) {
+                float total = 2.0;
+                int counter = 3;
+                wrapper(&total);
+                step(&counter);
+                result[0] = total;
+                integerResult[0] = counter;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void step(float values[1])" in generated
+    assert "void step(inout int values[1])" in generated
+    assert "void wrapper(float values[1])" in generated
+    assert "void wrapper(inout float values[1])" not in generated
+    assert "wrapper(total);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "fixed_array_mutation_cache_exact_overload",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_fixed_array_direct_element_selects_scalar_inout_overload_natively(
+    tmp_path,
+):
+    shader = """
+    shader FixedArrayDirectElementScalarOverload {
+        void update(inout float value) {
+            value += 1.0;
+        }
+
+        void update(float values[1]) {}
+
+        void wrapper(float values[1]) {
+            update(values[0]);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float total = 2.0;
+                wrapper(&total);
+                result[0] = total;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void update(inout float value)" in generated
+    assert "void wrapper(inout float values[1])" in generated
+    assert "update(values[0]);" in generated
+    assert "result[0] = total[0];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "fixed_array_direct_element_scalar_overload",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_scalar_address_view_propagates_transitive_writeback(tmp_path):
+    shader = """
+    shader ScalarAddressViewTransitiveWriteback {
+        void update(float value[1]) {
+            value[0] += 1.0;
+        }
+
+        void wrapper(float value[1]) {
+            update(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float total = 2.0;
+                wrapper(&total);
+                result[0] = total;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void update(inout float value[1])" in generated
+    assert "void wrapper(inout float value[1])" in generated
+    assert "update(value);" in generated
+    assert "wrapper(total);" in generated
+    assert "result[0] = total[0];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "scalar_address_view_transitive_writeback",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_fixed_array_readonly_intrinsics_do_not_require_helper_definitions(
+    tmp_path,
+):
+    shader = """
+    shader FixedArrayReadonlyIntrinsics {
+        float inspect(float values[2]) {
+            return max(float(values[0]), values[1]);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float values[2];
+                values[0] = -1.0;
+                values[1] = 2.0;
+                result[0] = inspect(values);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float inspect(float values[2])" in generated
+    assert "float inspect(inout float values[2])" not in generated
+    assert "return max(float(values[0]), values[1]);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "fixed_array_readonly_intrinsics",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_scalar_address_view_rejects_unresolved_forwarding_call():
+    shader = """
+    shader ScalarAddressViewUnresolvedForwarding {
+        void wrapper(float value[1]) {
+            missingHelper(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float total = 2.0;
+                wrapper(&total);
+                result[0] = total;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "wrapper"
+    assert error.parameter_name == "value"
+    assert error.reason == "fixed-array-mutation-call-unresolved"
+
+
+def test_opengl_scalar_address_view_rejects_recursive_forwarding_cycle():
+    shader = """
+    shader ScalarAddressViewForwardingCycle {
+        void first(float value[1]) {
+            second(value);
+        }
+
+        void second(float value[1]) {
+            first(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float total = 2.0;
+                first(&total);
+                result[0] = total;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name in {"first", "second"}
+    assert error.parameter_name == "value"
+    assert error.reason == "fixed-array-mutation-cycle"
+
+
+def test_opengl_scalar_address_view_respects_nested_global_shadowing(tmp_path):
+    shader = """
+    shader ScalarAddressViewGlobalShadow {
+        const float total = 7.0;
+
+        void consume(float totals[1]) {
+            totals[0] += 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                result[0] = total;
+                {
+                    float total = 2.0;
+                    consume(&total);
+                    result[1] = total;
+                }
+                result[2] = total;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const float total = 7.0;" in generated
+    assert "result[0] = total;" in generated
+    assert re.search(
+        r"float total\[1\] = float\[1\]\(2\.0\);\s*"
+        r"consume\(total\);\s*result\[1\] = total\[0\];",
+        generated,
+    )
+    assert "result[2] = total;" in generated
+    assert "result[0] = total[0];" not in generated
+    assert "result[2] = total[0];" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "scalar_address_view_global_shadow",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_for_in_scalar_address_view_materializes_loop_local_only(tmp_path):
+    shader = """
+    shader ScalarAddressViewForInShadow {
+        void consume(float values[1]) {
+            values[0] += 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float value = 10.0;
+                float items[1] = {2.0};
+                for value in items {
+                    consume(&value);
+                    result[0] = value;
+                }
+                result[1] = value;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float value = 10.0;" in generated
+    assert "float value[1] = float[1](value_crossgl_iterable[" in generated
+    assert "consume(value);" in generated
+    assert "result[0] = value[0];" in generated
+    assert "result[1] = value;" in generated
+    assert "result[1] = value[0];" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "for_in_scalar_view_loop_local_only",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize("integer_overload_first", [True, False])
+def test_opengl_for_in_scalar_address_view_binds_exact_shadow_and_restores_outer(
+    tmp_path,
+    integer_overload_first,
+):
+    float_overload = """
+        void consume(float values[1]) {
+            values[0] += 1.0;
+        }
+    """
+    integer_overload = """
+        void consume(int values[1]) {
+            values[0] += 1;
+        }
+    """
+    overloads = (
+        integer_overload + float_overload
+        if integer_overload_first
+        else float_overload + integer_overload
+    )
+    shader = """
+    shader ForInScalarAddressViewLexicalBinding {
+        OVERLOADS
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float value = 10.0;
+                consume(&value);
+                int items[1] = {2};
+                for value in items {
+                    consume(&value);
+                    result[0] = float(value);
+                }
+                result[1] = value;
+            }
+        }
+    }
+    """.replace("OVERLOADS", overloads)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void consume(inout float values[1])" in generated
+    assert "void consume(inout int values[1])" in generated
+    assert "float value[1] = float[1](10.0);" in generated
+    assert re.search(
+        r"for \(int value_crossgl_index = 0; "
+        r"value_crossgl_index < 1; \+\+value_crossgl_index\) \{\s*"
+        r"int value\[1\] = int\[1\]\("
+        r"value_crossgl_iterable\[value_crossgl_index\]\);",
+        generated,
+    )
+    assert generated.count("consume(value);") == 2
+    assert "result[0] = float(value[0]);" in generated
+    assert "result[1] = value[0];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"for_in_scalar_view_overload_{integer_overload_first}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_for_in_plain_binding_shadows_outer_scalar_address_view(tmp_path):
+    shader = """
+    shader ForInPlainBindingShadowsOuterView {
+        void consume(float values[1]) {
+            values[0] += 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float value = 10.0;
+                consume(&value);
+                int items[1] = {2};
+                for value in items {
+                    result[0] = float(value);
+                }
+                result[1] = value;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float value[1] = float[1](10.0);" in generated
+    assert re.search(
+        r"int value = value_crossgl_iterable\[value_crossgl_index\];\s*"
+        r"result\[0\] = float\(value\);",
+        generated,
+    )
+    assert "result[0] = float(value[0]);" not in generated
+    assert "result[1] = value[0];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "for_in_plain_binding_shadows_outer_view",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_for_in_scalar_address_view_restores_after_nested_local_shadow(
+    tmp_path,
+):
+    shader = """
+    shader ForInScalarViewNestedLocalShadow {
+        void consume(int values[1]) {
+            values[0] += 1;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                int items[1] = {2};
+                for value in items {
+                    consume(&value);
+                    {
+                        float value = 7.0;
+                        result[0] = value;
+                    }
+                    result[1] = float(value);
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int value[1] = int[1](value_crossgl_iterable[" in generated
+    assert re.search(
+        r"float value = 7\.0;\s*result\[0\] = value;",
+        generated,
+    )
+    assert "result[0] = value[0];" not in generated
+    assert "result[1] = float(value[0]);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "for_in_scalar_view_nested_local_shadow",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("setup", "iterable", "expected_header"),
+    (
+        (
+            "",
+            "2..5",
+            "for (int value_crossgl_index = 2; "
+            "value_crossgl_index < 5; ++value_crossgl_index)",
+        ),
+        (
+            "int limit = 3;",
+            "limit",
+            "for (int value_crossgl_index = 0; "
+            "value_crossgl_index < limit; ++value_crossgl_index)",
+        ),
+    ),
+    ids=("range", "count"),
+)
+def test_opengl_for_in_range_and_count_scalar_address_views_use_copy_binding(
+    tmp_path,
+    setup,
+    iterable,
+    expected_header,
+):
+    shader = """
+    shader ForInScalarAddressViewCopyBinding {
+        void consume(int values[1]) {
+            values[0] += 1;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                SETUP
+                result[0] = 0.0;
+                for value in ITERABLE {
+                    consume(&value);
+                    result[0] += float(value);
+                }
+            }
+        }
+    }
+    """.replace("SETUP", setup).replace("ITERABLE", iterable)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert expected_header in generated
+    assert "int value[1] = int[1](value_crossgl_index);" in generated
+    assert "consume(value);" in generated
+    assert "result[0] += float(value[0]);" in generated
+    assert "++value[0]" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"for_in_scalar_view_{iterable.replace('.', '_')}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "nested_shadow",
+    (
+        "",
+        """
+            {
+                float total = 2.0;
+                result[1] = total;
+            }
+        """,
+    ),
+    ids=("global-only", "same-named-nested-local"),
+)
+def test_opengl_scalar_address_view_rejects_nonlocal_global_binding(nested_shadow):
+    shader = """
+    shader ScalarAddressViewAddressedGlobalShadow {
+        const float total = 7.0;
+
+        float readOne(float totals[1]) {
+            return totals[0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                result[0] = readOne(&total);
+                NESTED_SHADOW
+                result[2] = total;
+            }
+        }
+    }
+    """.replace("NESTED_SHADOW", nested_shadow)
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "main"
+    assert error.parameter_name == "total"
+    assert error.reason == "scalar-array-view-binding-nonlocal"
+
+
+def test_opengl_scalar_address_view_rejects_shadowed_local_binding():
+    shader = """
+    shader ScalarAddressViewShadowedLocal {
+        void consume(float totals[1]) {
+            totals[0] += 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> result @buffer(0)) {
+                float total = 2.0;
+                if (result[0] > 0.0) {
+                    float total = 3.0;
+                    result[1] = total;
+                }
+                consume(&total);
+                result[0] = total;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "main"
+    assert error.parameter_name == "total"
+    assert error.reason == "scalar-array-view-binding-ambiguous"
+
+
+@pytest.mark.parametrize(
+    ("outer_declaration", "iterable_declaration", "pattern", "index_expression"),
+    (
+        (
+            "int i = 0;",
+            "int selectors[1] = {1};",
+            "i",
+            "i",
+        ),
+        (
+            "int2 lane = int2(0, 0);",
+            "int2 selectors[1] = {int2(1, 0)};",
+            "lane",
+            "lane.x",
+        ),
+    ),
+    ids=("scalar-interval", "vector-component-interval"),
+)
+def test_opengl_for_in_fixed_array_pattern_clears_shadowed_pointer_index_intervals(
+    outer_declaration,
+    iterable_declaration,
+    pattern,
+    index_expression,
+):
+    shader = """
+    shader StoragePointerArrayForInShadowedIndex {
+        float consume(constant float* inputs[2]) {
+            return inputs[0][0] + inputs[1][0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[2];
+                inputs[0] = source;
+                inputs[1] = source + 1;
+                OUTER_DECLARATION
+                ITERABLE_DECLARATION
+                for PATTERN in selectors {
+                    inputs[INDEX_EXPRESSION] = source + 5;
+                }
+                result[0] = consume(inputs);
+            }
+        }
+    }
+    """
+    shader = (
+        shader.replace("OUTER_DECLARATION", outer_declaration)
+        .replace("ITERABLE_DECLARATION", iterable_declaration)
+        .replace("PATTERN", pattern)
+        .replace("INDEX_EXPRESSION", index_expression)
+    )
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == "pointer-array-index-unproven"
+
+
+@pytest.mark.parametrize(
+    "iterable",
+    (pytest.param("0..limit", id="range"), pytest.param("limit", id="count")),
+)
+def test_opengl_for_in_same_name_bound_preserves_pointer_array_iteration(
+    tmp_path,
+    iterable,
+):
+    shader = """
+    shader StoragePointerArrayForInSameNameBound {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[1];
+                inputs[0] = source;
+                int limit = 1;
+                for limit in ITERABLE {
+                    inputs[limit] = source + 1;
+                }
+                result[0] = inputs[0][0];
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "for (int limit_crossgl_index = 0; "
+        "limit_crossgl_index < limit; ++limit_crossgl_index)" in generated
+    )
+    assert "int limit = limit_crossgl_index;" in generated
+    assert "for (int limit = 0; limit < limit;" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"for_in_pointer_same_name_bound_{iterable.replace('.', '_')}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "iterable",
+    (pytest.param("0..1", id="range"), pytest.param("1", id="count")),
+)
+def test_opengl_for_in_pattern_shadows_storage_pointer_alias(tmp_path, iterable):
+    shader = """
+    shader StoragePointerAliasShadowedByForIn {
+        void fill(device float* index, device float* values) {
+            for index in ITERABLE {
+                values[index] = 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                RWStructuredBuffer<float> shadowed @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                fill(shadowed, result);
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    expected_header = (
+        "for (int index = 0; index < 1; ++index)"
+        if ".." in iterable
+        else "for (int index = 0; index < 1; ++index)"
+    )
+    assert expected_header in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"for_in_storage_pointer_alias_shadow_{iterable.replace('.', '_')}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("iterable", "expected_header", "expected_assignments"),
+    (
+        (
+            "1..2",
+            "for (int i = 1; i < 2; ++i)",
+            ("inputs_offsets[1] = int((i + 4));",),
+        ),
+        (
+            "2",
+            "for (int i = 0; i < 2; ++i)",
+            (
+                "if (int(i) == 0)",
+                "inputs_offsets[0] = int((i + 4));",
+                "else if (int(i) == 1)",
+                "inputs_offsets[1] = int((i + 4));",
+            ),
+        ),
+    ),
+    ids=("range", "count"),
+)
+def test_opengl_for_in_range_and_count_patterns_receive_own_pointer_intervals(
+    tmp_path,
+    iterable,
+    expected_header,
+    expected_assignments,
+):
+    shader = """
+    shader StoragePointerArrayForInProvenIndex {
+        float consume(constant float* inputs[2]) {
+            return inputs[0][0] + inputs[1][0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[2];
+                inputs[0] = source;
+                inputs[1] = source + 1;
+                int i = 7;
+                for i in ITERABLE {
+                    inputs[i] = source + i + 4;
+                }
+                result[0] = consume(inputs);
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int i = 7;" in generated
+    assert expected_header in generated
+    for expected_assignment in expected_assignments:
+        assert expected_assignment in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"for_in_pointer_interval_{iterable.replace('.', '_')}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize("iterable", ("0..2", "2"), ids=("range", "count"))
+def test_opengl_for_in_address_mutated_pattern_invalidates_pointer_interval(iterable):
+    shader = """
+    shader StoragePointerArrayForInMutatedIndex {
+        void advance(int values[1]) {
+            values[0] += 1;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[3];
+                inputs[0] = source;
+                inputs[1] = source + 1;
+                inputs[2] = source + 2;
+                for i in ITERABLE {
+                    advance(&i);
+                    inputs[i] = source + 5;
+                }
+                result[0] = inputs[2][0];
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == "pointer-array-index-unproven"
+
+
+@pytest.mark.parametrize(
+    "iterable",
+    (pytest.param("0..limit", id="range"), pytest.param("limit", id="count")),
+)
+@pytest.mark.parametrize(("helper", "mutation"), _FOR_IN_REPEATED_BOUND_MUTATIONS)
+def test_opengl_for_in_mutated_bound_invalidates_pointer_array_interval(
+    iterable,
+    helper,
+    mutation,
+):
+    shader = """
+    shader StoragePointerArrayForInMutatedBound {
+        HELPER
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[1];
+                inputs[0] = source;
+                int limit = 1;
+                for i in ITERABLE {
+                    MUTATION
+                    inputs[i] = source + i;
+                }
+                result[0] = inputs[0][0];
+            }
+        }
+    }
+    """
+    shader = (
+        shader.replace("HELPER", helper)
+        .replace("ITERABLE", iterable)
+        .replace("MUTATION", mutation)
+    )
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == "pointer-array-index-unproven"
+
+
+def test_opengl_for_in_vector_component_bound_mutation_invalidates_pointer_interval(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerArrayForInVectorBound {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[1];
+                inputs[0] = source;
+                int2 bounds = int2(1, 0);
+                for i in 0..bounds.x {
+                    MUTATION
+                    inputs[i] = source + i;
+                }
+                result[0] = inputs[0][0];
+            }
+        }
+    }
+    """
+
+    for case_name, mutation in (
+        ("unchanged", ""),
+        ("unrelated_component", "bounds.y = 4;"),
+    ):
+        stable = GLSLCodeGen().generate(
+            crosstl.translator.parse(shader.replace("MUTATION", mutation))
+        )
+        assert_glsl_compute_validates_if_available(
+            stable,
+            tmp_path,
+            f"for_in_pointer_vector_bound_{case_name}",
+            spirv_target="spirv1.3",
+            validate_spirv=True,
+        )
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(
+            crosstl.translator.parse(shader.replace("MUTATION", "bounds.x = 4;"))
+        )
+
+    assert exc_info.value.reason == "pointer-array-index-unproven"
+
+
+@pytest.mark.parametrize("iterable", ("0..1", "1"), ids=("range", "count"))
+def test_opengl_for_in_pattern_mutation_after_pointer_array_access_fails_closed(
+    iterable,
+):
+    shader = """
+    shader StoragePointerArrayForInLatePatternMutation {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1)
+            ) {
+                constant float* inputs[1];
+                inputs[0] = source;
+                for i in ITERABLE {
+                    inputs[i] = source;
+                    i = 4;
+                }
+                result[0] = inputs[0][0];
+            }
+        }
+    }
+    """.replace("ITERABLE", iterable)
+
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == "pointer-array-index-unproven"
+
+
+@pytest.mark.parametrize(
+    ("shader", "reason"),
+    [
+        (
+            """
+            shader PointerArrayMissingElement {
+                float consume(constant float* inputs[2]) {
+                    return inputs[0][0] + inputs[1][0];
+                }
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    void main(
+                        StructuredBuffer<float> source @buffer(0),
+                        RWStructuredBuffer<float> result @buffer(1)
+                    ) {
+                        constant float* inputs[2];
+                        inputs[0] = source;
+                        result[0] = consume(inputs);
+                    }
+                }
+            }
+            """,
+            "pointer-array-initialization-unproven",
+        ),
+        (
+            """
+            shader PointerArrayUseBeforeInitialization {
+                float consume(constant float* inputs[2]) {
+                    return inputs[0][0] + inputs[1][0];
+                }
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    void main(
+                        StructuredBuffer<float> source @buffer(0),
+                        RWStructuredBuffer<float> result @buffer(1)
+                    ) {
+                        constant float* inputs[2];
+                        inputs[0] = source;
+                        result[0] = consume(inputs);
+                        inputs[1] = source + 1;
+                    }
+                }
+            }
+            """,
+            "pointer-array-use-before-initialization",
+        ),
+        (
+            """
+            shader PointerArrayBackingMismatch {
+                float consume(constant float* inputs[2]) {
+                    return inputs[0][0] + inputs[1][0];
+                }
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    void main(
+                        StructuredBuffer<float> first @buffer(0),
+                        StructuredBuffer<float> second @buffer(1),
+                        RWStructuredBuffer<float> result @buffer(2)
+                    ) {
+                        constant float* inputs[2];
+                        inputs[0] = first;
+                        inputs[1] = second;
+                        result[0] = consume(inputs);
+                    }
+                }
+            }
+            """,
+            "pointer-array-backing-mismatch",
+        ),
+        (
+            """
+            shader PointerArrayExtentMismatch {
+                float consume(constant float* inputs[2]) {
+                    return inputs[0][0] + inputs[1][0];
+                }
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    void main(
+                        StructuredBuffer<float> source @buffer(0),
+                        RWStructuredBuffer<float> result @buffer(1)
+                    ) {
+                        constant float* row = source;
+                        result[0] = consume(&row);
+                    }
+                }
+            }
+            """,
+            "pointer-array-extent-mismatch",
+        ),
+        (
+            """
+            shader PointerArrayUnboundedIndex {
+                float consume(constant float* inputs[2], uint index) {
+                    return inputs[index][0];
+                }
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    void main(
+                        StructuredBuffer<float> source @buffer(0),
+                        RWStructuredBuffer<float> result @buffer(1),
+                        uint3 tid @gl_GlobalInvocationID
+                    ) {
+                        constant float* inputs[2];
+                        inputs[0] = source;
+                        inputs[1] = source + 1;
+                        result[0] = consume(inputs, tid.x);
+                    }
+                }
+            }
+            """,
+            "pointer-array-index-unproven",
+        ),
+        (
+            """
+            shader PointerArrayOutOfRangeIndex {
+                float consume(constant float* inputs[2]) {
+                    return inputs[0][0];
+                }
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    void main(
+                        StructuredBuffer<float> source @buffer(0),
+                        RWStructuredBuffer<float> result @buffer(1)
+                    ) {
+                        constant float* inputs[2];
+                        inputs[0] = source;
+                        inputs[2] = source + 1;
+                        result[0] = consume(inputs);
+                    }
+                }
+            }
+            """,
+            "pointer-array-index-out-of-range",
+        ),
+    ],
+    ids=(
+        "missing-element",
+        "use-before-full-initialization",
+        "backing-mismatch",
+        "extent-mismatch",
+        "unbounded-index",
+        "out-of-range-index",
+    ),
+)
+def test_opengl_storage_pointer_array_fail_closed(shader, reason):
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == reason
+
+
+@pytest.mark.parametrize(
+    "shader",
+    [
+        """
+        shader PointerArrayDirectUseBeforeInitialization {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main(
+                    StructuredBuffer<float> source @buffer(0),
+                    RWStructuredBuffer<float> result @buffer(1)
+                ) {
+                    constant float* inputs[2];
+                    inputs[0] = source;
+                    result[0] = inputs[1][0];
+                    inputs[1] = source + 1;
+                }
+            }
+        }
+        """,
+        """
+        shader PointerArrayBranchSplitInitialization {
+            float consume(constant float* inputs[2]) {
+                return inputs[0][0] + inputs[1][0];
+            }
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main(
+                    StructuredBuffer<float> source @buffer(0),
+                    RWStructuredBuffer<float> result @buffer(1),
+                    bool choose
+                ) {
+                    constant float* inputs[2];
+                    if (choose) {
+                        inputs[0] = source;
+                    } else {
+                        inputs[1] = source + 1;
+                    }
+                    result[0] = consume(inputs);
+                }
+            }
+        }
+        """,
+    ],
+    ids=("direct-element-read", "branch-split-call"),
+)
+def test_opengl_storage_pointer_array_rejects_control_flow_use_before_initialization(
+    shader,
+):
+    with pytest.raises(OpenGLStoragePointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == "pointer-array-use-before-initialization"
 
 
 def test_opengl_storage_pointer_helper_writes_addressed_and_rebased_resource(
@@ -18973,6 +23292,99 @@ def test_opengl_top_level_overload_prototypes_use_distinct_emitted_names():
     assert "return adjust_bfloat16_t(value);" in generated_code
 
 
+def test_opengl_resource_specialized_void_tail_recursion_lowers_to_loop(tmp_path):
+    shader = """
+    shader SpecializedTailRecursion {
+        void advance(inout int value, int amount, constant int* shape) {
+            if (amount <= 0) {
+                return;
+            }
+            value += amount;
+            if (value >= shape[0]) {
+                int extra = value - shape[0];
+                value = 0;
+                if (extra > 0) {
+                    advance(value, extra, shape);
+                }
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<int> shape @buffer(0),
+                RWStructuredBuffer<int> result @buffer(1)
+            ) {
+                int value = 0;
+                advance(value, 9, shape);
+                result[0] = value;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    helper = re.search(
+        r"\bvoid\s+(?P<name>advance[A-Za-z0-9_]*)\s*\([^;]*\)\s*\{",
+        generated,
+    )
+    assert helper is not None, generated
+    assert "while (true) {" in generated
+    assert "int amount_tail_value = extra;" in generated
+    assert "amount = amount_tail_value;" in generated
+    assert "continue;" in generated
+    # Prototype, definition, and the entry-point call remain; the tail self-call
+    # itself has been replaced by state updates plus continue.
+    assert generated.count(f"{helper.group('name')}(") == 3
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "resource_specialized_tail_recursion",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_shadowed_parameter_void_tail_recursion_fails_closed():
+    shader = """
+    shader ShadowedTailRecursionParameter {
+        void recurse(int value) {
+            if (value > 0) {
+                int value = 0;
+                recurse(value);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLRecursiveFunctionError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == "recursive-call-cycle"
+    assert exc_info.value.cycle == ("recurse", "recurse")
+
+
+def test_opengl_non_tail_void_recursion_still_fails_closed():
+    shader = """
+    shader NonTailRecursion {
+        void recurse(inout int value) {
+            if (value > 0) {
+                recurse(value);
+                value -= 1;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLRecursiveFunctionError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == "recursive-call-cycle"
+    assert exc_info.value.cycle == ("recurse", "recurse")
+
+
 def test_opengl_recursion_detection_distinguishes_legal_overload_dispatch():
     shader = """
     shader OverloadDispatch {
@@ -20066,6 +24478,7 @@ def test_stage_tail_struct_constructor_returns_stage_output():
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
+    assert "struct VertexInput {" not in generated_code
     assert "struct VertexOutput {" not in generated_code
     assert "void main()" in generated_code
     assert "out_position = vec4(position, 1.0);" in generated_code

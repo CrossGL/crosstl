@@ -2411,6 +2411,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--expected-entry-count 16446" in mlx_porting
     assert "Enumerate current MLX Metal entry points" in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
+    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
+    assert "timeout-minutes: 120" in matrix_job
     assert "timeout-minutes: 60" in mlx_porting
     assert re.search(r"\bschedule\s*:", mlx_porting)
     assert 'cron: "31 4 * * 1"' in mlx_porting
@@ -5071,5 +5073,61 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_metal_proof():
     assert mlx_porting.count(f'- "{test_path}"') == 2
     matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
     assert "Prove current MLX complete reduce family Metal round-trips" not in (
+        matrix_job
+    )
+
+
+def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_reduce_complete_opengl.py"
+
+    reduce_opengl_job = _workflow_job_section(
+        mlx_porting,
+        "mlx-reduce-complete-opengl-translation",
+    )
+    assert (
+        "name: MLX complete reduce OpenGL translation "
+        "(shard ${{ matrix.shard_index }} of 24)" in reduce_opengl_job
+    )
+    assert "if: github.event_name != 'schedule'" in reduce_opengl_job
+    assert "runs-on: ubuntu-latest" in reduce_opengl_job
+    assert "timeout-minutes: 180" in reduce_opengl_job
+    assert "fail-fast: false" in reduce_opengl_job
+    assert _matrix_values(reduce_opengl_job, "shard_index") == {
+        str(index) for index in range(24)
+    }
+    assert 'python-version: "3.12"' in reduce_opengl_job
+    assert "sudo apt-get install -y glslang-tools spirv-tools" in reduce_opengl_job
+    assert "python -m pip install -e . pytest-xdist" in reduce_opengl_job
+    assert "glslangValidator --version" in reduce_opengl_job
+    assert "spirv-val --version" in reduce_opengl_job
+    assert "Checkout current MLX reduce corpus" in reduce_opengl_job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_opengl_job
+
+    reduce_opengl_step = ci_coverage.workflow_step_section(
+        reduce_opengl_job,
+        "Prove current MLX complete reduce family OpenGL translation",
+    )
+    assert "if: runner.os" not in reduce_opengl_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
+        in reduce_opengl_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_REDUCE_OPENGL_TRANSLATION: "1"' in reduce_opengl_step
+    assert (
+        "CROSTL_MLX_REDUCE_OPENGL_SHARD_INDEX: ${{ matrix.shard_index }}"
+        in reduce_opengl_step
+    )
+    assert 'CROSTL_MLX_REDUCE_OPENGL_SHARD_COUNT: "24"' in reduce_opengl_step
+    assert (
+        f"{test_path}::test_current_mlx_reduce_family_translates_to_opengl"
+        in reduce_opengl_step
+    )
+    assert "-n auto" in reduce_opengl_step
+    assert "-k" not in reduce_opengl_step
+    assert mlx_porting.count(f'- "{test_path}"') == 2
+    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
+    assert "Prove current MLX complete reduce family OpenGL translation" not in (
         matrix_job
     )

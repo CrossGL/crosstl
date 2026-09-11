@@ -10763,9 +10763,9 @@ def test_rms_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proo
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
-        "2112adeb6c1693fa42c48fe3013cd57637f34a9393c0d468b547ed06ab42cf73"
+        "c26decbd3ce3fca934a9f07967728d4aeaf990c9df633a81d96a7936d484cf06"
     )
-    assert opengl["size_bytes"] == 7771
+    assert opengl["size_bytes"] == 7768
     assert opengl["specialization_enforcement"] == (
         "deferred-opengl-spirv-specialization"
     )
@@ -13365,8 +13365,8 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "a1ab0c346d9143e6749e391fb971aeaed71bd84e15fedaf7a7e92808a56449bb",
-        "size_bytes": 82045,
+        "sha256": "cfc959ed6e2ede827516d8076c4adf4a5d87813c9de905cf3c75013b1e1c1608",
+        "size_bytes": 82089,
         "source_remap_mapping_count": 84,
         "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
         "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
@@ -13426,7 +13426,7 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "current FFT source now also emits an 82,045-byte GLSL artifact" in readme
+    assert "current FFT source now also emits an 82,089-byte GLSL artifact" in readme
     assert "21 deferred specialization constants" in readme
     assert "8-byte size, stride, and alignment" in readme
     assert "19 control barriers and no group-nonuniform instructions" in readme
@@ -16381,7 +16381,7 @@ def test_reduce_metal_roundtrip_evidence_records_complete_family():
     assert status["host_interface_reflection_included"] is True
     assert status["metal_roundtrip_included"] is True
     assert status["metal_numerical_runtime_included"] is False
-    assert status["opengl_complete_family_translation_included"] is False
+    assert status["opengl_complete_family_translation_included"] is True
     assert status["directx_complete_family_translation_included"] is False
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is False
@@ -16389,7 +16389,7 @@ def test_reduce_metal_roundtrip_evidence_records_complete_family():
     assert status["remaining_scope"] == {
         "uncovered_reduce_metal_entry_count": 0,
         "metal_numerical_execution_included": False,
-        "opengl_whole_family_included": False,
+        "opengl_whole_family_included": True,
         "directx_whole_family_included": False,
         "mlx_host_runtime_redirection_included": False,
     }
@@ -16412,3 +16412,407 @@ def test_reduce_metal_roundtrip_evidence_records_complete_family():
     assert "contains 25,088 resources" in guide
     assert "All 2,396 AIR objects must be non-empty" in guide
     assert "does not claim Metal numerical execution" in guide
+
+
+def test_reduce_opengl_translation_evidence_records_complete_family():
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = gaps["reduce_opengl_translation_status"]
+    assert status["status"] == (
+        "selected-entry-complete-family-native-compilation-validated"
+    )
+    assert status["commit"] == CURRENT_MLX_COMMIT
+    assert status["source"] == "mlx/backend/metal/kernels/reduce.metal"
+    assert status["source_sha256"] == (
+        "f1e410ab635eaa940ec195461069cbb013ab88ab0d1f8d5dd8790d30b32c454a"
+    )
+    assert status["target"] == "opengl"
+    assert status["scope"] == {
+        "discovered_reduce_instantiation_count": 2396,
+        "entry_count": 2396,
+        "shape_count": 39,
+        "template_count": 9,
+        "operator_count": 6,
+        "operator_type_count": 44,
+        "input_type_count": 13,
+        "output_type_count": 13,
+        "uncovered_reduce_entry_count": 0,
+        "all_discovered_reduce_instantiations_included": True,
+    }
+
+    contract_path = ROOT / status["contract"]["path"]
+    contract_bytes = contract_path.read_bytes()
+    assert status["contract"] == {
+        "path": "demos/integrations/mlx/contracts/reduce.opengl-translation.json",
+        "schema_version": 2,
+        "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "size_bytes": len(contract_bytes),
+        "entry_identity_fields": [
+            "entryPoint",
+            "shape",
+            "inputType",
+            "outputType",
+            "operator",
+            "sha256",
+            "sizeBytes",
+            "specializationCount",
+            "materializationSha256",
+            "resourceCount",
+            "resourcesSha256",
+        ],
+    }
+    contract = json.loads(contract_bytes)
+    assert set(contract) == {
+        "schemaVersion",
+        "kind",
+        "commit",
+        "source",
+        "sourceSha256",
+        "target",
+        "selection",
+        "shapeContracts",
+        "classifications",
+        "portabilityPreconditions",
+        "artifactContract",
+        "entries",
+    }
+    assert contract["schemaVersion"] == 2
+    assert contract["kind"] == "mlx-reduce-opengl-translation-contract"
+    assert contract["commit"] == status["commit"]
+    assert contract["source"] == status["source"]
+    assert contract["sourceSha256"] == status["source_sha256"]
+    assert contract["target"] == "opengl"
+    assert contract["selection"] == {
+        "entryCount": 2396,
+        "shapeCount": 39,
+        "templateCount": 9,
+        "operatorCount": 6,
+        "operatorTypeCount": 44,
+        "inputTypeCount": 13,
+        "outputTypeCount": 13,
+        "allDiscoveredSourceInstantiationsIncluded": True,
+    }
+    entries = contract["entries"]
+    assert len(entries) == 2396
+    assert [entry["entryPoint"] for entry in entries] == sorted(
+        entry["entryPoint"] for entry in entries
+    )
+    assert len({entry["entryPoint"] for entry in entries}) == 2396
+    assert len({entry["sha256"] for entry in entries}) == 2396
+    assert all(
+        list(entry) == status["contract"]["entry_identity_fields"] for entry in entries
+    )
+    classifications = contract["classifications"]
+    expected_classification_counts = {
+        "templates": 9,
+        "shapes": 39,
+        "operators": 6,
+        "operatorTypes": 44,
+        "inputTypes": 13,
+        "outputTypes": 13,
+        "indexTypes": 3,
+        "dimensions": 4,
+    }
+    for field, expected_count in expected_classification_counts.items():
+        assert len(classifications[field]) == expected_count
+        assert sum(classifications[field].values()) == 2396
+
+    artifact = contract["artifactContract"]
+    assert status["project_translation"] == {
+        "selected_entry_run_count": 2396,
+        "artifact_count": 2396,
+        "translated_count": 2396,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "target_entry_point": "main",
+        "provenance": "entry-scoped-translate",
+        "intermediate": "crossgl",
+        "specialization_count": artifact["specializationCount"],
+        "unsupported_specialization_count": 0,
+        "reachable_kernel_count_per_artifact": 1,
+        "exact_materialization_digests_included": True,
+        "exact_resource_digests_included": True,
+        "residual_template_syntax": False,
+        "residual_decltype_syntax": False,
+        "residual_call_operator_syntax": False,
+        "unsupported_placeholder_count": 0,
+    }
+    assert (
+        sum(entry["specializationCount"] for entry in entries)
+        == artifact["specializationCount"]
+    )
+    portability = status["portability_preconditions"]
+    assert portability == {
+        "kind": "explicit-host-runtime-portability-preconditions",
+        "inferred": False,
+        "runtime_enforced": False,
+        "minimum": 0,
+        "maximum": 2147483647,
+        "expressions": [
+            "in_ + LoopedElemToLoc_1_int64_t_false__location(loop)",
+            "in_ + LoopedElemToLoc_2_int64_t_false__location(loop)",
+            "in_ + LoopedElemToLoc_5_int64_t_true__location(loop)",
+            "inputs[i - 1] + reduction_size",
+            "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",
+            "out_idx",
+        ],
+    }
+    assert contract["portabilityPreconditions"] == {
+        "indexRangeAssertions": [
+            {
+                "source": status["source"],
+                "expression": expression,
+                "minimum": 0,
+                "maximum": 2147483647,
+            }
+            for expression in portability["expressions"]
+        ],
+        "contractKind": portability["kind"],
+        "inferred": False,
+        "runtimeEnforced": False,
+    }
+    assert status["implementation_contracts"] == {
+        "deferred_same_backing_storage_aliases": True,
+        "storage_alias_definite_assignment": True,
+        "non_singleton_dynamic_pointer_array_initialization_fails_closed": True,
+        "bounded_loop_carried_storage_pointer_array_initialization": True,
+        "shadow_safe_loop_iteration_bindings": True,
+        "for_in_pattern_interval_provenance": True,
+        "same_name_for_in_bounds_use_independent_controllers": True,
+        "fixed_array_for_in_iterables_resolve_before_pattern_binding": True,
+        "for_in_patterns_shadow_outer_alias_namespaces": True,
+        "for_in_resource_specialization_uses_lexical_binding_types": True,
+        "dynamic_for_in_resource_specialization_uses_call_lexical_types": True,
+        "nested_resource_specialization_discovery_is_hash_seed_stable": True,
+        "null_storage_pointer_reachability_preserves_lexical_binding_identity": True,
+        "null_workgroup_pointer_reachability_preserves_lexical_binding_identity": True,
+        "workgroup_pointer_control_flow_bounds_preserve_lexical_state": True,
+        "flattened_stage_input_structs_preserved_for_local_storage": True,
+        "for_in_repeated_bound_mutation_fails_closed": True,
+        "for_in_loop_controller_mutation_fails_closed": True,
+        "component_sensitive_for_in_bound_dependencies": True,
+        "storage_pointer_array_offset_lowering": True,
+        "transitive_storage_pointer_array_offset_writeback": True,
+        "storage_pointer_array_element_offset_writeback": True,
+        "addressed_storage_pointer_array_element_offset_writeback": True,
+        "overload_resolved_storage_pointer_array_element_mutation": True,
+        "one_element_storage_address_views": True,
+        "private_scalar_address_views": True,
+        "overload_resolved_private_scalar_address_views": True,
+        "lexically_scoped_private_scalar_address_views": True,
+        "nonlocal_scalar_address_views_fail_closed": True,
+        "fixed_array_local_pointer_escape_fails_closed": True,
+        "fixed_array_local_reference_escape_fails_closed": True,
+        "lexically_scoped_fixed_array_alias_provenance": True,
+        "residual_private_pointer_and_reference_syntax_fails_closed": True,
+        "workgroup_builtin_component_range_propagation": True,
+        "portable_unshadowed_nan_emission": True,
+        "proven_direct_void_tail_recursion_elimination": True,
+        "non_tail_and_unsupported_recursion_fails_closed": True,
+        "source_expression_index_assertion_provenance": True,
+        "signed_glsl_int_pointer_offset_bounds": True,
+        "unproven_index_narrowing_fails_closed": True,
+        "non_texture_helper_texture_admission_isolation": True,
+        "extended_gather_compare_offset_lowering_preserved": True,
+        "shape_specific_resource_reflection": True,
+        "exact_scalar_layout_resource_digests": True,
+    }
+    assert status["host_interface"] == {
+        "status": "ready",
+        "minimum_resource_count_per_artifact": min(
+            entry["resourceCount"] for entry in entries
+        ),
+        "maximum_resource_count_per_artifact": max(
+            entry["resourceCount"] for entry in entries
+        ),
+        "reflected_resource_count": artifact["reflectedResourceCount"],
+        "resource_counts_by_shape": artifact["reflectedResourceCountsByShape"],
+        "exact_resource_digests_included": True,
+        "resource_abi_fields": [
+            "name",
+            "kind",
+            "type",
+            "set",
+            "binding",
+            "access",
+            "scalarLayout",
+        ],
+        "host_dispatch_workgroup_size": [1, 1, 1],
+    }
+    assert (
+        sum(entry["resourceCount"] for entry in entries)
+        == artifact["reflectedResourceCount"]
+    )
+    assert status["artifacts"] == {
+        "generated_size_bytes_total": artifact["generatedSizeBytesTotal"],
+        "generated_size_range": artifact["generatedSizeRange"],
+    }
+    assert status["native_validation"] == {
+        "platform": "ubuntu-latest",
+        "compiler": (
+            "glslangValidator --target-env opengl --target-env spirv1.3 -S comp"
+        ),
+        "validator": "spirv-val --target-env spv1.3",
+        "status": "required-on-ci",
+        "ci_shard_count": 24,
+        "shard_entry_counts": [100] * 20 + [99] * 4,
+        "compiled_artifact_count": 2396,
+        "validated_artifact_count": 2396,
+        "all_spirv_artifacts_nonempty": True,
+        "test": (
+            "tests/test_translator/test_mlx_reduce_complete_opengl.py::"
+            "test_current_mlx_reduce_family_translates_to_opengl"
+        ),
+    }
+    assert status["host_interface_reflection_included"] is True
+    assert status["metal_roundtrip_included"] is True
+    assert status["opengl_complete_family_translation_included"] is True
+    assert status["opengl_numerical_runtime_included"] is False
+    assert status["directx_complete_family_translation_included"] is False
+    assert status["mlx_host_runtime_included"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["remaining_scope"] == {
+        "all_discovered_reduce_instantiations_included": True,
+        "opengl_numerical_execution_included": False,
+        "directx_whole_family_included": False,
+        "mlx_host_runtime_redirection_included": False,
+    }
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert (
+        "all 2,396 discovered current-pinned `reduce.metal` entries to OpenGL" in readme
+    )
+    assert "Six explicit host/runtime index-range preconditions" in readme
+    assert "one exact iteration at a time" in readme
+    assert "non-singleton per-invocation dynamic target remains a may-write" in readme
+    assert "shadowed loop-index bindings remain fail-closed" in readme
+    assert (
+        "For-in range and scalar-count expressions are rendered in the outer "
+        "lexical environment" in readme
+    )
+    assert "same-named patterns use independent controllers" in readme
+    assert (
+        "Fixed-array iterable expressions and compile-time extents resolve before "
+        "same-named pattern bindings enter scope" in readme
+    )
+    assert "shadow pointer, stage-builtin, and flattened stage-struct aliases" in readme
+    assert (
+        "For-in resource specialization resolves overloads from exact lexical "
+        "pattern types"
+    ) in readme
+    assert (
+        "Nested resource-specialization discovery preserves deterministic lexical "
+        "order across Python hash seeds"
+    ) in readme
+    assert (
+        "Null storage-pointer reachability and elision preserve exact lexical "
+        "declaration identity"
+    ) in readme
+    assert (
+        "Null workgroup-pointer reachability and elision preserve exact lexical "
+        "declaration identity"
+    ) in readme
+    assert (
+        "Workgroup-pointer bounds analysis visits every control-flow expression "
+        "and preserves outer mutations across lexical blocks"
+    ) in readme
+    assert (
+        "loop-local fixed-array storage retains flattened stage-input struct "
+        "declarations" in readme
+    )
+    assert (
+        "fixed-array patterns cannot inherit same-named outer scalar or "
+        "vector-component bounds" in readme
+    )
+    assert "logical-offset mutation through resolved nested helpers" in readme
+    assert "Direct element and addressed one-element forwarding" in readme
+    assert "overload-resolved scalar or fixed-array helpers" in readme
+    assert (
+        "private scalar address views remain confined to their declaring lexical scopes"
+        in readme
+    )
+    assert "nonlocal scalar address views remain fail-closed" in readme
+    assert "unresolved, ambiguous, or recursive forwarding remain fail-closed" in readme
+    assert (
+        "Fixed-array storage cannot escape through local private pointer or "
+        "reference aliases" in readme
+    )
+    assert (
+        "lexically shadowed arrays and condition-only reads are not misattributed"
+        in (readme)
+    )
+    assert "residual private pointer or reference syntax remains fail-closed" in readme
+    assert "scalar-layout-aware one- through twelve-resource target ABIs" in readme
+    assert "require 2,396 non-empty SPIR-V modules" in readme
+    assert "not numerical execution or MLX host runtime redirection" in readme
+    guide = " ".join(
+        (ROOT / "docs" / "source" / "project-porting.rst")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "all 2,396 reduction entries to standalone OpenGL" in guide
+    assert "six explicit source-expression portability preconditions" in guide
+    assert "one exact iteration at a time" in guide
+    assert "non-singleton per-invocation dynamic target remains a may-write" in guide
+    assert "shadowed loop-index binding disables the serial-loop proof" in guide
+    assert (
+        "For-in range and scalar-count expressions are rendered in the outer "
+        "lexical environment" in guide
+    )
+    assert "same-named patterns use independent controllers" in guide
+    assert (
+        "Fixed-array iterable expressions and compile-time extents resolve before "
+        "same-named pattern bindings enter scope" in guide
+    )
+    assert "shadow pointer, stage-builtin, and flattened stage-struct aliases" in guide
+    assert (
+        "For-in resource specialization resolves overloads from exact lexical "
+        "pattern types"
+    ) in guide
+    assert (
+        "Nested resource-specialization discovery preserves deterministic lexical "
+        "order across Python hash seeds"
+    ) in guide
+    assert (
+        "Null storage-pointer reachability and elision preserve exact lexical "
+        "declaration identity"
+    ) in guide
+    assert (
+        "Null workgroup-pointer reachability and elision preserve exact lexical "
+        "declaration identity"
+    ) in guide
+    assert (
+        "loop-local fixed-array storage retains flattened stage-input struct "
+        "declarations" in guide
+    )
+    assert (
+        "fixed-array patterns cannot inherit same-named outer scalar or "
+        "vector-component bounds" in guide
+    )
+    assert "logical-offset mutation through resolved nested helpers" in guide
+    assert "Direct element and addressed one-element forwarding" in guide
+    assert "overload-resolved scalar or fixed-array helpers" in guide
+    assert (
+        "private scalar address views remain confined to their declaring lexical scopes"
+        in guide
+    )
+    assert "nonlocal scalar address views remain fail-closed" in guide
+    assert "unresolved, ambiguous, or recursive forwarding remain fail-closed" in guide
+    assert (
+        "Fixed-array storage cannot escape through local private pointer or "
+        "reference aliases" in guide
+    )
+    assert (
+        "lexically shadowed arrays and condition-only reads are not misattributed"
+        in (guide)
+    )
+    assert "residual private pointer or reference syntax remains fail-closed" in guide
+    assert "scalar-layout-aware one- through twelve-resource target ABIs" in guide
+    assert "requires a non-empty SPIR-V module" in guide
+    assert "does not claim numerical execution" in guide
