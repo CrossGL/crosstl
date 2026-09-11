@@ -23,8 +23,27 @@ from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgr
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
 
 
+class OpenCLRecordSemanticError(ValueError):
+    """Raised when used OpenCL record semantics cannot survive CrossGL lowering."""
+
+    project_diagnostic_code = "project.translate.opencl-record-semantics-unsupported"
+    missing_capabilities = ("opencl.record-lifecycle-layout-lowering",)
+
+    def __init__(self, feature, record_name, context):
+        self.feature = feature
+        self.record_name = record_name
+        self.context = context
+        super().__init__(
+            f"OpenCL {feature} is unsupported for record '{record_name}' in {context}"
+        )
+
+
 class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     """Serialize OpenCL backend AST nodes into CrossGL source."""
+
+    SOURCE_LANGUAGE_NAME = "OpenCL"
+    ERASE_CONCRETE_TYPE_ALIASES = False
+    RECORD_SEMANTIC_ERROR = OpenCLRecordSemanticError
 
     CROSSGL_RESERVED_IDENTIFIERS = {
         *HipToCrossGLConverter.CROSSGL_RESERVED_IDENTIFIERS,
@@ -327,10 +346,12 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 isinstance(stmt, FunctionNode)
                 and "__global__" in getattr(stmt, "qualifiers", [])
             ):
+                self.emit_function_local_record_definitions(stmt)
                 self.emit(f"// Kernel: {stmt.name}")
                 self.visit_kernel_as_compute_shader(stmt)
                 self.emit("")
             elif isinstance(stmt, FunctionNode):
+                self.emit_function_local_record_definitions(stmt)
                 self.emit(f"// Function: {stmt.name}")
                 self.visit(stmt)
                 self.emit("")
@@ -483,13 +504,11 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         return "0 /* unsupported OpenCL block literal */"
 
     def visit_StructNode(self, node):
+        materialized = self.clone_ast_node(node)
         original_name = getattr(node, "name", None)
         if original_name:
-            node.name = self.sanitize_opencl_type_identifier(original_name)
-        try:
-            return super().visit_StructNode(node)
-        finally:
-            node.name = original_name
+            materialized.name = self.sanitize_opencl_type_identifier(original_name)
+        return super().visit_StructNode(materialized)
 
     def sanitize_opencl_type_identifier(self, name):
         parts = []

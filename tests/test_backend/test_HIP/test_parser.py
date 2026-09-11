@@ -907,15 +907,164 @@ class TestHipParser:
         ast = self.parse_code(code)
 
         static_struct = ast.statements[0]
-        class_node = ast.statements[1]
+        static_instance = ast.statements[1]
+        class_node = ast.statements[2]
         assert isinstance(static_struct, StructNode)
         assert static_struct.name == "sdkVersionStr"
+        assert isinstance(static_instance, VariableNode)
+        assert static_instance.vtype == "struct sdkVersionStr"
+        assert static_instance.name == "sdkVerStr"
         assert isinstance(class_node, StructNode)
         assert class_node.name == "HIPCommandArgs"
         member_names = [member.name for member in class_node.members]
         assert "~HIPCommandArgs" in member_names
         assert "HIPCommandArgs" in member_names
         assert "parseCommandLine" in member_names
+
+    def test_nested_class_struct_trailing_declarators_are_flattened(self):
+        code = """
+        class Outer {
+        public:
+            struct Inner { int value; } item, other;
+        };
+        """
+        ast = self.parse_code(code)
+
+        outer = ast.statements[0]
+        assert isinstance(outer, StructNode)
+        assert outer.name == "Outer"
+        assert all(not isinstance(member, list) for member in outer.members)
+        assert len(outer.members) == 3
+
+        inner, item, other = outer.members
+        assert isinstance(inner, StructNode)
+        assert inner.name == "Inner"
+        assert [member.name for member in inner.members] == ["value"]
+        assert isinstance(item, VariableNode)
+        assert item.vtype == "struct Inner"
+        assert item.name == "item"
+        assert isinstance(other, VariableNode)
+        assert other.vtype == "struct Inner"
+        assert other.name == "other"
+
+    @pytest.mark.parametrize("outer_keyword", ["class", "struct"])
+    def test_nested_class_trailing_declarators_are_flattened_recursively(
+        self, outer_keyword
+    ):
+        code = f"""
+        {outer_keyword} Outer {{
+        public:
+            class Middle {{
+            public:
+                class Inner {{ public: int value; }} item;
+            }} middle;
+        }};
+        """
+        ast = self.parse_code(code)
+
+        outer = ast.statements[0]
+        assert isinstance(outer, StructNode)
+        assert all(not isinstance(member, list) for member in outer.members)
+        middle, middle_object = outer.members
+        assert isinstance(middle, StructNode)
+        assert getattr(middle, "is_class", False) is True
+        assert middle_object.vtype == "class Middle"
+        assert middle_object.name == "middle"
+
+        inner, inner_object = middle.members
+        assert isinstance(inner, StructNode)
+        assert getattr(inner, "is_class", False) is True
+        assert [member.name for member in inner.members] == ["value"]
+        assert inner_object.vtype == "class Inner"
+        assert inner_object.name == "item"
+
+    def test_class_trailing_declarators_are_preserved_at_top_level_and_locally(self):
+        code = """
+        class Item { public: int value; } first, items[2], *selected;
+
+        int host() {
+            class Local { public: int value; } left, right;
+            return 0;
+        }
+        """
+        ast = self.parse_code(code)
+
+        item, first, items, selected, host = ast.statements
+        assert isinstance(item, StructNode)
+        assert getattr(item, "is_class", False) is True
+        assert [(node.vtype, node.name) for node in (first, items, selected)] == [
+            ("class Item", "first"),
+            ("class Item[2]", "items"),
+            ("class Item *", "selected"),
+        ]
+        local, left, right = host.body[:3]
+        assert isinstance(local, StructNode)
+        assert getattr(local, "is_class", False) is True
+        assert [(node.vtype, node.name) for node in (left, right)] == [
+            ("class Local", "left"),
+            ("class Local", "right"),
+        ]
+
+    def test_class_forward_and_definition_without_objects_remain_records(self):
+        ast = self.parse_code("class Forward; class Defined { public: int value; };")
+
+        forward, defined = ast.statements
+        assert isinstance(forward, StructNode)
+        assert forward.name == "Forward"
+        assert forward.members == []
+        assert getattr(forward, "is_class", False) is True
+        assert isinstance(defined, StructNode)
+        assert defined.name == "Defined"
+        assert [member.name for member in defined.members] == ["value"]
+        assert getattr(defined, "is_class", False) is True
+
+    def test_record_final_specifier_precedes_inheritance_and_trailing_objects(self):
+        code = """
+        class Base { public: int ignored; };
+        class Outer {
+        public:
+            class Inner final : public Base { public: int value; } item;
+        };
+        struct FinalState final : Base { int value; } state;
+        class Token { public: int value; } final;
+        """
+        ast = self.parse_code(code)
+
+        base, outer, final_state, state, token, final_object = ast.statements
+        assert base.name == "Base"
+        inner, item = outer.members
+        assert inner.name == "Inner"
+        assert getattr(inner, "is_class", False) is True
+        assert getattr(inner, "is_final", False) is True
+        assert [member.name for member in inner.members] == ["value"]
+        assert item.vtype == "class Inner"
+        assert item.name == "item"
+        assert final_state.name == "FinalState"
+        assert getattr(final_state, "is_final", False) is True
+        assert state.vtype == "struct FinalState"
+        assert token.name == "Token"
+        assert getattr(token, "is_final", False) is False
+        assert final_object.vtype == "class Token"
+        assert final_object.name == "final"
+
+    def test_record_bitfield_widths_and_names_are_preserved(self):
+        code = """
+        struct State {
+            unsigned low : 4, high : 4;
+            signed int value : 3;
+            unsigned : 0;
+        };
+        """
+        ast = self.parse_code(code)
+
+        members = ast.statements[0].members
+        assert [(member.name, member.vtype) for member in members] == [
+            ("low", "unsigned int"),
+            ("high", "unsigned int"),
+            ("value", "signed int"),
+            ("", "unsigned int"),
+        ]
+        assert [member.bitfield_width for member in members] == ["4", "4", "3", "0"]
 
     def test_public_rocm_composable_kernel_struct_inheritance_parse(self):
         code = """
@@ -944,6 +1093,36 @@ class TestHipParser:
         assert isinstance(templated_struct, StructNode)
         assert templated_struct.name == "GemmConfigComputeV3_2"
         assert templated_struct.members[0].name == "N_Tile"
+
+    def test_inherited_record_method_nested_type_and_static_metadata_parse(self):
+        code = """
+        class Base {
+        public:
+            class Item { public: int value; } item;
+            static constexpr int Value = 3;
+            int get() { return item.value; }
+            static int twice(int value) { return value * 2; }
+        };
+        class Derived : public Base { public: int own; };
+        """
+        ast = self.parse_code(code)
+
+        base, derived = ast.statements
+        item, item_object, constant, instance_method, static_method = base.members
+        assert isinstance(item, StructNode)
+        assert item.name == "Item"
+        assert isinstance(item_object, VariableNode)
+        assert item_object.vtype == "class Item"
+        assert constant.qualifiers == ["static", "constexpr"]
+        assert constant.name == "Value"
+        assert isinstance(instance_method, FunctionNode)
+        assert instance_method.name == "get"
+        assert isinstance(static_method, FunctionNode)
+        assert static_method.name == "twice"
+        assert static_method.qualifiers == ["static"]
+        assert derived.base_classes == [
+            {"type": "Base", "access": "public", "is_virtual": False}
+        ]
 
     def test_public_hip_elaborated_struct_types_parse(self):
         code = """
@@ -1525,12 +1704,20 @@ class TestHipParser:
 
         static_array = ast.statements[0]
         get = ast.statements[1]
+        size_type = static_array.members[0]
+        reference = static_array.members[1]
         size = static_array.members[2]
         front = static_array.members[3]
         elems = static_array.members[4]
 
         assert isinstance(static_array, StructNode)
         assert static_array.name == "static_array"
+        assert isinstance(size_type, TypeAliasNode)
+        assert size_type.name == "size_type"
+        assert size_type.alias_type == "size_t"
+        assert isinstance(reference, TypeAliasNode)
+        assert reference.name == "reference"
+        assert reference.alias_type == "T &"
         assert isinstance(size, FunctionNode)
         assert size.name == "size"
         assert size.qualifiers == ["__device__", "__host__", "constexpr"]
@@ -1680,20 +1867,46 @@ class TestHipParser:
         assert ast.statements[2].body[0].vtype == "float[2]"
         assert isinstance(ast.statements[2].body[0].value, InitializerListNode)
 
-    def test_long_long_int_declarations_parsing(self):
+    def test_long_long_and_short_int_declarations_parsing(self):
         code = """
+        struct NarrowValues {
+            signed short int signed_value;
+            unsigned short int unsigned_value;
+            short unsigned int reordered_unsigned;
+            int short signed reordered_signed;
+            char unsigned reordered_char;
+        };
+
         void kernel() {
             long long int start = 0;
             unsigned long long int ticks = 1;
+            signed short int delta = -1;
+            unsigned short int count = 2;
         }
         """
         ast = self.parse_code(code)
 
-        body = ast.statements[0].body
+        record = ast.statements[0]
+        assert record.members[0].vtype == "signed short"
+        assert record.members[0].name == "signed_value"
+        assert record.members[1].vtype == "unsigned short"
+        assert record.members[1].name == "unsigned_value"
+        assert record.members[2].vtype == "unsigned short"
+        assert record.members[2].name == "reordered_unsigned"
+        assert record.members[3].vtype == "signed short"
+        assert record.members[3].name == "reordered_signed"
+        assert record.members[4].vtype == "unsigned char"
+        assert record.members[4].name == "reordered_char"
+
+        body = ast.statements[1].body
         assert body[0].vtype == "long long"
         assert body[0].name == "start"
         assert body[1].vtype == "unsigned long long"
         assert body[1].name == "ticks"
+        assert body[2].vtype == "signed short"
+        assert body[2].name == "delta"
+        assert body[3].vtype == "unsigned short"
+        assert body[3].name == "count"
 
     def test_cpp_function_declarator_spacing_and_qualifiers(self):
         code = """
@@ -4403,3 +4616,212 @@ class TestHipParser:
         assert isinstance(body[1], IfNode)
         assert isinstance(body[1].condition, BinaryOpNode)
         assert body[1].condition.op == ">"
+
+    def test_anonymous_struct_trailing_declarators_are_preserved(self):
+        ast = self.parse_code("""
+            void host() {
+                struct { int value; } left, right;
+                left.value = 1;
+                right.value = 2;
+            }
+            """)
+
+        anonymous, left, right = ast.statements[0].body[:3]
+        assert isinstance(anonymous, StructNode)
+        assert anonymous.name is None
+        assert [(member.vtype, member.name) for member in anonymous.members] == [
+            ("int", "value")
+        ]
+        assert isinstance(left, VariableNode)
+        assert left.vtype == "struct <anonymous>"
+        assert left.name == "left"
+        assert isinstance(right, VariableNode)
+        assert right.vtype == "struct <anonymous>"
+        assert right.name == "right"
+
+    def test_anonymous_union_array_trailing_declarator_is_preserved(self):
+        ast = self.parse_code("""
+            void host() {
+                union { int selected; unsigned bits; } payloads[2];
+                payloads[1].selected = 1;
+            }
+            """)
+
+        anonymous, payloads = ast.statements[0].body[:2]
+        assert isinstance(anonymous, StructNode)
+        assert anonymous.name is None
+        assert getattr(anonymous, "is_union", False) is True
+        assert [(member.vtype, member.name) for member in anonymous.members] == [
+            ("int", "selected"),
+            ("unsigned int", "bits"),
+        ]
+        assert isinstance(payloads, VariableNode)
+        assert payloads.vtype == "union <anonymous>[2]"
+        assert payloads.name == "payloads"
+
+    def test_record_inheritance_metadata_preserves_access_virtual_and_final(self):
+        ast = self.parse_code("""
+            class Left { public: int left; };
+            class Right { public: int right; };
+            class Derived final : public Left, protected virtual Right {
+            public:
+                int own;
+            };
+            """)
+
+        derived = ast.statements[2]
+        assert isinstance(derived, StructNode)
+        assert getattr(derived, "is_class", False) is True
+        assert getattr(derived, "is_final", False) is True
+        assert derived.base_classes == [
+            {"type": "Left", "access": "public", "is_virtual": False},
+            {"type": "Right", "access": "protected", "is_virtual": True},
+        ]
+
+    def test_nested_enum_trailing_declarators_and_symbolic_values_are_preserved(self):
+        ast = self.parse_code("""
+            class Outer {
+            public:
+                enum Kind : int { Zero = 2, One = Zero + 1, Two } kind, other;
+                enum class Scoped : unsigned int { First = 4, Second } scoped;
+                enum { Anonymous = 7 } anonymous;
+            };
+            """)
+
+        outer = ast.statements[0]
+        (
+            kind,
+            kind_field,
+            other_field,
+            scoped,
+            scoped_field,
+            anonymous,
+            anonymous_field,
+        ) = outer.members
+        assert isinstance(kind, EnumNode)
+        assert kind.name == "Kind"
+        assert kind.underlying_type == "int"
+        assert kind.is_scoped is False
+        assert kind.members[0] == ("Zero", "2")
+        assert kind.members[2] == ("Two", None)
+        one_value = kind.members[1][1]
+        assert isinstance(one_value, BinaryOpNode)
+        assert (one_value.left, one_value.op, one_value.right) == ("Zero", "+", "1")
+        assert [
+            (kind_field.vtype, kind_field.name),
+            (other_field.vtype, other_field.name),
+        ] == [
+            ("enum Kind", "kind"),
+            ("enum Kind", "other"),
+        ]
+        assert isinstance(scoped, EnumNode)
+        assert scoped.name == "Scoped"
+        assert scoped.underlying_type == "unsigned int"
+        assert scoped.is_scoped is True
+        assert (scoped_field.vtype, scoped_field.name) == ("enum Scoped", "scoped")
+        assert isinstance(anonymous, EnumNode)
+        assert anonymous.name is None
+        assert (anonymous_field.vtype, anonymous_field.name) == (
+            "enum <anonymous>",
+            "anonymous",
+        )
+
+    def test_record_lifecycle_declarations_preserve_semantic_markers(self):
+        ast = self.parse_code("""
+            class Base {
+            public:
+                Base() {}
+                ~Base() {}
+                explicit operator int() const { return 1; }
+            };
+            class Derived : public Base {
+            public:
+                using Base::Base;
+            };
+            """)
+
+        base, derived = ast.statements
+        constructor = next(
+            member
+            for member in base.members
+            if isinstance(member, FunctionNode)
+            and getattr(member, "is_record_constructor", False)
+        )
+        destructor = next(
+            member
+            for member in base.members
+            if isinstance(member, FunctionNode)
+            and getattr(member, "is_record_destructor", False)
+        )
+        conversion = next(
+            member
+            for member in base.members
+            if isinstance(member, FunctionNode)
+            and getattr(member, "is_conversion_operator", False)
+        )
+        inherited = next(
+            member
+            for member in derived.members
+            if isinstance(member, FunctionNode)
+            and getattr(member, "is_inherited_constructor", False)
+        )
+
+        assert (constructor.name, constructor.record_owner) == ("Base", "Base")
+        assert (destructor.name, destructor.record_owner) == ("~Base", "Base")
+        assert conversion.name == "operator int"
+        assert conversion.conversion_target_type == "int"
+        assert "explicit" in conversion.qualifiers
+        assert inherited.name == "Base::Base"
+        assert inherited.is_using_declaration is True
+
+    def test_record_layout_attributes_pragma_pack_and_arrow_are_preserved(self):
+        ast = self.parse_code("""
+            struct alignas(16) Aligned {
+                int first;
+                alignas(32) int second;
+            };
+            union __attribute__((packed)) PackedUnion { int value; unsigned bits; };
+            class __declspec(align(64)) AlignedClass { public: int value; };
+            struct PostfixAligned { int value; } __attribute__((aligned(16)));
+            union PostfixPacked { int value; unsigned bits; }
+                __attribute__((packed));
+            class PostfixAlignedClass { public: int value; }
+                __declspec(align(32));
+            #pragma pack(push, 1)
+            struct Packed { unsigned char tag; int value; };
+            #pragma pack(push, 2)
+            struct NestedPacked { unsigned char tag; int value; };
+            #pragma pack(pop)
+            struct RestoredPacked { unsigned char tag; int value; };
+            #pragma pack(pop)
+            struct Natural { unsigned char tag; int value; };
+            struct Payload { int value; };
+            struct Box {
+                Payload payload;
+                Payload* operator->() { return &payload; }
+            };
+            """)
+
+        records = {
+            statement.name: statement
+            for statement in ast.statements
+            if isinstance(statement, StructNode)
+        }
+        assert records["Aligned"].attributes == ["alignas(16)"]
+        assert records["Aligned"].members[1].attributes == ["alignas(32)"]
+        assert records["PackedUnion"].attributes == ["__attribute__((packed))"]
+        assert records["AlignedClass"].attributes == ["__declspec(align(64))"]
+        assert records["PostfixAligned"].attributes == ["__attribute__((aligned(16)))"]
+        assert records["PostfixPacked"].attributes == ["__attribute__((packed))"]
+        assert records["PostfixAlignedClass"].attributes == ["__declspec(align(32))"]
+        assert records["Packed"].attributes == ["pragma_pack(1)"]
+        assert records["NestedPacked"].attributes == ["pragma_pack(2)"]
+        assert records["RestoredPacked"].attributes == ["pragma_pack(1)"]
+        assert records["Natural"].attributes == []
+        arrow = next(
+            member
+            for member in records["Box"].members
+            if isinstance(member, FunctionNode)
+        )
+        assert arrow.name == "operator->"
+        assert arrow.return_type == "Payload *"

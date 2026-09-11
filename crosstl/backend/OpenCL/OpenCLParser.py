@@ -638,7 +638,8 @@ class OpenCLParser(HipParser):
             return index
         return None
 
-    def parse_variable_declaration_type(self, qualifiers):
+    def parse_variable_declaration_type(self, qualifiers, attributes=None):
+        attributes = attributes if attributes is not None else []
         saved_pos = self.pos
         saved_token = self.current_token
         type_prefixes = []
@@ -646,7 +647,7 @@ class OpenCLParser(HipParser):
 
         self.skip_newlines()
         self.skip_cpp_attributes()
-        self.parse_type_attribute_prefixes()
+        parsed_attributes = self.parse_type_attribute_prefixes()
 
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
             if self.current_token.type in {"SIGNED", "UNSIGNED"}:
@@ -665,26 +666,30 @@ class OpenCLParser(HipParser):
             else:
                 base_type = self.parse_type()
             qualifiers.extend(self.parse_declaration_qualifiers())
+            attributes.extend(parsed_attributes)
             return " ".join([*type_prefixes, base_type]).strip()
 
         self.pos = saved_pos
         self.current_token = saved_token
         self.skip_newlines()
         self.skip_cpp_attributes()
-        self.parse_type_attribute_prefixes()
+        attributes.extend(self.parse_type_attribute_prefixes())
         base_type = self.parse_type()
         qualifiers.extend(self.parse_declaration_qualifiers())
         return base_type
 
-    def parse_variable_declarator(self, base_type, qualifiers, allow_prefix):
+    def parse_variable_declarator(
+        self, base_type, qualifiers, allow_prefix, attributes=None
+    ):
+        attributes = list(attributes or [])
         if allow_prefix:
             base_type = self.parse_declarator_prefix(base_type)
         self.skip_newlines()
-        self.parse_type_attribute_prefixes()
+        attributes.extend(self.parse_type_attribute_prefixes())
         block_declarator = self.parse_opencl_block_pointer_declarator()
         if block_declarator is not None:
             name, parameter_suffix = block_declarator
-            self.skip_declarator_attribute_suffixes()
+            attributes.extend(self.skip_declarator_attribute_suffixes())
             self.skip_newlines()
             value = self.parse_variable_initializer(base_type)
             return VariableNode(
@@ -692,11 +697,12 @@ class OpenCLParser(HipParser):
                 name,
                 value,
                 list(qualifiers),
+                attributes=attributes,
                 is_extern_shared_memory=self.is_extern_shared_memory(qualifiers),
                 is_dynamic_shared_memory=False,
             )
         return super().parse_variable_declarator(
-            base_type, qualifiers, allow_prefix=False
+            base_type, qualifiers, allow_prefix=False, attributes=attributes
         )
 
     def is_variable_declaration(self) -> bool:

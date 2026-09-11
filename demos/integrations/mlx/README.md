@@ -244,6 +244,30 @@ The current harness verifies:
   `spirv-val`, and require 2,396 non-empty SPIR-V modules. This is complete
   reduce OpenGL translation, reflection, and native compiler coverage, not
   numerical execution or MLX host runtime redirection;
+- selected-entry translation of all 2,396 discovered current-pinned
+  `reduce.metal` entries to DirectX. The compact schema-v2
+  `contracts/reduce.directx-translation.json` contract pins every standalone
+  `CSMain` HLSL artifact and its native DXIL identity across the same 39 exact
+  ABI shapes, nine kernel templates, six operator families, 44 concrete
+  operator types, 13 input/output types, and 9,216 exact materializations.
+  Exact HLSL target reflection contains 27,382 resources across one- through
+  thirteen-resource interfaces; the 37 shapes other than `init` and `all`
+  receive generated `CrossGLDispatchInfo` metadata. Portable unshadowed `NAN`,
+  explicit complex SIMD shuffle overloads, proven direct void tail recursion,
+  bounded device/constant pointer-array offsets and writeback, logical bfloat
+  pointee types over physical storage, and nested anonymous records lower only
+  in their natively proven forms. Unsafe recursion, ambiguous pointer-array
+  provenance, unresolved aggregate pointer members or arrays, and unsupported
+  HIP record lifecycle or layout remain fail-closed. Unlike the OpenGL
+  lowering, this native HLSL path introduces no additional source-scoped
+  32-bit index-range portability promise. Twenty-four required Windows CI
+  shards retranslate every exact entry, verify deterministic identity,
+  materialization, workgroup metadata, and reflected ABI, and compile with
+  checksum-pinned DXC using `-enable-16bit-types -WX -T cs_6_2 -E CSMain`,
+  requiring 2,396 non-empty DXIL modules. Together with the Metal and OpenGL
+  proofs this closes complete reduce translation, reflection, and native
+  compiler coverage on all three targets, not numerical execution or MLX host
+  runtime redirection;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
   to DirectX and OpenGL through the public `translate-project` CLI and retains

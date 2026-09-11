@@ -5,7 +5,12 @@ import subprocess
 import pytest
 
 from crosstl import translate
-from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.HIP.HipCrossGLCodeGen import (
+    HipRecordSemanticError,
+    HipToCrossGLConverter,
+)
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
 from crosstl.translator.lexer import Lexer as CrossGLLexer
@@ -69,6 +74,15 @@ def compile_metal_if_available(source: str, tmp_path):
     if result.returncode != 0 and _missing_metal_toolchain(result):
         pytest.skip("macOS Metal toolchain is not installed")
     assert result.returncode == 0, result.stderr
+
+
+def hip_record_probe_source(records, helpers, body):
+    return (
+        f"{records}\n{helpers}\n"
+        "__global__ void probe(const int* input, int* output) {\n"
+        f"  {body}\n"
+        "}\n"
+    )
 
 
 class TestHipCodeGen:
@@ -534,8 +548,7 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert (
-            "verificationPathMatrix = "
-            "ptr<u32>(malloc(((numNodes * numNodes) * sizeof(int))));"
+            "verificationPathMatrix = " "ptr<u32>(malloc(((numNodes * numNodes) * 4)));"
         ) in result
 
     def test_public_rocm_bandwidth_enum_class_conversion(self):
@@ -1034,7 +1047,7 @@ class TestHipCodeGen:
                 float f;
                 int32_t i;
             } ua{a};
-            consume(ua.i);
+            consume(ua.f);
         }
         """
         lexer = HipLexer(code)
@@ -1052,14 +1065,80 @@ class TestHipCodeGen:
         assert "f32 f32;" in result
         assert "f64 f64;" in result
         assert "i32 i32;" in result
-        assert (
-            "// HIP union anonymous represented as struct-like layout; "
-            "overlapping storage is not modeled"
-        ) in result
-        assert "var ua: hip_anonymous_union = {a};" in result
-        assert "consume(ua.i);" in result
+        local_union = re.search(
+            r"// HIP union (CrossGLFunctionLocal_host_ua_union_[0-9a-f]{12}) "
+            r"represented as struct-like layout; overlapping storage is not modeled",
+            result,
+        )
+        assert local_union is not None
+        local_union_name = local_union.group(1)
+        assert f"struct {local_union_name} {{" in result
+        assert f"var ua: {local_union_name} = {{a}};" in result
+        assert "consume(ua.f);" in result
         assert "union compute_type_interface {" not in result
+        assert "hip_anonymous_union" not in result
         assert "struct None" not in result
+
+    def test_class_trailing_declarators_convert_to_reparsable_crossgl(self):
+        code = """
+        class Top { public: int value; } first, items[2];
+
+        class Outer {
+        public:
+            class Middle {
+            public:
+                class Inner { public: int value; } item;
+            } middle;
+        };
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "struct Top {\n    i32 value;\n};" in result
+        assert "var first: Top;" in result
+        assert "var items: array<Top, 2>;" in result
+        assert "struct Inner {\n    i32 value;\n};" in result
+        assert "struct Middle {\n    Inner item;\n};" in result
+        assert "struct Outer {\n    Middle middle;\n};" in result
+        assert result.index("struct Inner {") < result.index("struct Middle {")
+        assert result.index("struct Middle {") < result.index("struct Outer {")
+        assert "class Inner" not in result
+        assert "class Middle" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_record_local_aliases_and_final_class_convert_to_reparsable_crossgl(self):
+        code = """
+        class Base { public: int ignored; };
+        class Outer {
+        public:
+            using Scalar = int;
+            typedef Scalar Value;
+            Value values[2];
+            class Inner final : public Base {
+            public:
+                using Item = int;
+                Item value;
+            } item;
+        };
+
+        Outer::Value pass_value(Outer::Value value) { return value; }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "struct Inner {\n    i32 ignored;\n    i32 value;\n};" in result
+        assert (
+            "struct Outer {\n    array<i32, 2> values;\n    Inner item;\n};" in result
+        )
+        assert "Scalar values" not in result
+        assert "Value values" not in result
+        assert "Item value" not in result
+        assert "Inner final" not in result
+        assert "i32 pass_value(i32 value)" in result
+        assert "Outer::Value" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_public_rocm_hipdnn_dependent_member_template_call_conversion(self):
         """Covers rocm-examples hipdnn_utils.hpp f.template operator()<...> calls."""
@@ -3165,7 +3244,7 @@ class TestHipCodeGen:
 
         assert (
             "// Kernel launch: kernel<<<(((n + blockSize) - 1) / blockSize), "
-            "blockSize, (sizeof(float) * blockSize), stream>>>()"
+            "blockSize, (4 * blockSize), stream>>>()"
         ) in result
         assert "// Arguments: data, n" in result
 
@@ -3299,7 +3378,7 @@ class TestHipCodeGen:
         assert (
             result.count(
                 "// HIP setup kernel argument: value: (&value), "
-                "bytes: sizeof(value), offset: offset"
+                "bytes: 4, offset: offset"
             )
             == 2
         )
@@ -4106,17 +4185,14 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
         result_lines = [line.strip() for line in result.splitlines()]
 
+        assert result.count("// HIP memory allocate: d, bytes: (n * 4)") == 2
         assert (
-            result.count("// HIP memory allocate: d, bytes: (n * sizeof(float))") == 2
-        )
-        assert (
-            "// HIP extended memory allocate: d, bytes: (n * sizeof(float)), "
+            "// HIP extended memory allocate: d, bytes: (n * 4), "
             "flags: hipDeviceMallocDefault"
         ) in result
         assert (
             result.count(
-                "// HIP async memory allocate: d, bytes: (n * sizeof(float)), "
-                "stream: stream"
+                "// HIP async memory allocate: d, bytes: (n * 4), " "stream: stream"
             )
             == 2
         )
@@ -4132,13 +4208,10 @@ class TestHipCodeGen:
             result.count("// HIP get device memory pool: output: pool, device: 0") == 2
         )
         assert (
-            "// HIP async memory allocate from pool: d2, bytes: (n * sizeof(float)), "
+            "// HIP async memory allocate from pool: d2, bytes: (n * 4), "
             "pool: pool, stream: stream"
         ) in result
-        assert (
-            "// HIP memory pool trim: pool: pool, minimum bytes: (n * sizeof(float))"
-            in result
-        )
+        assert "// HIP memory pool trim: pool: pool, minimum bytes: (n * 4)" in result
         assert (
             "// HIP memory pool set attribute: pool: pool, "
             "attribute: hipMemPoolAttrReleaseThreshold, value: ptrSize"
@@ -4179,24 +4252,24 @@ class TestHipCodeGen:
         )
         assert (
             result.count(
-                "// HIP memory prefetch: pointer: d, bytes: (n * sizeof(float)), "
+                "// HIP memory prefetch: pointer: d, bytes: (n * 4), "
                 "device: 0, stream: stream"
             )
             == 2
         )
         assert (
-            "// HIP memory prefetch v2: pointer: d, bytes: (n * sizeof(float)), "
+            "// HIP memory prefetch v2: pointer: d, bytes: (n * 4), "
             "location: location, flags: 0, stream: stream"
         ) in result
         assert (
             result.count(
-                "// HIP memory advise: pointer: d, bytes: (n * sizeof(float)), "
+                "// HIP memory advise: pointer: d, bytes: (n * 4), "
                 "advice: hipMemAdviseSetReadMostly, device: 0"
             )
             == 2
         )
         assert (
-            "// HIP memory advise v2: pointer: d, bytes: (n * sizeof(float)), "
+            "// HIP memory advise v2: pointer: d, bytes: (n * 4), "
             "advice: hipMemAdviseSetPreferredLocation, location: location"
         ) in result
         assert (
@@ -4204,41 +4277,39 @@ class TestHipCodeGen:
                 "// HIP memory range get attribute: output: accessFlags, "
                 "output bytes: sizeof(accessFlags), "
                 "attribute: hipMemRangeAttributeAccessedBy, pointer: d, "
-                "range bytes: (n * sizeof(float))"
+                "range bytes: (n * 4)"
             )
             == 2
         )
         assert (
             "// HIP memory range get attributes: outputs: (&rangeAttributeData), "
             "output sizes: (&rangeAttributeSizes), attributes: (&rangeAttribute), "
-            "attribute count: 1, pointer: d, range bytes: (n * sizeof(float))"
+            "attribute count: 1, pointer: d, range bytes: (n * 4)"
         ) in result
         assert (
             result.count(
                 "// HIP stream attach memory: stream: stream, pointer: d, "
-                "bytes: (n * sizeof(float)), flags: hipMemAttachSingle"
+                "bytes: (n * 4), flags: hipMemAttachSingle"
             )
             == 2
         )
         assert (
             result.count(
-                "// HIP driver memory allocate: output: devicePtr, "
-                "bytes: (n * sizeof(float))"
+                "// HIP driver memory allocate: output: devicePtr, " "bytes: (n * 4)"
             )
             == 2
         )
         assert (
             "// HIP driver pitched memory allocate: output: devicePtr2, "
-            "pitch output: pitch, width: (n * sizeof(float)), height: 4, "
+            "pitch output: pitch, width: (n * 4), height: 4, "
             "element bytes: 4"
         ) in result
         assert (
-            "// HIP driver host memory allocate: output: driverHost, "
-            "bytes: (n * sizeof(float))"
+            "// HIP driver host memory allocate: output: driverHost, " "bytes: (n * 4)"
         ) in result
         assert (
             "// HIP driver host memory allocate: output: driverHost, "
-            "bytes: (n * sizeof(float)), flags: hipHostMallocDefault"
+            "bytes: (n * 4), flags: hipHostMallocDefault"
         ) in result
         assert (
             "// HIP driver host device pointer: output: devicePtr, "
@@ -4251,63 +4322,63 @@ class TestHipCodeGen:
         assert (
             result_lines.count(
                 "// HIP driver memory copy host to device: source: h, "
-                "destination: devicePtr, bytes: (n * sizeof(float))"
+                "destination: devicePtr, bytes: (n * 4)"
             )
             == 2
         )
         assert (
             "// HIP driver memory copy host to device: source: h, "
-            "destination: devicePtr, bytes: (n * sizeof(float)), stream: stream"
+            "destination: devicePtr, bytes: (n * 4), stream: stream"
         ) in result
         assert (
             "// HIP driver memory copy device to host: source: devicePtr, "
-            "destination: h, bytes: (n * sizeof(float))"
+            "destination: h, bytes: (n * 4)"
         ) in result
         assert (
             "// HIP driver memory copy device to host: source: devicePtr, "
-            "destination: h, bytes: (n * sizeof(float)), stream: stream"
+            "destination: h, bytes: (n * 4), stream: stream"
         ) in result
         assert (
             "// HIP driver memory copy device to device: source: devicePtr, "
-            "destination: devicePtr2, bytes: (n * sizeof(float))"
+            "destination: devicePtr2, bytes: (n * 4)"
         ) in result
         assert (
             "// HIP driver memory copy device to device: source: devicePtr, "
-            "destination: devicePtr2, bytes: (n * sizeof(float)), stream: stream"
+            "destination: devicePtr2, bytes: (n * 4), stream: stream"
         ) in result
         assert (
             "// HIP driver memory copy array to host: source array: array, "
-            "source offset: 0, destination host: h, bytes: (n * sizeof(float))"
+            "source offset: 0, destination host: h, bytes: (n * 4)"
         ) in result
         assert (
             "// HIP driver memory copy array to host: source array: array, "
-            "source offset: 0, destination host: h, bytes: (n * sizeof(float)), "
+            "source offset: 0, destination host: h, bytes: (n * 4), "
             "stream: stream"
         ) in result
         assert (
             "// HIP driver memory copy host to array: source host: h, "
             "destination array: array, destination offset: 4, "
-            "bytes: (n * sizeof(float))"
+            "bytes: (n * 4)"
         ) in result
         assert (
             "// HIP driver memory copy host to array: source host: h, "
             "destination array: array, destination offset: 4, "
-            "bytes: (n * sizeof(float)), stream: stream"
+            "bytes: (n * 4), stream: stream"
         ) in result
         assert (
             "// HIP driver memory copy array to device: source array: array, "
             "source offset: 8, destination device: devicePtr, "
-            "bytes: (n * sizeof(float))"
+            "bytes: (n * 4)"
         ) in result
         assert (
             "// HIP driver memory copy device to array: source device: devicePtr, "
             "destination array: array, destination offset: 12, "
-            "bytes: (n * sizeof(float))"
+            "bytes: (n * 4)"
         ) in result
         assert (
             "// HIP driver memory copy array to array: source array: array, "
             "source offset: 20, destination array: array, "
-            "destination offset: 16, bytes: (n * sizeof(float))"
+            "destination offset: 16, bytes: (n * 4)"
         ) in result
         assert (
             "// HIP driver memory set 8-bit: pointer: devicePtr, value: 0, count: n"
@@ -4362,19 +4433,19 @@ class TestHipCodeGen:
         assert (
             result.count(
                 "// HIP virtual memory create allocation: output: allocationHandle, "
-                "bytes: (n * sizeof(float)), properties: (&allocationProp), flags: 0"
+                "bytes: (n * 4), properties: (&allocationProp), flags: 0"
             )
             == 2
         )
         assert (
             "// HIP virtual memory reserve address: output: virtualAddress, "
-            "bytes: (n * sizeof(float)), alignment: granularity, "
+            "bytes: (n * 4), alignment: granularity, "
             "address: preferredAddress, flags: 0"
         ) in result
         assert (
             result.count(
                 "// HIP virtual memory map: pointer: virtualAddress, "
-                "bytes: (n * sizeof(float)), offset: 0, handle: allocationHandle, "
+                "bytes: (n * 4), offset: 0, handle: allocationHandle, "
                 "flags: 0"
             )
             == 2
@@ -4382,7 +4453,7 @@ class TestHipCodeGen:
         assert (
             result.count(
                 "// HIP virtual memory set access: pointer: virtualAddress, "
-                "bytes: (n * sizeof(float)), descriptors: (&accessDesc), count: 1"
+                "bytes: (n * 4), descriptors: (&accessDesc), count: 1"
             )
             == 2
         )
@@ -4468,16 +4539,16 @@ class TestHipCodeGen:
         assert "// HIP free mipmapped array: mipmappedArray" in result
         assert "// HIP destroy external memory: externalMemory" in result
         assert (
-            "// HIP host memory allocate: h, bytes: (n * sizeof(float)), "
+            "// HIP host memory allocate: h, bytes: (n * 4), "
             "flags: hipHostMallocMapped"
         ) in result
         assert (
-            "// HIP host memory allocate: h, bytes: (n * sizeof(float)), "
+            "// HIP host memory allocate: h, bytes: (n * 4), "
             "flags: hipHostMallocDefault"
         ) in result
         assert (
             result.count(
-                "// HIP host memory register: h, bytes: (n * sizeof(float)), "
+                "// HIP host memory register: h, bytes: (n * 4), "
                 "flags: hipHostRegisterMapped"
             )
             == 2
@@ -4487,7 +4558,7 @@ class TestHipCodeGen:
         assert (
             result.count(
                 "// HIP pitched memory allocate: d2, pitch: pitch, "
-                "width: (n * sizeof(float)), height: 4"
+                "width: (n * 4), height: 4"
             )
             == 2
         )
@@ -4533,73 +4604,72 @@ class TestHipCodeGen:
             "mipmapped array: mipmappedArray, level: 2"
         ) in result
         assert (
-            "// HIP memory copy: h -> d, bytes: (n * sizeof(float)), "
-            "kind: hipMemcpyHostToDevice"
+            "// HIP memory copy: h -> d, bytes: (n * 4), " "kind: hipMemcpyHostToDevice"
         ) in result
         assert (
-            "// HIP memory copy: h -> d, bytes: (n * sizeof(float)), "
+            "// HIP memory copy: h -> d, bytes: (n * 4), "
             "kind: hipMemcpyHostToDevice, stream: stream"
         ) in result
         assert (
             result_lines.count(
                 "// HIP peer memory copy: source: d, source device: 0, "
-                "destination: d2, destination device: 1, bytes: (n * sizeof(float))"
+                "destination: d2, destination device: 1, bytes: (n * 4)"
             )
             == 2
         )
         assert (
             "// HIP peer memory copy: source: d, source device: 0, destination: d2, "
-            "destination device: 1, bytes: (n * sizeof(float)), stream: stream"
+            "destination device: 1, bytes: (n * 4), stream: stream"
         ) in result
         assert (
             "// HIP 2D memory copy: h -> d2, dst pitch: pitch, "
-            "src pitch: (n * sizeof(float)), width: (n * sizeof(float)), "
+            "src pitch: (n * 4), width: (n * 4), "
             "height: 4, kind: hipMemcpyHostToDevice"
         ) in result
         assert (
             "// HIP 2D memory copy: h -> d2, dst pitch: pitch, "
-            "src pitch: (n * sizeof(float)), width: (n * sizeof(float)), "
+            "src pitch: (n * 4), width: (n * 4), "
             "height: 4, kind: hipMemcpyHostToDevice, stream: 0"
         ) in result
         assert (
             result_lines.count(
                 "// HIP memory copy to array: source: h, destination array: array, "
-                "w offset: 0, h offset: 0, bytes: (n * sizeof(float)), "
+                "w offset: 0, h offset: 0, bytes: (n * 4), "
                 "kind: hipMemcpyHostToDevice"
             )
             == 2
         )
         assert (
             "// HIP memory copy to array: source: h, destination array: array, "
-            "w offset: 0, h offset: 0, bytes: (n * sizeof(float)), "
+            "w offset: 0, h offset: 0, bytes: (n * 4), "
             "kind: hipMemcpyHostToDevice, stream: stream"
         ) in result
         assert (
             "// HIP memory copy from array: source array: array, w offset: 0, "
-            "h offset: 0, destination: h, bytes: (n * sizeof(float)), "
+            "h offset: 0, destination: h, bytes: (n * 4), "
             "kind: hipMemcpyDeviceToHost"
         ) in result
         assert (
             "// HIP memory copy from array: source array: array, w offset: 0, "
-            "h offset: 0, destination: h, bytes: (n * sizeof(float)), "
+            "h offset: 0, destination: h, bytes: (n * 4), "
             "kind: hipMemcpyDeviceToHost, stream: stream"
         ) in result
         assert (
             "// HIP 2D memory copy to array: source: h, source pitch: pitch, "
             "destination array: array, w offset: 0, h offset: 0, "
-            "width: (n * sizeof(float)), height: 4, kind: hipMemcpyHostToDevice"
+            "width: (n * 4), height: 4, kind: hipMemcpyHostToDevice"
         ) in result
         assert (
             "// HIP 2D memory copy to array: source: h, source pitch: pitch, "
             "destination array: array, w offset: 0, h offset: 0, "
-            "width: (n * sizeof(float)), height: 4, kind: hipMemcpyHostToDevice, "
+            "width: (n * 4), height: 4, kind: hipMemcpyHostToDevice, "
             "stream: stream"
         ) in result
         assert (
             result_lines.count(
                 "// HIP 2D memory copy from array: source array: array, "
                 "w offset: 0, h offset: 0, destination: h, "
-                "destination pitch: pitch, width: (n * sizeof(float)), height: 4, "
+                "destination pitch: pitch, width: (n * 4), height: 4, "
                 "kind: hipMemcpyDeviceToHost"
             )
             == 2
@@ -4607,36 +4677,36 @@ class TestHipCodeGen:
         assert (
             "// HIP 2D memory copy from array: source array: array, "
             "w offset: 0, h offset: 0, destination: h, destination pitch: pitch, "
-            "width: (n * sizeof(float)), height: 4, kind: hipMemcpyDeviceToHost, "
+            "width: (n * 4), height: 4, kind: hipMemcpyDeviceToHost, "
             "stream: stream"
         ) in result
         assert (
             "// HIP memory copy array to array: source array: array, "
             "source w offset: 4, source h offset: 0, destination array: array, "
             "destination w offset: 0, destination h offset: 0, "
-            "bytes: (n * sizeof(float)), kind: hipMemcpyDeviceToDevice"
+            "bytes: (n * 4), kind: hipMemcpyDeviceToDevice"
         ) in result
         assert (
             "// HIP 2D memory copy array to array: source array: array, "
             "source w offset: 4, source h offset: 0, destination array: array, "
             "destination w offset: 0, destination h offset: 0, "
-            "width: (n * sizeof(float)), height: 4, kind: hipMemcpyDeviceToDevice"
+            "width: (n * 4), height: 4, kind: hipMemcpyDeviceToDevice"
         ) in result
         assert (
-            "// HIP symbol copy to: symbol, source: h, bytes: (n * sizeof(float)), "
+            "// HIP symbol copy to: symbol, source: h, bytes: (n * 4), "
             "offset: 0, kind: hipMemcpyHostToDevice"
         ) in result
         assert (
-            "// HIP symbol copy to: symbol, source: h, bytes: (n * sizeof(float)), "
+            "// HIP symbol copy to: symbol, source: h, bytes: (n * 4), "
             "offset: 0, kind: hipMemcpyHostToDevice, stream: stream"
         ) in result
         assert (
             "// HIP symbol copy from: symbol, destination: h, "
-            "bytes: (n * sizeof(float)), offset: 0, kind: hipMemcpyDeviceToHost"
+            "bytes: (n * 4), offset: 0, kind: hipMemcpyDeviceToHost"
         ) in result
         assert (
             "// HIP symbol copy from: symbol, destination: h, "
-            "bytes: (n * sizeof(float)), offset: 0, kind: hipMemcpyDeviceToHost, "
+            "bytes: (n * 4), offset: 0, kind: hipMemcpyDeviceToHost, "
             "stream: stream"
         ) in result
         assert "// HIP get symbol address: output: d, symbol: symbol" in result
@@ -4726,14 +4796,14 @@ class TestHipCodeGen:
         )
         assert result.count("// HIP texture object destroy: texObj") == 3
         assert result.count("// HIP surface object destroy: surfObj") == 2
-        assert "// HIP memory set: d, value: 0, bytes: (n * sizeof(float))" in result
+        assert "// HIP memory set: d, value: 0, bytes: (n * 4)" in result
         assert (
             "// HIP 2D memory set: d2, pitch: pitch, value: 0, "
-            "width: (n * sizeof(float)), height: 4"
+            "width: (n * 4), height: 4"
         ) in result
         assert (
             "// HIP 2D memory set: d2, pitch: pitch, value: 1, "
-            "width: (n * sizeof(float)), height: 4, stream: 0"
+            "width: (n * 4), height: 4, stream: 0"
         ) in result
         assert (
             result.count("// HIP 3D memory set: pitched, value: 0, extent: extent") == 2
@@ -4776,15 +4846,14 @@ class TestHipCodeGen:
         assert "// HIP driver memory free: devicePtr2" in result
         assert "// HIP driver memory free: devicePtr" in result
         assert (
-            "// HIP virtual memory unmap: pointer: virtualAddress, "
-            "bytes: (n * sizeof(float))"
+            "// HIP virtual memory unmap: pointer: virtualAddress, " "bytes: (n * 4)"
         ) in result
         assert "// HIP virtual memory release allocation: importedHandle" in result
         assert "// HIP virtual memory release allocation: allocationHandle" in result
         assert (
             result.count(
                 "// HIP virtual memory free address: pointer: virtualAddress, "
-                "bytes: (n * sizeof(float))"
+                "bytes: (n * 4)"
             )
             == 2
         )
@@ -4793,7 +4862,7 @@ class TestHipCodeGen:
         assert "var err: hipError_t = hipSuccess;" in result
         assert "if ((err != hipSuccess))" in result
         assert "err = hipSuccess;" in result
-        assert "hipMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)))" not in result
+        assert "hipMalloc(ptr<ptr<void>>((&d)), (n * 4))" not in result
         assert "hipExtMallocWithFlags(" not in result
         assert "hipMallocAsync(" not in result
         assert "hipMallocFromPoolAsync(" not in result
@@ -8058,7 +8127,7 @@ class TestHipCodeGen:
             "var selected: hipError_t = (retry ? "
             "(/* HIP graphics unmap resources: count: 1, resources: resources, "
             "stream: stream */ hipSuccess) : "
-            "(/* HIP setup kernel argument: value: (&value), bytes: sizeof(value), "
+            "(/* HIP setup kernel argument: value: (&value), bytes: 4, "
             "offset: 0 */ hipSuccess));"
         ) in result
         assert "return selected;" in result
@@ -8599,12 +8668,10 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert (
-            "// HIP memory set: d, value: 0, bytes: (n * sizeof(float)), "
-            "stream: stream"
+            "// HIP memory set: d, value: 0, bytes: (n * 4), " "stream: stream"
         ) in result
         assert (
-            "// HIP memory set: d, value: 1, bytes: (n * sizeof(float)), "
-            "stream: stream"
+            "// HIP memory set: d, value: 1, bytes: (n * 4), " "stream: stream"
         ) in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "hipMemsetAsync(" not in result
@@ -10622,7 +10689,7 @@ class TestHipCodeGen:
         assert "out[8] = attrs[1];" in result
         assert (
             "// HIP memory range get attribute: output: attrs[2], "
-            "output bytes: sizeof(int), "
+            "output bytes: 4, "
             "attribute: hipMemRangeAttributePreferredLocation, "
             "pointer: devicePtr, range bytes: 256"
         ) in result
@@ -10833,7 +10900,7 @@ class TestHipCodeGen:
         assert "var manualSymbolSize: u32 = symbolSize;" in result
         assert (
             "// HIP memory range get attribute: output: rangeValue, "
-            "output bytes: sizeof(int), "
+            "output bytes: 4, "
             "attribute: hipMemRangeAttributePreferredLocation, "
             "pointer: devicePtr, range bytes: 256"
         ) in result
@@ -16367,7 +16434,7 @@ class TestHipCodeGen:
         assert "var h: array<f32> = std::vector<float>(n);" in result
         assert (
             "// HIP memory copy: h.data() -> d, bytes: "
-            "(h.size() * sizeof(float)), kind: hipMemcpyHostToDevice"
+            "(h.size() * 4), kind: hipMemcpyHostToDevice"
         ) in result
         assert "var ordered: bool = (h.size() < n);" in result
         assert "std::chrono::high_resolution_clock::now();" in result
@@ -16393,7 +16460,7 @@ class TestHipCodeGen:
         assert "var zeros: array<f32, 4> = {};" in result
         assert (
             "// HIP memory copy: h.data() -> d, bytes: "
-            "(h.size() * sizeof(float)), kind: hipMemcpyHostToDevice"
+            "(h.size() * 4), kind: hipMemcpyHostToDevice"
         ) in result
 
     def test_host_index_fill_scalar_constructor_conversion(self):
@@ -16766,7 +16833,7 @@ class TestHipCodeGen:
 
         assert "var x: f32 = f32(i);" in result
         assert "var p: ptr<f32> = ptr<f32>(input);" in result
-        assert "// HIP memory allocate: data, bytes: (n * sizeof(float))" in result
+        assert "// HIP memory allocate: data, bytes: (n * 4)" in result
         assert "static_cast" not in result
         assert "const_cast" not in result
         assert "reinterpret_cast" not in result
@@ -16952,13 +17019,13 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "typedef ptr<f32> HostBuffer;" in result
-        assert "typedef array<array<u32, 4>> Table;" in result
-        assert "typedef ptr<f32> LocalBuffer;" in result
-        assert "var h: HostBuffer = new_array<f32>(n);" in result
-        assert "var hp: ptr<HostBuffer> = (&h);" in result
-        assert "var owned: LocalBuffer = new_array<f32>(n);" in result
-        assert "var table: Table;" in result
+        assert "typedef ptr<f32> HostBuffer;" not in result
+        assert "typedef array<array<u32, 4>> Table;" not in result
+        assert "typedef ptr<f32> LocalBuffer;" not in result
+        assert "var h: ptr<f32> = new_array<f32>(n);" in result
+        assert "var hp: ptr<ptr<f32>> = (&h);" in result
+        assert "var owned: ptr<f32> = new_array<f32>(n);" in result
+        assert "var table: array<array<u32, 4>>;" in result
         assert "consume(h, owned);" in result
         assert "using namespace" not in result
 
@@ -17031,17 +17098,17 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "typedef f32 Real;" in result
-        assert "typedef ptr<f32> RealPtr;" in result
-        assert "typedef array<f32, 16> Tile;" in result
-        assert "typedef ptr<f32> Buffer;" in result
-        assert "typedef ptr<ptr<f32>> BufferPtr;" in result
-        assert "void host(i32 n, Real x)" in result
-        assert "var y: Real = x;" in result
-        assert "var p: RealPtr;" in result
-        assert "var tile: Tile;" in result
-        assert "var h: Buffer = new_array<f32>(n);" in result
-        assert "var hp: BufferPtr = (&h);" in result
+        assert "typedef f32 Real;" not in result
+        assert "typedef ptr<f32> RealPtr;" not in result
+        assert "typedef array<f32, 16> Tile;" not in result
+        assert "typedef ptr<f32> Buffer;" not in result
+        assert "typedef ptr<ptr<f32>> BufferPtr;" not in result
+        assert "void host(i32 n, f32 x)" in result
+        assert "var y: f32 = x;" in result
+        assert "var p: ptr<f32>;" in result
+        assert "var tile: array<f32, 16>;" in result
+        assert "var h: ptr<f32> = new_array<f32>(n);" in result
+        assert "var hp: ptr<ptr<f32>> = (&h);" in result
         assert "consume(h);" in result
         assert "array<std::unique_ptr" not in result
 
@@ -17061,8 +17128,9 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "typedef u32 LaneMask;" in result
-        assert "return LaneMask(x);" in result
+        assert "typedef u32 LaneMask;" not in result
+        assert "u32 helper(f32 x)" in result
+        assert "return u32(x);" in result
         assert "return LaneMask;" not in result
         assert "x;" not in result
 
@@ -17702,3 +17770,1802 @@ class TestHipCodeGen:
 
         assert "typedef conditional_t<WarpSize==32, u32, u64> lane_mask_t;" in result
         assert "array<lane_mask_t<WarpSize>>" in result
+
+    def test_nested_class_struct_trailing_declarators_convert_and_reparse(self):
+        code = """
+        class Outer {
+        public:
+            struct Inner { int value; } item, other;
+        };
+
+        int probe() {
+            Outer state;
+            state.item.value = 3;
+            state.other.value = 4;
+            return state.item.value + state.other.value;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "struct Inner {\n    i32 value;\n};" in result
+        assert "struct Outer {\n    Inner item;\n    Inner other;\n};" in result
+        assert "state.item.value = 3;" in result
+        assert "state.other.value = 4;" in result
+        assert "struct Outer {\n};" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_nested_anonymous_records_materialize_deterministically(self):
+        code = """
+        struct Outer {
+            struct { int value; } inner;
+            union { int selected; unsigned bits; } payload;
+        };
+
+        void host() {
+            Outer state;
+            state.inner.value = 1;
+            state.payload.selected = state.inner.value;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+        assert result == HipToCrossGLConverter().generate(ast)
+        assert "struct CrossGLAnonymous_Outer_inner_struct_" in result
+        assert "struct CrossGLAnonymous_Outer_payload_union_" in result
+        assert "CrossGLAnonymous_Outer_inner_struct_" in result
+        assert "CrossGLAnonymous_Outer_payload_union_" in result
+        assert "struct <anonymous>" not in result
+        assert "hip_anonymous_union" not in result
+        assert "state.inner.value = 1;" in result
+        assert "state.payload.selected = state.inner.value;" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_function_local_anonymous_records_materialize_deterministically(self):
+        code = """
+        void host(int input) {
+            struct { int value; } left, right;
+            union { int selected; unsigned bits; } payloads[2];
+            left.value = input;
+            right.value = left.value;
+            payloads[1].selected = right.value;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+        assert result == HipToCrossGLConverter().generate(ast)
+        definitions = {
+            line.split()[1]: line
+            for line in result.splitlines()
+            if line.startswith("struct CrossGLFunctionLocal_host_")
+        }
+        struct_name = next(name for name in definitions if "_left_struct_" in name)
+        union_name = next(name for name in definitions if "_payloads_union_" in name)
+        assert result.index(f"struct {struct_name} {{") < result.index("void host(")
+        assert result.index(f"struct {union_name} {{") < result.index("void host(")
+        assert f"var left: {struct_name};" in result
+        assert f"var right: {struct_name};" in result
+        assert f"var payloads: array<{union_name}, 2>;" in result
+        assert "struct None" not in result
+        assert "struct <anonymous>" not in result
+        assert "union <anonymous>" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_qualified_record_aliases_symbolic_enums_and_inheritance_convert(self):
+        code = """
+        class Base {
+        public:
+            using Scalar = int;
+            enum Kind { Zero = 2, One = Zero + 1, Two } kind;
+            Scalar base;
+        };
+        class Right { public: int right; };
+        class Derived : public Base, public Right { public: Scalar own; };
+        class Outer { public: class Inner { public: int value; } item; };
+        using Qualified = Outer::Inner;
+
+        Qualified pass(Qualified value) { return value; }
+        int host() {
+            Derived state;
+            state.kind = Derived::Two;
+            Outer outer;
+            outer.item = pass(outer.item);
+            return state.base + state.right + state.own + int(state.kind);
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "struct Derived {\n    i32 kind;\n    i32 base;\n    i32 right;\n    i32 own;\n};"
+            in result
+        )
+        assert "Inner pass(Inner value)" in result
+        assert "typedef Inner Qualified" not in result
+        assert "state.kind = 4;" in result
+        assert "Derived::Two" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_inherited_scoped_enum_field_and_alias_convert(self):
+        code = """
+        class Base {
+        public:
+            using Value = int;
+            enum class Mode : int { First = 3, Second } mode;
+            Value base;
+        };
+        class Derived : public Base { public: Value own; };
+        int host() {
+            Derived state;
+            state.mode = Derived::Mode::Second;
+            return state.base + state.own;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "struct Derived {\n    i32 mode;\n    i32 base;\n    i32 own;\n};" in result
+        )
+        assert "state.mode = 4;" in result
+        assert "Derived::Mode::Second" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_nested_enum_integer_division_and_remainder_use_cpp_semantics(self):
+        code = """
+        class Outer {
+        public:
+            enum Kind { Quotient = -7 / 3, Remainder = -7 % 3 } kind;
+        };
+        int host() {
+            Outer state;
+            state.kind = Outer::Remainder;
+            return int(state.kind);
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "state.kind = -1;" in result
+        assert "Outer::Remainder" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            """
+            class Base { public: int value; int get() { return value; } };
+            class Derived : public Base { public: int own; };
+            int host() { Derived state; return state.get() + state.own; }
+            """,
+            """
+            class Outer {
+            public:
+                class Inner {
+                public:
+                    int value;
+                    int get() { return value; }
+                } item;
+            };
+            int host() { Outer state; return state.item.get(); }
+            """,
+            """
+            class State { public: int value; int get() { return value; } };
+            int host() { State state; return state.get(); }
+            """,
+            """
+            class Base {
+            public:
+                static int twice(int value) { return value * 2; }
+            };
+            class Derived : public Base {};
+            int host(int value) { return Derived::twice(value); }
+            """,
+        ],
+        ids=(
+            "inherited-instance",
+            "nested-instance",
+            "own-instance",
+            "inherited-static",
+        ),
+    )
+    def test_dropped_record_method_calls_fail_closed(self, code):
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        with pytest.raises(ValueError, match="HIP record method call"):
+            HipToCrossGLConverter().generate(ast)
+
+    def test_inherited_nested_record_type_and_static_constant_convert(self):
+        code = """
+        class Base {
+        public:
+            class Item { public: int value; } item;
+            static constexpr int Value = 3;
+        };
+        class Derived : public Base {};
+        Derived::Item pass(Derived::Item value) { return value; }
+        int host() {
+            Derived state;
+            state.item = pass(state.item);
+            return state.item.value + Derived::Value;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "Item pass(Item value)" in result
+        assert "Derived::Item" not in result
+        assert "Derived::Value" not in result
+        assert "return (state.item.value + 3);" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_unrepresentable_static_record_constant_use_fails_closed(self):
+        code = """
+        class State {
+        public:
+            static constexpr int Value = true ? 3 : 4;
+        };
+        int host() { return State::Value; }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        with pytest.raises(ValueError, match="cannot be represented exactly"):
+            HipToCrossGLConverter().generate(ast)
+
+    @pytest.mark.parametrize(
+        ("code", "message"),
+        [
+            (
+                "class Derived : public Missing { public: int own; };",
+                "unresolved base 'Missing'",
+            ),
+            (
+                "class Base { public: int value; }; class Derived : virtual public Base {};",
+                "virtual record inheritance is unsupported",
+            ),
+            (
+                "class Base { public: int value; }; class Left : public Base {}; "
+                "class Right : public Base {}; class Diamond : public Left, public Right {};",
+                "colliding storage member names",
+            ),
+        ],
+        ids=("unresolved", "virtual", "diamond"),
+    )
+    def test_unsafe_inheritance_fails_closed(self, code, message):
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        with pytest.raises(ValueError, match=message):
+            HipToCrossGLConverter().generate(ast)
+
+    def test_sibling_nested_record_name_collision_fails_on_crossgl_reparse(self):
+        code = """
+        class Left { public: class Inner { public: int left; } item; };
+        class Right { public: class Inner { public: int right; } item; };
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        with pytest.raises(
+            ValueError, match="Conflicting HIP nested record output name"
+        ):
+            HipToCrossGLConverter().generate(ast)
+
+    @pytest.mark.parametrize(
+        ("name", "records", "helpers", "body", "feature"),
+        [
+            (
+                "nontrivial-default-constructor",
+                "class State { public: int value; State(): value(7) {} };",
+                "",
+                "State state; output[0]=state.value;",
+                "default constructor",
+            ),
+            (
+                "nontrivial-value-constructor",
+                "class State { public: int value; State(int v): value(v*2) {} };",
+                "",
+                "State state(input[0]); output[0]=state.value;",
+                "constructor",
+            ),
+            (
+                "default-member-initializer",
+                "struct State { int value=11; };",
+                "",
+                "State state; output[0]=state.value;",
+                "default member initializer",
+            ),
+            (
+                "nontrivial-copy-constructor",
+                "class State { public: int value; State(): value(0) {} "
+                "State(const State& other): value(other.value+1) {} };",
+                "",
+                "State first; first.value=input[0]; State second=first; "
+                "output[0]=second.value;",
+                "constructor",
+            ),
+            (
+                "factory-result-method",
+                "class State { public: int value; int get() const { return value; } };",
+                "State make_state(int value) { State state; state.value=value; "
+                "return state; }",
+                "output[0]=make_state(input[0]).get();",
+                "record method call",
+            ),
+            (
+                "conditional-result-method",
+                "class State { public: int value; int get() const { return value; } };",
+                "",
+                "State left; State right; left.value=input[0]; "
+                "right.value=input[1]; "
+                "output[0]=(input[2] ? left : right).get();",
+                "record method call",
+            ),
+            (
+                "custom-conversion-operator",
+                "class State { public: int value; explicit operator int() const "
+                "{ return value+3; } };",
+                "",
+                "State state; state.value=input[0]; "
+                "output[0]=static_cast<int>(state);",
+                "conversion operator",
+            ),
+            (
+                "base-slicing-parameter",
+                "class Base { public: int value; }; "
+                "class Derived : public Base { public: int extra; };",
+                "int read_base(Base value) { return value.value; }",
+                "Derived state; state.value=input[0]; state.extra=input[1]; "
+                "output[0]=read_base(state);",
+                "derived-to-base argument",
+            ),
+            (
+                "derived-to-base-initialization",
+                "class Base { public: int value; }; "
+                "class Derived : public Base { public: int extra; };",
+                "",
+                "Derived state; state.value=input[0]; state.extra=input[1]; "
+                "Base base=state; output[0]=base.value;",
+                "derived-to-base value",
+            ),
+            (
+                "named-union-overlap",
+                "union Bits { int signed_value; unsigned unsigned_value; };",
+                "",
+                "Bits bits; bits.signed_value=input[0]; "
+                "output[0]=int(bits.unsigned_value);",
+                "union overlapping storage",
+            ),
+            (
+                "anonymous-union-overlap",
+                "struct State { union { int signed_value; "
+                "unsigned unsigned_value; }; };",
+                "",
+                "State state; state.signed_value=input[0]; "
+                "output[0]=int(state.unsigned_value);",
+                "union overlapping storage",
+            ),
+            (
+                "mutable-static-through-alias",
+                "class State { public: static int Value; }; "
+                "int State::Value=13; using Alias=State;",
+                "",
+                "output[0]=Alias::Value+input[0];",
+                "cannot be represented exactly",
+            ),
+            (
+                "inherited-constructor",
+                "class Base { public: int value; Base(int v): value(v+5) {} }; "
+                "class Derived : public Base { public: using Base::Base; };",
+                "",
+                "Derived state(input[0]); output[0]=state.value;",
+                "inherited record constructor",
+            ),
+        ],
+    )
+    def test_native_valid_record_lifecycle_and_layout_uses_fail_closed(
+        self, tmp_path, name, records, helpers, body, feature
+    ):
+        source = (
+            f"{records}\n{helpers}\n"
+            "__global__ void probe(const int* input, int* output) {\n"
+            f"  {body}\n"
+            "}\n"
+        )
+        source_path = tmp_path / f"{name}.hip"
+        source_path.write_text(source, encoding="utf-8")
+        clang = shutil.which("clang++")
+        if clang is not None:
+            native = subprocess.run(
+                [
+                    clang,
+                    "-x",
+                    "c++",
+                    "-std=c++17",
+                    "-Werror",
+                    "-D__global__=",
+                    "-fsyntax-only",
+                    str(source_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            assert native.returncode == 0, native.stderr
+
+        with pytest.raises((HipRecordSemanticError, ValueError)) as error:
+            translate(
+                str(source_path),
+                backend="directx",
+                source_backend="hip",
+                format_output=False,
+            )
+
+        assert feature in str(error.value)
+        if isinstance(error.value, HipRecordSemanticError):
+            assert (
+                error.value.project_diagnostic_code
+                == "project.translate.hip-record-semantics-unsupported"
+            )
+            assert error.value.missing_capabilities == (
+                "hip.record-lifecycle-layout-lowering",
+            )
+
+    @pytest.mark.parametrize(
+        ("name", "source", "feature"),
+        [
+            (
+                "contextual-bool-if",
+                hip_record_probe_source(
+                    "class Flag { public: int value; explicit operator bool() const "
+                    "{ return value != 0; } };",
+                    "",
+                    "Flag flag; flag.value=input[0]; if (flag) { output[0]=1; } "
+                    "else { output[0]=0; }",
+                ),
+                "conversion operator",
+            ),
+            (
+                "contextual-bool-while",
+                hip_record_probe_source(
+                    "class Flag { public: int value; explicit operator bool() const "
+                    "{ return value != 0; } };",
+                    "",
+                    "Flag flag; flag.value=input[0]; while (flag) { output[0]=1; "
+                    "break; }",
+                ),
+                "conversion operator",
+            ),
+            (
+                "contextual-bool-for",
+                hip_record_probe_source(
+                    "class Flag { public: int value; explicit operator bool() const "
+                    "{ return value != 0; } };",
+                    "",
+                    "Flag flag; flag.value=input[0]; for (; flag; ) { output[0]=1; "
+                    "break; }",
+                ),
+                "conversion operator",
+            ),
+            (
+                "contextual-bool-do-while",
+                hip_record_probe_source(
+                    "class Flag { public: int value; explicit operator bool() const "
+                    "{ return value != 0; } };",
+                    "",
+                    "Flag flag; flag.value=input[0]; do { output[0]=flag.value; "
+                    "flag.value=0; } while (flag);",
+                ),
+                "conversion operator",
+            ),
+            (
+                "contextual-bool-ternary",
+                hip_record_probe_source(
+                    "class Flag { public: int value; explicit operator bool() const "
+                    "{ return value != 0; } };",
+                    "",
+                    "Flag flag; flag.value=input[0]; "
+                    "output[0]=flag ? input[1] : input[2];",
+                ),
+                "conversion operator",
+            ),
+            (
+                "integral-switch",
+                hip_record_probe_source(
+                    "class Index { public: int value; operator int() const "
+                    "{ return value+1; } };",
+                    "",
+                    "Index index; index.value=input[0]; switch (index) { case 1: "
+                    "output[0]=7; break; default: output[0]=9; }",
+                ),
+                "conversion operator",
+            ),
+            (
+                "integral-array-index",
+                hip_record_probe_source(
+                    "class Index { public: int value; operator int() const "
+                    "{ return value & 1; } };",
+                    "",
+                    "int values[2]={input[0],input[1]}; Index index; "
+                    "index.value=input[2]; output[0]=values[index];",
+                ),
+                "conversion operator",
+            ),
+            (
+                "free-plus",
+                hip_record_probe_source(
+                    "struct State { int value; };",
+                    "int operator+(const State& left, const State& right) "
+                    "{ return left.value+right.value+1; }",
+                    "State left{input[0]}; State right{input[1]}; "
+                    "output[0]=left+right;",
+                ),
+                "record operator",
+            ),
+            (
+                "free-equality",
+                hip_record_probe_source(
+                    "struct State { int value; };",
+                    "bool operator==(const State& left, const State& right) "
+                    "{ return left.value+1==right.value; }",
+                    "State left{input[0]}; State right{input[1]}; "
+                    "output[0]=(left==right) ? 1 : 0;",
+                ),
+                "record operator",
+            ),
+            (
+                "member-compound-plus",
+                hip_record_probe_source(
+                    "struct State { int value; State& operator+=(const State& other) "
+                    "{ value+=other.value+1; return *this; } };",
+                    "",
+                    "State left{input[0]}; State right{input[1]}; left+=right; "
+                    "output[0]=left.value;",
+                ),
+                "overloaded operator",
+            ),
+            (
+                "free-compound-plus",
+                hip_record_probe_source(
+                    "struct State { int value; };",
+                    "State& operator+=(State& left, const State& right) "
+                    "{ left.value+=right.value+1; return left; }",
+                    "State left{input[0]}; State right{input[1]}; left+=right; "
+                    "output[0]=left.value;",
+                ),
+                "record operator",
+            ),
+            (
+                "member-subscript",
+                hip_record_probe_source(
+                    "struct State { int values[2]; int& operator[](int index) "
+                    "{ return values[index]; } };",
+                    "",
+                    "State state{{input[0],input[1]}}; " "output[0]=state[input[2]&1];",
+                ),
+                "overloaded operator",
+            ),
+            (
+                "const-member-subscript",
+                hip_record_probe_source(
+                    "struct State { int values[2]; int operator[](int index) const "
+                    "{ return values[index]+1; } };",
+                    "",
+                    "const State state{{input[0],input[1]}}; "
+                    "output[0]=state[input[2]&1];",
+                ),
+                "overloaded operator",
+            ),
+            (
+                "call-operator",
+                hip_record_probe_source(
+                    "struct State { int value; int operator()(int extra) const "
+                    "{ return value+extra+1; } };",
+                    "",
+                    "State state{input[0]}; output[0]=state(input[1]);",
+                ),
+                "overloaded operator",
+            ),
+            (
+                "unsigned-bitfield",
+                hip_record_probe_source(
+                    "struct State { unsigned value : 3; };",
+                    "",
+                    "State state{}; state.value=static_cast<unsigned>(input[0]); "
+                    "output[0]=int(state.value);",
+                ),
+                "bitfield member",
+            ),
+            (
+                "signed-bitfield",
+                hip_record_probe_source(
+                    "struct State { signed int value : 3; };",
+                    "",
+                    "State state{}; state.value=input[0]; output[0]=state.value;",
+                ),
+                "bitfield member",
+            ),
+            (
+                "adjacent-bitfields",
+                hip_record_probe_source(
+                    "struct State { unsigned low : 4; unsigned high : 4; };",
+                    "",
+                    "State state{}; state.low=static_cast<unsigned>(input[0]); "
+                    "state.high=static_cast<unsigned>(input[1]); "
+                    "output[0]=int(state.low+state.high);",
+                ),
+                "bitfield member",
+            ),
+            (
+                "reference-member",
+                hip_record_probe_source(
+                    "struct State { int& value; };",
+                    "",
+                    "int local=input[0]; State state{local}; local+=1; "
+                    "output[0]=state.value;",
+                ),
+                "reference member",
+            ),
+            (
+                "const-reference-member",
+                hip_record_probe_source(
+                    "struct State { const int& value; };",
+                    "",
+                    "int local=input[0]; State state{local}; local+=1; "
+                    "output[0]=state.value;",
+                ),
+                "reference member",
+            ),
+            (
+                "aliased-reference-member",
+                hip_record_probe_source(
+                    "struct State { using Ref = int&; Ref value; };",
+                    "",
+                    "int local=input[0]; State state{local}; local+=1; "
+                    "output[0]=state.value;",
+                ),
+                "reference member",
+            ),
+            (
+                "nested-bitfield-member",
+                hip_record_probe_source(
+                    "struct Inner { unsigned value : 3; }; "
+                    "struct State { Inner inner; };",
+                    "",
+                    "State state{}; state.inner.value=static_cast<unsigned>(input[0]); "
+                    "output[0]=int(state.inner.value);",
+                ),
+                "bitfield member",
+            ),
+            (
+                "inherited-reference-member",
+                hip_record_probe_source(
+                    "struct Base { int& value; }; struct State : Base { int own; };",
+                    "",
+                    "int local=input[0]; State state{{local}, input[1]}; local+=1; "
+                    "output[0]=state.value+state.own;",
+                ),
+                "reference member",
+            ),
+            (
+                "scalar-control",
+                hip_record_probe_source(
+                    "",
+                    "",
+                    "int value=input[0]; if (value) { value+=1; } "
+                    "while (value<0) { value+=1; } "
+                    "output[0]=value ? value : input[1];",
+                ),
+                None,
+            ),
+            (
+                "unused-conversion-operator-control",
+                hip_record_probe_source(
+                    "class State { public: int value; explicit operator bool() const "
+                    "{ return value != 0; } };",
+                    "",
+                    "State state; state.value=input[0]; output[0]=state.value;",
+                ),
+                None,
+            ),
+            (
+                "full-width-member-control",
+                hip_record_probe_source(
+                    "struct State { unsigned low; unsigned high; };",
+                    "",
+                    "State state{}; state.low=static_cast<unsigned>(input[0]); "
+                    "state.high=static_cast<unsigned>(input[1]); "
+                    "output[0]=int(state.low+state.high);",
+                ),
+                None,
+            ),
+            (
+                "plain-array-index-control",
+                hip_record_probe_source(
+                    "",
+                    "",
+                    "int values[2]={input[0],input[1]}; int index=input[2]&1; "
+                    "output[0]=values[index];",
+                ),
+                None,
+            ),
+            (
+                "record-array-index-control",
+                hip_record_probe_source(
+                    "struct State { int value; };",
+                    "",
+                    "State values[2]={{input[0]},{input[1]}}; int index=input[2]&1; "
+                    "output[0]=values[index].value;",
+                ),
+                None,
+            ),
+            (
+                "unused-bitfield-control",
+                hip_record_probe_source(
+                    "struct State { unsigned value : 3; };",
+                    "",
+                    "output[0]=input[0]+1;",
+                ),
+                None,
+            ),
+            (
+                "unused-reference-member-control",
+                hip_record_probe_source(
+                    "struct State { int& value; };",
+                    "",
+                    "output[0]=input[0]+1;",
+                ),
+                None,
+            ),
+        ],
+    )
+    def test_native_valid_record_operator_and_layout_semantics(
+        self, tmp_path, name, source, feature
+    ):
+        source_path = tmp_path / f"{name}.hip"
+        source_path.write_text(source, encoding="utf-8")
+        clang = shutil.which("clang++")
+        if clang is not None:
+            native = subprocess.run(
+                [
+                    clang,
+                    "-x",
+                    "c++",
+                    "-std=c++17",
+                    "-Werror",
+                    "-D__global__=",
+                    "-fsyntax-only",
+                    str(source_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            assert native.returncode == 0, native.stderr
+
+        if feature is not None:
+            with pytest.raises(HipRecordSemanticError, match=feature):
+                translate(
+                    str(source_path),
+                    backend="directx",
+                    source_backend="hip",
+                    format_output=False,
+                )
+            return
+
+        hlsl = translate(
+            str(source_path),
+            backend="directx",
+            source_backend="hip",
+            format_output=False,
+        )
+        assert "CSMain" in hlsl
+        glslang = shutil.which("glslangValidator")
+        if glslang is None:
+            return
+        hlsl_path = tmp_path / f"{name}.hlsl"
+        spirv_path = tmp_path / f"{name}.spv"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        validation = subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                "-V",
+                str(hlsl_path),
+                "-o",
+                str(spirv_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        assert validation.returncode == 0, validation.stdout + validation.stderr
+        assert spirv_path.stat().st_size > 0
+
+    def test_unused_record_lifecycle_declarations_remain_translatable(self):
+        code = """
+        class State {
+        public:
+            int value = 3;
+            State(): value(7) {}
+            ~State() {}
+            explicit operator int() const { return value; }
+        };
+        int host(int value) { return value + 1; }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "struct State {\n    i32 value;\n};" in result
+        assert "i32 host(i32 value)" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_explicit_aggregate_member_overrides_default_initializer(self):
+        code = """
+        struct State { int value = 11; };
+        int host(int value) {
+            State state{value};
+            return state.value;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "var state: State = {value};" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    @pytest.mark.parametrize(
+        ("name", "source", "feature"),
+        [
+            (
+                "destructor-use",
+                "class State { public: int value; ~State() { value=0; } }; "
+                "__global__ void probe(int* output) { State state; "
+                "state.value=1; output[0]=state.value; }",
+                "destructor",
+            ),
+            (
+                "custom-assignment",
+                "struct State { int value; State& operator=(const State& other) "
+                "{ value=other.value+1; return *this; } }; "
+                "__global__ void probe(int* output) { State left{1}; "
+                "State right{2}; left=right; output[0]=left.value; }",
+                "assignment operator",
+            ),
+            (
+                "implicit-conversion-variable",
+                "class State { public: int value; operator int() const "
+                "{ return value+1; } }; __global__ void probe(int* output) "
+                "{ State state; state.value=1; int value=state; output[0]=value; }",
+                "conversion operator",
+            ),
+            (
+                "implicit-conversion-binary",
+                "class State { public: int value; operator int() const "
+                "{ return value+1; } }; __global__ void probe(int* output) "
+                "{ State state; state.value=1; output[0]=state+1; }",
+                "conversion operator",
+            ),
+            (
+                "implicit-conversion-return",
+                "class State { public: int value; operator int() const "
+                "{ return value+1; } }; int consume(State state) { return state; } "
+                "__global__ void probe(int* output) { State state; state.value=1; "
+                "output[0]=consume(state); }",
+                "conversion operator",
+            ),
+            (
+                "overloaded-plus",
+                "struct State { int value; int operator+(int other) const "
+                "{ return value+other+1; } }; __global__ void probe(int* output) "
+                "{ State state{1}; output[0]=state+1; }",
+                "overloaded operator",
+            ),
+            (
+                "derived-return",
+                "struct Base { int value; }; struct Derived : Base { int extra; }; "
+                "Base make(Derived value) { return value; } "
+                "__global__ void probe(int* output) { Derived state{{1},2}; "
+                "Base base=make(state); output[0]=base.value; }",
+                "derived-to-base value",
+            ),
+            (
+                "derived-assignment",
+                "struct Base { int value; }; struct Derived : Base { int extra; }; "
+                "__global__ void probe(int* output) { Base base{1}; "
+                "Derived state; state.value=2; state.extra=3; "
+                "base=state; output[0]=base.value; }",
+                "derived-to-base assignment",
+            ),
+            (
+                "nested-default-constructor",
+                "class Inner { public: int value; Inner(): value(9) {} }; "
+                "struct Outer { Inner item; }; __global__ void probe(int* output) "
+                "{ Outer state; output[0]=state.item.value; }",
+                "default constructor",
+            ),
+            (
+                "partial-default-member",
+                "struct State { int left; int right=9; }; "
+                "__global__ void probe(int* output) { State state{1}; "
+                "output[0]=state.right; }",
+                "default member initializer",
+            ),
+            (
+                "inherited-function-style-conversion",
+                "class Base { public: int value; operator int() const "
+                "{ return value+1; } }; struct Derived : Base { int extra; }; "
+                "__global__ void probe(int* output) { Derived state; "
+                "state.value=1; output[0]=int(state); }",
+                "conversion operator",
+            ),
+            (
+                "union-pointer-overlap",
+                "union Bits { int signed_value; unsigned unsigned_value; }; "
+                "__global__ void probe(int* output) { Bits bits; Bits* ptr=&bits; "
+                "ptr->signed_value=1; output[0]=int(ptr->unsigned_value); }",
+                "union indirect object access",
+            ),
+        ],
+    )
+    def test_native_valid_adjacent_record_semantics_fail_closed(
+        self, tmp_path, name, source, feature
+    ):
+        source_path = tmp_path / f"{name}.hip"
+        source_path.write_text(source, encoding="utf-8")
+        clang = shutil.which("clang++")
+        if clang is not None:
+            native = subprocess.run(
+                [
+                    clang,
+                    "-x",
+                    "c++",
+                    "-std=c++17",
+                    "-Werror",
+                    "-D__global__=",
+                    "-fsyntax-only",
+                    str(source_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            assert native.returncode == 0, native.stderr
+
+        with pytest.raises(HipRecordSemanticError, match=feature):
+            translate(
+                str(source_path),
+                backend="directx",
+                source_backend="hip",
+                format_output=False,
+            )
+
+    @pytest.mark.parametrize(
+        ("name", "source", "feature"),
+        [
+            (
+                "nested-mutable-static",
+                "struct Inner { static int value; }; int Inner::value=1; "
+                "struct Outer { Inner inner; }; __global__ void probe(int* output) "
+                "{ Outer state; state.inner.value+=1; "
+                "output[0]=state.inner.value; }",
+                "static record state",
+            ),
+            (
+                "derived-aggregate-initialization",
+                "struct Base { int value; }; struct Derived : Base { int extra; }; "
+                "__global__ void probe(int* output) { Derived state{{1},2}; "
+                "output[0]=state.value+state.extra; }",
+                "base subobject aggregate initialization",
+            ),
+        ],
+    )
+    def test_native_valid_nested_record_semantics_fail_closed(
+        self, tmp_path, name, source, feature
+    ):
+        source_path = tmp_path / f"{name}.hip"
+        source_path.write_text(source, encoding="utf-8")
+        clang = shutil.which("clang++")
+        if clang is not None:
+            native = subprocess.run(
+                [
+                    clang,
+                    "-x",
+                    "c++",
+                    "-std=c++17",
+                    "-Werror",
+                    "-D__global__=",
+                    "-fsyntax-only",
+                    str(source_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            assert native.returncode == 0, native.stderr
+
+        with pytest.raises(HipRecordSemanticError, match=feature):
+            translate(
+                str(source_path),
+                backend="directx",
+                source_backend="hip",
+                format_output=False,
+            )
+
+    def test_union_array_objects_track_independent_active_members(self):
+        code = """
+        union Bits { int value; unsigned bits; };
+        __global__ void probe(int* output) {
+            Bits values[2];
+            values[0].value = 1;
+            values[1].bits = 2u;
+            output[0] = values[0].value + int(values[1].bits);
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "values[0].value = 1;" in result
+        assert "values[1].bits = 2u;" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_dynamic_union_array_object_fails_closed(self):
+        code = """
+        union Bits { int value; unsigned bits; };
+        __global__ void probe(int* output, int index) {
+            Bits values[2];
+            values[index].value = 1;
+            output[0] = values[index].value;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        with pytest.raises(HipRecordSemanticError, match="unprovable active storage"):
+            HipToCrossGLConverter().generate(ast)
+
+    def test_inherited_fields_remain_translatable_without_base_aggregate_init(self):
+        code = """
+        struct Base { int value; };
+        struct Derived : Base { int extra; };
+        __global__ void probe(int* output) {
+            Derived state;
+            state.value = 1;
+            state.extra = 2;
+            output[0] = state.value + state.extra;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "struct Derived {\n    i32 value;\n    i32 extra;\n};" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_object_qualified_record_constexpr_is_folded(self):
+        code = """
+        struct Inner { static constexpr int value = 3; };
+        struct Outer { Inner inner; };
+        __global__ void probe(int* output) {
+            Outer state;
+            output[0] = state.inner.value;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "output[0] = 3;" in result
+        assert "state.inner.value" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    @pytest.mark.parametrize(
+        ("name", "source", "feature"),
+        [
+            (
+                "union-reference-alias",
+                "union Bits { int value; unsigned bits; }; "
+                "__global__ void probe(int* output) { Bits value; Bits& alias=value; "
+                "alias.value=1; output[0]=int(value.bits); }",
+                "union indirect object access",
+            ),
+            (
+                "union-helper-value-flow",
+                "union Bits { int value; unsigned bits; }; "
+                "int read(Bits value) { return int(value.bits); } "
+                "__global__ void probe(int* output) { Bits value; value.value=1; "
+                "output[0]=read(value); }",
+                "union function argument active storage",
+            ),
+            (
+                "union-flattened-shadow",
+                "union Bits { int value; unsigned bits; }; "
+                "__global__ void probe(int* output) { Bits value; value.value=1; "
+                "{ Bits value; value.bits=2u; output[0]=int(value.bits); } "
+                "output[1]=value.value; }",
+                "union lexical shadowing with flattened scope",
+            ),
+            (
+                "union-copy",
+                "union Bits { int value; unsigned bits; }; "
+                "__global__ void probe(int* output) { Bits value; value.value=1; "
+                "Bits copy=value; output[0]=int(copy.bits); }",
+                "union-containing copy construction",
+            ),
+            (
+                "union-assignment",
+                "union Bits { int value; unsigned bits; }; "
+                "__global__ void probe(int* output) { Bits value; value.value=1; "
+                "Bits copy; copy.bits=2u; copy=value; output[0]=int(copy.bits); }",
+                "union-containing assignment",
+            ),
+            (
+                "union-return",
+                "union Bits { int value; unsigned bits; }; "
+                "Bits make() { Bits value; value.value=1; return value; } "
+                "__global__ void probe(int* output) { Bits value=make(); "
+                "output[0]=int(value.bits); }",
+                "union-containing value flow",
+            ),
+            (
+                "union-ternary-copy",
+                "union Bits { int value; unsigned bits; }; "
+                "__global__ void probe(int* output, int condition) { "
+                "Bits left; left.value=1; Bits right; right.bits=2u; "
+                "Bits value=condition?left:right; output[0]=value.value; }",
+                "union-containing copy construction",
+            ),
+            (
+                "nested-union-copy",
+                "union Bits { int value; unsigned bits; }; "
+                "struct Outer { Bits bits; }; "
+                "__global__ void probe(int* output) { Outer left; "
+                "left.bits.value=1; Outer right=left; "
+                "output[0]=int(right.bits.bits); }",
+                "union-containing copy construction",
+            ),
+        ],
+    )
+    def test_native_valid_union_alias_and_value_flows_fail_closed(
+        self, tmp_path, name, source, feature
+    ):
+        source_path = tmp_path / f"{name}.hip"
+        source_path.write_text(source, encoding="utf-8")
+        clang = shutil.which("clang++")
+        if clang is not None:
+            native = subprocess.run(
+                [
+                    clang,
+                    "-x",
+                    "c++",
+                    "-std=c++17",
+                    "-Werror",
+                    "-D__global__=",
+                    "-fsyntax-only",
+                    str(source_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            assert native.returncode == 0, native.stderr
+
+        with pytest.raises(HipRecordSemanticError, match=feature):
+            translate(
+                str(source_path),
+                backend="directx",
+                source_backend="hip",
+                format_output=False,
+            )
+
+    @pytest.mark.parametrize(
+        ("name", "source", "feature"),
+        [
+            (
+                "local-record-reference-mutation",
+                hip_record_probe_source(
+                    "struct State { int value; };",
+                    "",
+                    "State state{input[0]}; State& alias=state; "
+                    "alias.value+=input[1]; output[0]=state.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "function-reference-mutation",
+                hip_record_probe_source(
+                    "struct State { int value; };",
+                    "void increment(State& state, int delta) "
+                    "{ state.value+=delta; }",
+                    "State state{input[0]}; increment(state,input[1]); "
+                    "output[0]=state.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "two-reference-parameters",
+                hip_record_probe_source(
+                    "struct State { int value; };",
+                    "void step(State& first, State& second) "
+                    "{ first.value+=1; second.value+=first.value; }",
+                    "State state{input[0]}; step(state,state); "
+                    "output[0]=state.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "reference-return",
+                hip_record_probe_source(
+                    "struct State { int value; };",
+                    "State& identity(State& state) { return state; }",
+                    "State state{input[0]}; State& alias=identity(state); "
+                    "alias.value+=input[1]; output[0]=state.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "nested-reference-parameter",
+                hip_record_probe_source(
+                    "struct Inner { int value; }; " "struct Outer { Inner inner; };",
+                    "void increment(Inner& inner, int delta) "
+                    "{ inner.value+=delta; }",
+                    "Outer state{{input[0]}}; increment(state.inner,input[1]); "
+                    "output[0]=state.inner.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "polymorphic-resource",
+                "struct State { virtual int read() const { return value; } "
+                "int value; }; __global__ void probe(const State* states, "
+                "int* output) { output[0]=states[1].value; }",
+                "polymorphic record",
+            ),
+            (
+                "virtual-destructor-resource",
+                "struct State { virtual ~State() {} int value; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].value; }",
+                "polymorphic record",
+            ),
+            (
+                "polymorphic-base-resource",
+                "struct Base { virtual int tag() const { return 1; } int base; }; "
+                "struct State : Base { int value; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].base+states[1].value; }",
+                "polymorphic record",
+            ),
+            (
+                "nested-polymorphic-resource",
+                "struct Poly { virtual int tag() const { return 1; } int payload; }; "
+                "struct State { Poly poly; int value; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].poly.payload+states[1].value; }",
+                "polymorphic record",
+            ),
+            (
+                "record-alignas-resource",
+                "struct alignas(16) State { int first; int second; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].second; }",
+                "layout attribute",
+            ),
+            (
+                "member-alignas-resource",
+                "struct State { int first; alignas(16) int second; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].second; }",
+                "layout attribute",
+            ),
+            (
+                "pragma-packed-resource",
+                "#pragma pack(push, 1)\n"
+                "struct State { unsigned char tag; int value; };\n"
+                "#pragma pack(pop)\n"
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].value; }",
+                "layout attribute",
+            ),
+            (
+                "gnu-packed-resource",
+                "struct __attribute__((packed)) State "
+                "{ unsigned char tag; int value; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].value; }",
+                "layout attribute",
+            ),
+            (
+                "bool-resource",
+                "struct State { bool flag; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].flag ? 1 : 0; }",
+                "bool storage",
+            ),
+            (
+                "sizeof-record",
+                hip_record_probe_source(
+                    "struct alignas(16) State { int value; };",
+                    "",
+                    "output[0]=int(sizeof(State));",
+                ),
+                "source ABI query",
+            ),
+            (
+                "alignof-record",
+                hip_record_probe_source(
+                    "struct alignas(16) State { int value; };",
+                    "",
+                    "output[0]=int(alignof(State));",
+                ),
+                "source ABI query",
+            ),
+            (
+                "offsetof-record",
+                hip_record_probe_source(
+                    "struct State { int first; alignas(16) int second; };",
+                    "",
+                    "output[0]=int(__builtin_offsetof(State, second));",
+                ),
+                "source ABI query",
+            ),
+            (
+                "member-arrow",
+                hip_record_probe_source(
+                    "struct Payload { int value; }; "
+                    "struct Box { Payload payload; Payload* operator->() "
+                    "{ return &payload; } };",
+                    "",
+                    "Box box{{input[0]}}; output[0]=box->value;",
+                ),
+                "overloaded operator '->'",
+            ),
+            (
+                "const-reference-control",
+                hip_record_probe_source(
+                    "struct State { int value; };",
+                    "int read(const State& state) { return state.value; }",
+                    "State state{input[0]}; output[0]=read(state);",
+                ),
+                None,
+            ),
+            (
+                "by-value-control",
+                hip_record_probe_source(
+                    "struct State { int value; };",
+                    "State increment(State state, int delta) "
+                    "{ state.value+=delta; return state; }",
+                    "State state{input[0]}; "
+                    "State result=increment(state,input[1]); "
+                    "output[0]=result.value;",
+                ),
+                None,
+            ),
+            (
+                "plain-resource-control",
+                "struct State { int first; int second; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].first+states[1].second; }",
+                None,
+            ),
+            (
+                "unused-virtual-control",
+                hip_record_probe_source(
+                    "struct State { virtual int unused() const "
+                    "{ return value+1; } int value; };",
+                    "",
+                    "State state; state.value=input[0]; output[0]=state.value;",
+                ),
+                None,
+            ),
+            (
+                "unused-arrow-control",
+                hip_record_probe_source(
+                    "struct State { int value; State* operator->() "
+                    "{ return this; } };",
+                    "",
+                    "State state{input[0]}; output[0]=state.value;",
+                ),
+                None,
+            ),
+        ],
+    )
+    def test_native_valid_record_alias_abi_and_representation_semantics(
+        self, tmp_path, name, source, feature
+    ):
+        source_path = tmp_path / f"{name}.hip"
+        source_path.write_text(source, encoding="utf-8")
+        clang = shutil.which("clang++")
+        if clang is not None:
+            native = subprocess.run(
+                [
+                    clang,
+                    "-x",
+                    "c++",
+                    "-std=c++17",
+                    "-Werror",
+                    "-D__global__=",
+                    "-fsyntax-only",
+                    str(source_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            assert native.returncode == 0, native.stderr
+
+        if feature is not None:
+            with pytest.raises(HipRecordSemanticError, match=feature):
+                translate(
+                    str(source_path),
+                    backend="directx",
+                    source_backend="hip",
+                    format_output=False,
+                )
+            return
+
+        hlsl = translate(
+            str(source_path),
+            backend="directx",
+            source_backend="hip",
+            format_output=False,
+        )
+        assert "CSMain" in hlsl
+        glslang = shutil.which("glslangValidator")
+        if glslang is None:
+            return
+        hlsl_path = tmp_path / f"{name}.hlsl"
+        spirv_path = tmp_path / f"{name}.spv"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        validation = subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                "-V",
+                str(hlsl_path),
+                "-o",
+                str(spirv_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        assert validation.returncode == 0, validation.stdout + validation.stderr
+        assert spirv_path.stat().st_size > 0
+
+    @pytest.mark.parametrize(
+        ("name", "source", "feature"),
+        [
+            (
+                "using-local-record-reference",
+                hip_record_probe_source(
+                    "struct State { int value; }; using Ref = State&;",
+                    "",
+                    "State state{input[0]}; Ref alias=state; "
+                    "alias.value+=input[1]; output[0]=state.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "using-reference-parameter",
+                hip_record_probe_source(
+                    "struct State { int value; }; using Ref = State&;",
+                    "void increment(Ref state, int delta) { state.value+=delta; }",
+                    "State state{input[0]}; increment(state,input[1]); "
+                    "output[0]=state.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "using-reference-return",
+                hip_record_probe_source(
+                    "struct State { int value; }; using Ref = State&;",
+                    "Ref identity(Ref state) { return state; }",
+                    "State state{input[0]}; Ref alias=identity(state); "
+                    "alias.value+=input[1]; output[0]=state.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "typedef-local-record-reference",
+                hip_record_probe_source(
+                    "struct State { int value; }; typedef State& Ref;",
+                    "",
+                    "State state{input[0]}; Ref alias=state; "
+                    "alias.value+=input[1]; output[0]=state.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "using-kernel-record-reference",
+                "struct State { int value; }; using Ref = State&; "
+                "__global__ void probe(Ref state, int* output) "
+                "{ output[0]=state.value; }",
+                "non-const kernel record reference",
+            ),
+            (
+                "using-rvalue-record-reference",
+                hip_record_probe_source(
+                    "struct State { int value; }; using Ref = State&&;",
+                    "",
+                    "State state{input[0]}; "
+                    "Ref alias=static_cast<State&&>(state); "
+                    "alias.value+=input[1]; output[0]=state.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "recursive-using-record-reference",
+                hip_record_probe_source(
+                    "struct State { int value; }; using Value = State; "
+                    "using Ref = Value&; using Alias = Ref;",
+                    "",
+                    "State state{input[0]}; Alias alias=state; "
+                    "alias.value+=input[1]; output[0]=state.value;",
+                ),
+                "non-const record reference",
+            ),
+            (
+                "external-char-record",
+                "struct State { char value; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].value; }",
+                "narrow integer storage",
+            ),
+            (
+                "external-aliased-byte-record",
+                "using Byte = unsigned char; struct State { Byte value; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].value; }",
+                "narrow integer storage",
+            ),
+            (
+                "external-short-record",
+                "struct State { short value; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].value; }",
+                "narrow integer storage",
+            ),
+            (
+                "external-narrow-array-record",
+                "struct State { unsigned short values[3]; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].values[2]; }",
+                "narrow integer storage",
+            ),
+            (
+                "external-narrow-enum-record",
+                "enum class Tiny : unsigned char { Zero=0, One=1 }; "
+                "struct State { Tiny value; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=int(states[1].value); }",
+                "narrow integer storage",
+            ),
+            (
+                "external-recursive-aliased-array-record",
+                "using Word = unsigned short; using Words = Word[2]; "
+                "struct Inner { Words values; }; struct State { Inner inner; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].inner.values[1]; }",
+                "narrow integer storage",
+            ),
+            (
+                "external-nested-std-array-narrow-record",
+                "#include <array>\n"
+                "struct State { "
+                "std::array<std::array<unsigned short, 2>, 2> values; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].values[0][0]; }",
+                "narrow integer storage",
+            ),
+            (
+                "external-generic-vector-narrow-record",
+                "template <typename T> struct vec2 { T x; T y; }; "
+                "struct State { vec2<short> value; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].value.x; }",
+                "narrow integer storage",
+            ),
+            (
+                "external-nested-std-array-bool-record",
+                "#include <array>\n"
+                "struct State { std::array<std::array<bool, 2>, 2> values; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].values[0][0] ? 1 : 0; }",
+                "bool storage",
+            ),
+            (
+                "external-signed-short-int-record",
+                "struct State { signed short int value; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].value; }",
+                "narrow integer storage",
+            ),
+            (
+                "external-reordered-narrow-integer-record",
+                "struct State { short unsigned int first; char signed second; }; "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].first+states[1].second; }",
+                "narrow integer storage",
+            ),
+            (
+                "external-postfix-aligned-record",
+                "struct State { int value; } __attribute__((aligned(16))); "
+                "__global__ void probe(const State* states, int* output) "
+                "{ output[0]=states[1].value; }",
+                "layout attribute",
+            ),
+            (
+                "local-postfix-aligned-record-control",
+                hip_record_probe_source(
+                    "struct State { int value; } " "__attribute__((aligned(16)));",
+                    "",
+                    "State state{}; state.value=input[0]; output[0]=state.value;",
+                ),
+                None,
+            ),
+            (
+                "const-reference-alias-control",
+                hip_record_probe_source(
+                    "struct State { int value; }; using Value = const State; "
+                    "using ConstRef = Value&;",
+                    "int read(ConstRef state) { return state.value; }",
+                    "State state{input[0]}; output[0]=read(state);",
+                ),
+                None,
+            ),
+        ],
+    )
+    def test_native_valid_aliased_record_references_and_narrow_external_abi(
+        self, tmp_path, name, source, feature
+    ):
+        source_path = tmp_path / f"{name}.hip"
+        source_path.write_text(source, encoding="utf-8")
+        clang = shutil.which("clang++")
+        if clang is not None:
+            native = subprocess.run(
+                [
+                    clang,
+                    "-x",
+                    "c++",
+                    "-std=c++17",
+                    "-Werror",
+                    "-D__global__=",
+                    "-fsyntax-only",
+                    str(source_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            assert native.returncode == 0, native.stderr
+
+        if feature is not None:
+            with pytest.raises(HipRecordSemanticError, match=feature):
+                translate(
+                    str(source_path),
+                    backend="directx",
+                    source_backend="hip",
+                    format_output=False,
+                )
+            return
+
+        hlsl = translate(
+            str(source_path),
+            backend="directx",
+            source_backend="hip",
+            format_output=False,
+        )
+        HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+        glslang = shutil.which("glslangValidator")
+        if glslang is None:
+            return
+        hlsl_path = tmp_path / f"{name}.hlsl"
+        spirv_path = tmp_path / f"{name}.spv"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        validation = subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                "-V",
+                str(hlsl_path),
+                "-o",
+                str(spirv_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        assert validation.returncode == 0, validation.stdout + validation.stderr
+        assert spirv_path.stat().st_size > 0
+
+    def test_native_valid_fixed_scalar_representation_queries_lower_to_constants(
+        self, tmp_path
+    ):
+        source = """
+        using Count = int;
+        __global__ void probe(int* output) {
+            int value = 7;
+            output[0] = int(
+                sizeof(bool) + sizeof(char) + sizeof(unsigned short) +
+                sizeof(int) + sizeof(long long) + sizeof(float) +
+                sizeof(double) + sizeof(Count) + sizeof(value) + alignof(float)
+            );
+        }
+        """
+        source_path = tmp_path / "fixed-scalar-representation-queries.hip"
+        source_path.write_text(source, encoding="utf-8")
+
+        clang = shutil.which("clang++")
+        if clang is not None:
+            native = subprocess.run(
+                [
+                    clang,
+                    "-x",
+                    "c++",
+                    "-std=c++17",
+                    "-Werror",
+                    "-D__global__=",
+                    "-fsyntax-only",
+                    str(source_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            assert native.returncode == 0, native.stderr
+
+        hlsl = translate(
+            str(source_path),
+            backend="directx",
+            source_backend="hip",
+            format_output=False,
+        )
+        assert "sizeof" not in hlsl
+        assert "alignof" not in hlsl
+        HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+
+        glslang = shutil.which("glslangValidator")
+        if glslang is None:
+            return
+        hlsl_path = tmp_path / "fixed-scalar-representation-queries.hlsl"
+        spirv_path = tmp_path / "fixed-scalar-representation-queries.spv"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        validation = subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                "-V",
+                str(hlsl_path),
+                "-o",
+                str(spirv_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        assert validation.returncode == 0, validation.stdout + validation.stderr
+        assert spirv_path.stat().st_size > 0

@@ -819,8 +819,7 @@ def test_native_hip_linear_pitch2d_resource_desc_edges_parse_and_compile_if_avai
         "linear_resource_desc.resType = hipResourceTypeLinear;",
         "linear_resource_desc.res.linear.devPtr = device;",
         "linear_resource_desc.res.linear.desc = channel_desc;",
-        "linear_resource_desc.res.linear.sizeInBytes = "
-        "(width_elems * sizeof(float));",
+        "linear_resource_desc.res.linear.sizeInBytes = " "(width_elems * 4);",
         "pitch_resource_desc.resType = hipResourceTypePitch2D;",
         "pitch_resource_desc.res.pitch2D.devPtr = device;",
         "pitch_resource_desc.res.pitch2D.desc = channel_desc;",
@@ -1049,14 +1048,14 @@ def test_native_hip_memory_lifecycle_parses_and_compiles_if_available(tmp_path):
     assert "// Function: memory_lifecycle" in crossgl
     assert "void memory_lifecycle(ptr<f32> host, u32 n)" in crossgl
     assert "var device: ptr<f32> = NULL;" in crossgl
-    assert "// HIP memory allocate: device, bytes: (n * sizeof(float))" in crossgl
-    assert "// HIP memory set: device, value: 0, bytes: (n * sizeof(float))" in crossgl
+    assert "// HIP memory allocate: device, bytes: (n * 4)" in crossgl
+    assert "// HIP memory set: device, value: 0, bytes: (n * 4)" in crossgl
     assert (
-        "// HIP memory copy: host -> device, bytes: (n * sizeof(float)), "
+        "// HIP memory copy: host -> device, bytes: (n * 4), "
         "kind: hipMemcpyHostToDevice"
     ) in crossgl
     assert (
-        "// HIP memory copy: device -> host, bytes: (n * sizeof(float)), "
+        "// HIP memory copy: device -> host, bytes: (n * 4), "
         "kind: hipMemcpyDeviceToHost"
     ) in crossgl
     assert "// HIP memory free: device" in crossgl
@@ -1108,30 +1107,29 @@ def test_native_hip_managed_async_memory_parses_and_compiles_if_available(
     assert "var attribute: hipMemRangeAttribute = hipMemRangeAttributeAccessedBy;" in (
         crossgl
     )
-    assert "// HIP memory allocate: managed, bytes: (n * sizeof(float))" in crossgl
+    assert "// HIP memory allocate: managed, bytes: (n * 4)" in crossgl
     assert (
-        "// HIP async memory allocate: async_ptr, bytes: (n * sizeof(float)), "
-        "stream: stream"
+        "// HIP async memory allocate: async_ptr, bytes: (n * 4), " "stream: stream"
     ) in crossgl
     assert (
-        "// HIP memory prefetch: pointer: managed, bytes: (n * sizeof(float)), "
+        "// HIP memory prefetch: pointer: managed, bytes: (n * 4), "
         "device: 0, stream: stream"
     ) in crossgl
     assert (
-        "// HIP memory advise: pointer: managed, bytes: (n * sizeof(float)), "
+        "// HIP memory advise: pointer: managed, bytes: (n * 4), "
         "advice: hipMemAdviseSetReadMostly, device: 0"
     ) in crossgl
     assert (
         "// HIP memory range get attribute: output: access_flags, "
         "output bytes: sizeof(access_flags), attribute: attribute, "
-        "pointer: managed, range bytes: (n * sizeof(float))"
+        "pointer: managed, range bytes: (n * 4)"
     ) in crossgl
     assert (
         "// HIP stream attach memory: stream: stream, pointer: managed, "
-        "bytes: (n * sizeof(float)), flags: hipMemAttachSingle"
+        "bytes: (n * 4), flags: hipMemAttachSingle"
     ) in crossgl
     assert (
-        "// HIP memory copy: host -> async_ptr, bytes: (n * sizeof(float)), "
+        "// HIP memory copy: host -> async_ptr, bytes: (n * 4), "
         "kind: hipMemcpyHostToDevice, stream: stream"
     ) in crossgl
     assert "// HIP async memory free: async_ptr, stream: stream" in crossgl
@@ -2598,7 +2596,7 @@ def test_native_hip_peer_access_copy_parses_and_compiles_if_available(tmp_path):
         "var peer_device: i32 = 1;",
         "var link_type: u32 = 0;",
         "var hop_count: u32 = 0;",
-        "var bytes: u32 = (n * sizeof(float));",
+        "var bytes: u32 = (n * 4);",
         "// HIP device can access peer: output: can_access, "
         "device: device, peer device: peer_device",
         "// HIP get P2P attribute: output: p2p_attribute, "
@@ -2661,13 +2659,13 @@ def test_native_hip_host_pinned_memory_parses_and_compiles_if_available(
     assert "var device: ptr<f32> = NULL;" in crossgl
     assert "var flags: u32 = 0;" in crossgl
     assert (
-        "// HIP host memory allocate: host, bytes: (n * sizeof(float)), "
+        "// HIP host memory allocate: host, bytes: (n * 4), "
         "flags: hipHostMallocMapped"
     ) in crossgl
     assert "// HIP host device pointer: output: device, host: host, flags: 0" in crossgl
     assert "// HIP host memory flags: output: flags, host: host" in crossgl
     assert (
-        "// HIP host memory register: registered, bytes: (n * sizeof(float)), "
+        "// HIP host memory register: registered, bytes: (n * 4), "
         "flags: hipHostRegisterMapped"
     ) in crossgl
     assert "// HIP host memory unregister: registered" in crossgl
@@ -2983,7 +2981,7 @@ def test_native_hip_pitched_array_memory_copy_parses_and_compiles_if_available(
     ) in crossgl
     assert "var pitched_device: ptr<f32> = NULL;" in crossgl
     assert "var pitch: u32 = 0;" in crossgl
-    assert "var width_bytes: u32 = (width_elems * sizeof(float));" in crossgl
+    assert "var width_bytes: u32 = (width_elems * 4);" in crossgl
     assert "var pitched_3d: hipPitchedPtr;" in crossgl
     assert "var array: ptr<void>;" in crossgl
     assert "var array_3d: ptr<void>;" in crossgl
@@ -3327,7 +3325,7 @@ def test_native_hip_driver_memory_memset_parses_and_compiles_if_available(
         "var attribute_data: ptr<void> = NULL;",
         "var pitch: u32 = 0;",
         "var range_bytes: u32 = 0;",
-        "var bytes: u32 = (n * sizeof(float));",
+        "var bytes: u32 = (n * 4);",
         "var pointer_attrs: hipPointerAttribute_t;",
         "var pointer_attribute: hipPointer_attribute = "
         "hipPointerAttributeMemoryType;",
@@ -3503,7 +3501,7 @@ def test_native_hip_stream_callback_launch_config_parses_and_compiles_if_availab
         "var block: vec3<u32> = vec3<u32>(32, 1, 1);",
         "var out_grid: vec3<u32> = vec3<u32>(1, 1, 1);",
         "var out_block: vec3<u32> = vec3<u32>(1, 1, 1);",
-        "var shared_mem: u32 = (sizeof(float) * 32);",
+        "var shared_mem: u32 = (4 * 32);",
         "var out_stream: hipStream_t;",
         "var value: i32 = 7;",
         "var offset: u32 = 0;",
@@ -3520,8 +3518,7 @@ def test_native_hip_stream_callback_launch_config_parses_and_compiles_if_availab
         "// HIP pop call configuration: grid output: out_grid, "
         "block output: out_block, shared memory output: shared_mem, "
         "stream output: out_stream",
-        "// HIP setup kernel argument: value: (&value), "
-        "bytes: sizeof(value), offset: offset",
+        "// HIP setup kernel argument: value: (&value), " "bytes: 4, offset: offset",
         "// Kernel launch: launch_config_kernel<<<grid, block, shared_mem, "
         "stream>>>()",
         "// Kernel launch: launch_config_kernel<<<grid, block, 0, stream>>>()",
