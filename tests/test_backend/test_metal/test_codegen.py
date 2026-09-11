@@ -1277,6 +1277,60 @@ def test_codegen_writable_c_array_parameter_preserves_aliasing():
     )
 
 
+def test_codegen_const_device_pointer_array_slots_round_trip_to_native_metal(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    inline void advance(const device bool* inputs[4]) {
+        inputs[1] += 1;
+    }
+
+    kernel void pointer_rows(
+        const device bool* input [[buffer(0)]],
+        device bool* output [[buffer(1)]]) {
+        const device bool* inputs[4];
+        inputs[0] = input;
+        inputs[1] = input + 1;
+        advance(inputs);
+        output[0] = inputs[0][0];
+    }
+    """
+
+    crossgl = convert(code)
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "const device bool* inputs[4];" in metal
+    assert "inputs[0] = input;" in metal
+    assert "inputs[1] = input + 1;" in metal
+    assert "inputs[1] += 1;" in metal
+    assert "unsupported Metal parameter store" not in metal
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        metal_path = tmp_path / "const-device-pointer-array.metal"
+        air_path = tmp_path / "const-device-pointer-array.air"
+        metal_path.write_text(metal, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(metal_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0
+
+
 def test_codegen_struct_method_receiver_directions_reach_native_targets():
     source = """
     struct NestedState { int value; };
@@ -5323,9 +5377,11 @@ def test_codegen_simdgroup_indices_from_public_pmetal_kernel():
                                    uint3 tid [[thread_position_in_threadgroup]],
                                    uint simd_lane_id [[thread_index_in_simdgroup]],
                                    uint simd_group_id [[simdgroup_index_in_threadgroup]],
-                                   uint simd_size [[threads_per_simdgroup]]) {
+                                   uint simd_size [[threads_per_simdgroup]],
+                                   uint simd_group_count [[simdgroups_per_threadgroup]]) {
         device const half* x_row = x + tid.x;
-        half value = *(x_row + simd_lane_id + simd_group_id + simd_size);
+        half value = *(x_row + simd_lane_id + simd_group_id + simd_size
+                       + simd_group_count);
     }
     """
     result = convert(code)
@@ -5333,9 +5389,11 @@ def test_codegen_simdgroup_indices_from_public_pmetal_kernel():
     assert "uint simd_lane_id @gl_SubgroupInvocationID" in result
     assert "uint simd_group_id @gl_SubgroupID" in result
     assert "uint simd_size @gl_SubgroupSize" in result
+    assert "uint simd_group_count @gl_NumSubgroups" in result
     assert "@thread_index_in_simdgroup" not in result
     assert "@simdgroup_index_in_threadgroup" not in result
     assert "@threads_per_simdgroup" not in result
+    assert "@simdgroups_per_threadgroup" not in result
     assert parse_crossgl(result) is not None
 
 
@@ -8644,6 +8702,85 @@ def test_codegen_reports_unresolved_auto_local_resource_overload():
     }
 
 
+def mlx_contextual_initializer_list_overload_source(
+    initializer,
+    *,
+    include_signed_vector=False,
+):
+    source = mlx_materialized_auto_local_overload_source().replace(
+        "uint3(vector_index.x, 0u, 0u)",
+        initializer,
+    )
+    if not include_signed_vector:
+        return source
+    signed_overload = """
+    int64_t elem_to_loc_int64_t(
+        int3 elem,
+        constant const int* shape,
+        constant const int64_t* strides,
+        int ndim) {
+      return int64_t(elem.x) + int64_t(shape[0]) + strides[0] + ndim;
+    }
+    """
+    return source.replace(
+        "    kernel void use_indices(",
+        signed_overload + "\n    kernel void use_indices(",
+    )
+
+
+def test_codegen_contextually_binds_braced_vector_source_overload():
+    source = mlx_contextual_initializer_list_overload_source("{vector_index.x, 0u, 0u}")
+
+    normalized = normalize(convert(source))
+
+    assert (
+        "int64 vector_value = elem_to_loc_int64_t__metal_overload_2("
+        "uvec3(vector_index.x, 0u, 0u), shape, strides, ndim);" in normalized
+    )
+    assert "elem_to_loc_int64_t({" not in normalized
+
+
+def test_codegen_rejects_braced_vector_source_overload_with_wrong_width():
+    source = mlx_contextual_initializer_list_overload_source("{vector_index.x, 0u}")
+
+    with pytest.raises(MetalSourceOverloadResolutionError) as exc_info:
+        convert(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.argument_types == ("<unknown>", "int*", "int64_t*", "int")
+    assert diagnostic.reason == (
+        "no source-compatible overload matches the inferred argument types"
+    )
+    assert set(diagnostic.candidates) == {
+        "elem_to_loc_int64_t(int64_t, constant const int*, "
+        "constant const int64_t*, int)",
+        "elem_to_loc_int64_t(uint3, constant const int*, "
+        "constant const int64_t*, int)",
+    }
+
+
+def test_codegen_reports_ambiguous_contextual_braced_vector_source_overload():
+    source = mlx_contextual_initializer_list_overload_source(
+        "{vector_index.x, 1, 2}",
+        include_signed_vector=True,
+    )
+
+    with pytest.raises(MetalSourceOverloadResolutionError) as exc_info:
+        convert(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.argument_types == ("<unknown>", "int*", "int64_t*", "int")
+    assert diagnostic.reason == (
+        "multiple source-compatible overloads remain after type matching"
+    )
+    assert set(diagnostic.candidates) == {
+        "elem_to_loc_int64_t(int3, constant const int*, "
+        "constant const int64_t*, int)",
+        "elem_to_loc_int64_t(uint3, constant const int*, "
+        "constant const int64_t*, int)",
+    }
+
+
 def metal_materialized_callable_array_auto_source():
     return """
     struct DivMod {
@@ -9216,6 +9353,54 @@ def test_codegen_auto_pointer_from_index_reaches_portable_target_offsets(tmp_pat
     )
 
 
+def test_codegen_static_constant_storage_round_trips_to_native_metal(tmp_path):
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct ReduceOp {
+        static constexpr constant int value = 7;
+
+        int operator()() const {
+            return *(&ReduceOp::value);
+        }
+    };
+
+    kernel void probe(device int* out [[buffer(0)]]) {
+        ReduceOp op;
+        constant int& direct(ReduceOp::value);
+        constant int& grouped((ReduceOp::value));
+        constant int& braced{ReduceOp::value};
+        out[0] = op() + direct + grouped + braced;
+    }
+    """
+
+    assert_metal_compute_validates_if_available(
+        source,
+        tmp_path,
+        "metal-addressed-static-constant",
+    )
+
+    crossgl = convert(source)
+    storage = "_crosstl_metal_static_ReduceOp_value"
+    assert f"constant int {storage} = 7;" in crossgl
+    assert "ReduceOp::value" not in crossgl
+    assert f"constant int& direct = {storage};" in crossgl
+    assert f"constant int& grouped = {storage};" in crossgl
+    assert f"constant int& braced = {storage};" in crossgl
+
+    regenerated = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert f"constant int {storage} = 7;" in regenerated
+    assert f"return *&{storage};" in regenerated
+    assert f"constant int& direct = {storage};" in regenerated
+    assert "&7" not in regenerated
+    assert_metal_compute_validates_if_available(
+        regenerated,
+        tmp_path,
+        "metal-addressed-static-constant-round-trip",
+    )
+
+
 @pytest.mark.parametrize(
     ("initializer", "operand_kind"),
     [
@@ -9603,6 +9788,69 @@ def test_metal_target_materializes_and_rebinds_aggregate_free_operator(tmp_path)
     assert f"Box_float result = {helper}(a, b);" in normalized_metal
     assert_metal_compute_validates_if_available(
         metal, tmp_path, "metal-materialized-free-operator"
+    )
+
+
+def test_codegen_preserves_builtin_aggregate_pointer_arithmetic(tmp_path):
+    source = """
+    struct Payload { float value; };
+
+    Payload crosstl_metal_operator_add__Payload__Payload(
+        Payload a, Payload b) {
+      return a;
+    }
+
+    kernel void index_payloads(
+        device Payload* values [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      device Payload* advanced = values + index;
+      device Payload* rewound = advanced - index;
+      output[index] = advanced[0].value + rewound[0].value;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized_crossgl = normalize(crossgl)
+    assert "device Payload* advanced = values + index;" in normalized_crossgl
+    assert "device Payload* rewound = advanced - index;" in normalized_crossgl
+    assert normalized_crossgl.count("crosstl_metal_operator_add__Payload__Payload") == 1
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    normalized_metal = normalize(metal)
+    assert "device Payload* advanced = values + index;" in normalized_metal
+    assert "device Payload* rewound = advanced - index;" in normalized_metal
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-aggregate-pointer-arithmetic"
+    )
+
+
+def test_codegen_rejects_nonintegral_aggregate_pointer_arithmetic():
+    source = """
+    struct Payload { float value; };
+
+    Payload crosstl_metal_operator_add__Payload__Payload(
+        Payload a, Payload b) {
+      return a;
+    }
+
+    kernel void invalid_pointer_offset(
+        device Payload* values [[buffer(0)]], float offset) {
+      device Payload* advanced = values + offset;
+    }
+    """
+
+    with pytest.raises(MetalSourceOverloadResolutionError) as exc_info:
+        convert_without_preprocessing(source)
+    error = exc_info.value
+    assert error.function_name == "operator +"
+    assert error.argument_types == ("Payload*", "float")
+    assert error.candidates == (
+        "crosstl_metal_operator_add__Payload__Payload(Payload, Payload)",
+    )
+    assert error.reason == (
+        "no source-compatible materialized free operator matches the inferred "
+        "argument types"
     )
 
 
@@ -14493,3 +14741,56 @@ def test_codegen_resolves_conditional_alias_before_constructor_selection():
     assert "Scale scale = crosstl_ctor_Scale_1(buffer_load(input, gid));" in result
     assert "ScaleType" not in result
     assert parse_crossgl(result) is not None
+
+
+def test_codegen_local_const_pointee_pointer_slot_address_round_trips_to_native_metal(
+    tmp_path,
+):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    inline void advance(const device bool* inputs[1]) {
+        inputs[0] += 1;
+    }
+
+    kernel void pointer_rows(
+        const device bool* input [[buffer(0)]],
+        device bool* output [[buffer(1)]]) {
+        const device bool* row = input;
+        advance(&row);
+        output[0] = row[0];
+    }
+    """
+
+    crossgl = convert(code)
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "advance((&row));" in crossgl
+    assert "advance(&row);" in metal
+    assert "unsupported Metal parameter call" not in metal
+    assert "inputs[0] += 1;" in metal
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        metal_path = tmp_path / "local-pointer-slot-address.metal"
+        air_path = tmp_path / "local-pointer-slot-address.air"
+        metal_path.write_text(metal, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(metal_path),
+                "-o",
+                str(air_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert air_path.stat().st_size > 0

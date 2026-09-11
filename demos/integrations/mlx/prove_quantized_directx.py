@@ -73,7 +73,7 @@ GENERATED_ARTIFACTS = {
         "sizeBytes": 4357,
     },
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
-        "sha256": "c64564b5705aa9ef16769c0d0ffda26a8852399d63460079cd449fe71323b5de",
+        "sha256": "654e2788b4b1cf202ddfad3b4d90f6d933853e9e857e0e5fffd6cd41fae8a3b6",
         "sizeBytes": 16359,
     },
 }

@@ -761,6 +761,40 @@ module. This closes complete discovered-binary DirectX translation, reflection,
 and native compiler coverage; it does not claim numerical execution, MLX
 host-runtime redirection, or MLX test-suite parity.
 
+The current-pinned MLX reduction integration independently proves all 2,396
+host-named entries from ``reduce.metal`` through Metal-to-CrossGL-to-Metal
+translation. Three base forms plus six multidimensional families across two
+index widths and three dimension counts produce 39 exact ABI shapes over nine
+kernel templates. The family spans six operator families, 44 concrete operator
+types, and 13 input/output types. Its compact schema-v2 contract stores only
+per-entry classification, artifact identity and size, exact materialization
+identity/count, and exact resource identity/count; transient proof rows,
+translation reports, and AIR objects are not tracked.
+
+The complete reflected interface contains 25,088 resources across exact one-
+through twelve-resource ABIs and retains the host-owned ``[1, 1, 1]`` workgroup
+contract. Comparison-aware template parsing preserves non-type expressions such
+as ``(1 > 2)``; proven integral non-type arguments are folded for overload
+selection without changing source-spelled specialization identity. Visible
+aliases and raw pointer base spellings normalize only to proven concrete types,
+and native pointer-plus/minus-integral expressions bypass aggregate free-
+operator dispatch only when built-in semantics are type-proven. Concrete-helper
+deduplication ignores comments and external whitespace while retaining exact
+preprocessing-token literal bytes. Compile-time static members used by
+references, address-taking, receivers, or unevaluated storage-sensitive
+expressions are hoisted into address-space-correct Metal ``constant`` storage
+instead of being substituted as rvalues. Ambiguous aliases, unresolved address
+provenance, non-integral offsets, and incompatible overloads remain fail-closed.
+
+Required macOS CI uses 24 disjoint shards: 20 contain 100 entries and four
+contain 99. Every shard verifies deterministic identity, materialization,
+workgroup metadata, and reflected ABI before warning-fatal compilation with
+``xcrun -sdk macosx metal -Werror -c``. All 2,396 AIR objects must be non-empty.
+This closes complete discovered-reduce translation, reflection, and native
+compiler coverage; it does not claim Metal numerical execution, DirectX or
+OpenGL whole-family coverage, MLX host-runtime redirection, or MLX test-suite
+parity.
+
 OpenGL Software Subgroup Specialization
 ----------------------------------------
 

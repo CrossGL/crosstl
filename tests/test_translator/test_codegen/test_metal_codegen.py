@@ -2600,6 +2600,56 @@ def test_metal_relative_shuffle_intrinsics_round_trip_to_simd_shuffle():
     assert "WaveShuffle" not in generated_code
 
 
+def test_metal_relative_shuffle_result_type_supports_nested_bitcast():
+    shader = """
+    shader MetalRelativeShuffleBitcast {
+        uint64 simd_shuffle_down(uint64 data, uint16 delta) {
+            return as_type<uint64>(
+                WaveShuffleDown(as_type<uvec2>(data), delta));
+        }
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "as_type<uint64_t>(metal::simd_shuffle_down(" in generated_code
+    assert "as_type<uint2>(data)" in generated_code
+    assert "WaveShuffleDown" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_else_if_chain_preserves_all_nested_branches():
+    shader = """
+    shader MetalNestedElseIf {
+        float choose(bool first, bool second, bool third) {
+            if (first) {
+                return 1.0;
+            } else if (second) {
+                return 2.0;
+            } else if (third) {
+                return 3.0;
+            } else {
+                return 4.0;
+            }
+        }
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "} else if (second) {" in generated_code
+    assert "} else if (third) {" in generated_code
+    assert "} else {" in generated_code
+    assert generated_code.count("return ") == 4
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_shuffle_and_fill_up_lowers_boolean_payloads():
     shader = """
     shader MetalBooleanShuffleAndFill {
@@ -2793,6 +2843,79 @@ def test_metal_wave_lane_builtins_use_compute_stage_parameters():
     assert "uint count = simdCount;" in generated_code
     assert "crossglWaveLaneIndex" not in generated_code
     assert "crossglWaveLaneCount" not in generated_code
+
+
+def test_metal_subgroup_index_and_count_builtins_use_compute_parameters():
+    implicit_shader = """
+    shader MetalSubgroupIndexAndCount {
+        compute {
+            void main() {
+                uint subgroup = gl_SubgroupID;
+                uint subgroupCount = gl_NumSubgroups;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(implicit_shader)))
+
+    assert (
+        "uint simdgroup_index_in_threadgroup "
+        "[[simdgroup_index_in_threadgroup]]" in generated_code
+    )
+    assert (
+        "uint simdgroups_per_threadgroup [[simdgroups_per_threadgroup]]"
+        in generated_code
+    )
+    assert "uint subgroup = simdgroup_index_in_threadgroup;" in generated_code
+    assert "uint subgroupCount = simdgroups_per_threadgroup;" in generated_code
+    assert "gl_SubgroupID" not in generated_code
+    assert "gl_NumSubgroups" not in generated_code
+
+    explicit_shader = """
+    shader MetalExplicitSubgroupIndexAndCount {
+        compute {
+            void main(uint subgroup @ gl_SubgroupID,
+                      uint subgroupCount @ gl_NumSubgroups) {
+                uint combined = subgroup + subgroupCount;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(explicit_shader)))
+
+    assert "uint subgroup [[simdgroup_index_in_threadgroup]]" in generated_code
+    assert "uint subgroupCount [[simdgroups_per_threadgroup]]" in generated_code
+    assert "uint combined = subgroup + subgroupCount;" in generated_code
+    assert "gl_SubgroupID" not in generated_code
+    assert "gl_NumSubgroups" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("semantic", "metal_semantic"),
+    (
+        ("gl_SubgroupID", "simdgroup_index_in_threadgroup"),
+        ("gl_NumSubgroups", "simdgroups_per_threadgroup"),
+    ),
+)
+def test_metal_subgroup_index_and_count_require_uint(semantic, metal_semantic):
+    shader = f"""
+    shader MetalInvalidSubgroupBuiltin {{
+        compute {{
+            void main(float value @ {semantic}) {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"Metal compute semantic '{semantic}'.*'{metal_semantic}'.*"
+            r"type uint, got float"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_metal_wave_lane_builtins_thread_through_compute_helpers():
@@ -4400,6 +4523,54 @@ def test_metal_const_threadgroup_pointer_alias_rejects_writes_and_mutable_calls(
     assert "mutate(alias);" not in generated_code
 
 
+def test_metal_const_pointee_pointer_values_can_rebind_and_advance():
+    shader = """
+    shader MetalConstPointeePointerValue {
+        void advance(const float* cursor, const float* replacement) {
+            cursor = replacement;
+            cursor += 1;
+            cursor++;
+            cursor[0] = 3.0;
+        }
+
+        void advanceLocal(const float* source, const float* replacement) {
+            const float* cursor = source;
+            cursor = replacement;
+            cursor += 1;
+            cursor++;
+            cursor[0] = 4.0;
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert (
+        "void advance(const thread float* cursor, "
+        "const thread float* replacement)" in generated_code
+    )
+    assert "const thread float* cursor = source;" in generated_code
+    assert generated_code.count("cursor = replacement;") == 2
+    assert generated_code.count("cursor += 1;") == 2
+    assert generated_code.count("cursor++;") == 2
+    assert (
+        "/* unsupported Metal parameter store: parameter 'cursor' is "
+        "const-qualified */"
+    ) in generated_code
+    assert (
+        "/* unsupported Metal parameter store: parameter 'cursor' is "
+        "const-qualified local alias */"
+    ) in generated_code
+    assert "cursor[0] = 3.0;" not in generated_code
+    assert "cursor[0] = 4.0;" not in generated_code
+
+
 def test_metal_readonly_device_pointer_alias_rejects_writes_and_mutable_calls():
     shader = """
     shader MetalReadonlyDeviceAlias {
@@ -5164,6 +5335,26 @@ def test_metal_user_defined_inverse_function_is_preserved():
     assert "__crossgl_inverse_float2x2" not in generated_code
 
 
+def test_metal_signed_int64_minimum_literal_compiles_warning_fatal():
+    shader = """
+    shader SignedInt64Minimum {
+        compute {
+            void main(RWStructuredBuffer<int64_t> output @buffer(0)) {
+                output[0] = int64_t(-9223372036854775808);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "int64_t((-9223372036854775807L - 1L))" in generated_code
+    assert "-9223372036854775808" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_fixed_width_scalar_aliases_map_to_valid_metal_scalars():
     shader = """
     shader FixedWidthScalarAliasSmoke {
@@ -5274,6 +5465,80 @@ def test_metal_fixed_width_scalar_aliases_map_to_valid_metal_scalars():
         "ulong ",
     ):
         assert invalid_token not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source_type", "expected_type"),
+    (
+        ("bfloat16_t*", "bfloat*"),
+        ("float16_t*", "half*"),
+        ("int8*", "int*"),
+        ("int16*", "int*"),
+        ("int64*", "int64_t*"),
+        ("uint8*", "uint*"),
+        ("uint16*", "uint*"),
+        ("uint64*", "uint64_t*"),
+    ),
+)
+def test_metal_imported_pointer_text_maps_underlying_scalar_type(
+    source_type,
+    expected_type,
+):
+    codegen = MetalCodeGen()
+    codegen.metal_type_aliases = {
+        "bfloat16_t": PrimitiveType("bfloat16"),
+        "float16_t": PrimitiveType("f16"),
+    }
+
+    assert codegen.map_type(source_type) == expected_type
+
+
+def test_metal_imported_local_pointer_scalars_compile_with_native_spellings():
+    shader = """
+    shader ImportedLocalPointerScalars {
+        typedef bfloat16 bfloat16_t;
+        typedef f16 float16_t;
+
+        compute {
+            void main() {
+                const device bfloat16_t* bfloatRow;
+                const device float16_t* halfRow;
+                const device int8* byteRow;
+                const device int16* shortRow;
+                const device int64* longRow;
+                const device uint8* ubyteRow;
+                const device uint16* ushortRow;
+                const device uint64* ulongRow;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    for declaration in (
+        "const device bfloat* bfloatRow;",
+        "const device half* halfRow;",
+        "const device int* byteRow;",
+        "const device int* shortRow;",
+        "const device int64_t* longRow;",
+        "const device uint* ubyteRow;",
+        "const device uint* ushortRow;",
+        "const device uint64_t* ulongRow;",
+    ):
+        assert declaration in generated_code
+    for invalid_type in (
+        "bfloat16_t*",
+        "float16_t*",
+        "int8*",
+        "int16*",
+        "int64*",
+        "uint8*",
+        "uint16*",
+        "uint64*",
+    ):
+        assert invalid_type not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():

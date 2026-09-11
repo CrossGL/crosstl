@@ -14646,6 +14646,147 @@ def test_plain_metal_helper_materialization_recovers_commented_function_boundary
     assert "uint3 elem" not in materialized.split("uint elem_to_loc_uint(", 1)[1]
 
 
+def test_plain_metal_helper_contextually_selects_explicit_braced_vector_overload():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename IdxT = int64_t>
+        IdxT elem_to_loc(
+            IdxT elem,
+            constant const int* shape,
+            constant const int64_t* strides,
+            int ndim) {
+          return elem + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+        }
+
+        template <typename IdxT = int64_t>
+        IdxT elem_to_loc(
+            uint3 elem,
+            constant const int* shape,
+            constant const int64_t* strides,
+            int ndim) {
+          return IdxT(elem.x) + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+        }
+
+        kernel void launch(
+            device int* output [[buffer(0)]],
+            constant const int* shape [[buffer(1)]],
+            constant const int64_t* strides [[buffer(2)]],
+            uint3 index [[thread_position_in_grid]]) {
+          output[index.x] = elem_to_loc<int>(
+              {index.x, index.y, index.z}, shape, strides, 3);
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {"elem_to_loc"}
+    assert records == [
+        {
+            "name": "elem_to_loc",
+            "materializedName": "elem_to_loc_int",
+            "parameters": {"IdxT": "int"},
+            "parameterSources": {"IdxT": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    assert materialized_names == {
+        (
+            "elem_to_loc",
+            ("int",),
+            ("uint3", "constant const int*", "constant const int64_t*", "int"),
+        ): "elem_to_loc_int"
+    }
+    assert "elem_to_loc_int( {index.x, index.y, index.z}, shape, strides, 3)" in (
+        " ".join(materialized.split())
+    )
+    assert "int elem_to_loc_int( uint3 elem," in " ".join(materialized.split())
+    assert "int elem_to_loc_int( int elem," not in " ".join(materialized.split())
+
+
+def test_plain_metal_helper_rejects_aggregate_braced_vector_component():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        struct complex64_t {
+          float real;
+          float imag;
+        };
+
+        template <typename IdxT = int64_t>
+        IdxT elem_to_loc(
+            IdxT elem,
+            constant const int* shape,
+            constant const int64_t* strides,
+            int ndim) {
+          return elem + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+        }
+
+        template <typename IdxT = int64_t>
+        IdxT elem_to_loc(
+            uint3 elem,
+            constant const int* shape,
+            constant const int64_t* strides,
+            int ndim) {
+          return IdxT(elem.x) + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+        }
+
+        kernel void launch(
+            device int* output [[buffer(0)]],
+            constant const int* shape [[buffer(1)]],
+            constant const int64_t* strides [[buffer(2)]]) {
+          complex64_t value;
+          output[0] = elem_to_loc<int>({value, 0u, 0u}, shape, strides, 3);
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert records == []
+    assert completed_names == set()
+    assert materialized_names == {}
+    assert "elem_to_loc<int>({value, 0u, 0u}, shape, strides, 3)" in materialized
+    assert "elem_to_loc_int" not in materialized
+
+
+def test_plain_metal_helper_explicit_binding_rejects_pointer_conversion():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename T>
+        void write_value(device T* output, T value) {
+          output[0] = value;
+        }
+
+        void launch(device uint* output) {
+          write_value<int>(output, 1);
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert records == []
+    assert completed_names == set()
+    assert materialized_names == {}
+    assert "write_value<int>(output, 1)" in materialized
+    assert "write_value_int" not in materialized
+
+
 def test_source_instantiated_metal_kernel_selects_overloaded_helper_by_signature(
     tmp_path: Path,
 ) -> None:
@@ -14731,6 +14872,252 @@ output_dir = "out"
     assert "int64_t elem_to_loc_int64_t(int64_t elem," in generated
     assert "elem_to_loc_int64_t(row_idx," in generated
     assert "uint3 elem" not in generated
+
+
+def test_source_instantiated_metal_kernel_selects_fully_explicit_three_way_helper_overload(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    (project_root / "reduce.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+            #define METAL_FUNC inline
+
+            struct AndBool {};
+
+            template <typename T, typename U, typename Op,
+                      int N_READS = 4, int N_WRITES = 4>
+            METAL_FUNC void per_thread_row_reduce(
+                thread U totals[N_WRITES],
+                const device T* inputs[N_WRITES],
+                int blocks,
+                int extra,
+                uint lsize_x,
+                uint lid_x) {
+              totals[0] = inputs[0][0];
+            }
+
+            template <typename T, typename U, typename Op,
+                      int N_READS = 4, int N_WRITES = 4>
+            METAL_FUNC void per_thread_row_reduce(
+                thread U totals[N_WRITES],
+                const device T* in,
+                const constant size_t& reduction_size,
+                int blocks,
+                int extra,
+                uint lsize_x,
+                uint lid_x) {
+              const device T* inputs[N_WRITES];
+              inputs[0] = in + reduction_size - reduction_size;
+              per_thread_row_reduce<T, U, Op, N_READS, N_WRITES>(
+                  totals, inputs, blocks, extra, lsize_x, lid_x);
+            }
+
+            template <typename T, typename U, typename Op,
+                      int N_READS = 4, int N_WRITES = 4>
+            METAL_FUNC void per_thread_row_reduce(
+                thread U totals[N_WRITES],
+                const device T* in,
+                const int64_t row_idx,
+                int blocks,
+                int extra,
+                const constant int* shape,
+                const constant int64_t* strides,
+                const constant int& ndim,
+                uint lsize_x,
+                uint lid_x) {
+              totals[0] = in[row_idx + shape[ndim - 1] + strides[0]];
+            }
+
+            template <typename T>
+            [[kernel]] void row_reduce_simple(
+                const device T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                const constant size_t& reduction_size [[buffer(2)]],
+                uint lid [[thread_position_in_threadgroup]],
+                uint lsize [[threads_per_threadgroup]]) {
+              T totals[4];
+              per_thread_row_reduce<T, T, AndBool, 4, 4>(
+                  totals, in, reduction_size, 1, 1, lsize, lid);
+              out[0] = totals[0];
+            }
+
+            template [[host_name("row_reduce_simple_bool")]] [[kernel]]
+            decltype(row_reduce_simple<bool>) row_reduce_simple<bool>;
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (project_root / "crosstl.toml").write_text(
+        """[project]
+include = ["reduce.metal"]
+targets = ["metal"]
+output_dir = "out"
+
+[project.sources]
+"**/*.metal" = "metal"
+""",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(project_root),
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    helpers = [
+        record
+        for record in artifact["templateMaterialization"]["specializations"]
+        if record["name"] == "per_thread_row_reduce"
+    ]
+    assert len(helpers) == 2
+    assert len({record["materializedName"] for record in helpers}) == 2
+
+    generated = (project_root / artifact["path"]).read_text(encoding="utf-8")
+    contiguous_name = min(
+        (record["materializedName"] for record in helpers),
+        key=len,
+    )
+    assert f"{contiguous_name}(totals, in_, reduction_size," in generated
+    assert "constant uint64_t& reduction_size" in generated
+    assert "int64_t row_idx" not in generated
+    assert "constant int* shape" not in generated
+    assert "unsupported Metal parameter store" not in generated
+
+
+def test_source_instantiated_metal_kernel_materializes_unique_partial_object_helper(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    (project_root / "reduce.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename IdxT = int64_t>
+            IdxT elem_to_loc(
+                IdxT elem,
+                const constant int* shape,
+                const constant int64_t* strides,
+                int ndim) {
+              return elem + IdxT(shape[0]) + IdxT(strides[0]) + IdxT(ndim);
+            }
+
+            template <typename IdxT = int64_t>
+            IdxT elem_to_loc(
+                uint3 elem,
+                const constant int* shape,
+                const constant int64_t* strides,
+                int ndim) {
+              return IdxT(elem.x) + IdxT(shape[0]) + IdxT(strides[0]);
+            }
+
+            template <int Dim, typename OffsetT = size_t, bool General = true>
+            struct Loop {
+              OffsetT offset{0};
+              Loop(int) thread {}
+              void next(
+                  const constant int*,
+                  const constant int64_t*) thread {}
+            };
+
+            template <typename OffsetT>
+            struct Loop<1, OffsetT, true> {
+              int dim;
+              OffsetT offset{0};
+              uint index{0};
+
+              Loop(int dim) thread : dim(dim) {}
+
+              void next(
+                  const constant int* shape,
+                  const constant int64_t* strides) thread {
+                index++;
+                if (dim > 1) {
+                  offset = elem_to_loc<OffsetT>(index, shape, strides, dim);
+                }
+              }
+
+              OffsetT location() thread { return offset; }
+            };
+
+            template <typename IdxT>
+            [[kernel]] void row_reduce_small(
+                const constant int* shape [[buffer(0)]],
+                const constant int64_t* strides [[buffer(1)]],
+                device IdxT* out [[buffer(2)]],
+                int ndim [[buffer(3)]]) {
+              Loop<1, IdxT, true> loop(ndim);
+              loop.next(shape, strides);
+              out[0] = loop.location();
+            }
+
+            template [[host_name("row_reduce_small_int")]] [[kernel]]
+            decltype(row_reduce_small<int>) row_reduce_small<int>;
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (project_root / "crosstl.toml").write_text(
+        """[project]
+include = ["reduce.metal"]
+targets = ["metal"]
+output_dir = "out"
+
+[project.sources]
+"**/*.metal" = "metal"
+
+[project.entry_points]
+"reduce.metal" = "row_reduce_small_int"
+""",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(project_root),
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    materialization = artifact["templateMaterialization"]
+    assert materialization["unsupported"] == []
+    helpers = [
+        record
+        for record in materialization["specializations"]
+        if record["name"] == "elem_to_loc"
+    ]
+    assert helpers == [
+        {
+            "name": "elem_to_loc",
+            "materializedName": "elem_to_loc_int",
+            "parameters": {"IdxT": "int"},
+            "parameterSources": {"IdxT": "call-site"},
+            "source": "call-site",
+        }
+    ]
+
+    generated = (project_root / artifact["path"]).read_text(encoding="utf-8")
+    assert "struct Loop_1_int_true" in generated
+    assert "self.index++;" in generated
+    assert (
+        "self.offset = elem_to_loc_int(self.index, shape, strides, self.dim);"
+        in generated
+    )
+    assert "return self.offset;" in generated
+    assert "int elem_to_loc_int(int elem," in generated
+    assert "elem_to_loc_int64_t" not in generated
+    assert "uint3 elem" not in generated
+    assert "template <" not in generated
+    assert not re.search(r"\b(?:IdxT|OffsetT)\b", generated)
+    assert "unsupported Metal parameter store" not in generated
 
 
 def test_metal_device_scalar_reference_entry_resource_lowers_to_opengl_buffer(
@@ -14969,6 +15356,35 @@ def test_metal_template_type_binding_verifies_omitted_struct_defaults():
         template_structs_by_name={"Tile": tile_declaration},
     )
     assert custom_bindings == {}
+
+
+def test_metal_expression_type_infers_nested_index_elements():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+    environment = {
+        "inputs": "const device bool*[4]",
+        "vectors": "thread float4[2]",
+    }
+
+    assert (
+        project_pipeline._metal_expression_type(
+            preprocessor,
+            "inputs[j][i]",
+            environment,
+            {},
+        )
+        == "bool"
+    )
+    assert (
+        project_pipeline._metal_expression_type(
+            preprocessor,
+            "vectors[outer][lane]",
+            environment,
+            {},
+        )
+        == "float"
+    )
 
 
 def test_metal_expression_type_infers_vector_components():
@@ -50453,6 +50869,63 @@ def test_translate_project_metal_struct_method_diagnostic_uses_call_location(
     )
 
 
+def test_translate_project_metal_postincremented_pointer_functor_compiles(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct Max {
+          template <typename T>
+          metal::enable_if_t<metal::is_integral_v<T>, T> operator()(
+              T a, T b) thread {
+            return a > b ? a : b;
+          }
+
+          template <typename T>
+          metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(
+              T a, T b) thread {
+            return a > b ? a : b;
+          }
+        };
+
+        kernel void reduce(
+            const device float* row [[buffer(0)]],
+            device float* out [[buffer(1)]]) {
+          Max op;
+          float total = row[0];
+          total = op(*row++, total);
+          out[0] = total;
+        }
+        """).strip()
+    (repo / "reduce.metal").write_text(source, encoding="utf-8")
+
+    payload = translate_project(
+        repo,
+        targets=["metal"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert generated.count("row++") == 1
+    assert "Max__operator_call__float" in generated
+    assert "op(*row" not in generated
+    assert_metal_validates_if_available(
+        generated,
+        tmp_path,
+        warnings_as_errors=True,
+    )
+
+
 def test_translate_project_reports_unrepresentable_metal_constructor_details(
     tmp_path,
 ):
@@ -58698,3 +59171,217 @@ def test_translate_project_reports_metal_registered_structure_conversion_failure
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+
+
+def test_metal_project_helper_infers_explicit_address_space_pointer_dereference(
+    tmp_path,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+    assert (
+        project_pipeline._metal_expression_type(
+            preprocessor,
+            "*row",
+            {"row": "const device bool*"},
+            {},
+        )
+        == "bool"
+    )
+    assert (
+        project_pipeline._metal_expression_type(
+            preprocessor,
+            "*row",
+            {"row": "bool*"},
+            {},
+        )
+        is None
+    )
+    assert (
+        project_pipeline._metal_expression_type(
+            preprocessor,
+            "**row",
+            {"row": "const device bool**"},
+            {},
+        )
+        is None
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "reduce.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename U, typename T>
+            inline U cast_to(T value) {
+                return static_cast<U>(value);
+            }
+
+            template <typename T, typename U>
+            kernel void reduce(
+                const device T* in [[buffer(0)]],
+                device U* out [[buffer(1)]]) {
+                const device T* row = in;
+                out[0] = cast_to<U>(*row);
+            }
+
+            instantiate_kernel("reduce_bool", reduce, bool, bool)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["metal"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["translatedCount"] == 1
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "bool cast_to_bool_bool(bool value)" in generated
+    assert "cast_to<bool>" not in generated
+    assert_metal_validates_if_available(
+        generated,
+        tmp_path,
+        warnings_as_errors=True,
+    )
+
+
+def test_metal_concrete_function_fingerprints_preserve_literal_token_bytes():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+
+    def fingerprints(source: str):
+        return project_pipeline._metal_concrete_function_definition_fingerprints(
+            preprocessor,
+            source,
+        )
+
+    assert fingerprints("int helper(int x) { return x + int('a'); }") != fingerprints(
+        "int helper(int x) { return x + int('b'); }"
+    )
+    assert fingerprints('const char* helper() { return "a b"; }') != fingerprints(
+        'const char* helper() { return "a  b"; }'
+    )
+    assert fingerprints("int helper(int x = int('a')) { return x; }") != fingerprints(
+        "int helper(int x = int('b')) { return x; }"
+    )
+
+
+def test_metal_concrete_function_fingerprints_normalize_comments_and_formatting():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    compact = "int helper(int x){return x+int('a');}"
+    formatted = textwrap.dedent("""
+        int helper (
+            int x
+        ) {
+            // Formatting-only comment.
+            return x /* separator */ + int ( 'a' ) ;
+        }
+        """)
+
+    preprocessor = MetalPreprocessor()
+    assert project_pipeline._metal_concrete_function_definition_fingerprints(
+        preprocessor,
+        compact,
+    ) == project_pipeline._metal_concrete_function_definition_fingerprints(
+        preprocessor,
+        formatted,
+    )
+
+
+def test_metal_project_default_overload_does_not_duplicate_inferred_definition(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "overloaded.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename IdxT = int64_t>
+            IdxT elem_to_loc(
+                IdxT elem,
+                constant int* shape,
+                constant int64_t* strides,
+                int ndim) {
+                return elem + IdxT(shape[ndim - 1]) + IdxT(strides[0]);
+            }
+
+            template <typename IdxT = int64_t>
+            IdxT elem_to_loc(
+                uint3 elem,
+                constant int* shape,
+                constant int64_t* strides,
+                int ndim) {
+                return IdxT(elem.x) + IdxT(shape[ndim - 1]) + IdxT(strides[0]);
+            }
+
+            struct Locator {
+                int64_t index;
+
+                int64_t location(
+                    constant int* shape,
+                    constant int64_t* strides,
+                    int ndim) const {
+                    return elem_to_loc<int64_t>(index, shape, strides, ndim);
+                }
+            };
+
+            template <typename T>
+            kernel void locate(
+                device T* out [[buffer(0)]],
+                constant int* shape [[buffer(1)]],
+                constant int64_t* strides [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]) {
+                Locator locator;
+                locator.index = int64_t(gid);
+                out[0] = T(
+                    locator.location(shape, strides, 1) +
+                    elem_to_loc<int64_t>(
+                        gid > 0 ? int64_t(gid) : int64_t(0),
+                        shape,
+                        strides,
+                        1));
+            }
+
+            instantiate_kernel("locate_int64", locate, int64_t)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["metal"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    signatures = re.findall(
+        r"\b(?:int64_t|long)\s+elem_to_loc_int64_t\s*\(\s*"
+        r"(?P<first>int64_t|long|uint3)\s+elem",
+        generated,
+    )
+    assert signatures == ["int64_t"]
+    elem_specializations = [
+        record
+        for record in artifact["templateMaterialization"]["specializations"]
+        if record["name"] == "elem_to_loc"
+    ]
+    assert len(elem_specializations) == 2
+    assert_metal_validates_if_available(
+        generated,
+        tmp_path,
+        warnings_as_errors=True,
+    )

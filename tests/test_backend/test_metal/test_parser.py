@@ -19,6 +19,7 @@ from crosstl.backend.common_ast import (
     RangeForNode,
     TextureSampleNode,
     UnaryOpNode,
+    VariableNode,
     VectorConstructorNode,
     WhileNode,
 )
@@ -2829,6 +2830,30 @@ def test_parse_direct_list_declaration_initializers_from_book_of_shaders_metal()
     assert isinstance(body[0].right, InitializerListNode)
     assert [node.left.name for node in body[1:3]] == ["st", "offset"]
     assert all(isinstance(node.right, InitializerListNode) for node in body[1:3])
+
+
+def test_parse_reference_direct_initializers_as_bound_expressions():
+    code = """
+    constant int stored_value = 7;
+
+    kernel void bind_references(device int* output [[buffer(0)]]) {
+        constant int& parenthesized(stored_value);
+        constant int& grouped((stored_value));
+        constant int& braced{stored_value};
+        output[0] = parenthesized + grouped + braced;
+    }
+    """
+
+    ast = parse_ok(code)
+    bindings = ast.functions[0].body[:3]
+
+    assert [binding.left.vtype for binding in bindings] == ["int&", "int&", "int&"]
+    assert all(isinstance(binding.right, VariableNode) for binding in bindings)
+    assert [binding.right.name for binding in bindings] == [
+        "stored_value",
+        "stored_value",
+        "stored_value",
+    ]
 
 
 def test_parse_standalone_scoped_block_from_llama_cpp():

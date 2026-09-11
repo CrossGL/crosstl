@@ -2425,6 +2425,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         "mlx-unary-metal-roundtrip",
         "mlx-binary-complete-metal-roundtrip",
         "mlx-copy-complete-metal-roundtrip",
+        "mlx-reduce-complete-metal-roundtrip",
     ):
         metal_job = _workflow_job_section(mlx_porting, metal_job_name)
         assert "xcrun --sdk macosx metal --version" in metal_job
@@ -5016,5 +5017,59 @@ def test_mlx_project_porting_workflow_runs_copy_complete_metal_proof():
     assert mlx_porting.count(f'- "{test_path}"') == 2
     matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
     assert "Prove current MLX complete copy family Metal round-trips" not in (
+        matrix_job
+    )
+
+
+def test_mlx_project_porting_workflow_runs_reduce_complete_metal_proof():
+    mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+    test_path = "tests/test_translator/test_mlx_reduce_complete_metal_roundtrip.py"
+
+    reduce_metal_job = _workflow_job_section(
+        mlx_porting,
+        "mlx-reduce-complete-metal-roundtrip",
+    )
+    assert (
+        "name: MLX complete reduce Metal round-trip "
+        "(shard ${{ matrix.shard_index }} of 24)" in reduce_metal_job
+    )
+    assert "if: github.event_name != 'schedule'" in reduce_metal_job
+    assert "runs-on: macOS-latest" in reduce_metal_job
+    assert "timeout-minutes: 180" in reduce_metal_job
+    assert "fail-fast: false" in reduce_metal_job
+    assert _matrix_values(reduce_metal_job, "shard_index") == {
+        str(index) for index in range(24)
+    }
+    assert 'python-version: "3.12"' in reduce_metal_job
+    assert "python -m pip install -e . pytest-xdist" in reduce_metal_job
+    assert "xcrun --sdk macosx metal --version" in reduce_metal_job
+    assert "Checkout current MLX reduce corpus" in reduce_metal_job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_metal_job
+
+    reduce_metal_step = ci_coverage.workflow_step_section(
+        reduce_metal_job,
+        "Prove current MLX complete reduce family Metal round-trips",
+    )
+    assert "if: runner.os" not in reduce_metal_step
+    assert (
+        "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream"
+        in reduce_metal_step
+    )
+    assert 'CROSTL_REQUIRE_MLX_REDUCE_METAL_ROUNDTRIP: "1"' in reduce_metal_step
+    assert (
+        "CROSTL_MLX_REDUCE_METAL_SHARD_INDEX: ${{ matrix.shard_index }}"
+        in reduce_metal_step
+    )
+    assert 'CROSTL_MLX_REDUCE_METAL_SHARD_COUNT: "24"' in reduce_metal_step
+    assert (
+        f"{test_path}::test_current_mlx_reduce_family_roundtrips_through_metal"
+        in reduce_metal_step
+    )
+    assert "-n auto" in reduce_metal_step
+    assert "-k" not in reduce_metal_step
+    assert mlx_porting.count(f'- "{test_path}"') == 2
+    matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
+    assert "Prove current MLX complete reduce family Metal round-trips" not in (
         matrix_job
     )
