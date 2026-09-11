@@ -17770,6 +17770,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or (binding or {}).get("address_space")
             or "storage"
         )
+        # Preserve native Metal qualifiers in the IR for round-trip fidelity, but
+        # expose DirectX's target-neutral storage contract in diagnostics.
+        if str(address_space).lower() in {"device", "global", "storage"}:
+            address_space = "storage"
         raise PointerReinterpretationError(
             "DirectX cannot preserve a storage aggregate view from "
             f"'{source_type}' to '{target_type}': {detail}",

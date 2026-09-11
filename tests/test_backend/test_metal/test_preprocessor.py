@@ -2199,6 +2199,117 @@ def test_preprocessor_materializes_nested_explicit_template_helper_calls():
     assert "float cast_value_float(float value)" in output
 
 
+def test_preprocessor_materializes_nested_constexpr_non_type_template_argument():
+    code = """
+    template <int Bits, int Width = 8>
+    inline constexpr short pack_factor() {
+        return Width / Bits;
+    }
+
+    template <typename T, int Count>
+    T value() {
+        return T(Count);
+    }
+
+    kernel void launch(device float* out [[buffer(0)]]) {
+        out[0] = value<float, (pack_factor<2>())>();
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "value<float" not in output
+    assert "pack_factor<2>()" not in output
+    assert "value_float_4()" in output
+    assert "float value_float_4()" in output
+    assert "return float(4);" in output
+
+
+@pytest.mark.parametrize(
+    "helper_declarations, call",
+    [
+        pytest.param(
+            """
+            template <int Bits>
+            inline constexpr short pack_factor() { return 8 / Bits; }
+            template <int Bits>
+            inline constexpr int pack_factor(int width = 8) {
+                return width / Bits;
+            }
+            """,
+            "pack_factor<2>()",
+            id="overload-ambiguity",
+        ),
+        pytest.param(
+            """
+            template <int Bits>
+            inline constexpr short pack_factor(int width) {
+                return width / Bits;
+            }
+            """,
+            "pack_factor<2>(width)",
+            id="runtime-argument",
+        ),
+        pytest.param(
+            """
+            template <int Bits>
+            inline constexpr short pack_factor() {
+                return pack_factor<Bits>();
+            }
+            """,
+            "pack_factor<2>()",
+            id="recursive-helper",
+        ),
+    ],
+)
+def test_preprocessor_leaves_unproven_nested_constexpr_argument_unmaterialized(
+    helper_declarations,
+    call,
+):
+    code = f"""
+    {helper_declarations}
+
+    template <typename T, int Count>
+    T value() {{
+        return T(Count);
+    }}
+
+    kernel void launch(
+        device float* out [[buffer(0)]],
+        constant int& width [[buffer(1)]]) {{
+        out[0] = value<float, {call}>();
+    }}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert f"value<float, {call}>()" in output
+    assert "value_float" not in output
+
+
+def test_preprocessor_does_not_import_later_nested_constexpr_declaration():
+    code = """
+    template <typename T, int Count>
+    T value() {
+        return T(Count);
+    }
+
+    kernel void launch(device float* out [[buffer(0)]]) {
+        out[0] = value<float, pack_factor<2>()>();
+    }
+
+    template <int Bits>
+    inline constexpr short pack_factor() {
+        return 8 / Bits;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "value<float, pack_factor<2>()>()" in output
+    assert "value_float" not in output
+
+
 def test_preprocessor_preserves_operator_comparison_overloads():
     code = """
     struct complex64_t {
@@ -4356,6 +4467,109 @@ def test_preprocessor_resolves_scalar_alias_from_selected_partial_specialization
     assert "struct ConditionalType_0_uint_uchar" not in output
 
 
+def test_preprocessor_resolves_remove_cv_before_pointer_trait_specialization():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T>
+    struct pointer_element {};
+
+    template <typename T>
+    struct pointer_element<device T*> {
+        using type = remove_cv_t<T>;
+    };
+
+    template <typename DstPtrType>
+    [[kernel]] void copy_value(
+        DstPtrType dst [[buffer(0)]],
+        device const float* src [[buffer(1)]]) {
+        using U =
+            typename pointer_element<remove_cv_t<DstPtrType>>::type;
+        dst[0] = static_cast<U>(src[0]);
+    }
+
+    instantiate_kernel("copy_value_float", copy_value, device float*)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert re.search(r"using\s+U\s*=\s*float\s*;", output)
+    assert "static_cast<U>(src[0])" in output
+    assert "pointer_element_remove_cv_t_device_float" not in output
+
+
+def test_preprocessor_resolves_qualified_remove_cv_in_template_trait():
+    code = """
+    template <typename T>
+    struct Trait { using type = int; };
+
+    template <typename T>
+    struct Trait<device T*> { using type = metal::remove_cv_t<T>; };
+    """
+    preprocessor = MetalPreprocessor()
+    traits = preprocessor._find_template_type_traits(code)
+
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename Trait<metal::remove_cv_t<device const float*>>::type",
+            traits,
+        )
+        == "float"
+    )
+
+
+def test_preprocessor_does_not_assume_shadowed_remove_cv_is_metal_alias():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T>
+    struct Wrapper {};
+
+    template <typename T>
+    using remove_cv_t = Wrapper<T>;
+
+    template <typename T>
+    struct pointer_element {};
+
+    template <typename T>
+    struct pointer_element<device T*> { using type = T; };
+
+    using U =
+        typename pointer_element<remove_cv_t<device float*>>::type;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "using U = float;" not in output
+    assert "pointer_element_remove_cv_t_device_float" in output
+
+
+def test_preprocessor_does_not_assume_shadowing_remove_cv_class_is_metal_alias():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T>
+    struct remove_cv_t {};
+
+    template <typename T>
+    struct pointer_element {};
+
+    template <typename T>
+    struct pointer_element<device T*> { using type = T; };
+
+    using U =
+        typename pointer_element<remove_cv_t<device float*>>::type;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "using U = float;" not in output
+    assert "pointer_element_remove_cv_t_device_float" in output
+
+
 def test_preprocessor_resolves_file_alias_before_partial_specialization():
     code = """
     template <typename T>
@@ -5037,6 +5251,114 @@ def test_preprocessor_rejects_unsafe_implicit_reference_accessor_argument():
     assert error.requested_signature == "Tile::frag_at(i++, j)"
     assert error.reason == "reference-return-identity-unsupported"
     assert "preserving the returned lvalue identity" in str(error)
+
+
+def test_preprocessor_inlines_implicit_reference_accessor_before_template_deduction():
+    code = """
+    template <int N>
+    struct Int {};
+
+    struct FragmentOps {
+        template <typename SrcPtrType, typename Stride>
+        static void load(thread float2& dst, SrcPtrType src, Stride stride) {
+            dst[0] = src[0 * stride];
+        }
+    };
+
+    struct Tile {
+        float2 val_frags[4];
+        thread float2& frag_at(short i, short j) {
+            return val_frags[i * 2 + j];
+        }
+        const thread float2& frag_at(short i, short j) const {
+            return val_frags[i * 2 + j];
+        }
+        void load(threadgroup float* src, short i, short j) {
+            FragmentOps::load(
+                frag_at(i, j), &(src[i * 2 + j]), Int<1>{});
+        }
+    };
+
+    kernel void run(threadgroup float* src [[threadgroup(0)]]) {
+        Tile tile;
+        tile.load(src, 0, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "frag_at(i, j)" not in output
+    assert "Tile__frag_at" not in output
+    assert (
+        "FragmentOps__load__threadgroup_float_ptr_Int_1("
+        "self.val_frags[(i) * 2 + (j)], &(src[i * 2 + j]), Int_1{})" in output
+    )
+
+
+def test_preprocessor_rejects_side_effecting_reference_accessor_before_deduction():
+    code = """
+    struct FragmentOps {
+        template <typename SrcPtrType>
+        static void load(thread float2& dst, SrcPtrType src) {
+            dst[0] = src[0];
+        }
+    };
+
+    struct Tile {
+        float2 val_frags[4];
+        thread float2& frag_at(short i, short j) {
+            return val_frags[i * 2 + j];
+        }
+        void load(threadgroup float* src, short i, short j) {
+            FragmentOps::load(frag_at(i++, j), &(src[0]));
+        }
+    };
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.missing_capabilities == ("struct.reference-return",)
+    assert error.struct_name == "Tile"
+    assert error.method_name == "frag_at"
+    assert error.requested_signature == "Tile::frag_at(i++, j)"
+    assert error.reason == "reference-return-identity-unsupported"
+
+
+def test_preprocessor_rematerializes_parenthesized_integral_constant_parameters():
+    code = """
+    template <int N>
+    struct Int {
+        static constexpr int value = N;
+    };
+
+    struct FragmentOps {
+        template <int Ld, int Sd>
+        static void load(thread float2& dst, Int<Ld>, Int<Sd>) {
+            dst[0] += Ld + Sd;
+        }
+    };
+
+    void retain_canonical_types(thread Int<36>& ld, thread Int<1>& sd) {
+        (void)ld;
+        (void)sd;
+    }
+
+    kernel void run(device float* out [[buffer(0)]]) {
+        float2 value = 0.0f;
+        FragmentOps::load(value, Int<(36)>{}, Int<((1))>{});
+        out[0] = value[0];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Int<" not in output
+    assert output.count("struct Int_36") == 1
+    assert output.count("struct Int_1") == 1
+    assert "FragmentOps__load__36_1(" in output
+    assert "thread float2& dst, Int_36, Int_1" in output
 
 
 @pytest.mark.parametrize(
@@ -8180,6 +8502,33 @@ def test_preprocessor_instantiates_template_operator_call_from_temporary_functor
     assert "Select()(" not in output
 
 
+def test_preprocessor_reconstructs_materialized_array_parameter_declarator():
+    # Reduced from quantized.metal's ``dequantize<U, N, bits>`` helper after
+    # call inference binds its final type parameter to a thread-local array.
+    code = """
+    template <typename U, int N, typename W>
+    inline void decode(U scale, W output) {
+      for (int i = 0; i < N; ++i) {
+        output[i] = scale;
+      }
+    }
+
+    void run(device float* out) {
+      float values[8];
+      decode<float, 8, float[8]>(1.0f, values);
+      out[0] = values[0];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "inline void decode_float_8_float_8(float scale, float output[8])" in output
+    assert "float[8] output" not in output
+    assert "decode_float_8_float_8(1.0f, values);" in output
+    ast = MetalParser(MetalLexer(output, preprocess=False).tokenize()).parse()
+    assert ast is not None
+
+
 def test_preprocessor_infers_materialized_free_template_call_argument():
     # MLX reduce materializes ``cast_to<U>(in[i])`` before lowering the
     # reduction functor.  The renamed helper remains an exact typed expression,
@@ -9334,38 +9683,38 @@ def test_preprocessor_expands_nested_const_for_loop_in_template_member_ordered()
     expected = [
         (
             "Fragment__load__float_integral_constant_int_0_integral_constant_int_0",
-            "integral_constant<int,0>",
-            "integral_constant<int,0>",
+            "integral_constant_int_0",
+            "integral_constant_int_0",
         ),
         (
             "Fragment__load__float_integral_constant_int_0_integral_constant_int_1",
-            "integral_constant<int,0>",
-            "integral_constant<int,1>",
+            "integral_constant_int_0",
+            "integral_constant_int_1",
         ),
         (
             "Fragment__load__float_integral_constant_int_4_integral_constant_int_0",
-            "integral_constant<int,4>",
-            "integral_constant<int,0>",
+            "integral_constant_int_4",
+            "integral_constant_int_0",
         ),
         (
             "Fragment__load__float_integral_constant_int_4_integral_constant_int_1",
-            "integral_constant<int,4>",
-            "integral_constant<int,1>",
+            "integral_constant_int_4",
+            "integral_constant_int_1",
         ),
     ]
 
     calls = re.findall(r"(?m)^\s+(Fragment__load__[A-Za-z0-9_]+)\(src,$", output)
     definitions = re.findall(
         r"void (Fragment__load__[A-Za-z0-9_]+)\("
-        r"const device float\* src, (integral_constant<int,\d+>) row, "
-        r"(integral_constant<int,\d+>) col\)",
+        r"const device float\* src, (integral_constant_int_\d+) row, "
+        r"(integral_constant_int_\d+) col\)",
         output,
     )
 
     assert calls == [name for name, _, _ in expected]
     assert definitions == expected
-    assert "integral_constant<int, 1>{} * Int<(4)>{}" in output
-    assert "integral_constant<int, 1>{} * Int<(1)>{}" in output
+    assert "integral_constant_int_1{} * Int<(4)>{}" in output
+    assert "integral_constant_int_1{} * Int<(1)>{}" in output
     assert "src[0 + 0]" in output
     assert "src[0 + 1]" in output
     assert "src[4 + 0]" in output
@@ -11915,3 +12264,106 @@ def test_static_assertion_resolves_file_constant_after_preserved_directives():
 
     assert "static_assert" not in output
     assert "constexpr short n_reads" in output
+
+
+def test_preprocessor_late_constexpr_fold_rejects_hidden_namespace_helper():
+    code = """
+    namespace hidden {
+    template <int Value>
+    constexpr int hidden_value() { return Value; }
+    }
+
+    kernel void visibility_probe(device int* out [[buffer(0)]]) {
+        out[0] = hidden_value<7>();
+    }
+    """
+
+    output = MetalPreprocessor()._fold_proven_explicit_static_constexpr_calls(code)
+
+    assert "hidden_value<7>()" in output
+    assert "out[0] = 7" not in output
+
+
+def test_preprocessor_does_not_materialize_hidden_namespace_template_call():
+    code = """
+    namespace outer::hidden {
+    template <int Value>
+    constexpr int hidden_value() { return Value; }
+    }
+
+    kernel void visibility_probe(device int* out [[buffer(0)]]) {
+        out[0] = hidden::hidden_value<7>();
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "hidden::hidden_value<7>()" in output
+    assert "hidden_value_7" not in output
+
+
+def test_preprocessor_using_namespace_must_precede_template_call():
+    code = """
+    namespace hidden {
+    template <int Value>
+    constexpr int hidden_value() { return Value; }
+    }
+
+    kernel void visibility_probe(device int* out [[buffer(0)]]) {
+        out[0] = hidden_value<7>();
+    }
+    using namespace hidden;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "hidden_value<7>()" in output
+    assert "hidden_value_7" not in output
+
+
+@pytest.mark.parametrize(
+    "call_context",
+    [
+        pytest.param(
+            """
+            namespace hidden {
+            kernel void visibility_probe(device int* out [[buffer(0)]]) {
+                out[0] = hidden_value<7>();
+            }
+            }
+            """,
+            id="same-namespace",
+        ),
+        pytest.param(
+            """
+            kernel void visibility_probe(device int* out [[buffer(0)]]) {
+                out[0] = hidden::hidden_value<7>();
+            }
+            """,
+            id="qualified",
+        ),
+        pytest.param(
+            """
+            using namespace hidden;
+            kernel void visibility_probe(device int* out [[buffer(0)]]) {
+                out[0] = hidden_value<7>();
+            }
+            """,
+            id="prior-using-directive",
+        ),
+    ],
+)
+def test_preprocessor_materializes_lexically_visible_namespace_template_call(
+    call_context,
+):
+    code = """
+        namespace hidden {
+        template <int Value>
+        constexpr int hidden_value() { return Value; }
+        }
+        """ + call_context
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "hidden_value_7();" in output
+    assert "constexpr int hidden_value_7() { return 7; }" in output

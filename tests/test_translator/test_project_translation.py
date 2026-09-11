@@ -14546,6 +14546,101 @@ def test_plain_metal_helper_materialization_deduces_threadgroup_array_decay():
     assert "gemm_loop_finalize_float_MatrixOp_TileLoader(" in materialized
 
 
+def test_plain_metal_helper_materialization_preserves_direct_pointer_address_space():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename U, typename W>
+        void decode(const device uchar* src, U scale, W output) {
+          output[0] = U(src[0]) * scale;
+        }
+
+        struct Decoder {
+          threadgroup float* output;
+        };
+
+        void call_decode(const thread Decoder& self, const device uchar* src) {
+          decode<float>(src, 1.0f, self.output);
+        }
+
+        kernel void launch(
+            const device uchar* src [[buffer(0)]],
+            device float* output [[buffer(1)]],
+            uint index [[thread_index_in_threadgroup]]) {
+          threadgroup float shared[4];
+          Decoder decoder{shared};
+          call_decode(decoder, src);
+          output[index] = shared[index];
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+            include_struct_members=True,
+        )
+    )
+
+    assert completed_names == {"decode"}
+    assert records == [
+        {
+            "name": "decode",
+            "materializedName": "decode_float_threadgroup_float",
+            "parameters": {"U": "float", "W": "threadgroup float*"},
+            "parameterSources": {"U": "call-site", "W": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    assert materialized_names == {
+        (
+            "decode",
+            ("float", "threadgroup float*"),
+            ("const device uchar*", "U", "W"),
+        ): "decode_float_threadgroup_float"
+    }
+    assert "decode_float_threadgroup_float(src, 1.0f, self.output)" in materialized
+    assert (
+        "void decode_float_threadgroup_float("
+        "const device uchar* src, float scale, threadgroup float* output)"
+    ) in " ".join(materialized.split())
+
+
+def test_plain_metal_helper_materialization_rejects_mixed_direct_pointer_addresses():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename W>
+        void transfer(W destination, W source) {
+          destination[0] = source[0];
+        }
+
+        void call_transfer(
+            threadgroup float* shared,
+            device float* values) {
+          transfer(shared, values);
+        }
+
+        kernel void launch(device float* values [[buffer(0)]]) {
+          threadgroup float shared[4];
+          call_transfer(shared, values);
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "transfer(shared, values)" in materialized
+    assert "void transfer_" not in materialized
+    assert records == []
+    assert completed_names == set()
+    assert materialized_names == {}
+
+
 def test_plain_metal_helper_reuses_existing_concrete_signature():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
@@ -16975,6 +17070,92 @@ def test_translate_project_opengl_materializes_quantized_local_template_alias(
     assert "QuantizedScale<" not in output
     assert not re.search(r"\b(?:T|group_size|bits)\b", output)
     assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_metal_materializes_quantized_uint64_conditional_alias(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "affine_quantize.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_quantized(name, type, group_size, bits) \
+                instantiate_kernel(#name "_" #type "_gs_" #group_size "_b_" #bits, name, type, group_size, bits)
+
+            template <typename T, const int group_size, const int bits>
+            [[kernel]] void affine_quantize(
+                const device T* w [[buffer(0)]],
+                device uint8_t* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                using OutType =
+                    metal::conditional_t<bits == 5, uint64_t, uint32_t>;
+                uint8_t value = static_cast<uint8_t>(w[gid]);
+                OutType output = 0;
+                output |= static_cast<OutType>(value) << bits;
+                out[gid] = static_cast<uint8_t>(output & 0xff);
+            }
+
+            instantiate_quantized(affine_quantize, float, 128, 5)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["metal"]
+            output_dir = "translated"
+
+            [project.entry_points]
+            "shaders/affine_quantize.metal" = "affine_quantize_float_gs_128_b_5"
+
+            [project.entry_workgroup_size_rules."shaders/affine_quantize.metal"]
+            "affine_quantize_float_gs_128_b_5" = [1, 1, 1]
+
+            [project.source_options.metal]
+            max_template_specializations = 64
+            max_template_materialization_work = 4096
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        load_project_config(repo),
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+
+    optional_toolchain_warnings = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic.get("severity") == "warning"
+        and diagnostic.get("code") == "project.validate.toolchain-unavailable"
+        and diagnostic.get("target") == "metal"
+        and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
+    ]
+    assert optional_toolchain_warnings == payload["diagnostics"]
+    assert len(optional_toolchain_warnings) == (0 if shutil.which("xcrun") else 1)
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
+    assert artifact["entryPoint"]["source"] == "affine_quantize_float_gs_128_b_5"
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "kernel void affine_quantize_float_gs_128_b_5" in output
+    assert "uint64_t output = 0;" in output
+    assert "output |= uint64_t(value) << 5;" in output
+    assert "OutType" not in output
+    assert_metal_validates_if_available(
+        output,
+        tmp_path,
+        warnings_as_errors=True,
+    )
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])
@@ -41105,6 +41286,77 @@ def test_metal_opengl_workgroup_split_fails_closed_without_reachability(
     assert not list((repo / "out").rglob("*.glsl"))
 
 
+def test_metal_entry_scope_proves_owner_alias_scalar_conversion_reachability(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "alias_conversion.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant bool use_bias [[function_constant(20)]];
+
+            kernel void alias_conversion(
+                device int* output [[buffer(0)]],
+                uint index [[thread_position_in_grid]]) {
+                short lane = short(index);
+                integral_constant_int_40 stride;
+                output[index] = lane * stride + int(use_bias);
+            }
+
+            struct integral_constant_int_40 {
+                using value_type = int;
+            };
+
+            int integral_constant_int_40__operator_value_type(
+                const thread integral_constant_int_40& self) {
+                return 40;
+            }
+
+            struct complex_t_float { float value; };
+
+            complex_t_float
+            crosstl_metal_operator_multiply__complex_t_float__complex_t_float(
+                complex_t_float left, complex_t_float right) {
+                return {left.value * right.value};
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=repo,
+        include_patterns=(source_path.name,),
+        targets=("metal",),
+        output_dir="out",
+        entry_points={source_path.name: "alias_conversion"},
+    )
+
+    payload = translate_project(config, format_output=False).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert [
+        (constant["name"], constant["id"], constant["status"])
+        for constant in artifact["specializationConstants"]
+    ] == [("use_bias", 20, "required")]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "lane * integral_constant_int_40__operator_value_type(stride)" in generated
+    assert "project.translate.specialization-reachability-unproven" not in json.dumps(
+        payload
+    )
+    assert_metal_validates_if_available(
+        generated,
+        repo,
+        warnings_as_errors=True,
+    )
+
+
 @pytest.mark.parametrize("target", ["directx", "opengl"])
 def test_metal_project_canonicalizes_leading_zero_function_constant_ids(
     tmp_path, target
@@ -49963,6 +50215,100 @@ def test_translate_project_metal_implicit_template_helper_materializes_to_target
     assert validation["success"] is True
 
 
+def test_metal_materialization_resolves_late_member_nested_constexpr_helpers(
+    tmp_path,
+):
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <int Bits, int Width = 8>
+        inline constexpr short get_pack_factor() {
+            return Width / Bits;
+        }
+
+        template <int Bits, int Width = 8>
+        inline constexpr short get_bytes_per_pack() {
+            return Width / 8;
+        }
+
+        template <typename U, int Count, int Bits, typename W>
+        inline void decode(const device uchar* source, W destination) {
+            for (int index = 0; index < Count; ++index) {
+                destination[index] = U(source[index]);
+            }
+        }
+
+        template <typename T, short Count, short Bits>
+        struct Loader {
+            static constant constexpr const short pack_factor =
+                get_pack_factor<Bits, 8>();
+            static constant constexpr const short bytes_per_pack =
+                get_bytes_per_pack<Bits>();
+            const device uchar* source;
+            thread T* destination;
+
+            Loader(
+                const device uchar* source_,
+                thread T* destination_) thread
+                : source(source_), destination(destination_) {}
+
+            void load() const thread {
+                decode<T, pack_factor, Bits>(
+                    source + bytes_per_pack,
+                    destination + pack_factor);
+            }
+        };
+
+        template <typename T, short Bits>
+        [[kernel]] void launch(
+            const device uchar* source [[buffer(0)]],
+            device T* output [[buffer(1)]]) {
+            thread T values[4];
+            Loader<T, 4, Bits> loader(source, values);
+            loader.load();
+            output[0] = values[0];
+        }
+
+        instantiate_kernel("launch_float_2", launch, float, 2)
+        """).strip()
+    source_path = tmp_path / "late_nested_helpers.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    materialized = project_pipeline.materialize_metal_source_for_target(
+        source=source,
+        file_path=source_path,
+        target="directx",
+    )
+
+    assert materialized is not None
+    assert materialized.blocked is False
+    assert materialized.metadata["unsupported"] == []
+    assert not re.search(
+        r"\b(?:decode|get_pack_factor|get_bytes_per_pack)\s*<",
+        materialized.text,
+    )
+    assert "static constant constexpr const short pack_factor = 4;" in materialized.text
+    assert (
+        "static constant constexpr const short bytes_per_pack = 1;" in materialized.text
+    )
+    assert "decode_float_4_2_thread_float(" in materialized.text
+    assert (
+        "inline void decode_float_4_2_thread_float("
+        "const device uchar* source, thread float* destination)"
+        in " ".join(materialized.text.split())
+    )
+    specialization_names = {
+        record["name"] for record in materialized.metadata["specializations"]
+    }
+    assert {
+        "decode",
+        "get_pack_factor",
+        "get_bytes_per_pack",
+        "launch",
+    } <= specialization_names
+
+
 def test_metal_materialization_reuses_defaulted_zero_argument_helper(tmp_path):
     source = textwrap.dedent("""
         template <int WordSize = 8>
@@ -52244,7 +52590,7 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
     intermediate = MetalToCrossGLConverter().generate(
         MetalParser(MetalLexer(source).tokenize()).parse()
     )
-    assert "(vec<bfloat16_t, 4>*)(base + offset)" in intermediate
+    assert "(const device vec<bfloat16_t, 4>*)(base + offset)" in intermediate
 
     payload = translate_project(
         repo,
@@ -52377,8 +52723,49 @@ def test_translate_project_reports_reinterpreted_pointer_writes(tmp_path):
         }
 
 
+def test_translate_project_preserves_qualified_metal_storage_pointer_view(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "reinterpret.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[kernel]] void read_byte(
+                const device uint32_t* words [[buffer(0)]],
+                device uint8_t* out_values [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                const device uint8_t* bytes = (const device uint8_t*)words;
+                out_values[gid] = bytes[gid];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["metal"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert not any(
+        diagnostic["code"] == "project.translate.pointer-reinterpret-unsupported"
+        for diagnostic in payload["diagnostics"]
+    )
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "reinterpret_cast<const device uchar*>(words)" in generated
+    assert "const device uchar* bytes" in generated
+    assert "device uchar* out_values" in generated
+    assert_metal_validates_if_available(generated, tmp_path)
+
+
 @pytest.mark.parametrize(
-    "target", ["cuda", "hip", "metal", "mojo", "rust", "slang", "webgl", "wgsl"]
+    "target", ["cuda", "hip", "mojo", "rust", "slang", "webgl", "wgsl"]
 )
 def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering(
     tmp_path, target
@@ -52774,6 +53161,191 @@ def test_translate_project_canonicalizes_metal_template_aliases_for_targets(
     assert_compute_glsl_validates_if_available(opengl, tmp_path)
     vulkan = (repo / artifacts["vulkan"]["path"]).read_text(encoding="utf-8")
     assert_spirv_asm_validates_if_available(vulkan, tmp_path)
+
+
+def test_translate_project_materializes_relocated_member_integral_aliases(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "member_alias.metal").write_text(
+        textwrap.dedent("""
+            namespace mlx {
+            namespace steel {
+
+            template <typename T, T Value>
+            struct integral_constant {
+                static constexpr T value = Value;
+                T payload;
+            };
+
+            template <int Value>
+            using Int = integral_constant<int, Value>;
+
+            template <int Stride>
+            struct Base {
+                static float load(
+                    float src,
+                    Int<(Stride)> str_x,
+                    Int<((1))> str_y
+                ) {
+                    return src + float(Stride) + 1.0f;
+                }
+            };
+
+            template <int Stride, class Frag = Base<Stride>>
+            struct Tile {
+                float load(float src) {
+                    return Frag::load(
+                        src,
+                        Int<(Stride)>{},
+                        Int<((1))>{}
+                    );
+                }
+            };
+
+            }
+            }
+
+            template <int Stride>
+            [[kernel]] void dispatch(device float* out [[buffer(0)]]) {
+                mlx::steel::Tile<Stride> tile;
+                out[0] = tile.load(1.0f);
+            }
+
+            instantiate_kernel("dispatch_36", dispatch, 36)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "Int<" not in output
+    assert "using Int" not in output
+    assert "template <" not in output
+    assert output.count("struct integral_constant_int_36") == 1
+    assert output.count("struct integral_constant_int_1") == 1
+    assert (
+        "Base_36_load(float src, integral_constant_int_36 str_x, "
+        "integral_constant_int_1 str_y)" in output
+    )
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_relocated_member_alias_canonicalization_rejects_ambiguous_namespaces():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        namespace left {
+        template <int Value>
+        using Int = LeftValue<Value>;
+        }
+
+        namespace right {
+        template <int Value>
+        using Int = RightValue<Value>;
+        }
+
+        struct Holder_4 {};
+        void Holder_4__load(Int<4> value) {
+            (void)value;
+        }
+        """)
+    preprocessor = MetalPreprocessor()
+    preprocessor._materialized_struct_specializations["Holder_4"] = (
+        "Holder",
+        ("4",),
+    )
+    declarations = project_pipeline._metal_template_alias_declarations(
+        preprocessor,
+        source,
+    )
+
+    output = project_pipeline._canonicalize_relocated_metal_template_aliases(
+        preprocessor,
+        source,
+        declarations,
+    )
+
+    assert output == source
+
+
+def test_relocated_member_alias_canonicalization_rejects_unrelated_namespace():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        namespace hidden {
+        template <int Value>
+        using Int = HiddenValue<Value>;
+        }
+
+        struct Holder_4 {};
+        void Holder_4__load(Int<4> value) {
+            (void)value;
+        }
+        """)
+    preprocessor = MetalPreprocessor()
+    preprocessor._materialized_struct_specializations["Holder_4"] = (
+        "Holder",
+        ("4",),
+    )
+    declarations = project_pipeline._metal_template_alias_declarations(
+        preprocessor,
+        source,
+    )
+
+    output = project_pipeline._canonicalize_relocated_metal_template_aliases(
+        preprocessor,
+        source,
+        declarations,
+    )
+
+    assert output == source
+
+
+def test_relocated_member_alias_canonicalization_rejects_forged_helper_prefix():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        namespace hidden {
+        template <int Value>
+        using Int = HiddenValue<Value>;
+        }
+
+        struct Holder_4 {};
+        void Holder_4__load(Int<4> value) {
+            (void)value;
+        }
+        """)
+    preprocessor = MetalPreprocessor()
+    preprocessor._materialized_struct_specializations["Holder_4"] = (
+        "Holder",
+        ("4",),
+    )
+    preprocessor._materialized_struct_specialization_namespaces["Holder_4"] = "hidden"
+    declarations = project_pipeline._metal_template_alias_declarations(
+        preprocessor,
+        source,
+    )
+
+    output = project_pipeline._lower_metal_struct_members_with_generated_aliases(
+        preprocessor,
+        source,
+        alias_declarations=declarations,
+    )
+
+    assert output == source
+    assert "Int<4>" in output
+    assert "HiddenValue<4>" not in output
 
 
 def test_translate_project_resolves_local_constant_member_arguments_for_targets(

@@ -4698,6 +4698,7 @@ class Parser:
         if not (
             self.next_token_starts_type()
             or self.token_is_c_style_cast_address_space(self.peek())
+            or self.peek()[0] == "CONST"
         ):
             return None
 
@@ -4713,8 +4714,18 @@ class Parser:
         try:
             self.eat("LPAREN")
             address_spaces = []
-            while self.token_is_c_style_cast_address_space(self.current_token):
-                address_spaces.append(str(self.current_token[1]).lower())
+            is_const = False
+            while self.current_token[0] == "CONST" or (
+                self.token_is_c_style_cast_address_space(self.current_token)
+            ):
+                if self.current_token[0] == "CONST":
+                    if is_const:
+                        raise SyntaxError(
+                            "Duplicate const qualifier in C-style cast target"
+                        )
+                    is_const = True
+                else:
+                    address_spaces.append(str(self.current_token[1]).lower())
                 self.eat(self.current_token[0])
 
             if not self.is_type_token():
@@ -4745,20 +4756,24 @@ class Parser:
             not identifier_type
             or isinstance(target_type, PointerType)
             or bool(address_spaces)
+            or is_const
         )
 
-        if address_spaces:
+        if address_spaces or is_const:
             if not isinstance(target_type, PointerType):
                 raise SyntaxError(
-                    "Address-space-qualified C-style cast target must be a pointer type"
+                    "Qualified C-style cast target must be a pointer type"
                 )
             unique_address_spaces = set(address_spaces)
-            if len(unique_address_spaces) != 1:
+            if len(unique_address_spaces) > 1:
                 raise SyntaxError(
                     "Conflicting address spaces in C-style cast target: "
                     + ", ".join(address_spaces)
                 )
-            target_type.address_space = address_spaces[0]
+            if address_spaces:
+                target_type.address_space = address_spaces[0]
+            if is_const:
+                target_type.is_mutable = False
 
         # Pointer targets and keyword types accept prefix operators in the
         # operand. Identifier scalar casts still require a primary start so

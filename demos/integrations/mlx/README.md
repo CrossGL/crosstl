@@ -191,6 +191,24 @@ The current harness verifies:
   2,396 non-empty AIR objects. This is complete reduce translation, reflection,
   and native compiler coverage, not numerical execution or MLX host runtime
   redirection;
+- selected-entry Metal-to-CrossGL-to-Metal translation of all 2,052 host-named
+  entries from `quantized.metal`. The compact schema-v2
+  `contracts/quantized.metal-roundtrip.json` contract covers 38 normalized
+  variants over 17 source templates for three data types, group sizes 32/64/128,
+  and bit widths 2/3/4/5/6/8. It pins 14,904 exact materializations and
+  39,638,916 generated Metal bytes without checking transient proof rows into
+  git. Thirty deduplicated exact ABI contracts span four- through
+  twenty-two-resource interfaces and contain 31,374 reflected resources in
+  aggregate, all with host-owned `[1, 1, 1]` workgroups. The terminal external
+  proof compiled every entry twice with Metal 3.1 and warnings fatal, required
+  byte-identical non-empty AIR, and is bound by the checked-in terminal,
+  independent-audit, and adversarial identities. Twenty-four required macOS CI
+  shards rediscover the exact source entries, retranslate and reflect each one,
+  and compile them warning-fatally; twelve shards contain 86 entries and twelve
+  contain 85, and the gate requires all 2,052 AIR outputs to be non-empty. This
+  is complete quantized Metal translation, reflection, and native compiler
+  coverage; it does not claim Metal numerical execution or MLX host runtime
+  redirection;
 - selected-entry translation of all 2,396 discovered current-pinned
   `reduce.metal` entries to OpenGL. The compact schema-v2
   `contracts/reduce.opengl-translation.json` contract spans the same 39 exact

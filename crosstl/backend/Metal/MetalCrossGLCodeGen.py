@@ -1427,6 +1427,7 @@ class MetalToCrossGLConverter:
         self.struct_declarations = {}
         self.struct_name_map = {}
         self.ambiguous_struct_names = set()
+        self.nested_struct_types_by_owner = {}
         self.struct_static_constants = {}
         self.struct_static_constant_members = {}
         self.struct_static_constant_owner_candidates = {}
@@ -1708,6 +1709,12 @@ class MetalToCrossGLConverter:
             return None
         if name == "this":
             return self.render_identifier(result_name)
+        if self.constructor_identifier_is_shadowed(name):
+            return None
+        owner = getattr(function, "constructor_owner", None)
+        static_key = (self.map_struct_name(owner), name) if owner else None
+        if static_key in self.struct_static_constant_members:
+            return self.render_resolved_static_constant(static_key)
         if self.current_constructor_member_type(name) is None:
             return None
         return (
@@ -2682,6 +2689,7 @@ class MetalToCrossGLConverter:
 
         # Get structs - support both 'struct' and 'structs' attributes
         structs = getattr(ast, "structs", []) or getattr(ast, "struct", []) or []
+        structs = self.flatten_concrete_nested_structs(structs)
         self.struct_name_map = self.build_struct_name_map(structs)
         self.struct_declarations = {
             struct_node.name: struct_node
@@ -2775,12 +2783,18 @@ class MetalToCrossGLConverter:
                         parts = []
                         for item in struct_node.alignas:
                             if isinstance(item, tuple) and item[0] == "type":
-                                parts.append(f"alignas({self.map_type(item[1])})")
+                                parts.append(self.map_type(item[1]))
                             else:
-                                parts.append(
-                                    f"alignas({self.generate_expression(item, False)})"
-                                )
-                        struct_alignas = " ".join(parts) + " "
+                                parts.append(self.generate_expression(item, False))
+                        if (
+                            getattr(struct_node, "nested_owner_name", None)
+                            and len(parts) == 1
+                        ):
+                            code += f"    @metal_alignas({parts[0]})\n"
+                        else:
+                            struct_alignas = (
+                                " ".join(f"alignas({part})" for part in parts) + " "
+                            )
                     code += (
                         f"    {self.format_generic_prefix(struct_node)}"
                         f"{struct_alignas}struct "
@@ -4505,7 +4519,18 @@ class MetalToCrossGLConverter:
                     statements.append(loop)
                 continue
             if initializer is not None:
-                value = VectorConstructorNode(member.vtype, list(initializer.arguments))
+                member_type = self.resolve_type_alias(
+                    self.metal_declaration_expression_type(member)
+                )
+                if (
+                    self.pointer_element_type(member_type) is not None
+                    and len(initializer.arguments) == 1
+                ):
+                    value = initializer.arguments[0]
+                else:
+                    value = VectorConstructorNode(
+                        member.vtype, list(initializer.arguments)
+                    )
                 value.source_location = initializer.source_location
             else:
                 value = getattr(member, "default_value", None)
@@ -4835,6 +4860,82 @@ class MetalToCrossGLConverter:
             values[member_name] = int(value)
             values[f"{owner}::{member_name}"] = int(value)
         return values
+
+    def flatten_concrete_nested_structs(self, structs):
+        flattened = []
+        self.nested_struct_types_by_owner = {}
+
+        def append_struct(struct_node, owner_name=None):
+            raw_name = getattr(struct_node, "name", None)
+            if not raw_name:
+                return
+            original_name = getattr(struct_node, "nested_original_name", raw_name)
+            if owner_name is not None:
+                qualified_name = f"{owner_name}::{original_name}"
+                struct_node.nested_original_name = original_name
+                struct_node.nested_owner_name = owner_name
+                struct_node.name = qualified_name
+                struct_node.qualified_name = qualified_name
+                self.nested_struct_types_by_owner.setdefault(owner_name, {})[
+                    original_name
+                ] = qualified_name
+                raw_name = qualified_name
+                for constructor in getattr(struct_node, "constructors", ()) or ():
+                    constructor.owner_name = qualified_name
+                    constructor.owner_qualified_name = qualified_name
+                for alias in getattr(struct_node, "type_aliases", ()) or ():
+                    alias.owner_name = qualified_name
+                    alias.owner_qualified_name = qualified_name
+            for nested in getattr(struct_node, "nested_structs", ()) or ():
+                append_struct(nested, raw_name)
+            flattened.append(struct_node)
+
+        for struct_node in structs or ():
+            if isinstance(struct_node, StructNode):
+                append_struct(struct_node)
+        return flattened
+
+    def current_nested_struct_owner(self):
+        context = self.current_type_resolution_context
+        if isinstance(context, StructNode):
+            context_name = getattr(context, "name", None)
+            if context_name in self.nested_struct_types_by_owner:
+                return context_name
+
+        function = self.current_function
+        if getattr(function, "is_metal_constructor_factory", False):
+            owner = getattr(function, "constructor_owner", None)
+            if owner in self.nested_struct_types_by_owner:
+                return owner
+        parameters = list(getattr(function, "params", ()) or ())
+        if parameters and getattr(parameters[0], "name", None) == "self":
+            receiver_type = self.metal_declaration_expression_type(parameters[0])
+            owner = self.reference_element_type(receiver_type) or receiver_type
+            owner = self.normalized_metal_type(self.resolve_type_alias(owner))
+            if owner in self.nested_struct_types_by_owner:
+                return owner
+
+        function_name = str(getattr(function, "name", ""))
+        for owner in sorted(self.nested_struct_types_by_owner, key=len, reverse=True):
+            mapped_owner = self.map_struct_name(owner)
+            if function_name.startswith(f"{owner}__") or function_name.startswith(
+                f"{mapped_owner}__"
+            ):
+                return owner
+        return None
+
+    def resolve_contextual_nested_struct_type(self, type_name):
+        candidate = self.normalize_qualified_type_name(type_name).lstrip(":")
+        owner = self.current_nested_struct_owner()
+        if owner is not None:
+            nested_type = self.nested_struct_types_by_owner.get(owner, {}).get(
+                candidate
+            )
+            if nested_type is not None:
+                return nested_type
+        if candidate in self.struct_name_map:
+            return candidate
+        return candidate
 
     def build_struct_name_map(self, structs):
         mapped_names = {}
@@ -7490,6 +7591,7 @@ class MetalToCrossGLConverter:
         self.struct_declarations = {}
         self.struct_name_map = {}
         self.ambiguous_struct_names = set()
+        self.nested_struct_types_by_owner = {}
         self.struct_static_constants = {}
         self.struct_static_constant_members = {}
         self.struct_static_constant_owner_candidates = {}
@@ -9231,7 +9333,7 @@ class MetalToCrossGLConverter:
         mapped_type = str(mapped_type or "").strip()
         if not mapped_type or any(token in mapped_type for token in ("*", "&")):
             return False
-        if mapped_type in self.crossgl_typedef_source_types():
+        if self.crossgl_typedef_source_type(mapped_type) is not None:
             return True
         if mapped_type in self.struct_name_map.values():
             return True
@@ -9361,6 +9463,8 @@ class MetalToCrossGLConverter:
         member_types = {}
         member_names = {}
         used_member_names = set()
+        member_layouts = []
+        requires_native_storage_provenance = False
         for member in getattr(struct_node, "members", None) or []:
             if not isinstance(member, VariableNode) or not getattr(
                 member, "name", None
@@ -9401,6 +9505,17 @@ class MetalToCrossGLConverter:
                 for extent in getattr(member, "array_sizes", None) or []
             ]
             suffix = "".join(f"[{extent}]" for extent in extents)
+            member_layouts.append(
+                (
+                    member,
+                    f"{source_type}{suffix}",
+                    self.metal_concrete_type_layout(f"{source_type}{suffix}"),
+                )
+            )
+            requires_native_storage_provenance = requires_native_storage_provenance or (
+                mapped_type not in self.crossgl_typedef_source_types()
+                and self.crossgl_typedef_source_type(mapped_type) is not None
+            )
             member_name_base = self.sanitize_identifier(member.name)
             member_name = member_name_base
             suffix_index = 2
@@ -9412,6 +9527,24 @@ class MetalToCrossGLConverter:
             member_types[member.name] = f"{source_type}{suffix}"
             member_names[member.name] = member_name
 
+        native_storage_alignment = None
+        if requires_native_storage_provenance:
+            unresolved_layouts = [
+                source_type
+                for _member, source_type, layout in member_layouts
+                if layout is None
+            ]
+            if unresolved_layouts:
+                raise self.local_aggregate_error(
+                    struct_node,
+                    "native member storage alignment cannot be proven for "
+                    + ", ".join(sorted(unresolved_layouts)),
+                    unresolved_dependencies=tuple(sorted(unresolved_layouts)),
+                )
+            native_storage_alignment = max(
+                layout[1] for _member, _source_type, layout in member_layouts
+            )
+
         self.local_aggregate_declaration_keys[key] = canonical_name
         self.local_aggregate_declarations.append(
             {
@@ -9420,6 +9553,7 @@ class MetalToCrossGLConverter:
                 "source_location": getattr(
                     struct_node, "declaration_source_location", None
                 ),
+                "native_storage_alignment": native_storage_alignment,
             }
         )
         self.struct_member_types[canonical_name] = member_types
@@ -9444,6 +9578,9 @@ class MetalToCrossGLConverter:
         member_pad = "    " * (indent + 1)
         code = f"{pad}// Materialized function-local structs\n"
         for declaration in self.local_aggregate_declarations:
+            native_storage_alignment = declaration.get("native_storage_alignment")
+            if native_storage_alignment is not None:
+                code += f"{pad}@metal_alignas({native_storage_alignment})\n"
             code += f"{pad}struct {declaration['name']} {{\n"
             for member in declaration["members"]:
                 code += f"{member_pad}{member}\n"
@@ -9497,7 +9634,7 @@ class MetalToCrossGLConverter:
             or getattr(alias, "array_sizes", None)
             or getattr(alias, "declarator_type_suffix", "")
             or (
-                mapped_alias_type not in self.crossgl_typedef_source_types()
+                self.crossgl_typedef_source_type(mapped_alias_type) is None
                 and not concrete_struct_alias
             )
         ):
@@ -10143,10 +10280,42 @@ class MetalToCrossGLConverter:
             )
             if wide_vector_binary is not None:
                 return wide_vector_binary
+            conversion_plan = self.metal_builtin_lowered_conversion_plan(
+                expr.op,
+                (expr.left, expr.right),
+            )
+            if conversion_plan is not None:
+                helpers, _converted_types = conversion_plan
+                operands = []
+                for index, (operand, helper) in enumerate(
+                    zip((expr.left, expr.right), helpers)
+                ):
+                    if helper is None:
+                        operands.append(
+                            self.generate_binary_operand(
+                                operand,
+                                expr.op,
+                                index == 1,
+                                is_main,
+                            )
+                        )
+                        continue
+                    helper_name = self.sanitize_identifier(
+                        self.function_output_name(helper)
+                    )
+                    operands.append(
+                        f"{helper_name}({self.generate_expression(operand, is_main)})"
+                    )
+                return f"{operands[0]} {expr.op} {operands[1]}"
             left = self.generate_binary_operand(expr.left, expr.op, False, is_main)
             right = self.generate_binary_operand(expr.right, expr.op, True, is_main)
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, FunctionCallNode):
+            lowered_static_call = self.generate_lowered_static_struct_method_call(
+                expr, is_main
+            )
+            if lowered_static_call is not None:
+                return lowered_static_call
             lowered_method_call = self.generate_lowered_struct_method_call(
                 expr, is_main
             )
@@ -10515,6 +10684,27 @@ class MetalToCrossGLConverter:
             if wide_vector_cast is not None:
                 return wide_vector_cast
             mapped_type = self.map_type(expr.target_type)
+            if (
+                self.metal_pointer_pointee_type_once(
+                    self.resolve_type_alias(expr.target_type)
+                )
+                is not None
+            ):
+                qualifier_set = set(getattr(expr, "qualifiers", ()) or ())
+                pointer_qualifiers = [
+                    qualifier
+                    for qualifier in (
+                        "const",
+                        "threadgroup_imageblock",
+                        "threadgroup",
+                        "thread",
+                        "device",
+                        "constant",
+                    )
+                    if qualifier in qualifier_set
+                ]
+                if pointer_qualifiers:
+                    mapped_type = f"{' '.join(pointer_qualifiers)} {mapped_type}"
             value = self.generate_expression(expr.expression, is_main)
             if not self.cast_uses_constructor_syntax(mapped_type):
                 return (
@@ -10730,6 +10920,8 @@ class MetalToCrossGLConverter:
                 flags = flags - {"mem_none"}
             if unscoped_name == "threadgroup_barrier" and flags == {"mem_none"}:
                 return "workgroupExecutionBarrier()"
+            if unscoped_name == "simdgroup_barrier" and flags == {"mem_none"}:
+                return "subgroupExecutionBarrier()"
             if flags == {"mem_threadgroup"}:
                 return "workgroupBarrier()"
             if flags == {"mem_device"}:
@@ -11069,6 +11261,256 @@ class MetalToCrossGLConverter:
             function, transport_count
         )
         return f"{function.name}({', '.join(source)})"
+
+    def lowered_static_struct_method_owner(self, function):
+        """Return the concrete owner encoded by one lowered static helper."""
+        if not isinstance(function, FunctionNode):
+            return None
+        if getattr(function, "is_metal_constructor_factory", False):
+            owner = self.normalized_metal_type(
+                self.resolve_type_alias(getattr(function, "constructor_owner", None))
+            )
+            return owner or None
+
+        instance_context = self.lowered_struct_method_context(function)
+        if instance_context is not None:
+            return instance_context["owner"]
+
+        function_name = str(getattr(function, "name", ""))
+        matches = []
+        for owner in self.struct_name_map:
+            prefixes = {
+                owner,
+                self.map_struct_name(owner),
+                self.sanitize_identifier(owner),
+            }
+            matched_prefix = next(
+                (
+                    prefix
+                    for prefix in sorted(prefixes, key=len, reverse=True)
+                    if prefix and function_name.startswith(f"{prefix}__")
+                ),
+                None,
+            )
+            if matched_prefix is not None:
+                matches.append((len(matched_prefix), owner))
+        if not matches:
+            return None
+        longest = max(length for length, _owner in matches)
+        owners = {owner for length, owner in matches if length == longest}
+        return next(iter(owners)) if len(owners) == 1 else None
+
+    def resolve_lowered_static_struct_owner(self, owner_name, lexical_owner):
+        """Resolve a scoped static-call owner, including owner-local aliases."""
+        candidate = self.normalize_qualified_type_name(owner_name).lstrip(":")
+        if lexical_owner:
+            resolved_alias = self.resolve_dependent_alias_type(
+                lexical_owner,
+                candidate,
+                required=False,
+            )
+            if resolved_alias is not None:
+                candidate = resolved_alias
+        candidate = self.normalized_metal_type(
+            self.resolve_type_alias(
+                self.materialize_alias_template_type(candidate, required=False)
+            )
+        )
+        if candidate in self.struct_name_map:
+            return candidate
+        reverse_names = {
+            mapped: owner for owner, mapped in self.struct_name_map.items()
+        }
+        return reverse_names.get(candidate, candidate)
+
+    @staticmethod
+    def lowered_static_method_is_instance_helper(function):
+        params = list(getattr(function, "params", []) or [])
+        return bool(
+            params
+            and getattr(params[0], "name", None) == "self"
+            and MetalToCrossGLConverter.reference_parameter(params[0])
+        )
+
+    def lowered_static_method_candidate_signature(self, function):
+        parameters = ", ".join(
+            self.normalized_metal_parameter_type(parameter)
+            for parameter in getattr(function, "params", []) or []
+        )
+        return f"{function.name}({parameters})"
+
+    def resolve_lowered_static_struct_method_call(self, expression):
+        """Bind a retained static struct call to its concrete free helper."""
+        raw_name = self.normalize_qualified_type_name(getattr(expression, "name", ""))
+        lexical_owner = self.lowered_static_struct_method_owner(self.current_function)
+        if not raw_name or lexical_owner is None:
+            return None
+
+        if "::" in raw_name:
+            owner_name, method_name = raw_name.rsplit("::", 1)
+            if not self.crossgl_identifier_pattern.fullmatch(method_name):
+                return None
+            # A real qualified free function remains authoritative.
+            if self.metal_user_function_overloads(raw_name) or (
+                self.metal_source_overload_groups_for_name(raw_name)
+            ):
+                return None
+            owner = self.resolve_lowered_static_struct_owner(
+                owner_name,
+                lexical_owner,
+            )
+        else:
+            method_name = raw_name
+            if not self.crossgl_identifier_pattern.fullmatch(method_name):
+                return None
+            # Preserve lexical values/callables and ordinary free functions.
+            if (
+                method_name in self.current_variable_types
+                or method_name in self.global_variable_types
+                or method_name in self.user_function_overloads_by_name
+                or self.metal_source_overload_groups_for_name(method_name)
+            ):
+                return None
+            owner = lexical_owner
+
+        helper_name = f"{self.map_struct_name(owner)}__{method_name}"
+        all_candidates = [
+            candidate
+            for candidate in self.user_function_overloads_by_name.get(helper_name, [])
+            if not self.lowered_static_method_is_instance_helper(candidate)
+        ]
+        if not all_candidates:
+            return None
+
+        arity_candidates = [
+            candidate
+            for candidate in all_candidates
+            if len(getattr(candidate, "params", []) or []) == len(expression.args)
+        ]
+        argument_types = tuple(
+            self.metal_source_overload_value_type(self.expression_metal_type(argument))
+            for argument in expression.args
+        )
+        diagnostic_argument_types = tuple(
+            argument_type or "<unknown>" for argument_type in argument_types
+        )
+        candidate_signatures = tuple(
+            self.lowered_static_method_candidate_signature(candidate)
+            for candidate in all_candidates
+        )
+        if not arity_candidates:
+            raise MetalStructMethodCallResolutionError(
+                owner,
+                method_name,
+                diagnostic_argument_types,
+                candidate_signatures,
+                "no static helper has the required argument count",
+                getattr(expression, "source_location", None),
+            )
+        if any(argument_type is None for argument_type in argument_types):
+            raise MetalStructMethodCallResolutionError(
+                owner,
+                method_name,
+                diagnostic_argument_types,
+                candidate_signatures,
+                "one or more static-helper argument types could not be inferred",
+                getattr(expression, "source_location", None),
+            )
+
+        source_groups = {}
+        for candidate in arity_candidates:
+            source_groups.setdefault(
+                tuple(
+                    self.normalized_metal_parameter_type(parameter)
+                    for parameter in getattr(candidate, "params", []) or []
+                ),
+                [],
+            ).append(candidate)
+
+        ranked = []
+        for source_signature, declarations in source_groups.items():
+            parameters = list(getattr(declarations[0], "params", []) or [])
+            ranks = []
+            for argument, argument_type, parameter in zip(
+                expression.args,
+                argument_types,
+                parameters,
+            ):
+                rank = self.metal_source_overload_argument_match_rank(
+                    argument,
+                    argument_type,
+                    parameter,
+                )
+                if rank is None:
+                    break
+                ranks.append(rank)
+            else:
+                ranked.append((tuple(ranks), source_signature, declarations))
+
+        if not ranked:
+            raise MetalStructMethodCallResolutionError(
+                owner,
+                method_name,
+                diagnostic_argument_types,
+                candidate_signatures,
+                "no source-compatible static-helper overload matches",
+                getattr(expression, "source_location", None),
+            )
+
+        def dominates(left, right):
+            return all(a >= b for a, b in zip(left, right)) and any(
+                a > b for a, b in zip(left, right)
+            )
+
+        winners = [
+            entry
+            for entry in ranked
+            if not any(
+                other is not entry and dominates(other[0], entry[0]) for other in ranked
+            )
+        ]
+        if len(winners) != 1:
+            raise MetalStructMethodCallResolutionError(
+                owner,
+                method_name,
+                diagnostic_argument_types,
+                tuple(
+                    self.lowered_static_method_candidate_signature(declarations[0])
+                    for _ranks, _source, declarations in winners
+                ),
+                "multiple source-compatible static-helper overloads remain",
+                getattr(expression, "source_location", None),
+            )
+
+        declarations = winners[0][2]
+        selected = next(
+            (
+                candidate
+                for candidate in declarations
+                if getattr(candidate, "body", None)
+            ),
+            declarations[0],
+        )
+        if self.reference_element_type(getattr(selected, "return_type", None)):
+            raise MetalStructMethodCallResolutionError(
+                owner,
+                method_name,
+                diagnostic_argument_types,
+                (self.lowered_static_method_candidate_signature(selected),),
+                "reference-returning static helpers require lvalue-preserving lowering",
+                getattr(expression, "source_location", None),
+            )
+        return selected
+
+    def generate_lowered_static_struct_method_call(self, expression, is_main=False):
+        selected = self.resolve_lowered_static_struct_method_call(expression)
+        if selected is None:
+            return None
+        function_name = self.sanitize_identifier(self.function_output_name(selected))
+        arguments = ", ".join(
+            self.generate_expression(argument, is_main) for argument in expression.args
+        )
+        return f"{function_name}({arguments})"
 
     def resolve_lowered_struct_method_call(self, expression):
         """Bind one retained implicit-this call to a concrete lowered helper."""
@@ -11854,6 +12296,172 @@ class MetalToCrossGLConverter:
             return 1
         return None
 
+    def metal_lowered_readonly_scalar_conversion(self, metal_type):
+        """Return one generated readonly aggregate-to-scalar conversion helper.
+
+        Struct-member lowering transports a Metal conversion operator into a
+        free helper named ``Struct__operator_*``. Once the member is removed,
+        built-in expressions must call that helper explicitly. Admit only one
+        exact receiver helper with a readonly thread reference and a native
+        arithmetic scalar result; ambiguous or mutating conversions remain
+        unsupported.
+        """
+
+        value_type = self.metal_source_overload_value_type(metal_type)
+        if value_type is None:
+            return None
+        resolved_type = self.normalized_metal_type(value_type)
+        if resolved_type not in self.struct_member_types:
+            return None
+        prefix = f"{self.sanitize_identifier(resolved_type)}__operator_"
+        candidates = []
+        for function_name, overloads in self.user_function_overloads_by_name.items():
+            if not str(function_name).startswith(prefix):
+                continue
+            for function in overloads:
+                parameters = list(getattr(function, "params", []) or [])
+                if len(parameters) != 1:
+                    continue
+                parameter = parameters[0]
+                parameter_type = self.metal_source_overload_value_type(
+                    self.metal_source_overload_parameter_type(parameter)
+                )
+                if self.normalized_metal_type(parameter_type) != resolved_type:
+                    continue
+                qualifiers = {
+                    str(qualifier).lower()
+                    for qualifier in getattr(parameter, "qualifiers", []) or []
+                }
+                if "const" not in qualifiers or "thread" not in qualifiers:
+                    continue
+                result_type = self.metal_source_overload_value_type(
+                    getattr(function, "return_type", None)
+                )
+                result_descriptor = self.metal_source_overload_type_descriptor(
+                    result_type
+                )
+                if result_descriptor is None or result_descriptor[0] != "scalar":
+                    continue
+                candidate_name = str(getattr(function, "name", function_name))
+                conversion_suffix = (
+                    candidate_name[len(prefix) :]
+                    if candidate_name.startswith(prefix)
+                    else ""
+                )
+                result_spellings = {
+                    str(result_type or ""),
+                    self.normalized_metal_type(result_type),
+                    self.normalized_metal_type(self.resolve_type_alias(result_type)),
+                }
+                expected_suffixes = {
+                    re.sub(r"[^A-Za-z0-9_]+", "_", spelling).strip("_")
+                    for spelling in result_spellings
+                    if spelling
+                }
+                if conversion_suffix not in expected_suffixes:
+                    previous_context = self.current_type_resolution_context
+                    self.current_type_resolution_context = function
+                    try:
+                        alias_result = self.resolve_dependent_alias_type(
+                            resolved_type,
+                            conversion_suffix,
+                            required=False,
+                        )
+                    except (
+                        MetalAliasTemplateResolutionError,
+                        MetalStructAliasResolutionError,
+                    ):
+                        continue
+                    finally:
+                        self.current_type_resolution_context = previous_context
+                    if alias_result is None or (
+                        self.metal_source_overload_type_identity(alias_result)
+                        != self.metal_source_overload_type_identity(result_type)
+                    ):
+                        continue
+                candidates.append((function, result_type))
+        return candidates[0] if len(candidates) == 1 else None
+
+    def metal_builtin_lowered_conversion_plan(
+        self,
+        operator,
+        arguments,
+        argument_types=None,
+    ):
+        """Prove a native scalar binary operation after one lowered conversion."""
+
+        if len(arguments) != 2 or operator not in {
+            "+",
+            "-",
+            "*",
+            "/",
+            "%",
+            "<<",
+            ">>",
+            "&",
+            "|",
+            "^",
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+        }:
+            return None
+        if argument_types is None:
+            argument_types = [
+                self.metal_source_overload_value_type(
+                    self.expression_metal_type(argument)
+                )
+                for argument in arguments
+            ]
+        if any(argument_type is None for argument_type in argument_types):
+            return None
+
+        aggregate_indices = [
+            index
+            for index, argument_type in enumerate(argument_types)
+            if self.normalized_metal_type(argument_type) in self.struct_member_types
+        ]
+        if len(aggregate_indices) != 1:
+            return None
+        aggregate_index = aggregate_indices[0]
+        scalar_index = 1 - aggregate_index
+        scalar_descriptor = self.metal_source_overload_type_descriptor(
+            argument_types[scalar_index]
+        )
+        if scalar_descriptor is None or scalar_descriptor[0] != "scalar":
+            return None
+        conversion = self.metal_lowered_readonly_scalar_conversion(
+            argument_types[aggregate_index]
+        )
+        if conversion is None:
+            return None
+        _function, converted_type = conversion
+        converted_types = list(argument_types)
+        converted_types[aggregate_index] = converted_type
+        if operator in {"==", "!=", "<", "<=", ">", ">="}:
+            if any(
+                (descriptor := self.metal_source_overload_type_descriptor(operand_type))
+                is None
+                or descriptor[0] != "scalar"
+                for operand_type in converted_types
+            ):
+                return None
+        elif (
+            self.metal_scalar_binary_result_type(
+                operator,
+                converted_types[0],
+                converted_types[1],
+            )
+            is None
+        ):
+            return None
+        helpers = [None, None]
+        helpers[aggregate_index] = conversion[0]
+        return tuple(helpers), tuple(converted_types)
+
     def metal_free_operator_helper_label(self, operator, arity):
         if operator == "-" and arity == 1:
             return "negate"
@@ -11916,6 +12524,15 @@ class MetalToCrossGLConverter:
             else:
                 ranked.append((tuple(ranks), function))
         if not ranked:
+            if (
+                self.metal_builtin_lowered_conversion_plan(
+                    operator,
+                    arguments,
+                    argument_types,
+                )
+                is not None
+            ):
+                return None
             aggregate_arguments = [
                 argument_type
                 for argument_type in argument_types
@@ -13207,6 +13824,7 @@ class MetalToCrossGLConverter:
             if base.startswith(tag_prefix):
                 base = base[len(tag_prefix) :].strip()
                 break
+        base = self.resolve_contextual_nested_struct_type(base)
 
         uniform_payload_type = self.uniform_value_payload_type(base)
         if uniform_payload_type is not None:
@@ -15203,6 +15821,9 @@ class MetalToCrossGLConverter:
         if self.metal_constructor_result_type(expression.name) is not None:
             return None
 
+        lowered_static = self.resolve_lowered_static_struct_method_call(expression)
+        if lowered_static is not None:
+            return lowered_static
         lowered_method = self.resolve_lowered_struct_method_call(expression)
         if lowered_method is not None:
             function, _transported = lowered_method
@@ -15987,6 +16608,14 @@ class MetalToCrossGLConverter:
             or self.metal_pointer_pointee_type_once(right_type) is not None
         ):
             return None
+        conversion_plan = self.metal_builtin_lowered_conversion_plan(
+            expr.op,
+            (expr.left, expr.right),
+            [left_type, right_type],
+        )
+        if conversion_plan is not None:
+            _helpers, converted_types = conversion_plan
+            left_type, right_type = converted_types
         left_wide = self.wide_vector_type_info(
             left_type,
             getattr(expr.left, "source_location", None),

@@ -662,7 +662,7 @@ def test_pointer_reinterpret_cast_does_not_invoke_constructor():
     _preprocessed, generated = convert(source)
 
     assert "crosstl_ctor_fp8_like" not in generated
-    assert "(*(fp8_like*)(&value))" in generated
+    assert "(*(thread fp8_like*)(&value))" in generated
     assert_crossgl_parses(generated)
 
 

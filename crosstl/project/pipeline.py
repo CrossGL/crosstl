@@ -14806,6 +14806,7 @@ class _MetalTemplateAliasReference:
     declaration: _MetalTemplateAliasDeclaration
     arguments: tuple[str, ...]
     target_is_visible: bool
+    relocated_fallback: bool = False
 
 
 def _materialize_inherited_source_template_helpers(
@@ -15888,6 +15889,50 @@ def _strip_metal_type_qualifiers(type_text: str) -> str:
     return " ".join(tokens).strip()
 
 
+_METAL_STORAGE_TYPE_QUALIFIERS = frozenset(
+    {"const", "constant", "device", "thread", "threadgroup", "volatile"}
+)
+_METAL_ADDRESS_SPACE_QUALIFIERS = frozenset(
+    {"constant", "device", "thread", "threadgroup"}
+)
+
+
+def _metal_template_argument_binding_type(type_text: str) -> str:
+    """Retain storage qualifiers when a direct type parameter binds a pointer.
+
+    Top-level qualifiers on an ordinary by-value scalar do not participate in
+    C++ template deduction.  A Metal address-space qualifier on a pointer does:
+    ``threadgroup float*`` and ``device float*`` are different concrete types.
+    Stripping that qualifier from a direct ``W`` parameter silently changes the
+    materialized helper ABI, even though recursively deducing ``T`` from
+    ``device T*`` should still bind only the pointee type.
+    """
+
+    normalized = _normalize_metal_type_text(type_text)
+    unqualified = _strip_metal_type_qualifiers(normalized)
+    if not unqualified or not unqualified.rstrip("&").endswith("*"):
+        return unqualified
+
+    tokens = normalized.split(" ")
+    qualifiers: list[str] = []
+    while tokens and tokens[0] in METAL_TEMPLATE_TYPE_QUALIFIERS:
+        qualifier = tokens.pop(0)
+        if qualifier in _METAL_STORAGE_TYPE_QUALIFIERS:
+            qualifiers.append(qualifier)
+    if not qualifiers:
+        return unqualified
+    return f"{' '.join(qualifiers)} {unqualified}"
+
+
+def _metal_explicit_address_space(type_text: str) -> str | None:
+    tokens = _normalize_metal_type_text(type_text).split(" ")
+    while tokens and tokens[0] in METAL_TEMPLATE_TYPE_QUALIFIERS:
+        qualifier = tokens.pop(0)
+        if qualifier in _METAL_ADDRESS_SPACE_QUALIFIERS:
+            return qualifier
+    return None
+
+
 def _metal_pointer_pointee_type(type_text: str) -> str | None:
     text = _strip_metal_type_qualifiers(type_text).rstrip()
     while text.endswith("&"):
@@ -15928,12 +15973,12 @@ def _metal_merge_template_binding(
     parameter: str,
     value: str,
 ) -> bool:
-    normalized_value = _strip_metal_type_qualifiers(value)
+    normalized_value = _metal_template_argument_binding_type(value)
     existing = bindings.get(parameter)
     if existing is None:
         bindings[parameter] = normalized_value
         return True
-    return _strip_metal_type_qualifiers(existing) == normalized_value
+    return _metal_template_argument_binding_type(existing) == normalized_value
 
 
 def _metal_template_scalar_type(type_text: str) -> str | None:
@@ -15965,6 +16010,17 @@ def _metal_concrete_parameter_type_compatible(
 ) -> bool:
     expected = _strip_metal_type_qualifiers(expected_type)
     actual = _strip_metal_type_qualifiers(actual_type)
+    expected_pointee = _metal_pointer_pointee_type(expected_type)
+    actual_pointee = _metal_pointer_pointee_type(actual_type)
+    if expected_pointee is not None or actual_pointee is not None:
+        if expected_pointee is None or actual_pointee is None:
+            return False
+        expected_address_space = _metal_explicit_address_space(expected_type)
+        actual_address_space = _metal_explicit_address_space(actual_type)
+        if (
+            expected_address_space is not None or actual_address_space is not None
+        ) and expected_address_space != actual_address_space:
+            return False
     if expected == actual:
         return True
 
@@ -15996,15 +16052,18 @@ def _collect_metal_template_type_bindings(
 ) -> bool:
     expected = _strip_metal_type_qualifiers(expected_type)
     actual = _strip_metal_type_qualifiers(actual_type)
+    actual_binding = _metal_template_argument_binding_type(actual_type)
     if not expected or not actual:
         return True
 
     while expected.endswith("&") or actual.endswith("&"):
         expected = expected[:-1].strip() if expected.endswith("&") else expected
         actual = actual[:-1].strip() if actual.endswith("&") else actual
+        if actual_binding.endswith("&"):
+            actual_binding = actual_binding[:-1].strip()
 
     if expected in template_parameters:
-        return _metal_merge_template_binding(bindings, expected, actual)
+        return _metal_merge_template_binding(bindings, expected, actual_binding)
 
     expected_pointee = _metal_pointer_pointee_type(expected)
     actual_pointee = _metal_pointer_pointee_type(actual)
@@ -17716,9 +17775,21 @@ def _metal_struct_field_type_environments(
     environments: list[tuple[tuple[int, int], str, dict[str, str]]] = []
     for struct in structs:
         field_types: dict[str, str] = {}
+        full_pointer_types = {
+            member.name: member.type_text
+            for member in struct.data_members
+            if member.is_pointer
+        }
         for name, type_text in struct.data_member_types.items():
+            # ``data_member_types`` intentionally stores a value-normalized
+            # spelling for legacy member-overload inference.  Plain helper
+            # deduction needs the full Metal storage pointer type: directly
+            # binding ``W`` from a ``threadgroup T*`` member must not silently
+            # materialize a default ``thread T*`` helper.  The ordered member
+            # metadata retains that complete declaration.
+            inference_type = full_pointer_types.get(name, type_text)
             canonical = preprocessor._canonicalize_struct_scoped_type(
-                type_text,
+                inference_type,
                 struct,
                 structs_by_name,
             )
@@ -18454,13 +18525,13 @@ def _infer_plain_template_helper_arguments(
     # being deduced retain the stricter repeated-binding contract, so this does
     # not turn `int* <- uint*` or `helper(T, T)` into a viable match.
     explicit_parameter_bindings: dict[str, str] = {
-        parameter: _strip_metal_type_qualifiers(value)
+        parameter: _metal_template_argument_binding_type(value)
         for parameter, value in explicit_bindings.items()
     }
     bindings: dict[str, str] = dict(explicit_parameter_bindings)
     variadic_bindings: dict[str, list[str]] = {
         parameter: [
-            _strip_metal_type_qualifiers(str(value))
+            _metal_template_argument_binding_type(str(value))
             for value in values
             if str(value).strip()
         ]
@@ -18486,7 +18557,7 @@ def _infer_plain_template_helper_arguments(
             expected_clean = _strip_metal_type_qualifiers(expected_type)
             if expected_clean in variadic_parameters and all(actual_types):
                 variadic_bindings[expected_clean] = [
-                    _strip_metal_type_qualifiers(str(actual_type))
+                    _metal_template_argument_binding_type(str(actual_type))
                     for actual_type in actual_types
                     if actual_type
                 ]
@@ -18590,6 +18661,30 @@ def _infer_plain_template_helper_matches(
     matches: list[tuple[Any, list[str], list[tuple[str, str, bool]]]] = []
     for template in candidate_templates:
         source_explicit_arguments = tuple(explicit_template_arguments)
+        if template_argument_alias_contexts and source_explicit_arguments:
+            _aliases, call_position, call_source = template_argument_alias_contexts[0]
+            constexpr_functions = (
+                preprocessor._materialization_constexpr_function_index(call_source)
+            )
+            folded_arguments: list[str] = []
+            unresolved_constexpr_calls: set[str] = set()
+            for argument in source_explicit_arguments:
+                resolved_argument, _evaluation, unresolved_calls = (
+                    preprocessor._resolve_static_constexpr_calls(
+                        argument,
+                        constexpr_functions,
+                        call_position,
+                    )
+                )
+                folded_arguments.append(resolved_argument)
+                unresolved_constexpr_calls.update(unresolved_calls)
+            if unresolved_constexpr_calls:
+                # Signature inference must not guess through an ambiguous,
+                # runtime-dependent, or recursive constexpr helper.  Retaining
+                # the original call lets the final template-residue diagnostic
+                # report the unsupported specialization instead.
+                continue
+            source_explicit_arguments = tuple(folded_arguments)
         canonical_explicit_arguments = source_explicit_arguments
         materialization_explicit_arguments = source_explicit_arguments
         aliases_visible_at_materialization = True
@@ -20122,6 +20217,8 @@ def _metal_template_alias_reference_matches(
     preprocessor: Any,
     source: str,
     declarations: Sequence[_MetalTemplateAliasDeclaration],
+    *,
+    relocated_reference_spans: Sequence[tuple[int, int]] = (),
 ) -> list[_MetalTemplateAliasReference]:
     if not declarations:
         return []
@@ -20137,6 +20234,12 @@ def _metal_template_alias_reference_matches(
     }
     if not unambiguous:
         return []
+    relocated_declarations_by_name: dict[str, list[_MetalTemplateAliasDeclaration]] = {}
+    for declaration in declarations:
+        if declaration.owner_name is None:
+            relocated_declarations_by_name.setdefault(declaration.name, []).append(
+                declaration
+            )
 
     masked = _masked_metal_non_code_text(source)
     declaration_spans = [declaration.span for declaration in declarations]
@@ -20204,6 +20307,20 @@ def _metal_template_alias_reference_matches(
             ),
             None,
         )
+        relocated_fallback = False
+        if (
+            declaration is None
+            and "::" not in raw_name
+            and not globally_qualified
+            and _source_offset_in_spans(
+                match.start(),
+                relocated_reference_spans,
+            )
+        ):
+            relocated_candidates = relocated_declarations_by_name.get(raw_name, [])
+            if len(relocated_candidates) == 1:
+                declaration = relocated_candidates[0]
+                relocated_fallback = True
         if declaration is None:
             continue
         if (
@@ -20224,7 +20341,8 @@ def _metal_template_alias_reference_matches(
             source[angle_start + 1 : angle_end]
         )
         target_is_visible = (
-            "::" in raw_name
+            relocated_fallback
+            or "::" in raw_name
             or globally_qualified
             or namespace == declaration.namespace
             or declaration.namespace in visible_namespaces
@@ -20236,9 +20354,208 @@ def _metal_template_alias_reference_matches(
                 declaration=declaration,
                 arguments=tuple(arguments),
                 target_is_visible=target_is_visible,
+                relocated_fallback=relocated_fallback,
             )
         )
     return references
+
+
+def _metal_relocated_member_function_contexts(
+    preprocessor: Any,
+    source: str,
+    *,
+    preexisting_function_headers: frozenset[str] = frozenset(),
+) -> dict[tuple[int, int], frozenset[str]]:
+    """Return generated member functions and their owner-visible namespaces.
+
+    Struct materialization records the concrete owner provenance before member
+    lowering relocates its methods to global free functions.  A generated name
+    alone proves the owner, but not visibility of every same-named alias in the
+    translation unit.  Bind each helper to the namespaces lexically enclosing
+    its one concrete owner so a unique alias in an unrelated namespace remains
+    unavailable after relocation.
+    """
+
+    materialized_structs = getattr(
+        preprocessor,
+        "_materialized_struct_specializations",
+        {},
+    )
+    if not materialized_structs:
+        return {}
+    concrete_structs = preprocessor._find_concrete_struct_definitions(source)
+    concrete_name_counts = Counter(struct.name for struct in concrete_structs)
+    concrete_by_name = {
+        struct.name: struct
+        for struct in concrete_structs
+        if concrete_name_counts.get(struct.name) == 1
+        and struct.name in materialized_structs
+    }
+    if not concrete_by_name:
+        return {}
+
+    owner_names = tuple(sorted(concrete_by_name, key=len, reverse=True))
+    template_spans = preprocessor._find_template_declaration_spans(source)
+    namespace_spans = preprocessor._find_namespace_spans(source)
+    source_namespaces = getattr(
+        preprocessor,
+        "_materialized_struct_specialization_namespaces",
+        {},
+    )
+    contexts: dict[tuple[int, int], frozenset[str]] = {}
+    for function in preprocessor._find_non_template_function_definitions(
+        source,
+        list(template_spans),
+    ):
+        function_header = re.sub(
+            r"\s+",
+            " ",
+            _metal_function_header(source, function).strip(),
+        )
+        if function_header in preexisting_function_headers:
+            continue
+        matching_owners = [
+            owner for owner in owner_names if function.name.startswith(f"{owner}__")
+        ]
+        if not matching_owners:
+            continue
+        longest = len(matching_owners[0])
+        exact_owners = {owner for owner in matching_owners if len(owner) == longest}
+        if len(exact_owners) != 1:
+            continue
+        owner = concrete_by_name[next(iter(exact_owners))]
+        owner_namespace = source_namespaces.get(owner.name)
+        if owner_namespace is None:
+            owner_namespace = preprocessor._namespace_at(
+                namespace_spans,
+                owner.span[0],
+            )
+        contexts[function.span] = frozenset(
+            preprocessor._metal_enclosing_namespaces(owner_namespace)
+        )
+    return contexts
+
+
+def _canonicalize_relocated_metal_template_aliases(
+    preprocessor: Any,
+    source: str,
+    declarations: Sequence[_MetalTemplateAliasDeclaration],
+    *,
+    preexisting_function_headers: frozenset[str] = frozenset(),
+) -> str:
+    """Resolve aliases copied out of their source namespace by member lowering.
+
+    Only a unique namespace-level alias may be borrowed, and only inside a free
+    function whose concrete owner is recorded by struct materialization.  Alias
+    declarations are retained so ordinary helper deduction can continue using
+    the source wrappers until the established final canonicalization pass.
+    """
+
+    captured_declarations = tuple(
+        replace(declaration, span=(-1, -1))
+        for declaration in declarations
+        if declaration.owner_name is None
+    )
+    if not captured_declarations:
+        return source
+
+    working = source
+    seen_sources: set[str] = set()
+    for _ in range(len(captured_declarations) + 1):
+        if working in seen_sources:
+            break
+        seen_sources.add(working)
+        generated_contexts = _metal_relocated_member_function_contexts(
+            preprocessor,
+            working,
+            preexisting_function_headers=preexisting_function_headers,
+        )
+        generated_spans = tuple(generated_contexts)
+        if not generated_spans:
+            break
+        replacements: list[tuple[int, int, str]] = []
+        for reference in _metal_template_alias_reference_matches(
+            preprocessor,
+            working,
+            captured_declarations,
+            relocated_reference_spans=generated_spans,
+        ):
+            owner_visible_namespaces = next(
+                (
+                    namespaces
+                    for (start, end), namespaces in generated_contexts.items()
+                    if start <= reference.start < end
+                ),
+                None,
+            )
+            if not reference.target_is_visible or owner_visible_namespaces is None:
+                continue
+            if (
+                reference.relocated_fallback
+                and reference.declaration.namespace not in owner_visible_namespaces
+            ):
+                continue
+            replacement = _metal_template_alias_reference_replacement(
+                preprocessor,
+                reference,
+                captured_declarations,
+            )
+            if replacement and replacement != working[reference.start : reference.end]:
+                replacements.append((reference.start, reference.end, replacement))
+        if not replacements:
+            break
+        working = preprocessor._apply_text_replacements(working, replacements)
+    return working
+
+
+def _lower_metal_struct_members_with_generated_aliases(
+    preprocessor: Any,
+    source: str,
+    *,
+    work_budget: Any = None,
+    alias_declarations: Sequence[_MetalTemplateAliasDeclaration] | None = None,
+    prematerialize: bool = False,
+    rematerialize: bool = False,
+) -> str:
+    """Materialize as requested, lower members, and resolve relocated aliases."""
+
+    captured_declarations = tuple(
+        alias_declarations
+        if alias_declarations is not None
+        else _metal_template_alias_declarations(preprocessor, source)
+    )
+    if prematerialize:
+        source = preprocessor._materialize_explicit_template_struct_instantiations(
+            source,
+            work_budget=work_budget,
+            allow_partial_object_specializations=True,
+        )
+    preexisting_template_spans = preprocessor._find_template_declaration_spans(source)
+    preexisting_function_headers = frozenset(
+        re.sub(
+            r"\s+",
+            " ",
+            _metal_function_header(source, function).strip(),
+        )
+        for function in preprocessor._find_non_template_function_definitions(
+            source,
+            list(preexisting_template_spans),
+        )
+    )
+    lowered = preprocessor._lower_struct_member_functions(source)
+    canonicalized = _canonicalize_relocated_metal_template_aliases(
+        preprocessor,
+        lowered,
+        captured_declarations,
+        preexisting_function_headers=preexisting_function_headers,
+    )
+    if canonicalized == lowered and not rematerialize:
+        return lowered
+    return preprocessor._materialize_explicit_template_struct_instantiations(
+        canonicalized,
+        work_budget=work_budget,
+        allow_partial_object_specializations=True,
+    )
 
 
 def _metal_template_alias_reference_replacement(
@@ -22563,6 +22880,7 @@ def _project_template_materialization_for_artifact(
         },
     )
     specializations.extend(inferred_plain_specializations)
+    post_member_materialized_names = inferred_plain_materialized_names
     materialized = preprocessor._lower_concrete_const_for_loop_callbacks(materialized)
 
     materialized = _fold_concrete_metal_struct_template_arguments(
@@ -22586,14 +22904,21 @@ def _project_template_materialization_for_artifact(
     )
     if source_instantiations or discovered_struct_specializations:
         # Struct materialization makes member field types concrete; member
-        # lowering then exposes those fields as `self.field` arguments. Run one
-        # bounded helper pass at that point before template-hostile diagnostics.
-        materialized = preprocessor._lower_struct_member_functions(materialized)
+        # lowering then exposes those fields as `self.field` arguments. It can
+        # also relocate namespace aliases such as `Int<(Stride)>` into generated
+        # global free functions. Resolve only those provenance-backed aliases,
+        # then materialize the resulting concrete structs before helper discovery.
+        materialized = _lower_metal_struct_members_with_generated_aliases(
+            preprocessor,
+            materialized,
+            work_budget=explicit_work_budget,
+            rematerialize=True,
+        )
         (
             materialized,
             struct_field_specializations,
             struct_field_template_names,
-            _struct_field_materialized_names,
+            post_member_materialized_names,
         ) = _materialize_plain_template_helper_calls(
             preprocessor,
             materialized,
@@ -22614,6 +22939,8 @@ def _project_template_materialization_for_artifact(
     materialized = preprocessor._lower_concrete_const_for_loop_callbacks(materialized)
 
     replacements: list[tuple[int, int, str]] = []
+    deferred_constexpr_template_names: set[str] = set()
+    remaining_template_unsupported: list[dict[str, Any]] = []
     unsupported: list[dict[str, Any]] = list(source_instantiation_unsupported)
     used_configured_parameters: dict[str, str] = {}
     used_configured_parameter_sources: dict[str, str] = {}
@@ -22660,7 +22987,24 @@ def _project_template_materialization_for_artifact(
             template.name in explicit_template_names
             or template.name in inferred_plain_template_names
         ):
-            replacements.append((template.span[0], template.span[1], ""))
+            body_start = preprocessor._find_next_top_level_char(
+                template.source,
+                0,
+                "{",
+            )
+            header = (
+                template.source[:body_start]
+                if body_start is not None
+                else template.source
+            )
+            if re.search(r"\b(?:constexpr|consteval)\b", header):
+                # Struct/member materialization later in this pipeline can
+                # reintroduce the source spelling of a proven constexpr helper
+                # inside a non-type template argument.  Keep only these helper
+                # declarations until that generated layer has been rescanned.
+                deferred_constexpr_template_names.add(template.name)
+            else:
+                replacements.append((template.span[0], template.span[1], ""))
             continue
         if (
             current_reachable_function_spans
@@ -22822,7 +23166,7 @@ def _project_template_materialization_for_artifact(
                 )
             )
             continue
-        unsupported.append(
+        remaining_template_unsupported.append(
             _unsupported_template_record(
                 name=template.name,
                 parameters=template.template_parameters,
@@ -22873,9 +23217,18 @@ def _project_template_materialization_for_artifact(
                 materialized, explicit_replacements
             )
     materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
-    materialized = preprocessor._lower_struct_member_functions(materialized)
+    materialized = _lower_metal_struct_members_with_generated_aliases(
+        preprocessor,
+        materialized,
+        work_budget=explicit_work_budget,
+        prematerialize=True,
+    )
     # Keep alias wrappers intact while compile-time callbacks infer their
     # argument types; canonicalize only after member lowering has consumed them.
+    template_alias_declarations = _metal_template_alias_declarations(
+        preprocessor,
+        materialized,
+    )
     canonicalized_aliases = _canonicalize_metal_template_aliases(
         preprocessor,
         materialized,
@@ -22889,7 +23242,12 @@ def _project_template_materialization_for_artifact(
             )
         )
         materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
-        materialized = preprocessor._lower_struct_member_functions(materialized)
+        materialized = _lower_metal_struct_members_with_generated_aliases(
+            preprocessor,
+            materialized,
+            work_budget=explicit_work_budget,
+            alias_declarations=template_alias_declarations,
+        )
     materialized = _inline_metal_concrete_using_template_aliases(
         preprocessor,
         materialized,
@@ -22910,6 +23268,68 @@ def _project_template_materialization_for_artifact(
     )
     materialized = preprocessor._substitute_local_integral_constant_array_extents(
         materialized
+    )
+
+    # The final member-lowering layer can expose explicit calls that did not
+    # exist during the first helper pass (for example a concrete struct member
+    # whose non-type argument is a constexpr helper call).  Fold only calls with
+    # one proven constexpr value, then rescan with the full signature-aware
+    # materializer so trailing template parameters are still inferred from
+    # concrete call arguments rather than guessed.
+    materialized = preprocessor._fold_proven_explicit_static_constexpr_calls(
+        materialized
+    )
+    late_known_materializations = {
+        **_metal_concrete_function_materializations(
+            preprocessor,
+            materialized,
+            {
+                **source_instantiation_materialized_names,
+                **call_site_materialized_names,
+                **explicit_materialized_names,
+            },
+        ),
+        **post_member_materialized_names,
+    }
+    (
+        materialized,
+        late_helper_specializations,
+        late_materialized_template_names,
+        _late_materialized_names,
+    ) = _materialize_plain_template_helper_calls(
+        preprocessor,
+        materialized,
+        work_budget=explicit_work_budget,
+        include_struct_members=True,
+        known_materializations=late_known_materializations,
+    )
+    specializations.extend(late_helper_specializations)
+
+    removable_template_names = {
+        *deferred_constexpr_template_names,
+        *late_materialized_template_names,
+    }
+    if removable_template_names:
+        late_template_replacements = [
+            (template.span[0], template.span[1], "")
+            for template in preprocessor._find_template_functions(materialized)
+            if template.name in removable_template_names
+        ]
+        if late_template_replacements:
+            materialized = preprocessor._apply_text_replacements(
+                materialized,
+                late_template_replacements,
+            )
+        materialized = preprocessor._evaluate_static_assertions(materialized)
+
+    # Missing-argument records gathered before late member lowering are only
+    # provisional.  Drop one when every reachable call for that helper was
+    # safely materialized; any unresolved call remains visible to the final
+    # residue scanner below and is reported with its concrete signature.
+    unsupported.extend(
+        record
+        for record in remaining_template_unsupported
+        if record.get("name") not in late_materialized_template_names
     )
     post_materialization_unsupported = [
         *_post_materialization_unresolved_metal_template_type_records(

@@ -15,9 +15,11 @@ from crosstl.translator.ast import (
     CooperativeMatrixOpNode,
     CooperativeMatrixType,
     ExecutionModel,
+    FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
+    ParameterNode,
     PointerType,
     PrimitiveType,
     ResourceMemoryQualifierNode,
@@ -36,6 +38,63 @@ from crosstl.translator.codegen.metal_codegen import (
     MetalStructConversionError,
     UnsupportedMetalFeatureError,
 )
+
+
+def test_metal_ambiguous_same_arity_overloads_require_one_return_type():
+    codegen = MetalCodeGen()
+    call = FunctionCallNode(
+        IdentifierNode("choose"),
+        [IdentifierNode("value")],
+    )
+    int_overload = FunctionNode(
+        "choose",
+        PrimitiveType("int"),
+        [object()],
+    )
+    float_overload = FunctionNode(
+        "choose",
+        PrimitiveType("float"),
+        [object()],
+    )
+    codegen.function_overloads_by_name["choose"] = [
+        int_overload,
+        float_overload,
+    ]
+    # This flattened map intentionally models its normal last-declaration
+    # metadata. It must not decide a same-arity overloaded call.
+    codegen.function_return_types["choose"] = "float"
+
+    assert codegen.expression_result_type(call) is None
+
+    second_int_overload = FunctionNode(
+        "choose",
+        PrimitiveType("int"),
+        [object()],
+    )
+    codegen.function_overloads_by_name["choose"] = [
+        int_overload,
+        second_int_overload,
+    ]
+
+    assert codegen.expression_result_type(call) == "int"
+
+    no_argument_call = FunctionCallNode(IdentifierNode("choose"), [])
+    codegen.function_overloads_by_name["choose"] = [int_overload]
+    assert codegen.expression_result_type(no_argument_call) is None
+
+    defaulted_overload = FunctionNode(
+        "choose",
+        PrimitiveType("int"),
+        [
+            ParameterNode(
+                "value",
+                PrimitiveType("int"),
+                default_value=LiteralNode("1", "int"),
+            )
+        ],
+    )
+    codegen.function_overloads_by_name["choose"] = [defaulted_overload]
+    assert codegen.expression_result_type(no_argument_call) == "int"
 
 
 @pytest.mark.parametrize(
@@ -3770,7 +3829,7 @@ def test_metal_texture_proj_grad_offset_emits_division_with_gradient_and_offset(
     assert "textureProjGradOffset(" not in generated_code
 
 
-def test_metal_shared_local_variables_use_threadgroup_address_space():
+def test_metal_shared_local_variables_use_threadgroup_address_space(tmp_path):
     shader = """
     shader SharedLocalStorage {
         compute {
@@ -3790,6 +3849,63 @@ def test_metal_shared_local_variables_use_threadgroup_address_space():
     assert "threadgroup int scratch[4];" in generated_code
     assert "\n    int data[4];" not in generated_code
     assert "\n    int scratch[4];" not in generated_code
+
+    shader_path = tmp_path / "threadgroup-native-widths.metal"
+    shader_path.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+void consume_i8(threadgroup int8_t* values) { values[0] = int8_t(1); }
+void consume_u8(threadgroup uint8_t* values) { values[0] = uint8_t(1); }
+void consume_i16(threadgroup int16_t* values) { values[0] = int16_t(1); }
+void consume_u16(threadgroup uint16_t* values) { values[0] = uint16_t(1); }
+void consume_i32(threadgroup int* values) { values[0] = 1; }
+void consume_f32(threadgroup float* values) { values[0] = 1.0f; }
+
+kernel void native_width_probe(uint lid [[thread_index_in_threadgroup]]) {
+  threadgroup int8_t i8_values[4];
+  threadgroup uint8_t u8_values[4];
+  threadgroup int16_t i16_values[4];
+  threadgroup uint16_t u16_values[4];
+  threadgroup int i32_values[4];
+  threadgroup float f32_values[4];
+  if (lid == 0) {
+    consume_i8(i8_values);
+    consume_u8(u8_values);
+    consume_i16(i16_values);
+    consume_u16(u16_values);
+    consume_i32(i32_values);
+    consume_f32(f32_values);
+  }
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    for declaration in (
+        "threadgroup char i8_values[4];",
+        "threadgroup uchar u8_values[4];",
+        "threadgroup short i16_values[4];",
+        "threadgroup ushort u16_values[4];",
+        "threadgroup int i32_values[4];",
+        "threadgroup float f32_values[4];",
+    ):
+        assert declaration in generated_code
+    for widened_declaration in (
+        "threadgroup int i8_values[4];",
+        "threadgroup uint u8_values[4];",
+        "threadgroup int i16_values[4];",
+        "threadgroup uint u16_values[4];",
+    ):
+        assert widened_declaration not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_stage_local_shared_variables_emit_inside_kernel():
@@ -4342,6 +4458,41 @@ def test_metal_readonly_raw_buffer_calls_to_mutable_helpers_emit_diagnostic():
         "passed to mutable parameter 'payload' of 'mutate' */"
     ) in generated_code
     assert "mutate(payload, values);" not in generated_code
+
+
+def test_metal_readonly_call_preserves_same_arity_const_overload():
+    shader = """
+    shader MetalReadonlyOverloadCall {
+        struct Payload {
+            float value;
+        };
+
+        float inspect(const device Payload* payload) {
+            return payload.value;
+        }
+
+        float inspect(device Payload* payload) {
+            payload.value = 2.0;
+            return payload.value;
+        }
+
+        compute {
+            void main(readonly device Payload* payload @buffer(0)) {
+                float value = inspect(payload);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert generated_code.count("float inspect(") == 2
+    assert "float value = inspect(payload);" in generated_code
+    assert "unsupported Metal raw buffer call" not in generated_code
+    assert "unsupported Metal parameter call" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_const_reference_helper_parameters_are_readonly():
@@ -5472,11 +5623,11 @@ def test_metal_fixed_width_scalar_aliases_map_to_valid_metal_scalars():
     (
         ("bfloat16_t*", "bfloat*"),
         ("float16_t*", "half*"),
-        ("int8*", "int*"),
-        ("int16*", "int*"),
+        ("int8*", "char*"),
+        ("int16*", "short*"),
         ("int64*", "int64_t*"),
-        ("uint8*", "uint*"),
-        ("uint16*", "uint*"),
+        ("uint8*", "uchar*"),
+        ("uint16*", "ushort*"),
         ("uint64*", "uint64_t*"),
     ),
 )
@@ -5519,11 +5670,11 @@ def test_metal_imported_local_pointer_scalars_compile_with_native_spellings():
     for declaration in (
         "const device bfloat* bfloatRow;",
         "const device half* halfRow;",
-        "const device int* byteRow;",
-        "const device int* shortRow;",
+        "const device char* byteRow;",
+        "const device short* shortRow;",
         "const device int64_t* longRow;",
-        "const device uint* ubyteRow;",
-        "const device uint* ushortRow;",
+        "const device uchar* ubyteRow;",
+        "const device ushort* ushortRow;",
         "const device uint64_t* ulongRow;",
     ):
         assert declaration in generated_code
@@ -5750,7 +5901,7 @@ def test_metal_structured_buffer_fixed_width_aliases_map_to_device_pointers():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "device uint* counts" in generated_code
+    assert "device ushort* counts" in generated_code
     assert "const device int64_t* signedValues" in generated_code
     assert "device uint64_t* offsets" in generated_code
     assert "uint count = counts[index];" in generated_code
@@ -5785,7 +5936,7 @@ def test_metal_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert (
-        "uint readCount(array<device uint*, 2> localCounts, uint which, uint index)"
+        "uint readCount(array<device ushort*, 2> localCounts, uint which, uint index)"
         in generated_code
     )
     assert (
@@ -5793,12 +5944,12 @@ def test_metal_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
         in generated_code
     )
     assert (
-        "uint64_t combine(uint which, uint index, array<device uint*, 2> counts, array<const device uint64_t*, 2> offsets)"
+        "uint64_t combine(uint which, uint index, array<device ushort*, 2> counts, array<const device uint64_t*, 2> offsets)"
         in generated_code
     )
     assert "return localCounts[which][index];" in generated_code
     assert "counts[which][index] = count + uint(1u);" in generated_code
-    assert "device uint* localCounts" not in generated_code
+    assert "device ushort* localCounts" not in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
 
@@ -5828,11 +5979,11 @@ def test_metal_unsized_structured_buffer_arrays_infer_helper_size():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "array<device uint*, 3> counts" in generated_code
-    assert "device uint* afterCounts" in generated_code
+    assert "array<device ushort*, 3> counts" in generated_code
+    assert "device ushort* afterCounts" in generated_code
     assert "array<const device uint64_t*, 2> offsets" in generated_code
     assert (
-        "uint readCount(array<device uint*, 3> localCounts, uint index)"
+        "uint readCount(array<device ushort*, 3> localCounts, uint index)"
         in generated_code
     )
     assert (
@@ -5954,18 +6105,19 @@ def test_metal_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "array<device uint*, 3> counts" in generated_code
-    assert "device uint* afterCounts" in generated_code
+    assert "array<device ushort*, 3> counts" in generated_code
+    assert "device ushort* afterCounts" in generated_code
     assert (
-        "uint readLeaf(array<device uint*, 3> leafCounts, uint index)" in generated_code
+        "uint readLeaf(array<device ushort*, 3> leafCounts, uint index)"
+        in generated_code
     )
     assert (
-        "uint readMid(array<device uint*, 3> midCounts, uint index)" in generated_code
+        "uint readMid(array<device ushort*, 3> midCounts, uint index)" in generated_code
     )
     assert "return leafCounts[2][index];" in generated_code
     assert "return readLeaf(midCounts, index);" in generated_code
     assert "return readMid(counts, index) + afterCounts[index];" in generated_code
-    assert "array<device uint*, 1> counts" not in generated_code
+    assert "array<device ushort*, 1> counts" not in generated_code
     assert "uint16_t" not in generated_code
 
 

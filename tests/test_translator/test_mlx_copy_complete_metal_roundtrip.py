@@ -33,7 +33,7 @@ COPY_METAL_CONTRACT_PATH = (
 )
 # Installed from the terminal exhaustive proof before this harness is committed.
 COPY_METAL_CONTRACT_SHA256 = (
-    "5efd3b2b238ba4022e75fcf6848aedb6623af9d50ed1a9bf4e94cbd48aa3ef4f"
+    "648e989cacb5e9567ef889531c7bf9d3dd488bb0fb77f2aa924a9b032c47d564"
 )
 
 
@@ -284,14 +284,14 @@ COPY_METAL_TYPE_NAMES = {
     "complex64_t": "complex_t_float",
     "float": "float",
     "half": "half",
-    "int16_t": "int",
+    "int16_t": "short",
     "int32_t": "int",
     "int64_t": "int64_t",
-    "int8_t": "int",
-    "uint16_t": "uint",
+    "int8_t": "char",
+    "uint16_t": "ushort",
     "uint32_t": "uint",
     "uint64_t": "uint64_t",
-    "uint8_t": "uint",
+    "uint8_t": "uchar",
 }
 CONTRACT_RESOURCE_ABI_FIELDS = (
     "name",

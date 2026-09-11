@@ -2144,6 +2144,64 @@ def test_parse_alignas_after_struct_keyword_from_apple_msl_spec():
     assert struct.members[0].vtype == "float4"
 
 
+def test_parse_named_nested_aligned_struct_from_mlx_loader():
+    code = """
+    struct BlockLoader {
+        struct alignas(4) ReadVector {
+            uchar v[8];
+        };
+        int src_ld;
+    };
+    """
+    ast = parse_ok(code)
+    owner = ast.structs[0]
+
+    assert owner.name == "BlockLoader"
+    assert [member.name for member in owner.members] == ["src_ld"]
+    assert len(owner.nested_structs) == 1
+    nested = owner.nested_structs[0]
+    assert nested.name == "ReadVector"
+    assert nested.lexical_owner_name == "BlockLoader"
+    assert nested.alignas == ["4"]
+    assert [member.name for member in nested.members] == ["v"]
+    assert nested.members[0].vtype == "uchar"
+    assert nested.members[0].array_sizes == ["8"]
+
+
+def test_parse_named_nested_struct_retains_trailing_member_declaration():
+    code = """
+    struct Outer {
+        struct Inner {
+            int value;
+        } inner;
+        int retained;
+    };
+    """
+    ast = parse_ok(code)
+    owner = ast.structs[0]
+
+    assert owner.name == "Outer"
+    assert [member.name for member in owner.members] == ["inner", "retained"]
+    assert owner.members[0].vtype == "Inner"
+    assert [nested.name for nested in owner.nested_structs] == ["Inner"]
+
+
+def test_parse_anonymous_nested_struct_keeps_prior_conservative_skip():
+    code = """
+    struct Outer {
+        struct {
+            int omitted;
+        } anonymous_value;
+        int retained;
+    };
+    """
+    ast = parse_ok(code)
+    owner = ast.structs[0]
+
+    assert [member.name for member in owner.members] == ["retained"]
+    assert owner.nested_structs == []
+
+
 def test_parse_using_alias():
     code = """
     using Index = uint;

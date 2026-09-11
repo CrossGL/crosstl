@@ -2143,8 +2143,8 @@ EXTERNAL_FIXTURES = [
             "threadgroup float* scratch @threadgroup(0)",
             "uint simd_lane_id @gl_SubgroupInvocationID",
             "uint simd_group_id @gl_SubgroupID",
-            "vec4((*(f16vec4*)(x_row + simd_lane_id)))",
-            "vec4((*(f16vec4*)(A + simd_lane_id)))",
+            "vec4((*(const device f16vec4*)(x_row + simd_lane_id)))",
+            "vec4((*(const device f16vec4*)(A + simd_lane_id)))",
             "xA_tile[tid.x] = acc_a4.x;",
         ],
         "not_contains": [

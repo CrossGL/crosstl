@@ -313,7 +313,11 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .pointer_reinterpret import (
+    PointerReinterpretationError,
+    crossgl_literal_positive_integer,
     metal_local_single_field_reinterpret_contract,
+    metal_storage_pointer_reinterpret_contract,
+    scalar_storage_layout,
     validate_pointer_reinterpretation_target,
 )
 from .resource_arrays import collect_resource_array_size_hints
@@ -858,6 +862,7 @@ class MetalCodeGen:
         self.function_parameter_infos = {}
         self.function_parameter_nodes = {}
         self.functions_by_name = {}
+        self.function_overloads_by_name = {}
         self.metal_skipped_function_parameter_indices = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
@@ -897,6 +902,7 @@ class MetalCodeGen:
         self.current_local_identifier_remaps = {}
         self.struct_member_types = {}
         self.struct_member_address_spaces = {}
+        self.metal_static_struct_members = {}
         self.structs_by_name = {}
         self.metal_generated_struct_names = set()
         self.metal_union_layouts = {}
@@ -1862,6 +1868,11 @@ class MetalCodeGen:
         self.functions_by_name = {
             func.name: func for func in all_functions if getattr(func, "name", None)
         }
+        self.function_overloads_by_name = {}
+        for func in all_functions:
+            func_name = getattr(func, "name", None)
+            if func_name:
+                self.function_overloads_by_name.setdefault(func_name, []).append(func)
         self.function_parameter_infos = self.collect_function_parameter_infos(
             all_functions
         )
@@ -1872,7 +1883,7 @@ class MetalCodeGen:
             self.collect_unused_array_parameter_indices(all_functions)
         )
         self.function_return_types = {
-            func.name: self.type_name_string(getattr(func, "return_type", "void"))
+            func.name: self.metal_effective_function_return_type(func)
             for func in all_functions
             if getattr(func, "name", None)
         }
@@ -1953,6 +1964,18 @@ class MetalCodeGen:
         )
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)
+        }
+        self.metal_static_struct_members = {
+            node.name: {
+                getattr(member, "name", None)
+                for member in getattr(node, "members", []) or []
+                if any(
+                    self.normalized_metal_abi_attribute_name(attribute) == "static"
+                    for attribute in getattr(member, "attributes", []) or []
+                )
+            }
+            for node in structs
+            if isinstance(node, StructNode)
         }
         self.metal_union_layouts = {}
         for node in structs:
@@ -2161,7 +2184,7 @@ class MetalCodeGen:
         )
         self.function_return_types.update(
             {
-                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                func.name: self.metal_effective_function_return_type(func)
                 for func in generic_function_specializations.values()
             }
         )
@@ -3218,8 +3241,60 @@ class MetalCodeGen:
                 return True
         return False
 
+    def is_metal_declaration_qualifier_attribute(self, attr):
+        return self.normalized_metal_abi_attribute_name(attr) in {
+            "const",
+            "constexpr",
+            "inline",
+            "mutable",
+            "static",
+            "volatile",
+        }
+
     def is_metal_struct_member_abi_attribute(self, attr):
         return self.normalized_metal_abi_attribute_name(attr) == "id"
+
+    def metal_struct_alignment_error(self, node, reason, detail):
+        struct_name = getattr(node, "name", "<anonymous>")
+        raise UnsupportedMetalFeatureError(
+            "struct-alignment-contract",
+            f"Metal codegen cannot reconstruct alignment for struct "
+            f"'{struct_name}': {detail}",
+            missing_capabilities=("metal.struct-alignment-contract",),
+            operation=struct_name,
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def metal_struct_alignment(self, node):
+        attributes = [
+            attr
+            for attr in getattr(node, "attributes", ()) or ()
+            if self.normalized_metal_abi_attribute_name(attr) == "alignas"
+        ]
+        if not attributes:
+            return None
+        if len(attributes) != 1:
+            self.metal_struct_alignment_error(
+                node,
+                "duplicate-alignment",
+                "exactly one @metal_alignas attribute is required",
+            )
+        arguments = list(getattr(attributes[0], "arguments", ()) or ())
+        if len(arguments) != 1:
+            self.metal_struct_alignment_error(
+                node,
+                "malformed-alignment",
+                "@metal_alignas requires one positive power-of-two integer",
+            )
+        alignment = crossgl_literal_positive_integer(arguments[0])
+        if alignment is None or alignment & (alignment - 1):
+            self.metal_struct_alignment_error(
+                node,
+                "invalid-alignment",
+                "@metal_alignas must be a positive power-of-two integer",
+            )
+        return alignment
 
     def metal_union_layout_error(self, node, reason, detail, member=None):
         union_name = getattr(node, "name", "<anonymous>")
@@ -3726,7 +3801,9 @@ class MetalCodeGen:
         if not is_union:
             self.validate_struct_member_semantic_types(node)
         declaration_kind = "union" if is_union else "struct"
-        code = f"{declaration_kind} {node.name} {{\n"
+        alignment = self.metal_struct_alignment(node)
+        alignment_suffix = f" alignas({alignment})" if alignment is not None else ""
+        code = f"{declaration_kind}{alignment_suffix} {node.name} {{\n"
         dependencies = set()
         default_member_semantics = self.metal_default_struct_member_semantics(node)
         for member in getattr(node, "members", []) or []:
@@ -3734,6 +3811,7 @@ class MetalCodeGen:
                 member,
                 default_member_semantics,
                 node.name,
+                preserve_native_narrow_storage=alignment is not None,
             )
             code += member_code
             dependencies.update(member_dependencies)
@@ -3954,9 +4032,78 @@ class MetalCodeGen:
     def metal_stage_io_array_getter_name(self, struct_name, member_name):
         return f"__crossgl_stage_io_get_{struct_name}_{member_name}"
 
+    def metal_static_struct_member_declaration(self, member):
+        attributes = {
+            self.normalized_metal_abi_attribute_name(attribute)
+            for attribute in getattr(member, "attributes", []) or []
+        }
+        if "static" not in attributes:
+            return None
+
+        member_name = getattr(member, "name", None)
+        if "constant" not in attributes:
+            raise UnsupportedMetalFeatureError(
+                "static-struct-member",
+                "Metal codegen requires static struct members to reside in "
+                "the constant address space",
+                missing_capabilities=("metal.static-struct-constant-storage",),
+                operation=member_name or "<unnamed>",
+                reason="constant-address-space-required",
+                source_location=getattr(member, "source_location", None),
+            )
+
+        default_value = getattr(member, "default_value", None)
+        if not member_name or default_value is None:
+            raise UnsupportedMetalFeatureError(
+                "static-struct-member",
+                "Metal codegen requires a static struct member to have a "
+                "compile-time initializer",
+                missing_capabilities=("metal.static-struct-member-initializer",),
+                operation=member_name or "<unnamed>",
+                reason="initializer-missing",
+                source_location=getattr(member, "source_location", None),
+            )
+
+        raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+        if self.is_array_type_node(raw_type):
+            raise UnsupportedMetalFeatureError(
+                "static-struct-member",
+                f"Metal codegen cannot emit static array member '{member_name}'",
+                missing_capabilities=("metal.static-struct-array-member",),
+                operation=member_name,
+                reason="array-static-member-unsupported",
+                source_location=getattr(member, "source_location", None),
+            )
+        mapped_type = self.map_type(self.convert_type_node_to_string(raw_type))
+        if "*" in mapped_type or "&" in mapped_type:
+            raise UnsupportedMetalFeatureError(
+                "static-struct-member",
+                f"Metal codegen cannot emit static pointer member '{member_name}'",
+                missing_capabilities=("metal.static-struct-pointer-member",),
+                operation=member_name,
+                reason="pointer-static-member-unsupported",
+                source_location=getattr(member, "source_location", None),
+            )
+
+        initializer = self.generate_expression_with_expected(default_value, raw_type)
+        dependencies = self.metal_struct_type_dependencies(mapped_type)
+        return (
+            f"    static constant constexpr {mapped_type} {member_name} = "
+            f"{initializer};\n",
+            dependencies,
+        )
+
     def metal_struct_member_declaration(
-        self, member, default_member_semantics, struct_name=None
+        self,
+        member,
+        default_member_semantics,
+        struct_name=None,
+        preserve_native_narrow_storage=False,
     ):
+        static_declaration = self.metal_static_struct_member_declaration(member)
+        if static_declaration is not None:
+            return static_declaration
+
         dependencies = set()
         lowering = self.metal_stage_io_member_lowerings.get(struct_name, {}).get(
             getattr(member, "name", None)
@@ -4065,6 +4212,13 @@ class MetalCodeGen:
             if str(type(member.member_type)).find("ArrayType") != -1:
                 member_type_str = self.convert_type_node_to_string(member.member_type)
                 member_type = self.map_type(member_type_str)
+                if preserve_native_narrow_storage:
+                    base_type, array_suffix = split_array_type_suffix(member_type_str)
+                    native_type = self.metal_native_narrow_bitcast_storage_type(
+                        base_type
+                    )
+                    if native_type is not None:
+                        member_type = f"{native_type}{array_suffix}"
                 dependencies.update(self.metal_struct_type_dependencies(member_type))
                 declaration = format_c_style_array_declaration(member_type, member.name)
                 if self.metal_array_semantic_attribute_precedes_extent(semantic):
@@ -4884,14 +5038,21 @@ class MetalCodeGen:
                 )
 
         if hasattr(func, "return_type"):
-            raw_return_type = self.type_name_string(func.return_type)
+            effective_return_type = self.metal_effective_function_return_type(func)
+            raw_return_type = self.type_name_string(effective_return_type)
             if "[" in raw_return_type:
                 raise ValueError(
                     "Metal output does not support C-style array return types; "
                     "wrap the array in a struct or use an output parameter"
                 )
-            return_type = self.map_type(raw_return_type)
+            if isinstance(effective_return_type, PointerType):
+                return_type = self.format_metal_pointer_return_type(
+                    effective_return_type
+                )
+            else:
+                return_type = self.map_type(raw_return_type)
         else:
+            effective_return_type = "void"
             raw_return_type = "void"
             return_type = "void"
         if shader_type in {"vertex", "fragment"}:
@@ -4903,7 +5064,7 @@ class MetalCodeGen:
                     f"Metal {shader_type} function '{self.current_function_name}' "
                     "cannot combine output parameters with a non-void return type"
                 )
-        self.current_function_return_type = raw_return_type
+        self.current_function_return_type = effective_return_type
         self.validate_metal_ray_stage_signature(func, shader_type, raw_return_type)
         parameter_diagnostics = self.glsl_buffer_block_parameter_diagnostics(
             "Metal", param_list, indent
@@ -7170,7 +7331,7 @@ class MetalCodeGen:
 
             local_name = self.metal_local_identifier_name(stmt.name)
             declaration = format_c_style_array_declaration(
-                self.map_type(var_type), local_name
+                self.metal_local_storage_declaration_type(stmt, var_type), local_name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             declaration = self.maybe_format_unused_local_declaration(
@@ -7637,6 +7798,26 @@ class MetalCodeGen:
     def local_variable_type_node(self, stmt):
         return getattr(stmt, "var_type", None) or getattr(stmt, "vtype", None)
 
+    def metal_local_storage_declaration_type(self, node, declared_type):
+        """Map a local type while preserving native threadgroup storage width.
+
+        Arithmetic values intentionally use CrossGL's widened fixed-width integer
+        mapping, but Metal threadgroup storage has a physical ABI.  In particular,
+        an array passed to a ``threadgroup T*`` helper must retain the source
+        ``char``/``uchar``/``short``/``ushort`` element width rather than decay
+        from a widened ``int``/``uint`` array.
+        """
+        mapped_type = self.map_type(declared_type)
+        if self.local_variable_address_space(node) != "threadgroup":
+            return mapped_type
+
+        source_type = self.type_name_string(declared_type)
+        base_type, array_suffix = split_array_type_suffix(source_type)
+        native_type = self.metal_native_narrow_bitcast_storage_type(base_type)
+        if native_type is None:
+            return mapped_type
+        return f"{native_type}{array_suffix}"
+
     def array_indirect_element_type_node(self, raw_type):
         if not self.is_array_type_node(raw_type):
             return None
@@ -7722,10 +7903,55 @@ class MetalCodeGen:
             return False
         return self.assignment_target_root_name(value) is not None
 
-    def address_space_assignment_diagnostic(self, target, value):
+    def metal_pointer_offset_is_integral_scalar_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name or "[" in type_name:
+            return False
+        integral_names = {
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "int8",
+            "uint8",
+            "int16",
+            "uint16",
+            "int32",
+            "uint32",
+            "int64",
+            "uint64",
+            "int8_t",
+            "uint8_t",
+            "int16_t",
+            "uint16_t",
+            "int32_t",
+            "uint32_t",
+            "int64_t",
+            "uint64_t",
+            "size_t",
+        }
+        mapped_type = self.map_type(type_name)
+        return type_name in integral_names or mapped_type in integral_names
+
+    def address_space_assignment_diagnostic(self, target, value, operator="="):
         target_type = self.expression_result_type(target)
         if self.pointer_pointee_type_name(target_type) is None:
             return None
+        if operator in {"+=", "-="}:
+            value_type = self.expression_result_type(value)
+            if self.metal_pointer_offset_is_integral_scalar_type(value_type):
+                return None
+            target_name = self.assignment_target_display_name(target) or "<target>"
+            value_name = self.assignment_target_display_name(value) or "<expr>"
+            return (
+                "/* unsupported Metal pointer offset assignment: value "
+                f"'{value_name}' is not an integer scalar for target "
+                f"'{target_name}' */"
+            )
 
         expected_address_space = self.argument_address_space(target)
         if expected_address_space is None:
@@ -8640,6 +8866,10 @@ class MetalCodeGen:
             return "uint"
         if mapped_type.startswith("int"):
             return "int"
+        if mapped_type in {"ulong2", "ulong3", "ulong4"}:
+            return "ulong"
+        if mapped_type in {"long2", "long3", "long4"}:
+            return "long"
         if mapped_type.startswith("bool"):
             return "bool"
         return None
@@ -8747,8 +8977,9 @@ class MetalCodeGen:
                 array_type = self.unsupported_glsl_buffer_block_expression_type(
                     expr.array
                 )
-            if array_type and "[" in array_type and "]" in array_type:
-                base_type, _ = split_array_type_suffix(array_type)
+            array_type_name = self.type_name_string(array_type)
+            if array_type_name and "[" in array_type_name and "]" in array_type_name:
+                base_type, _ = split_array_type_suffix(array_type_name)
                 return base_type
             metal_array_element_type = self.metal_array_element_type(array_type)
             if metal_array_element_type is not None:
@@ -8906,6 +9137,26 @@ class MetalCodeGen:
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[specialized_func_name]
+            overload = self.metal_user_function_overload_for_call(func_name, args)
+            if overload is not None:
+                return self.metal_effective_function_return_type(overload)
+            overloads = self.function_overloads_by_name.get(func_name, [])
+            if overloads:
+                argument_count = len(args or [])
+                viable_return_types = {
+                    self.metal_effective_function_return_type(candidate)
+                    for candidate in overloads
+                    if self.metal_user_function_accepts_argument_count(
+                        candidate,
+                        argument_count,
+                    )
+                }
+                if len(viable_return_types) == 1:
+                    return next(iter(viable_return_types))
+                # Type-aware source overload resolution is unavailable here.
+                # Differing same-arity results must remain unknown rather than
+                # consuming the last declaration in function_return_types.
+                return None
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
             unsupported_functions = getattr(
@@ -9303,13 +9554,13 @@ class MetalCodeGen:
         if readonly_mesh_payload_alias is not None:
             return readonly_mesh_payload_alias
         address_space_assignment = self.address_space_assignment_diagnostic(
-            target, value
+            target, value, op
         )
         if address_space_assignment is not None:
             return address_space_assignment
 
         lhs = self.generate_expression(target)
-        if self.pointer_assignment_needs_address(target, value):
+        if op == "=" and self.pointer_assignment_needs_address(target, value):
             rhs = f"&{rhs}"
         return f"{lhs} {op} {rhs}"
 
@@ -9893,6 +10144,8 @@ class MetalCodeGen:
                 for element in expr.elements
             )
             return f"{{{elements}}}"
+        elif isinstance(expr, PointerReinterpretNode):
+            return self.generate_metal_storage_pointer_reinterpret(expr)
         elif isinstance(expr, UnaryOpNode):
             # In C++/Metal, ``9223372036854775808`` cannot be represented by a
             # signed literal type, so spelling INT64_MIN as unary minus applied
@@ -10567,6 +10820,15 @@ class MetalCodeGen:
             if block_load is not None:
                 return block_load
             suppress_suffix = self.member_access_is_image_load_component(expr)
+            object_name = self.expression_name(expr.object)
+            if (
+                object_name in self.metal_static_struct_members
+                and str(expr.member)
+                in self.metal_static_struct_members.get(object_name, set())
+                and object_name not in self.local_variable_types
+                and object_name not in self.metal_program_scope_value_global_types
+            ):
+                return f"{object_name}::{expr.member}"
             previous_suppression = self.suppress_image_load_component_suffix
             self.suppress_image_load_component_suffix = (
                 previous_suppression or suppress_suffix
@@ -11053,6 +11315,7 @@ class MetalCodeGen:
             "barrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "workgroupBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "workgroupExecutionBarrier": "threadgroup_barrier(mem_flags::mem_none)",
+            "subgroupExecutionBarrier": "simdgroup_barrier(mem_flags::mem_none)",
             "groupMemoryBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "memoryBarrierShared": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "memoryBarrierBuffer": "threadgroup_barrier(mem_flags::mem_device)",
@@ -13734,8 +13997,90 @@ class MetalCodeGen:
         type_name = str(self.resource_base_type(vtype))
         if "<" not in type_name or not type_name.endswith(">"):
             return "uint"
-        element_type = type_name.split("<", 1)[1][:-1].strip()
-        return self.map_type(element_type)
+        element_type_name = type_name.split("<", 1)[1][:-1].strip()
+        return self.metal_native_narrow_bitcast_storage_type(
+            element_type_name
+        ) or self.map_type(element_type_name)
+
+    def metal_thread_pointer_return_surrogate_type(self, func):
+        """Recover a pointer ABI from one canonical CrossGL buffer surrogate.
+
+        CrossGL deliberately has no general function-pointer return syntax.  The
+        Metal importer therefore represents a source ``thread T*`` return as a
+        ``RWStructuredBuffer<T>`` (or ``StructuredBuffer<T>`` for a const
+        pointee) while retaining the exact pointer type on the sole
+        ``PointerReinterpretNode`` returned by the helper.  Reconstruct only
+        that narrow shape: arbitrary resource-returning functions must not be
+        mistaken for thread-local pointer views.
+        """
+
+        declared_type = getattr(func, "return_type", None)
+        buffer_kind = self.structured_buffer_type_name(declared_type)
+        if buffer_kind not in {"StructuredBuffer", "RWStructuredBuffer"}:
+            return None
+
+        body = getattr(func, "body", None)
+        statements = list(getattr(body, "statements", ()) or ())
+        if len(statements) != 1 or not isinstance(
+            statements[0], (ReturnNode, BackendReturnNode)
+        ):
+            return None
+        reinterpret = getattr(statements[0], "value", None)
+        if not isinstance(reinterpret, PointerReinterpretNode):
+            return None
+        pointer_type = getattr(reinterpret, "target_type", None)
+        if not isinstance(pointer_type, PointerType):
+            return None
+        if (
+            self.normalized_address_space(getattr(pointer_type, "address_space", None))
+            != "thread"
+        ):
+            return None
+        if getattr(pointer_type, "access_mode", None) not in {
+            None,
+            "read",
+            "write",
+            "read_write",
+        }:
+            return None
+        if getattr(pointer_type, "resource_qualifiers", None):
+            return None
+
+        is_mutable = bool(getattr(pointer_type, "is_mutable", True))
+        if is_mutable != (buffer_kind == "RWStructuredBuffer"):
+            return None
+        if getattr(pointer_type, "access_mode", None) == "read" and is_mutable:
+            return None
+        if (
+            getattr(pointer_type, "access_mode", None)
+            in {
+                "write",
+                "read_write",
+            }
+            and not is_mutable
+        ):
+            return None
+
+        pointee_type = self.metal_native_narrow_bitcast_storage_type(
+            pointer_type.pointee_type
+        ) or self.map_type(pointer_type.pointee_type)
+        if pointee_type != self.structured_buffer_element_type(declared_type):
+            return None
+        return pointer_type
+
+    def metal_effective_function_return_type(self, func):
+        pointer_type = self.metal_thread_pointer_return_surrogate_type(func)
+        if pointer_type is not None:
+            return pointer_type
+        return self.type_name_string(getattr(func, "return_type", "void"))
+
+    def format_metal_pointer_return_type(self, pointer_type):
+        address_space = self.normalized_address_space(pointer_type.address_space)
+        pointee_type = self.metal_native_narrow_bitcast_storage_type(
+            pointer_type.pointee_type
+        ) or self.map_type(pointer_type.pointee_type)
+        const_prefix = "" if pointer_type.is_mutable else "const "
+        return f"{const_prefix}{address_space} {pointee_type}*"
 
     def structured_buffer_address_space(self, vtype, node=None):
         qualifiers = self.parameter_qualifier_names(node)
@@ -14514,9 +14859,9 @@ class MetalCodeGen:
                 raw_param_type, node, shader_type
             )
             address_space = self.readonly_qualified_address_space(address_space, node)
-            pointee_type = self.map_resource_type_with_format(
-                raw_param_type.pointee_type, node
-            )
+            pointee_type = self.metal_native_narrow_bitcast_storage_type(
+                raw_param_type.pointee_type
+            ) or self.map_resource_type_with_format(raw_param_type.pointee_type, node)
             memory_qualifiers = self.resource_memory_qualifier_prefix(
                 node, raw_param_type
             )
@@ -14527,7 +14872,9 @@ class MetalCodeGen:
                 raw_param_type, node, shader_type
             )
             address_space = self.readonly_qualified_address_space(address_space, node)
-            referenced_type = self.map_resource_type_with_format(
+            referenced_type = self.metal_native_narrow_bitcast_storage_type(
+                raw_param_type.referenced_type
+            ) or self.map_resource_type_with_format(
                 raw_param_type.referenced_type, node
             )
             memory_qualifiers = self.resource_memory_qualifier_prefix(
@@ -14876,10 +15223,31 @@ class MetalCodeGen:
             return False
         return not self.is_readonly_raw_buffer_parameter(raw_param_type, node)
 
+    def metal_user_function_parameter_nodes_for_call(self, func_name, call_args):
+        overloads = self.function_overloads_by_name.get(func_name, [])
+        if overloads:
+            selected = self.metal_user_function_overload_for_call(func_name, call_args)
+            if selected is None:
+                return None
+            return list(
+                getattr(
+                    selected,
+                    "parameters",
+                    getattr(selected, "params", []),
+                )
+                or []
+            )
+        return list(self.function_parameter_nodes.get(func_name, []) or [])
+
     def readonly_raw_buffer_call_diagnostic(self, func_name, call_args):
         if func_name not in self.user_function_names:
             return None
-        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        parameter_nodes = self.metal_user_function_parameter_nodes_for_call(
+            func_name,
+            call_args,
+        )
+        if parameter_nodes is None:
+            return None
         for index, arg in enumerate(call_args):
             if index >= len(parameter_nodes):
                 continue
@@ -14903,7 +15271,12 @@ class MetalCodeGen:
     def readonly_metal_parameter_call_diagnostic(self, func_name, call_args):
         if func_name not in self.user_function_names:
             return None
-        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        parameter_nodes = self.metal_user_function_parameter_nodes_for_call(
+            func_name,
+            call_args,
+        )
+        if parameter_nodes is None:
+            return None
         for index, arg in enumerate(call_args):
             if index >= len(parameter_nodes):
                 continue
@@ -14942,7 +15315,12 @@ class MetalCodeGen:
     def readonly_metal_mesh_payload_call_diagnostic(self, func_name, call_args):
         if func_name not in self.user_function_names:
             return None
-        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        parameter_nodes = self.metal_user_function_parameter_nodes_for_call(
+            func_name,
+            call_args,
+        )
+        if parameter_nodes is None:
+            return None
         for index, arg in enumerate(call_args):
             if index >= len(parameter_nodes):
                 continue
@@ -14970,7 +15348,15 @@ class MetalCodeGen:
                 f"'{arg_name}' is {reason_text} and cannot be passed to "
                 f"mutable parameter '{parameter_name}' of '{func_name}' */"
             )
-            return_type = self.function_return_types.get(func_name)
+            selected_function = self.metal_user_function_overload_for_call(
+                func_name,
+                call_args,
+            )
+            return_type = (
+                self.metal_effective_function_return_type(selected_function)
+                if selected_function is not None
+                else self.function_return_types.get(func_name)
+            )
             if self.map_type(return_type) == "void":
                 return diagnostic
             return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
@@ -15084,10 +15470,65 @@ class MetalCodeGen:
             f"'{false_name}' ({false_space})"
         )
 
+    @staticmethod
+    def metal_user_function_accepts_argument_count(function, argument_count):
+        parameters = list(
+            getattr(
+                function,
+                "parameters",
+                getattr(function, "params", []),
+            )
+            or []
+        )
+        required_count = sum(
+            getattr(parameter, "default_value", None) is None
+            for parameter in parameters
+        )
+        return required_count <= argument_count <= len(parameters)
+
+    def metal_user_function_overload_for_call(self, function_name, arguments):
+        candidates = list(self.function_overloads_by_name.get(function_name, []))
+        if not candidates:
+            candidate = self.functions_by_name.get(function_name)
+            candidates = [candidate] if candidate is not None else []
+        argument_count = len(arguments or [])
+        arity_matches = [
+            candidate
+            for candidate in candidates
+            if self.metal_user_function_accepts_argument_count(
+                candidate,
+                argument_count,
+            )
+        ]
+        if len(arity_matches) == 1:
+            return arity_matches[0]
+        return None
+
     def address_space_call_diagnostic(self, func_name, call_args):
         if func_name not in self.user_function_names:
             return None
-        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        overloads = self.function_overloads_by_name.get(func_name, [])
+        selected_function = self.metal_user_function_overload_for_call(
+            func_name, call_args
+        )
+        if overloads and selected_function is None:
+            # Same-name, same-arity overloads require type-aware source overload
+            # resolution. Leave those calls intact for native Metal resolution
+            # rather than validating against arbitrary overwritten metadata.
+            return None
+        if selected_function is not None:
+            parameter_nodes = list(
+                getattr(
+                    selected_function,
+                    "parameters",
+                    getattr(selected_function, "params", []),
+                )
+                or []
+            )
+            return_type = self.metal_effective_function_return_type(selected_function)
+        else:
+            parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+            return_type = self.function_return_types.get(func_name)
         for index, arg in enumerate(call_args):
             if index >= len(parameter_nodes):
                 continue
@@ -15111,7 +15552,6 @@ class MetalCodeGen:
                     f"but parameter '{parameter_name}' of '{func_name}' requires "
                     f"{expected_address_space} */"
                 )
-                return_type = self.function_return_types.get(func_name)
                 if self.map_type(return_type) == "void":
                     return diagnostic
                 return (
@@ -15131,7 +15571,6 @@ class MetalCodeGen:
                 f"parameter '{parameter_name}' of '{func_name}' requires "
                 f"{expected_address_space} */"
             )
-            return_type = self.function_return_types.get(func_name)
             if self.map_type(return_type) == "void":
                 return diagnostic
             return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
@@ -19852,6 +20291,7 @@ class MetalCodeGen:
                 or self.is_metal_texture_element_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.is_metal_address_space_attribute(attr)
+                or self.is_metal_declaration_qualifier_attribute(attr)
                 or self.is_metal_struct_member_abi_attribute(attr)
                 or self.metal_interpolation_attribute_name(attr) is not None
                 or self.is_precision_qualifier_attribute(attr)
@@ -24716,9 +25156,15 @@ class MetalCodeGen:
         if cooperative_matrix is not None:
             return self.map_cooperative_matrix_type(vtype, cooperative_matrix)
         if isinstance(vtype, PointerType):
-            return f"{self.map_type(vtype.pointee_type)}*"
+            pointee_type = self.metal_native_narrow_bitcast_storage_type(
+                vtype.pointee_type
+            ) or self.map_type(vtype.pointee_type)
+            return f"{pointee_type}*"
         if isinstance(vtype, ReferenceType):
-            return f"{self.map_type(vtype.referenced_type)}&"
+            referent_type = self.metal_native_narrow_bitcast_storage_type(
+                vtype.referenced_type
+            ) or self.map_type(vtype.referenced_type)
+            return f"{referent_type}&"
 
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
@@ -24742,7 +25188,10 @@ class MetalCodeGen:
         if indirection is not None:
             base = indirection.group("base").strip()
             if base:
-                return f"{self.map_type(base)}{indirection.group('suffix')}"
+                mapped_base = self.metal_native_narrow_bitcast_storage_type(
+                    base
+                ) or self.map_type(base)
+                return f"{mapped_base}{indirection.group('suffix')}"
 
         tessellation_patch_type = self.metal_tessellation_patch_mapped_type(vtype)
         if tessellation_patch_type is not None:
@@ -25064,6 +25513,213 @@ class MetalCodeGen:
         if patch_type is None:
             return None
         return f"thread const {patch_type}& {name}"
+
+    def metal_storage_pointer_reinterpret_member_node(self, expression):
+        if isinstance(expression, UnaryOpNode) and getattr(
+            expression, "operator", getattr(expression, "op", None)
+        ) in {"&", "*"}:
+            return self.metal_storage_pointer_reinterpret_member_node(
+                getattr(expression, "operand", None)
+            )
+        if isinstance(expression, ArrayAccessNode):
+            return self.metal_storage_pointer_reinterpret_member_node(
+                getattr(expression, "array", getattr(expression, "array_expr", None))
+            )
+        if isinstance(expression, BinaryOpNode) and getattr(
+            expression, "operator", getattr(expression, "op", None)
+        ) in {"+", "-"}:
+            for operand in (
+                getattr(expression, "left", None),
+                getattr(expression, "right", None),
+            ):
+                operand_type = self.expression_result_type(operand)
+                if self.metal_type_is_pointer_like(operand_type) or (
+                    self.argument_address_space(operand) is not None
+                ):
+                    member = self.metal_storage_pointer_reinterpret_member_node(operand)
+                    if member is not None:
+                        return member
+            return None
+        if not isinstance(expression, MemberAccessNode):
+            return None
+        object_expr = getattr(
+            expression, "object", getattr(expression, "object_expr", None)
+        )
+        return self.struct_member_named_node(object_expr, str(expression.member))
+
+    def metal_storage_pointer_reinterpret_source_is_readonly(
+        self, expression, source_type
+    ):
+        member = self.metal_storage_pointer_reinterpret_member_node(expression)
+        if member is not None:
+            raw_member_type = getattr(
+                member,
+                "member_type",
+                getattr(member, "vtype", getattr(member, "element_type", None)),
+            )
+            if isinstance(raw_member_type, (PointerType, ReferenceType)):
+                return not self.is_mutable_metal_parameter(raw_member_type, member)
+
+        if self.structured_buffer_type_name(source_type) == "StructuredBuffer":
+            return True
+
+        root_name = self.assignment_target_root_name(expression)
+        return root_name in self.current_readonly_metal_parameters or (
+            root_name in self.current_readonly_raw_buffer_parameters
+        )
+
+    def metal_storage_pointer_reinterpret_error(
+        self, expression, contract, reason, source_type=None
+    ):
+        source_name = self.type_name_string(source_type)
+        if source_name is None and source_type is not None:
+            source_name = str(source_type)
+        raise PointerReinterpretationError(
+            "metal cannot prove a semantics-preserving storage pointer "
+            f"reinterpretation ({reason})",
+            source_type=source_name,
+            target_type=contract.get("targetTypeName"),
+            address_space=contract.get("addressSpace"),
+            access=(
+                "read"
+                if contract.get("usage") == "immediate-value-read"
+                else "write" if contract.get("isMutable") else "read"
+            ),
+            target_backend="metal",
+            reason=reason,
+            source_location=getattr(expression, "source_location", None),
+        )
+
+    def generate_metal_storage_pointer_reinterpret(self, expression):
+        contract = metal_storage_pointer_reinterpret_contract(expression)
+        if contract is None:
+            self.metal_storage_pointer_reinterpret_error(
+                expression,
+                {
+                    "targetTypeName": self.type_name_string(
+                        getattr(
+                            getattr(expression, "target_type", None),
+                            "pointee_type",
+                            None,
+                        )
+                    ),
+                    "addressSpace": getattr(
+                        getattr(expression, "target_type", None),
+                        "address_space",
+                        None,
+                    ),
+                    "isMutable": True,
+                },
+                "target-lowering-unavailable",
+            )
+
+        source = getattr(expression, "expression", None)
+        source_type = self.expression_result_type(source)
+        source_is_address = (
+            isinstance(source, UnaryOpNode)
+            and getattr(source, "operator", getattr(source, "op", None)) == "&"
+        )
+        if not source_is_address and not self.metal_type_is_pointer_like(source_type):
+            self.metal_storage_pointer_reinterpret_error(
+                expression, contract, "source-not-pointer-storage", source_type
+            )
+
+        if self.argument_address_space_conflict(source) is not None:
+            self.metal_storage_pointer_reinterpret_error(
+                expression, contract, "source-address-space-conflict", source_type
+            )
+        source_address_space = self.argument_address_space(source)
+        target_address_space = contract["addressSpace"]
+        if source_address_space is None:
+            self.metal_storage_pointer_reinterpret_error(
+                expression, contract, "source-address-space-unproven", source_type
+            )
+        if source_address_space != target_address_space:
+            self.metal_storage_pointer_reinterpret_error(
+                expression, contract, "address-space-mismatch", source_type
+            )
+
+        source_pointee = (
+            self.type_name_string(
+                self.expression_result_type(getattr(source, "operand", None))
+            )
+            if source_is_address
+            else self.pointer_pointee_type_name(source_type)
+        )
+        if source_pointee is None and self.is_structured_buffer_type(source_type):
+            source_pointee = self.structured_buffer_element_type(source_type)
+
+        if contract.get("aggregateByteView"):
+            source_layout = scalar_storage_layout(source_pointee)
+            required_alignment = contract.get("alignment")
+            if (
+                source_layout is None
+                or required_alignment is None
+                or source_layout.byte_width < required_alignment
+                or source_layout.byte_width % required_alignment
+            ):
+                self.metal_storage_pointer_reinterpret_error(
+                    expression, contract, "source-alignment-unproven", source_type
+                )
+
+        if contract.get("aggregateHomogeneousScalarArrayRead"):
+            source_layout = scalar_storage_layout(source_pointee)
+            target_layout = scalar_storage_layout(contract.get("elementTypeName"))
+            element_count = contract.get("elementCount")
+            target_layout_is_exact = (
+                target_layout is not None
+                and isinstance(element_count, int)
+                and not isinstance(element_count, bool)
+                and element_count > 0
+                and contract.get("alignment") == target_layout.byte_width
+                and contract.get("byteWidth")
+                == target_layout.byte_width * element_count
+            )
+            if not target_layout_is_exact:
+                self.metal_storage_pointer_reinterpret_error(
+                    expression, contract, "target-layout-unproven", source_type
+                )
+            if source_layout is None or source_layout != target_layout:
+                self.metal_storage_pointer_reinterpret_error(
+                    expression, contract, "source-element-layout-mismatch", source_type
+                )
+
+        source_is_readonly = self.metal_storage_pointer_reinterpret_source_is_readonly(
+            source, source_type
+        )
+        target_type = self.metal_native_narrow_bitcast_storage_type(
+            contract["targetType"]
+        ) or self.map_type(contract["targetType"])
+        effective_is_mutable = contract["isMutable"]
+        if source_is_readonly and contract["isMutable"]:
+            if (
+                contract.get("aggregateByteView")
+                or contract.get("aggregateHomogeneousScalarArrayRead")
+            ) and contract.get("usage") == "immediate-value-read":
+                # The source spelling may remove pointee constness before an
+                # immediate struct value load. Reconstruct the same native
+                # pointer identity as a const view because the validated AST
+                # cannot write through or escape this temporary pointer.
+                effective_is_mutable = False
+            else:
+                source_storage_type = self.metal_native_narrow_bitcast_storage_type(
+                    source_pointee
+                ) or self.map_type(source_pointee)
+                if (
+                    source_pointee is None
+                    or source_storage_type != target_type
+                    or contract.get("usage") != "call-argument"
+                ):
+                    self.metal_storage_pointer_reinterpret_error(
+                        expression, contract, "const-removal", source_type
+                    )
+                return self.generate_expression(source)
+
+        const_prefix = "" if effective_is_mutable else "const "
+        if target_address_space == "constant":
+            const_prefix = ""
+        cast_type = f"{const_prefix}{target_address_space} {target_type}*"
+        return f"reinterpret_cast<{cast_type}>({self.generate_expression(source)})"
 
     def generate_metal_local_reinterpret_read(self, expression):
         if getattr(expression, "operator", getattr(expression, "op", None)) != "*":
