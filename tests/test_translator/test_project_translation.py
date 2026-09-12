@@ -14546,6 +14546,175 @@ def test_plain_metal_helper_materialization_deduces_threadgroup_array_decay():
     assert "gemm_loop_finalize_float_MatrixOp_TileLoader(" in materialized
 
 
+def test_plain_metal_helper_materialization_decays_implicit_local_array():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename W>
+        void decode(W output) {
+          output += 1;
+          output[0] = 2.0f;
+        }
+
+        kernel void launch(device float* output [[buffer(0)]]) {
+          float values[8];
+          decode(values);
+          output[0] = values[0];
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {"decode"}
+    assert records == [
+        {
+            "name": "decode",
+            "materializedName": "decode_thread_float",
+            "parameters": {"W": "thread float*"},
+            "parameterSources": {"W": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    assert materialized_names == {
+        ("decode", ("thread float*",), ("W",)): "decode_thread_float"
+    }
+    assert "decode_thread_float(values)" in materialized
+    assert "void decode_thread_float(thread float* output)" in materialized
+    assert "output += 1;" in materialized
+    assert "float output[8]" not in materialized
+
+
+def test_plain_metal_helper_materialization_preserves_decayed_array_const():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename W>
+        float decode(W input) {
+          return input[0];
+        }
+
+        kernel void launch(device float* output [[buffer(0)]]) {
+          const float values[8] = {};
+          output[0] = decode(values);
+        }
+        """)
+
+    materialized, records, completed_names, _materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {"decode"}
+    assert records[0]["parameters"] == {"W": "const thread float*"}
+    assert "float decode_const_thread_float(const thread float* input)" in materialized
+
+
+def test_plain_metal_helper_materialization_preserves_explicit_array_argument():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename W>
+        void decode(W output) {
+          output[0] = 2.0f;
+        }
+
+        kernel void launch(device float* output [[buffer(0)]]) {
+          float values[8];
+          decode<float[8]>(values);
+          output[0] = values[0];
+        }
+        """)
+
+    materialized, records, completed_names, _materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {"decode"}
+    assert records[0]["parameters"] == {"W": "float[8]"}
+    assert "void decode_float_8(float output[8])" in materialized
+    assert "thread float* output" not in materialized
+
+
+def test_plain_metal_helper_materialization_rejects_array_reference_deduction():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename W>
+        void decode(W& output) {
+          output[0] = 2.0f;
+        }
+
+        kernel void launch(device float* output [[buffer(0)]]) {
+          float values[8];
+          decode(values);
+          output[0] = values[0];
+        }
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "decode(values)" in materialized
+    assert "decode_float_8" not in materialized
+    assert records == []
+    assert completed_names == set()
+    assert materialized_names == {}
+
+
+@pytest.mark.parametrize(
+    "second_declaration",
+    [
+        "threadgroup float second[8];",
+        "const float second[8] = {};",
+    ],
+)
+def test_plain_metal_helper_materialization_rejects_incompatible_array_decay(
+    second_declaration,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent(f"""
+        template <typename W>
+        void transfer(W first, W second) {{
+          first[0] = second[0];
+        }}
+
+        kernel void launch(device float* output [[buffer(0)]]) {{
+          float first[8];
+          {second_declaration}
+          transfer(first, second);
+          output[0] = first[0];
+        }}
+        """)
+
+    materialized, records, completed_names, materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert "transfer(first, second)" in materialized
+    assert "void transfer_" not in materialized
+    assert records == []
+    assert completed_names == set()
+    assert materialized_names == {}
+
+
 def test_plain_metal_helper_materialization_preserves_direct_pointer_address_space():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 

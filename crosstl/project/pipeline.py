@@ -1529,6 +1529,10 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION = "software_subgroup_width"
+COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION = (
+    "cooperative_matrix_software_lowering"
+)
+PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION = "private_pointer_out_of_bounds_read"
 DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION = (
     "relative_wave_shuffle_out_of_range"
 )
@@ -6177,6 +6181,8 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
             TEMPLATE_VARIANTS_SOURCE_OPTION,
             TARGET_SOURCE_OPTIONS_KEY,
             SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
+            COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION,
+            PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION,
             DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
             METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
             METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
@@ -15951,6 +15957,61 @@ def _metal_array_element_type(type_text: str) -> str | None:
     return match.group("element").strip()
 
 
+def _metal_decay_array_argument_for_value_template_deduction(
+    argument: str,
+    actual_type: str,
+    type_environment: Mapping[str, str],
+) -> str | None:
+    """Return the pointer type used to deduce a direct by-value type parameter.
+
+    C++ function-template deduction applies array-to-pointer conversion when the
+    function parameter is not a reference.  A local Metal array without an
+    explicit address space lives in ``thread`` storage; explicitly qualified
+    arrays retain their source address space and pointee cv qualifiers.  Only a
+    one-dimensional array with provenance from a bare local binding is admitted
+    when the source omits its address space.  Member expressions and
+    pointer-to-array shapes remain fail-closed rather than guessing storage.
+    """
+
+    normalized = _normalize_metal_type_text(actual_type)
+    match = re.fullmatch(r"(?P<element>[^\[\]]+)\[(?P<extent>[^\[\]]+)\]", normalized)
+    if match is None or not match.group("extent").strip():
+        return None
+
+    element = match.group("element").strip()
+    tokens = element.split(" ")
+    qualifiers: list[str] = []
+    while tokens and tokens[0] in _METAL_STORAGE_TYPE_QUALIFIERS:
+        qualifiers.append(tokens.pop(0))
+    if not tokens:
+        return None
+    base = " ".join(tokens).strip()
+    if any(token in base for token in ("*", "&", "(", ")", "[", "]")) or any(
+        token in _METAL_STORAGE_TYPE_QUALIFIERS
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", base)
+    ):
+        return None
+
+    address_spaces = [
+        qualifier
+        for qualifier in qualifiers
+        if qualifier in _METAL_ADDRESS_SPACE_QUALIFIERS
+    ]
+    if len(address_spaces) > 1:
+        return None
+    if not address_spaces:
+        binding = _metal_strip_outer_parentheses(argument)
+        if (
+            re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", binding) is None
+            or _normalize_metal_type_text(type_environment.get(binding, ""))
+            != normalized
+        ):
+            return None
+        qualifiers.append("thread")
+
+    return _normalize_metal_type_text(f"{' '.join(qualifiers)} {base}*")
+
+
 def _metal_generic_type_parts(
     preprocessor: Any, type_text: str
 ) -> tuple[str, list[str]]:
@@ -16055,6 +16116,13 @@ def _collect_metal_template_type_bindings(
     actual_binding = _metal_template_argument_binding_type(actual_type)
     if not expected or not actual:
         return True
+
+    # Array-to-pointer conversion is a by-value function-parameter adjustment.
+    # A reference parameter instead binds the array type itself, whose concrete
+    # parenthesized declarator is not representable by this materializer.  Reject
+    # it rather than decaying the array or emitting ``float[8]& value``.
+    if "&" in expected and _metal_array_element_type(actual) is not None:
+        return False
 
     while expected.endswith("&") or actual.endswith("&"):
         expected = expected[:-1].strip() if expected.endswith("&") else expected
@@ -18581,6 +18649,19 @@ def _infer_plain_template_helper_arguments(
             if contextual_match is False:
                 return None
             continue
+        if (
+            explicit_expected_type is None
+            and expected_clean in template_parameters
+            and _normalize_metal_type_text(expected_type) == expected_clean
+            and _metal_array_element_type(actual_type) is not None
+        ):
+            actual_type = _metal_decay_array_argument_for_value_template_deduction(
+                argument,
+                actual_type,
+                type_environment,
+            )
+            if actual_type is None:
+                return None
         if explicit_expected_type is not None:
             if not _metal_concrete_parameter_type_compatible(
                 explicit_expected_type,
@@ -22337,6 +22418,10 @@ def _project_template_materialization_for_artifact(
         base_preprocessor_kwargs["template_specialization_limit_source"] = (
             source_options["template_specialization_limit_source"]
         )
+    if "promote_derived_pointer_members" in source_options:
+        base_preprocessor_kwargs["promote_derived_pointer_members"] = source_options[
+            "promote_derived_pointer_members"
+        ]
     materialization_work_limit = _metal_template_materialization_work_limit(
         source_options
     )
@@ -27456,6 +27541,42 @@ def _project_software_subgroup_width(
     return width
 
 
+def _project_cooperative_matrix_software_lowering(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> bool | None:
+    option = COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    enabled = source_options[option]
+    if target != "opengl":
+        raise ValueError(
+            "cooperative_matrix_software_lowering is supported only by "
+            "the OpenGL target"
+        )
+    if not isinstance(enabled, bool):
+        raise TypeError("cooperative_matrix_software_lowering must be a boolean")
+    return enabled
+
+
+def _project_private_pointer_out_of_bounds_read(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> str | None:
+    option = PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    policy = source_options[option]
+    if target != "opengl":
+        raise ValueError(
+            "private_pointer_out_of_bounds_read is supported only by the "
+            "OpenGL target"
+        )
+    if not isinstance(policy, str) or policy not in {"error", "zero"}:
+        raise ValueError("private_pointer_out_of_bounds_read must be 'error' or 'zero'")
+    return policy
+
+
 def _project_directx_relative_wave_shuffle_out_of_range(
     target: str,
     source_options: Mapping[str, Any],
@@ -27497,10 +27618,32 @@ def _generate_project_target_from_crossgl_ast(
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
+    cooperative_matrix_software_lowering: bool | None = None,
+    private_pointer_out_of_bounds_read: str | None = None,
     directx_relative_wave_shuffle_out_of_range: Any | None = None,
     directx_widen_native_float16: Any | None = None,
 ) -> str:
     codegen = get_codegen(target)
+    if cooperative_matrix_software_lowering is not None:
+        configure_cooperative_matrix = getattr(
+            codegen, "set_cooperative_matrix_software_lowering", None
+        )
+        if not callable(configure_cooperative_matrix):
+            raise ValueError(
+                f"Target '{target}' does not consume "
+                "cooperative_matrix_software_lowering"
+            )
+        configure_cooperative_matrix(cooperative_matrix_software_lowering)
+    if private_pointer_out_of_bounds_read is not None:
+        configure_private_pointer_reads = getattr(
+            codegen, "set_private_pointer_out_of_bounds_read", None
+        )
+        if not callable(configure_private_pointer_reads):
+            raise ValueError(
+                f"Target '{target}' does not consume "
+                "private_pointer_out_of_bounds_read"
+            )
+        configure_private_pointer_reads(private_pointer_out_of_bounds_read)
     if directx_widen_native_float16 is not None:
         configure_float16_widening = getattr(codegen, "set_widen_native_float16", None)
         if not callable(configure_float16_widening):
@@ -28536,12 +28679,26 @@ def _translate_project_impl(
                     else ()
                 )
                 software_subgroup_width = None
+                cooperative_matrix_software_lowering = None
+                private_pointer_out_of_bounds_read = None
                 directx_relative_wave_shuffle_out_of_range = None
                 directx_widen_native_float16 = None
                 try:
                     software_subgroup_width = _project_software_subgroup_width(
                         target,
                         source_options,
+                    )
+                    cooperative_matrix_software_lowering = (
+                        _project_cooperative_matrix_software_lowering(
+                            target,
+                            source_options,
+                        )
+                    )
+                    private_pointer_out_of_bounds_read = (
+                        _project_private_pointer_out_of_bounds_read(
+                            target,
+                            source_options,
+                        )
                     )
                     directx_relative_wave_shuffle_out_of_range = (
                         _project_directx_relative_wave_shuffle_out_of_range(
@@ -28846,6 +29003,8 @@ def _translate_project_impl(
                         requires_workgroup_specialization
                         or requires_subgroup_specialization
                         or software_subgroup_width is not None
+                        or cooperative_matrix_software_lowering is not None
+                        or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
                     ):
@@ -29011,6 +29170,12 @@ def _translate_project_impl(
                                             software_subgroup_width=(
                                                 software_subgroup_width
                                             ),
+                                            cooperative_matrix_software_lowering=(
+                                                cooperative_matrix_software_lowering
+                                            ),
+                                            private_pointer_out_of_bounds_read=(
+                                                private_pointer_out_of_bounds_read
+                                            ),
                                             directx_relative_wave_shuffle_out_of_range=(
                                                 directx_relative_wave_shuffle_out_of_range
                                             ),
@@ -29083,6 +29248,12 @@ def _translate_project_impl(
                                         software_subgroup_width=(
                                             software_subgroup_width
                                         ),
+                                        cooperative_matrix_software_lowering=(
+                                            cooperative_matrix_software_lowering
+                                        ),
+                                        private_pointer_out_of_bounds_read=(
+                                            private_pointer_out_of_bounds_read
+                                        ),
                                         directx_relative_wave_shuffle_out_of_range=(
                                             directx_relative_wave_shuffle_out_of_range
                                         ),
@@ -29114,6 +29285,8 @@ def _translate_project_impl(
                         index_range_assertions
                         or workgroup_access_assertions
                         or software_subgroup_width is not None
+                        or cooperative_matrix_software_lowering is not None
+                        or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
                     ):
@@ -29138,6 +29311,12 @@ def _translate_project_impl(
                             index_range_assertions=index_range_assertions,
                             workgroup_access_assertions=(workgroup_access_assertions),
                             software_subgroup_width=software_subgroup_width,
+                            cooperative_matrix_software_lowering=(
+                                cooperative_matrix_software_lowering
+                            ),
+                            private_pointer_out_of_bounds_read=(
+                                private_pointer_out_of_bounds_read
+                            ),
                             directx_relative_wave_shuffle_out_of_range=(
                                 directx_relative_wave_shuffle_out_of_range
                             ),

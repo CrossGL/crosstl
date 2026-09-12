@@ -3181,6 +3181,53 @@ def test_preprocessor_materializes_struct_template_instantiation():
     assert "Tile<float, 4>" not in output
 
 
+def test_preprocessor_preserves_dependent_non_type_default_precedence():
+    code = """
+    template <
+        short BROWS,
+        short BCOLS,
+        short tgp_size,
+        short n_reads = (BCOLS * BROWS) / (tgp_size),
+        short TCOLS = BCOLS / n_reads,
+        short TROWS = tgp_size / TCOLS>
+    struct Loader {
+        static void clear(threadgroup float* dst) {
+            for (short i = 0; i < BROWS; i += TROWS) {
+                dst[i] = float(TCOLS + n_reads);
+            }
+        }
+    };
+    """
+    preprocessor = MetalPreprocessor()
+    struct = preprocessor._find_template_structs(code)[0]
+
+    bindings, variadic = preprocessor._template_argument_bindings(
+        struct,
+        ["32", "32", "128"],
+    )
+    materialized = preprocessor._materialize_template_struct_with_name(
+        struct,
+        ["32", "32", "128"],
+        "Loader_32_32_128",
+    )
+
+    assert variadic == {}
+    assert preprocessor._evaluate_static_integral_expression(bindings["n_reads"]) == (
+        True,
+        8,
+    )
+    assert preprocessor._evaluate_static_integral_expression(bindings["TCOLS"]) == (
+        True,
+        4,
+    )
+    assert preprocessor._evaluate_static_integral_expression(bindings["TROWS"]) == (
+        True,
+        32,
+    )
+    assert "i += (128 /(32 /((32*32)/(128))))" in materialized
+    assert "i += (((128 / 32) / (32 * 32)) / 128)" not in materialized
+
+
 def test_preprocessor_materializes_nested_struct_template_instantiations():
     # Nested instantiations resolve through iteration: materializing Outer
     # surfaces a concrete Inner<float, 8> reference, which is then materialized.
@@ -6586,6 +6633,49 @@ def test_pointer_member_promotion_removes_pointer_members_from_struct():
     assert "total = n_ * 2;" in struct_body
 
 
+def test_pointer_member_promotion_preserves_nested_aligned_byte_view():
+    code = """
+    struct Loader {
+      threadgroup float* dst;
+      const device float* src;
+      int offset;
+
+      struct alignas(sizeof(float)) ReadVector {
+        uchar v[sizeof(float) * 2];
+      };
+
+      Loader(
+          threadgroup float* dst_,
+          const device float* src_,
+          int offset_)
+          : dst(dst_ + offset_), src(src_ + offset_), offset(offset_) {}
+
+      void copy() const {
+        *((threadgroup ReadVector*)(&dst[0])) =
+            *((const device ReadVector*)(&src[0]));
+      }
+    };
+
+    kernel void k(const device float* input [[buffer(0)]]) {
+      threadgroup float shared[4];
+      Loader loader(&shared[0], input, 1);
+      loader.copy();
+    }
+    """
+
+    output = MetalPreprocessor(promote_derived_pointer_members=True).preprocess(code)
+
+    assert "struct alignas(sizeof(float)) ReadVector" in output
+    assert "uchar v[sizeof(float) * 2];" in output
+    assert "threadgroup ReadVector*" in output
+    assert "const device ReadVector*" in output
+    ast = MetalParser(MetalLexer(output, preprocess=False).tokenize()).parse()
+    loader = next(struct for struct in ast.structs if struct.name == "Loader")
+    assert [nested.name for nested in loader.nested_structs] == ["ReadVector"]
+    assert len(loader.nested_structs[0].alignas) == 1
+    assert loader.nested_structs[0].alignas[0].name == "sizeof"
+
+
 def test_pointer_member_promotion_threads_pointers_through_methods():
     # Each instance method is lowered to a free function that takes `self`
     # followed by the promoted pointer parameters; the body references pointer
@@ -6683,6 +6773,113 @@ def test_pointer_member_promotion_rewrites_internal_method_calls():
     assert "Writer__store(self, crosstl_ptr_output, index + 1, value);" in output
     assert "Writer__store_pair(writer, output, 0, 1.0f);" in output
     assert MetalParser(MetalLexer(output).tokenize()).parse() is not None
+
+
+def test_pointer_member_promotion_forwards_through_chained_helper_parameters():
+    code = """
+    struct Loader {
+      threadgroup float* dst;
+      const device float* src;
+      int offset;
+
+      Loader(
+          threadgroup float* dst_,
+          const device float* src_,
+          int offset_)
+          : dst(dst_), src(src_), offset(offset_) {}
+
+      void copy() const {
+        dst[offset] = src[offset];
+      }
+    };
+
+    void consume(Loader loader) {
+      loader.copy();
+    }
+
+    void relay(Loader loader) {
+      consume(loader);
+    }
+
+    void relay(int value) {}
+
+    kernel void k(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      threadgroup float shared[8];
+      Loader loader(&shared[0], input, 2);
+      relay(loader);
+      relay(7);
+      output[0] = shared[2];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    consume_signature = (
+        "void consume(Loader loader, "
+        "threadgroup float* crosstl_ptr_loader_dst, "
+        "const device float* crosstl_ptr_loader_src)"
+    )
+    relay_signature = (
+        "void relay(Loader loader, "
+        "threadgroup float* crosstl_ptr_loader_dst, "
+        "const device float* crosstl_ptr_loader_src)"
+    )
+    assert consume_signature in output
+    assert relay_signature in output
+    assert (
+        "Loader__copy(loader, crosstl_ptr_loader_dst, "
+        "crosstl_ptr_loader_src);" in output
+    )
+    assert (
+        "consume(loader, crosstl_ptr_loader_dst, " "crosstl_ptr_loader_src);" in output
+    )
+    assert "relay(loader, &shared[0], input);" in output
+    assert "void relay(int value)" in output
+    assert "relay(7);" in output
+    assert "crosstl_ptr_dst[self.offset] = crosstl_ptr_src[self.offset];" in output
+    assert MetalParser(MetalLexer(output).tokenize()).parse() is not None
+
+
+def test_pointer_member_promotion_helper_forwarding_fails_closed_without_roots():
+    code = """
+    struct Loader {
+      threadgroup float* dst;
+      const device float* src;
+
+      Loader(threadgroup float* dst_, const device float* src_)
+          : dst(dst_), src(src_) {}
+
+      void copy() const {
+        dst[0] = src[0];
+      }
+    };
+
+    void consume(Loader loader) {
+      loader.copy();
+    }
+
+    kernel void k(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        bool select [[buffer(2)]]) {
+      threadgroup float left_storage[1];
+      threadgroup float right_storage[1];
+      Loader left(&left_storage[0], input);
+      Loader right(&right_storage[0], input);
+      consume(select ? left : right);
+      output[0] = left_storage[0] + right_storage[0];
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    assert excinfo.value.reason == "promoted-pointer-forwarding-unresolved"
+    assert excinfo.value.struct_name == "Loader"
+    assert excinfo.value.method_name == "consume"
+    assert excinfo.value.requested_signature == "consume(select ? left : right)"
 
 
 def test_pointer_member_promotion_via_using_alias():
@@ -12367,3 +12564,28 @@ def test_preprocessor_materializes_lexically_visible_namespace_template_call(
 
     assert "hidden_value_7();" in output
     assert "constexpr int hidden_value_7() { return 7; }" in output
+
+
+def test_preprocessor_resolves_unqualified_remove_cv_in_concrete_trait_result():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T>
+    struct pointer_element {};
+
+    template <typename T>
+    struct pointer_element<device T*> {
+        using type = remove_cv_t<T>;
+    };
+    """
+    preprocessor = MetalPreprocessor()
+    traits = preprocessor._find_template_type_traits(code)
+
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename pointer_element<device bfloat*>::type",
+            traits,
+        )
+        == "bfloat"
+    )

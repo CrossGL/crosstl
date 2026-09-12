@@ -5142,6 +5142,28 @@ def test_mlx_project_porting_workflow_runs_quantized_complete_metal_proof():
     )
 
 
+def test_mlx_project_porting_workflow_requires_quantized_wide_opengl_compilation():
+    workflow = _workflow_texts()["mlx-project-porting.yml"]
+    job = _workflow_job_section(workflow, "mlx-quantized-wide-opengl")
+    test_path = "tests/test_translator/test_mlx_quantized_wide_opengl.py"
+
+    assert "runs-on: ubuntu-latest" in job
+    assert "timeout-minutes: 30" in job
+    assert "persist-credentials: false" in job
+    assert "continue-on-error" not in job
+    assert "sudo apt-get install -y glslang-tools spirv-tools" in job
+    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in job
+    assert 'CROSTL_REQUIRE_MLX_QUANTIZED_WIDE_OPENGL: "1"' in job
+    assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in job
+    assert "python -m pytest -q -n auto" in job
+    assert test_path in job
+    assert "--junitxml=quantized-wide-junit.xml" in job
+    assert "--basetemp=quantized-wide-results" in job
+    assert "if: always()" in job
+    assert "if-no-files-found: error" in job
+    assert workflow.count(f'- "{test_path}"') == 2
+
+
 def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
     mlx_porting = _workflow_texts().get("mlx-project-porting.yml", "")
     ci_coverage = _load_ci_coverage_module()

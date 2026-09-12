@@ -105,6 +105,7 @@ WAVE_INTRINSICS = {
     "WavePrefixInclusiveSum",
     "WavePrefixInclusiveProduct",
     "WavePrefixCountBits",
+    "QuadActiveSum",
     "QuadReadAcrossX",
     "QuadReadAcrossY",
     "QuadReadAcrossDiagonal",

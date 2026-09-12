@@ -769,6 +769,10 @@ class _PointerPromotionPlan:
     # position is the pointer expression to forward at call sites.
     pointer_ctor_arg_indices: List[int]
     constructor: _MetalConstructor
+    # When present, each promoted pointer keeps a scalar relative offset in the
+    # residual struct. This is used only by the explicit derived-pointer opt-in;
+    # the default direct-pointer promotion remains byte-for-byte unchanged.
+    pointer_offset_initializers: Optional[List[str]] = None
 
     @property
     def pointer_member_names(self) -> List[str]:
@@ -778,6 +782,37 @@ class _PointerPromotionPlan:
     def pointer_parameter_decls(self) -> List[str]:
         # ``<type> <name>`` for each promoted pointer member, in order.
         return [f"{member.type_text} {member.name}" for member in self.pointer_members]
+
+
+@dataclass(frozen=True)
+class _PromotedPointerBinding:
+    """One lexical binding of a promoted struct receiver to its pointer roots."""
+
+    declaration_position: int
+    scope_start: int
+    scope_end: int
+    struct_name: str
+    pointer_exprs: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _PromotedFunctionParameter:
+    """A promoted-struct function parameter and its generated companions."""
+
+    index: int
+    name: str
+    struct_name: str
+    companion_names: Tuple[str, ...]
+    companion_declarations: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _PromotedFunctionDefinition:
+    """A free function whose ABI forwards promoted pointer members."""
+
+    function: _MetalFunctionDefinition
+    parameter_count: int
+    promoted_parameters: Tuple[_PromotedFunctionParameter, ...]
 
 
 class MetalPreprocessor(HLSLPreprocessor):
@@ -793,6 +828,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
         ),
         template_specialization_limit_source: Optional[str] = None,
+        promote_derived_pointer_members: bool = False,
     ):
         super().__init__(
             include_paths=include_paths,
@@ -800,6 +836,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             strict=strict,
             max_expansion_depth=max_expansion_depth,
         )
+        if not isinstance(promote_derived_pointer_members, bool):
+            raise ValueError("Metal promote_derived_pointer_members must be a boolean")
+        self.promote_derived_pointer_members = promote_derived_pointer_members
         if isinstance(max_template_specializations, bool):
             raise ValueError(
                 "Metal max_template_specializations must be a non-negative integer"
@@ -2495,10 +2534,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         # argument); otherwise it falls back to the ordinary path unchanged.
         promotion_plans: Dict[str, _PointerPromotionPlan] = {}
         for struct in structs_with_methods:
-            plan = self._pointer_promotion_plan(struct)
+            plan = self._pointer_promotion_plan(struct, code=code)
             if plan is not None:
                 promotion_plans[struct.name] = plan
-        promoted_pointer_args: Dict[str, List[Tuple[int, str, List[str]]]] = {}
+        promoted_pointer_args: Dict[str, List[_PromotedPointerBinding]] = {}
         promoted_construction_replacements: List[Tuple[int, int, str]] = []
         promoted_names: Set[str] = set()
         if promotion_plans:
@@ -2589,6 +2628,15 @@ class MetalPreprocessor(HLSLPreprocessor):
             free_functions.extend(lowered)
         replacements.extend(promoted_construction_replacements)
         if promoted_structs:
+            replacements.extend(
+                self._plan_promoted_function_forwarding(
+                    code,
+                    promoted_structs,
+                    promotion_plans,
+                    promoted_pointer_args,
+                    all_struct_spans,
+                )
+            )
             replacements.extend(
                 self._rewrite_promoted_call_sites(
                     code,
@@ -4970,7 +5018,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             # Drop any default value.
             lhs, _default = self._split_top_level_assignment(parameter)
-            lhs = lhs.strip()
+            lhs = self._strip_trailing_metal_attributes(lhs.strip())
             # Peel trailing array extents that belong to the declarator.
             while lhs.endswith("]"):
                 open_bracket = lhs.rfind("[")
@@ -6335,11 +6383,21 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _declaration_is_type_alias(declaration: str) -> bool:
         return bool(re.match(r"\s*(?:using\b[^=]*=|typedef\b)", declaration))
 
+    @staticmethod
+    def _strip_trailing_metal_attributes(declaration: str) -> str:
+        text = declaration.rstrip()
+        while True:
+            match = re.search(r"\s*\[\[[^\[\]]*\]\]\s*$", text)
+            if match is None:
+                return text
+            text = text[: match.start()].rstrip()
+
     def _declared_data_member_name(self, declaration: str) -> Optional[str]:
         # Extract the declared identifier from a data-member declaration such as
         # `float bias`, `T data[N]`, `device float* ptr`, or
         # `static constexpr constant U init = U(0)`.
         text = self._strip_top_level_default_value(declaration).strip()
+        text = self._strip_trailing_metal_attributes(text)
         if not text:
             return None
         # Drop any trailing array extents so the bare name is left.
@@ -10704,8 +10762,141 @@ class MetalPreprocessor(HLSLPreprocessor):
         # in the method body and sidesteps backends where `in`/`out` are reserved.
         return f"crosstl_ptr_{member_name}"
 
+    def _promoted_pointer_offset_member_name(self, member_name: str) -> str:
+        return f"crosstl_ptr_offset_{member_name}"
+
+    def _pointer_initializer_root_and_offset(
+        self,
+        expression: str,
+        pointer_parameter_names: Set[str],
+    ) -> Optional[Tuple[str, str]]:
+        """Split one derived pointer initializer into its base and scalar delta.
+
+        Only additive expressions with exactly one constructor pointer parameter
+        are accepted. Multiplication, casts, calls, or subtraction with the
+        pointer on the right remain unpromoted so root-changing/reinterpreting
+        expressions fail closed on the ordinary lowering path.
+        """
+
+        def analyze(value: str) -> Optional[Tuple[Optional[str], str]]:
+            value = self._strip_enclosing_parens(value)
+            pointer_references = [
+                name
+                for name in IDENTIFIER_RE.findall(value)
+                if name in pointer_parameter_names
+            ]
+            if not pointer_references:
+                return None, value
+            if IDENTIFIER_RE.fullmatch(value) and value in pointer_parameter_names:
+                return value, "0"
+
+            split = self._split_top_level_binary_arithmetic(value)
+            if split is None:
+                return None
+            left_text, operator_text, right_text = split
+            if operator_text not in {"+", "-"}:
+                return None
+            left = analyze(left_text)
+            right = analyze(right_text)
+            if left is None or right is None:
+                return None
+            left_root, left_offset = left
+            right_root, right_offset = right
+            if left_root is not None and right_root is not None:
+                return None
+            if left_root is not None:
+                if left_offset == "0":
+                    offset = (
+                        right_offset if operator_text == "+" else f"-({right_offset})"
+                    )
+                else:
+                    offset = f"({left_offset}) {operator_text} ({right_offset})"
+                return left_root, offset
+            if right_root is not None:
+                if operator_text != "+":
+                    return None
+                offset = (
+                    left_offset
+                    if right_offset == "0"
+                    else f"({left_offset}) + ({right_offset})"
+                )
+                return right_root, offset
+            return None
+
+        result = analyze(expression)
+        if result is None or result[0] is None:
+            return None
+        root, offset = result
+        return root, offset
+
+    def _promoted_pointer_offset_usage_is_supported(
+        self,
+        body: str,
+        pointer_member_names: Set[str],
+    ) -> bool:
+        # Normalize explicit receiver spelling so the scanner can distinguish
+        # this object's pointer members from `other.member` accesses.
+        normalized = re.sub(r"\(\s*\*\s*this\s*\)\s*(?=\.|->)", "self", body)
+        normalized = re.sub(r"\bthis\s*->\s*", "self.", normalized)
+        normalized = re.sub(r"\bthis\s*\.\s*", "self.", normalized)
+        for name in pointer_member_names:
+            normalized = re.sub(
+                rf"\bself\s*\.\s*{re.escape(name)}\b",
+                name,
+                normalized,
+            )
+
+        index = 0
+        while index < len(normalized):
+            if normalized[index] in "\"'":
+                _literal, consumed = self._read_string(normalized, index)
+                index += consumed
+                continue
+            if normalized.startswith("//", index):
+                end = normalized.find("\n", index)
+                index = len(normalized) if end == -1 else end + 1
+                continue
+            if normalized.startswith("/*", index):
+                end = normalized.find("*/", index + 2)
+                index = len(normalized) if end == -1 else end + 2
+                continue
+            if not (normalized[index].isalpha() or normalized[index] == "_"):
+                index += 1
+                continue
+            identifier, consumed = self._read_identifier(normalized, index)
+            end = index + consumed
+            if (
+                identifier in pointer_member_names
+                and not self._is_member_identifier_context(normalized, index)
+                and not self._identifier_is_declaration_or_call(normalized, index, end)
+            ):
+                cursor = end
+                while cursor < len(normalized) and normalized[cursor].isspace():
+                    cursor += 1
+                suffix = normalized[cursor:]
+                if suffix.startswith(("+=", "-=", "++", "--")):
+                    pass
+                elif suffix.startswith(
+                    ("*=", "/=", "%=", "<<=", ">>=", "&=", "|=", "^=")
+                ) or (suffix.startswith("=") and not suffix.startswith("==")):
+                    return False
+
+                previous = index - 1
+                while previous >= 0 and normalized[previous].isspace():
+                    previous -= 1
+                if (
+                    previous >= 0
+                    and normalized[previous] == "&"
+                    and not suffix.startswith("[")
+                ):
+                    return False
+            index = end
+        return True
+
     def _pointer_promotion_plan(
-        self, struct: _MetalStructDefinition
+        self,
+        struct: _MetalStructDefinition,
+        code: Optional[str] = None,
     ) -> Optional[_PointerPromotionPlan]:
         # Decide whether `struct` can have its pointer members promoted out (see
         # _PointerPromotionPlan). Returns a plan, or None to leave the struct on
@@ -10722,7 +10913,14 @@ class MetalPreprocessor(HLSLPreprocessor):
         # template/operator-call struct is out of scope.
         if any(member.is_array for member in pointer_members):
             return None
-        if struct.template_methods or struct.has_operator_call:
+        if struct.has_operator_call:
+            return None
+        # Historical direct-pointer promotion remains strict. The derived-pointer
+        # opt-in may discard template methods only when no call to any such method
+        # survives outside the declaration (or from a concrete sibling method).
+        # Used template methods stay on the ordinary lowering path, where their
+        # existing call-site specialization machinery remains authoritative.
+        if struct.template_methods and not self.promote_derived_pointer_members:
             return None
         # Exactly one constructor, which must source every pointer member from a
         # pointer parameter, so a construction argument is the pointer expression.
@@ -10732,20 +10930,43 @@ class MetalPreprocessor(HLSLPreprocessor):
         if constructor.span is None:
             return None
         pointer_member_names = {member.name for member in pointer_members}
+        pointer_parameter_indices = [
+            index
+            for index, parameter_type in enumerate(constructor.param_types)
+            if "*" in parameter_type
+        ]
+        pointer_parameter_names = {
+            constructor.param_names[index]
+            for index in pointer_parameter_indices
+            if index < len(constructor.param_names)
+        }
         pointer_ctor_arg_indices: List[int] = []
+        pointer_offset_initializers: List[str] = []
+        has_derived_initializer = False
         for member in pointer_members:
             init_expr = constructor.init_map.get(member.name)
             if init_expr is None:
                 return None
             init_expr = init_expr.strip()
-            if init_expr not in constructor.param_names:
-                return None
-            index = constructor.param_names.index(init_expr)
+            if init_expr in pointer_parameter_names:
+                root_name, offset = init_expr, "0"
+            else:
+                if not self.promote_derived_pointer_members:
+                    return None
+                derived = self._pointer_initializer_root_and_offset(
+                    init_expr,
+                    pointer_parameter_names,
+                )
+                if derived is None:
+                    return None
+                root_name, offset = derived
+                has_derived_initializer = True
+            index = constructor.param_names.index(root_name)
             if index >= len(constructor.param_types):
                 return None
-            if "*" not in constructor.param_types[index]:
-                return None
             pointer_ctor_arg_indices.append(index)
+            pointer_offset_initializers.append(offset)
+
         # The constructor body must not reference any pointer parameter or pointer
         # member (both are about to disappear); otherwise dropping them is unsafe.
         pointer_param_names = {
@@ -10765,12 +10986,73 @@ class MetalPreprocessor(HLSLPreprocessor):
             names.update(self._local_variable_names(method.body))
             if names & pointer_member_names:
                 return None
+
+        offset_initializers: Optional[List[str]] = None
+        if has_derived_initializer:
+            if struct.template_methods and (
+                code is None
+                or self._promoted_struct_template_method_is_referenced(code, struct)
+            ):
+                return None
+            generated_names = {
+                self._promoted_pointer_offset_member_name(member.name)
+                for member in pointer_members
+            }
+            occupied_names = set(struct.data_member_names) | set(
+                constructor.param_names
+            )
+            if generated_names & occupied_names:
+                return None
+            if any(
+                not self._promoted_pointer_offset_usage_is_supported(
+                    method.body,
+                    pointer_member_names,
+                )
+                for method in struct.methods
+                if not method.is_static
+            ):
+                return None
+            offset_initializers = pointer_offset_initializers
+
         return _PointerPromotionPlan(
             struct_name=struct.name,
             pointer_members=pointer_members,
             pointer_ctor_arg_indices=pointer_ctor_arg_indices,
             constructor=constructor,
+            pointer_offset_initializers=offset_initializers,
         )
+
+    def _promoted_struct_template_method_is_referenced(
+        self,
+        code: str,
+        struct: _MetalStructDefinition,
+    ) -> bool:
+        method_names = {method.name for method in struct.template_methods}
+        if not method_names:
+            return False
+
+        outside = (
+            code[: struct.span[0]]
+            + (" " * (struct.span[1] - struct.span[0]))
+            + code[struct.span[1] :]
+        )
+        masked_outside = self._mask_comments_and_literals(outside)
+        for method_name in method_names:
+            if re.search(
+                rf"(?:\.|->)\s*{re.escape(method_name)}\b\s*"
+                rf"(?:<[^;{{}}()]*>\s*)?\(",
+                masked_outside,
+            ):
+                return True
+        for method in struct.methods:
+            masked_body = self._mask_comments_and_literals(method.body)
+            for method_name in method_names:
+                if re.search(
+                    rf"\b{re.escape(method_name)}\b\s*" rf"(?:<[^;{{}}()]*>\s*)?\(",
+                    masked_body,
+                ):
+                    return True
+        return False
 
     def _render_promoted_struct(
         self,
@@ -10779,33 +11061,75 @@ class MetalPreprocessor(HLSLPreprocessor):
         plan: _PointerPromotionPlan,
     ) -> Tuple[str, List[str]]:
         # Produce (data_only_struct_text, [free_function_text, ...]) for a struct
-        # whose pointer members are promoted. The residual struct keeps only its
-        # SCALAR members (regenerated from captured metadata, in declaration
-        # order) plus a constructor rewritten to drop the pointer parameters and
-        # their initializer-list entries; every method is re-emitted as a free
-        # function that takes `self` plus the promoted pointer parameters.
-        #
-        # The header (up to and including `{`, so any base clause is preserved) is
-        # taken verbatim from the source; `body_span[0]` is the first body
-        # character, i.e. just past the opening brace.
-        header = code[struct.span[0] : struct.body_span[0]].rstrip()
-        member_lines: List[str] = []
+        # whose pointer members are promoted. Preserve unknown non-method body
+        # text verbatim so nested aggregates, aliases, layout attributes, and
+        # static assertions remain part of the owner's lexical type context.
+        # Known data-member spans are still regenerated from their specialized
+        # metadata: template materialization may have concretized their types,
+        # extents, or initializers after the source text was captured. Promoted
+        # pointers are removed/replaced, the constructor is rebuilt without
+        # those pointers, and methods are hoisted. Reconstructing the entire body
+        # solely from data-member metadata would silently discard nested byte-
+        # view structs used by aggregate loads.
+        struct_text = code[struct.span[0] : struct.span[1]]
+        header_body_start = self._find_next_top_level_char(struct_text, 0, "{")
+        header = struct_text[: header_body_start + 1]
+        body_abs_start, body_abs_end = struct.body_span
+        body_rel_start = body_abs_start - struct.span[0]
+        body_rel_end = body_abs_end - struct.span[0]
+        body = struct_text[body_rel_start:body_rel_end]
+
+        replacements: List[Tuple[int, int, str]] = []
         for member in struct.data_members:
-            if member.is_pointer:
+            if member.span is None:
                 continue
-            declaration = f"  {member.type_text} {member.name}{member.array_suffix}"
-            if member.default is not None:
-                if member.initializer_style == "direct-list":
-                    declaration += f"{{{member.default}}}"
-                else:
-                    declaration += f" = {member.default}"
-            declaration += ";"
-            member_lines.append(declaration)
-        rebuilt_constructor = self._rebuild_promoted_constructor(plan)
-        body_parts = "\n".join(member_lines)
-        if body_parts:
-            body_parts += "\n"
-        data_only = f"{header}\n{body_parts}  {rebuilt_constructor}\n}};"
+            if member.is_pointer:
+                replacement = ""
+                if plan.pointer_offset_initializers is not None:
+                    replacement = (
+                        f"int {self._promoted_pointer_offset_member_name(member.name)};"
+                    )
+            else:
+                replacement = f"{member.type_text} {member.name}{member.array_suffix}"
+                if member.default is not None:
+                    if member.initializer_style == "direct-list":
+                        replacement += f"{{{member.default}}}"
+                    else:
+                        replacement += f" = {member.default}"
+                replacement += ";"
+            replacements.append(
+                (
+                    member.span[0] - body_abs_start,
+                    member.span[1] - body_abs_start,
+                    replacement,
+                )
+            )
+
+        for method in [*struct.methods, *struct.template_methods]:
+            rel_start = method.span[0] - body_abs_start
+            rel_end = method.span[1] - body_abs_start
+            tail = rel_end
+            while tail < len(body) and body[tail].isspace():
+                tail += 1
+            if tail < len(body) and body[tail] == ";":
+                rel_end = tail + 1
+            replacements.append((rel_start, rel_end, ""))
+
+        constructor = plan.constructor
+        if constructor.span is not None:
+            replacements.append(
+                (
+                    constructor.span[0] - body_abs_start,
+                    constructor.span[1] - body_abs_start,
+                    self._rebuild_promoted_constructor(plan),
+                )
+            )
+
+        data_body = self._apply_text_replacements(body, replacements)
+        data_body = self._collapse_blank_lines(data_body)
+        data_only = (header + data_body + "}").rstrip()
+        if not data_only.endswith(";"):
+            data_only += ";"
         free_functions = [
             self._emit_promoted_free_function(struct, method, plan)
             for method in struct.methods
@@ -10830,6 +11154,11 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             kept_params.append(param)
         pointer_member_names = set(plan.pointer_member_names)
+        offset_initializers = (
+            dict(zip(plan.pointer_member_names, plan.pointer_offset_initializers))
+            if plan.pointer_offset_initializers is not None
+            else {}
+        )
         kept_inits: List[str] = []
         if constructor.init_text:
             for item in self._split_top_level_commas(constructor.init_text):
@@ -10838,6 +11167,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                     continue
                 match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*[\({]", item)
                 if match is not None and match.group(1) in pointer_member_names:
+                    member_name = match.group(1)
+                    if plan.pointer_offset_initializers is not None:
+                        kept_inits.append(
+                            f"{self._promoted_pointer_offset_member_name(member_name)}"
+                            f"({offset_initializers[member_name]})"
+                        )
                     continue
                 kept_inits.append(item)
         rebuilt = f"{constructor.prefix}{', '.join(kept_params)})"
@@ -11046,9 +11381,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         method: _MetalStructMethod,
         plan: _PointerPromotionPlan,
     ) -> str:
-        # Like _rewrite_method_body, but pointer members resolve to the promoted
-        # pointer PARAMETER (bare name) rather than `self.<member>`; scalar
-        # members still resolve to `self.<member>`.
+        # Like _rewrite_method_body, but pointer members resolve to promoted base
+        # pointer parameters. The derived-pointer opt-in additionally carries each
+        # member's mutable state in a scalar offset field on `self`.
         body = method.body
         body = re.sub(r"\(\s*\*\s*this\s*\)\s*(?=\.|->)", "self", body)
         body = re.sub(r"\bthis\s*->\s*", "self.", body)
@@ -11058,31 +11393,146 @@ class MetalPreprocessor(HLSLPreprocessor):
         if method.is_static:
             return body
         pointer_member_names = plan.pointer_member_names
-        # `self.<ptr>` (typically from a normalized `this->ptr`) becomes the bare
-        # promoted parameter.
-        for name in pointer_member_names:
+
+        if plan.pointer_offset_initializers is None:
+            # Preserve the historical direct-pointer promotion bytes exactly.
+            for name in pointer_member_names:
+                body = re.sub(
+                    rf"\bself\s*\.\s*{re.escape(name)}\b",
+                    self._promoted_pointer_param_name(name),
+                    body,
+                )
+            shadowed = set(method.parameter_names)
+            pointer_name_set = set(pointer_member_names)
+            mapping: Dict[str, str] = {}
+            for name in struct.data_member_names:
+                if name in shadowed:
+                    continue
+                if name in pointer_name_set:
+                    mapping[name] = self._promoted_pointer_param_name(name)
+                else:
+                    mapping[name] = f"self.{name}"
+            if not mapping:
+                return body
+            return self._substitute_bare_member_references(
+                body,
+                mapping,
+                local_shadows=self._local_variable_shadow_scopes(body),
+            )
+
+        body = self._rewrite_promoted_pointer_offset_mutations(body, plan)
+        pointer_name_set = set(pointer_member_names)
+        pointer_views = {
+            name: "({} + self.{})".format(
+                self._promoted_pointer_param_name(name),
+                self._promoted_pointer_offset_member_name(name),
+            )
+            for name in pointer_member_names
+        }
+        for name, view in pointer_views.items():
             body = re.sub(
                 rf"\bself\s*\.\s*{re.escape(name)}\b",
-                self._promoted_pointer_param_name(name),
+                view,
                 body,
             )
         shadowed = set(method.parameter_names)
-        pointer_name_set = set(pointer_member_names)
         mapping: Dict[str, str] = {}
         for name in struct.data_member_names:
             if name in shadowed:
                 continue
             if name in pointer_name_set:
-                mapping[name] = self._promoted_pointer_param_name(name)
+                mapping[name] = pointer_views[name]
             else:
                 mapping[name] = f"self.{name}"
-        if not mapping:
-            return body
         return self._substitute_bare_member_references(
             body,
             mapping,
             local_shadows=self._local_variable_shadow_scopes(body),
         )
+
+    def _rewrite_promoted_pointer_offset_mutations(
+        self,
+        body: str,
+        plan: _PointerPromotionPlan,
+    ) -> str:
+        offset_names = {
+            name: f"self.{self._promoted_pointer_offset_member_name(name)}"
+            for name in plan.pointer_member_names
+        }
+        for name, offset_name in offset_names.items():
+            body = re.sub(
+                rf"(?P<operator>\+\+|--)(?P<space>\s*)"
+                rf"\bself\s*\.\s*{re.escape(name)}\b",
+                lambda match: (
+                    f"{match.group('operator')}{match.group('space')}{offset_name}"
+                ),
+                body,
+            )
+            body = re.sub(
+                rf"\bself\s*\.\s*{re.escape(name)}\b" rf"(?=\s*(?:\+=|-=|\+\+|--))",
+                offset_name,
+                body,
+            )
+        return self._substitute_bare_promoted_pointer_mutations(body, offset_names)
+
+    def _substitute_bare_promoted_pointer_mutations(
+        self,
+        body: str,
+        offset_names: Dict[str, str],
+    ) -> str:
+        result: List[str] = []
+        index = 0
+        while index < len(body):
+            if body[index] in "\"'":
+                literal, consumed = self._read_string(body, index)
+                result.append(literal)
+                index += consumed
+                continue
+            if body.startswith("//", index):
+                end = body.find("\n", index)
+                if end == -1:
+                    result.append(body[index:])
+                    break
+                result.append(body[index:end])
+                index = end
+                continue
+            if body.startswith("/*", index):
+                end = body.find("*/", index + 2)
+                if end == -1:
+                    result.append(body[index:])
+                    break
+                result.append(body[index : end + 2])
+                index = end + 2
+                continue
+            if not (body[index].isalpha() or body[index] == "_"):
+                result.append(body[index])
+                index += 1
+                continue
+            identifier, consumed = self._read_identifier(body, index)
+            end = index + consumed
+            replacement = offset_names.get(identifier)
+            if (
+                replacement is not None
+                and not self._is_member_identifier_context(body, index)
+                and not self._identifier_is_declaration_or_call(body, index, end)
+            ):
+                cursor = end
+                while cursor < len(body) and body[cursor].isspace():
+                    cursor += 1
+                suffix_mutation = body[cursor:].startswith(("+=", "-=", "++", "--"))
+                previous = index - 1
+                while previous >= 0 and body[previous].isspace():
+                    previous -= 1
+                prefix_mutation = previous >= 1 and body[
+                    previous - 1 : previous + 1
+                ] in {"++", "--"}
+                if suffix_mutation or prefix_mutation:
+                    result.append(replacement)
+                    index = end
+                    continue
+            result.append(identifier)
+            index = end
+        return "".join(result)
 
     def _substitute_bare_member_references(
         self,
@@ -17391,7 +17841,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         promotion_plans: Dict[str, _PointerPromotionPlan],
         skip_spans: List[Tuple[int, int]],
     ) -> Tuple[
-        Dict[str, List[Tuple[int, str, List[str]]]],
+        Dict[str, List[_PromotedPointerBinding]],
         List[Tuple[int, int, str]],
         Set[str],
     ]:
@@ -17412,7 +17862,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         # (`using read_writer_t = ReadWriter_...;` then
         # `read_writer_t rw = read_writer_t(...)`), so resolve such aliases too.
         type_aliases = self._collect_struct_type_aliases(code, struct_names, skip_spans)
-        pointer_args: Dict[str, List[Tuple[int, str, List[str]]]] = {}
+        pointer_args: Dict[str, List[_PromotedPointerBinding]] = {}
+        lexical_scopes = self._find_lexical_brace_scopes(code)
         # Each pending replacement is tagged with its struct so replacements for a
         # struct that ends up NOT promoted can be discarded (its constructor keeps
         # its pointer arguments).
@@ -17456,8 +17907,17 @@ class MetalPreprocessor(HLSLPreprocessor):
                         if kind == "construction":
                             _, next_index, receiver, ptr_exprs, replacement = outcome
                             constructed.add(target)
+                            scope_start, scope_end = self._innermost_lexical_scope(
+                                lexical_scopes, i, len(code)
+                            )
                             pointer_args.setdefault(receiver, []).append(
-                                (i, target, ptr_exprs)
+                                _PromotedPointerBinding(
+                                    declaration_position=i,
+                                    scope_start=scope_start,
+                                    scope_end=scope_end,
+                                    struct_name=target,
+                                    pointer_exprs=tuple(ptr_exprs),
+                                )
                             )
                             if replacement is not None:
                                 pending_replacements.append((target, replacement))
@@ -17474,7 +17934,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         promoted_names = constructed - failed
         # Keep only what belongs to a struct we will actually promote.
         pointer_args = {
-            receiver: [entry for entry in entries if entry[1] in promoted_names]
+            receiver: [
+                entry for entry in entries if entry.struct_name in promoted_names
+            ]
             for receiver, entries in pointer_args.items()
         }
         pointer_args = {
@@ -17486,7 +17948,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             if struct_name in promoted_names
         ]
         for entries in pointer_args.values():
-            entries.sort(key=lambda item: item[0])
+            entries.sort(key=lambda item: item.declaration_position)
         return pointer_args, construction_replacements, promoted_names
 
     def _match_pointer_struct_construction(
@@ -17590,12 +18052,394 @@ class MetalPreprocessor(HLSLPreprocessor):
         replacement = (arg_open, arg_close + 1, replacement_text)
         return ("construction", arg_close + 1, receiver, pointer_exprs, replacement)
 
+    def _plan_promoted_function_forwarding(
+        self,
+        code: str,
+        promoted_structs: List[_MetalStructDefinition],
+        promotion_plans: Dict[str, _PointerPromotionPlan],
+        pointer_args: Dict[str, List[_PromotedPointerBinding]],
+        struct_spans: List[Tuple[int, int]],
+    ) -> List[Tuple[int, int, str]]:
+        """Thread promoted pointer roots through ordinary helper functions.
+
+        A promoted struct may be constructed in an entry point and then passed as
+        a normal helper parameter. The residual scalar struct cannot recover the
+        pointer members by itself, so every such parameter receives one explicit
+        companion pointer per promoted member. Calls forward either construction
+        roots or the current helper parameter's companions. Bindings are lexical,
+        which keeps same-named parameters and nested constructions independent.
+        """
+
+        promoted_by_name = {struct.name: struct for struct in promoted_structs}
+        excluded_spans = sorted(
+            set(struct_spans + self._find_template_declaration_spans(code))
+        )
+        functions = self._find_non_template_function_definitions(code, excluded_spans)
+        if not functions:
+            return []
+
+        replacements: List[Tuple[int, int, str]] = []
+        definitions: List[_PromotedFunctionDefinition] = []
+        all_arities: Dict[Tuple[str, int], int] = {}
+        for function in functions:
+            header_start = function.span[0]
+            header_end = function.body_span[0] - 1
+            header = code[header_start:header_end]
+            parameter_span = self._function_parameter_list_span(header)
+            if parameter_span is None:
+                continue
+            parameter_open, parameter_close = parameter_span
+            parameter_spans = self._top_level_comma_item_spans(
+                header, parameter_open + 1, parameter_close
+            )
+            if len(parameter_spans) == 1:
+                only_start, only_end = parameter_spans[0]
+                if header[only_start:only_end].strip() == "void":
+                    parameter_spans = []
+            parameters = [header[start:end].strip() for start, end in parameter_spans]
+            all_arities[(function.name, len(parameters))] = (
+                all_arities.get((function.name, len(parameters)), 0) + 1
+            )
+
+            occupied_names = set(
+                IDENTIFIER_RE.findall(code[function.span[0] : function.span[1]])
+            )
+            promoted_parameters: List[_PromotedFunctionParameter] = []
+            for index, ((start, end), parameter) in enumerate(
+                zip(parameter_spans, parameters)
+            ):
+                absolute_start = header_start + start
+                declaration, default = self._split_top_level_assignment(parameter)
+                value_type = self._function_parameter_value_type(declaration)
+                canonical_type = self._canonicalize_type_aliases_at(
+                    value_type,
+                    self._source_type_alias_bindings,
+                    absolute_start,
+                )
+                normalized_type = self._normalize_inferred_type(
+                    canonical_type or value_type
+                )
+                normalized_type = re.sub(r"^(?:struct|class)\s+", "", normalized_type)
+                if normalized_type not in promoted_by_name:
+                    continue
+                if default is not None or "..." in declaration:
+                    raise MetalStructMethodError(
+                        "Metal promoted pointer members cannot be forwarded "
+                        "through a defaulted or variadic struct parameter.",
+                        struct_name=normalized_type,
+                        method_name=function.name,
+                        requested_signature=header.strip(),
+                        suggested_action=(
+                            "pass the promoted struct explicitly through a "
+                            "non-variadic helper parameter"
+                        ),
+                        source_location=self._source_location_for_offsets(
+                            code, absolute_start, header_start + end
+                        ),
+                        missing_capabilities=("metal.promoted-pointer-forwarding",),
+                        reason="promoted-pointer-forwarding-unsupported-parameter",
+                    )
+                parameter_name = self._declared_data_member_name(declaration)
+                if parameter_name is None or parameter_name == "void":
+                    raise MetalStructMethodError(
+                        "Metal promoted pointer forwarding requires a named "
+                        "struct parameter.",
+                        struct_name=normalized_type,
+                        method_name=function.name,
+                        requested_signature=header.strip(),
+                        suggested_action="give the promoted struct parameter a name",
+                        source_location=self._source_location_for_offsets(
+                            code, absolute_start, header_start + end
+                        ),
+                        missing_capabilities=("metal.promoted-pointer-forwarding",),
+                        reason="promoted-pointer-forwarding-unnamed-parameter",
+                    )
+
+                struct = promoted_by_name[normalized_type]
+                plan = promotion_plans[normalized_type]
+                companion_names: List[str] = []
+                companion_declarations: List[str] = []
+                for member in plan.pointer_members:
+                    base_name = f"crosstl_ptr_{parameter_name}_{member.name}"
+                    companion_name = base_name
+                    suffix = 2
+                    while companion_name in occupied_names:
+                        companion_name = f"{base_name}_{suffix}"
+                        suffix += 1
+                    occupied_names.add(companion_name)
+                    member_type = self._canonicalize_struct_scoped_type(
+                        member.type_text, struct, None
+                    )
+                    companion_names.append(companion_name)
+                    companion_declarations.append(f"{member_type} {companion_name}")
+                promoted_parameters.append(
+                    _PromotedFunctionParameter(
+                        index=index,
+                        name=parameter_name,
+                        struct_name=normalized_type,
+                        companion_names=tuple(companion_names),
+                        companion_declarations=tuple(companion_declarations),
+                    )
+                )
+
+            if not promoted_parameters:
+                continue
+            promoted_by_index = {
+                parameter.index: parameter for parameter in promoted_parameters
+            }
+            expanded_parameters: List[str] = []
+            for index, parameter in enumerate(parameters):
+                expanded_parameters.append(parameter)
+                promoted = promoted_by_index.get(index)
+                if promoted is not None:
+                    expanded_parameters.extend(promoted.companion_declarations)
+            replacements.append(
+                (
+                    header_start + parameter_open + 1,
+                    header_start + parameter_close,
+                    ", ".join(expanded_parameters),
+                )
+            )
+            definition = _PromotedFunctionDefinition(
+                function=function,
+                parameter_count=len(parameters),
+                promoted_parameters=tuple(promoted_parameters),
+            )
+            definitions.append(definition)
+            for parameter in promoted_parameters:
+                pointer_args.setdefault(parameter.name, []).append(
+                    _PromotedPointerBinding(
+                        declaration_position=function.body_span[0],
+                        scope_start=function.body_span[0],
+                        scope_end=function.body_span[1],
+                        struct_name=parameter.struct_name,
+                        pointer_exprs=parameter.companion_names,
+                    )
+                )
+
+        if not definitions:
+            return replacements
+        for entries in pointer_args.values():
+            entries.sort(key=lambda binding: binding.declaration_position)
+        replacements.extend(
+            self._rewrite_promoted_function_calls(
+                code,
+                functions,
+                definitions,
+                all_arities,
+                pointer_args,
+            )
+        )
+        return replacements
+
+    def _rewrite_promoted_function_calls(
+        self,
+        code: str,
+        functions: List[_MetalFunctionDefinition],
+        definitions: List[_PromotedFunctionDefinition],
+        all_arities: Dict[Tuple[str, int], int],
+        pointer_args: Dict[str, List[_PromotedPointerBinding]],
+    ) -> List[Tuple[int, int, str]]:
+        by_name_and_arity: Dict[Tuple[str, int], List[_PromotedFunctionDefinition]] = {}
+        for definition in definitions:
+            by_name_and_arity.setdefault(
+                (definition.function.name, definition.parameter_count), []
+            ).append(definition)
+
+        replacements: List[Tuple[int, int, str]] = []
+        for caller in functions:
+            cursor = caller.body_span[0]
+            body_end = caller.body_span[1]
+            while cursor < body_end:
+                if code[cursor] in "\"'":
+                    _literal, consumed = self._read_string(code, cursor)
+                    cursor += consumed
+                    continue
+                if code.startswith("//", cursor):
+                    line_end = code.find("\n", cursor, body_end)
+                    cursor = body_end if line_end == -1 else line_end + 1
+                    continue
+                if code.startswith("/*", cursor):
+                    comment_end = code.find("*/", cursor + 2, body_end)
+                    cursor = body_end if comment_end == -1 else comment_end + 2
+                    continue
+                if not (code[cursor].isalpha() or code[cursor] == "_"):
+                    cursor += 1
+                    continue
+
+                name, consumed = self._read_identifier(code, cursor)
+                name_end = cursor + consumed
+                if self._is_member_identifier_context(code, cursor):
+                    cursor = name_end
+                    continue
+                argument_open = name_end
+                while argument_open < body_end and code[argument_open].isspace():
+                    argument_open += 1
+                if argument_open >= body_end or code[argument_open] != "(":
+                    cursor = name_end
+                    continue
+                argument_close = self._find_matching_delimiter(
+                    code, argument_open, "(", ")"
+                )
+                if argument_close is None or argument_close > body_end:
+                    cursor = name_end
+                    continue
+                argument_spans = self._top_level_comma_item_spans(
+                    code, argument_open + 1, argument_close
+                )
+                key = (name, len(argument_spans))
+                candidates = by_name_and_arity.get(key, ())
+                if not candidates:
+                    cursor = name_end
+                    continue
+
+                viable_plans: List[Tuple[Tuple[int, Tuple[str, ...]], ...]] = []
+                for candidate in candidates:
+                    plan: List[Tuple[int, Tuple[str, ...]]] = []
+                    viable = True
+                    for parameter in candidate.promoted_parameters:
+                        if parameter.index >= len(argument_spans):
+                            viable = False
+                            break
+                        argument_start, argument_end = argument_spans[parameter.index]
+                        expression = self._strip_static_outer_parentheses(
+                            code[argument_start:argument_end]
+                        )
+                        if re.fullmatch(r"[A-Za-z_]\w*", expression) is None:
+                            viable = False
+                            break
+                        resolved = self._resolve_promoted_receiver(
+                            pointer_args, expression, cursor
+                        )
+                        if resolved is None or resolved[0] != parameter.struct_name:
+                            viable = False
+                            break
+                        plan.append((argument_end, tuple(resolved[1])))
+                    if viable:
+                        viable_plans.append(tuple(plan))
+
+                unique_plans = list(dict.fromkeys(viable_plans))
+                if not unique_plans:
+                    if all_arities.get(key, 0) == len(candidates):
+                        candidate = candidates[0]
+                        promoted = candidate.promoted_parameters[0]
+                        call_text = code[cursor : argument_close + 1]
+                        raise MetalStructMethodError(
+                            "Metal cannot resolve the promoted pointer roots "
+                            f"needed by helper call '{call_text}'.",
+                            struct_name=promoted.struct_name,
+                            method_name=name,
+                            requested_signature=call_text,
+                            suggested_action=(
+                                "pass a directly constructed promoted object or "
+                                "another promoted helper parameter"
+                            ),
+                            source_location=self._source_location_for_offsets(
+                                code, cursor, argument_close + 1
+                            ),
+                            missing_capabilities=("metal.promoted-pointer-forwarding",),
+                            reason="promoted-pointer-forwarding-unresolved",
+                        )
+                    cursor = name_end
+                    continue
+                if len(unique_plans) != 1:
+                    call_text = code[cursor : argument_close + 1]
+                    raise MetalStructMethodError(
+                        "Metal promoted pointer forwarding is ambiguous for "
+                        f"helper call '{call_text}'.",
+                        method_name=name,
+                        requested_signature=call_text,
+                        suggested_action=(
+                            "disambiguate the helper overload or its promoted "
+                            "struct argument"
+                        ),
+                        source_location=self._source_location_for_offsets(
+                            code, cursor, argument_close + 1
+                        ),
+                        missing_capabilities=("metal.promoted-pointer-forwarding",),
+                        reason="promoted-pointer-forwarding-ambiguous",
+                    )
+                for insertion_position, pointer_exprs in unique_plans[0]:
+                    replacements.append(
+                        (
+                            insertion_position,
+                            insertion_position,
+                            ", " + ", ".join(pointer_exprs),
+                        )
+                    )
+                cursor = name_end
+        return replacements
+
+    def _top_level_comma_item_spans(
+        self, text: str, start: int, end: int
+    ) -> List[Tuple[int, int]]:
+        """Return trimmed top-level comma-delimited spans in ``text[start:end]``."""
+
+        spans: List[Tuple[int, int]] = []
+        item_start = start
+        paren_depth = bracket_depth = brace_depth = angle_depth = 0
+        cursor = start
+        while cursor < end:
+            if text[cursor] in "\"'":
+                _literal, consumed = self._read_string(text, cursor)
+                cursor += consumed
+                continue
+            if text.startswith("//", cursor):
+                line_end = text.find("\n", cursor, end)
+                cursor = end if line_end == -1 else line_end + 1
+                continue
+            if text.startswith("/*", cursor):
+                comment_end = text.find("*/", cursor + 2, end)
+                cursor = end if comment_end == -1 else comment_end + 2
+                continue
+            character = text[cursor]
+            if character == "(":
+                paren_depth += 1
+            elif character == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif character == "[":
+                bracket_depth += 1
+            elif character == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif character == "{":
+                brace_depth += 1
+            elif character == "}":
+                brace_depth = max(0, brace_depth - 1)
+            elif character == "<":
+                angle_depth += 1
+            elif character == ">":
+                angle_depth = max(0, angle_depth - 1)
+            elif (
+                character == ","
+                and paren_depth == 0
+                and bracket_depth == 0
+                and brace_depth == 0
+                and angle_depth == 0
+            ):
+                item_end = cursor
+                while item_start < item_end and text[item_start].isspace():
+                    item_start += 1
+                while item_end > item_start and text[item_end - 1].isspace():
+                    item_end -= 1
+                if item_start < item_end:
+                    spans.append((item_start, item_end))
+                item_start = cursor + 1
+            cursor += 1
+        item_end = end
+        while item_start < item_end and text[item_start].isspace():
+            item_start += 1
+        while item_end > item_start and text[item_end - 1].isspace():
+            item_end -= 1
+        if item_start < item_end:
+            spans.append((item_start, item_end))
+        return spans
+
     def _rewrite_promoted_call_sites(
         self,
         code: str,
         promoted_structs: List[_MetalStructDefinition],
         promotion_plans: Dict[str, _PointerPromotionPlan],
-        pointer_args: Dict[str, List[Tuple[int, str, List[str]]]],
+        pointer_args: Dict[str, List[_PromotedPointerBinding]],
         skip_spans: List[Tuple[int, int]],
     ) -> List[Tuple[int, int, str]]:
         # Rewrite `receiver.method(args)` for a promoted-struct receiver to
@@ -17703,26 +18547,34 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     def _resolve_promoted_receiver(
         self,
-        pointer_args: Dict[str, List[Tuple[int, str, List[str]]]],
+        pointer_args: Dict[str, List[_PromotedPointerBinding]],
         name: str,
         position: int,
     ) -> Optional[Tuple[str, List[str]]]:
-        # Resolve a receiver name to the (struct_name, pointer_exprs) of its
-        # NEAREST construction at or before `position` (falling back to the first
-        # construction for a forward reference), mirroring
-        # `_resolve_declared_type_at`.
+        # Resolve only a declaration that is both preceding and lexically visible
+        # at the use site. This prevents same-named helper parameters or nested
+        # constructions from leaking pointer roots into another function/scope.
         entries = pointer_args.get(name)
         if not entries:
             return None
-        best: Optional[Tuple[str, List[str]]] = None
-        for construction_position, struct_name, pointer_exprs in entries:
-            if construction_position <= position:
-                best = (struct_name, pointer_exprs)
-            else:
+        best: Optional[_PromotedPointerBinding] = None
+        for binding in entries:
+            if binding.declaration_position > position:
                 break
-        if best is not None:
-            return best
-        return entries[0][1], entries[0][2]
+            if not (binding.scope_start <= position < binding.scope_end):
+                continue
+            if (
+                best is None
+                or binding.declaration_position > best.declaration_position
+                or (
+                    binding.declaration_position == best.declaration_position
+                    and binding.scope_start > best.scope_start
+                )
+            ):
+                best = binding
+        if best is None:
+            return None
+        return best.struct_name, list(best.pointer_exprs)
 
     def _collect_struct_variable_types(
         self,
@@ -23949,6 +24801,36 @@ class MetalPreprocessor(HLSLPreprocessor):
             arguments.append(default)
         return arguments
 
+    def _group_non_type_template_substitution(self, value: str) -> str:
+        """Return a context-safe spelling for one non-type template value.
+
+        Identifier replacement is textual, so substituting an arithmetic default
+        such as ``BCOLS / n_reads`` into ``tgp_size / TCOLS`` must retain the
+        substituted expression as one operand.  Atomic values already bind as one
+        expression; compound values receive one balanced outer pair.  The helper
+        is deliberately limited to parameters recorded as non-type by callers so
+        type substitutions never acquire expression parentheses.
+        """
+
+        text = str(value).strip()
+        if not text:
+            return text
+        if text.startswith("(") and text.endswith(")"):
+            closing = self._find_matching_delimiter(text, 0, "(", ")")
+            if closing == len(text) - 1:
+                return text
+        scalar = (
+            r"(?:true|false|nullptr|[-+]?(?:0[xX][0-9A-Fa-f]+|0[bB][01]+|"
+            r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+            r"[uUlLfFhH]*)"
+        )
+        qualified_identifier = (
+            r"(?:::)?[A-Za-z_][A-Za-z0-9_]*" r"(?:::[A-Za-z_][A-Za-z0-9_]*)*"
+        )
+        if re.fullmatch(rf"(?:{scalar}|{qualified_identifier})", text):
+            return text
+        return f"({text})"
+
     def _template_argument_bindings(
         self,
         template: _MetalTemplateFunction,
@@ -23957,6 +24839,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         substitutions: Dict[str, str] = {}
         variadic_bindings: Dict[str, List[str]] = {}
         defaults = getattr(template, "template_parameter_defaults", {}) or {}
+        non_type_parameters = set(
+            getattr(template, "template_parameter_types", {}) or {}
+        )
+
+        def bound_value(name: str, value: str) -> str:
+            if name not in non_type_parameters:
+                return value
+            return self._group_non_type_template_substitution(value)
+
         argument_index = 0
         for parameter_index, name in enumerate(template.template_parameters):
             if name in template.variadic_template_parameters:
@@ -23975,16 +24866,22 @@ class MetalPreprocessor(HLSLPreprocessor):
                 argument_index += variadic_count
                 continue
             if argument_index < len(template_arguments):
-                substitutions[name] = template_arguments[argument_index]
+                substitutions[name] = bound_value(
+                    name,
+                    template_arguments[argument_index],
+                )
                 argument_index += 1
                 continue
             default_argument = defaults.get(name)
             if default_argument is None:
                 continue
-            substitutions[name] = self._resolve_template_default_argument(
-                default_argument,
-                substitutions,
-                template,
+            substitutions[name] = bound_value(
+                name,
+                self._resolve_template_default_argument(
+                    default_argument,
+                    substitutions,
+                    template,
+                ),
             )
         return substitutions, variadic_bindings
 
@@ -24018,7 +24915,21 @@ class MetalPreprocessor(HLSLPreprocessor):
         substitutions: Dict[str, str],
         template: _MetalTemplateFunction,
     ) -> str:
-        resolved = self._replace_identifiers(str(default_argument), substitutions)
+        non_type_parameters = set(
+            getattr(template, "template_parameter_types", {}) or {}
+        )
+        grouped_substitutions = {
+            name: (
+                self._group_non_type_template_substitution(value)
+                if name in non_type_parameters
+                else value
+            )
+            for name, value in substitutions.items()
+        }
+        resolved = self._replace_identifiers(
+            str(default_argument),
+            grouped_substitutions,
+        )
         resolved = self._normalize_template_argument_text(resolved)
         trait_resolved = self._resolve_template_type_trait(
             resolved,
@@ -24056,9 +24967,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         )
         if not trait:
             return None
+        allow_unqualified_remove_cv_t = bool(
+            trait.get("allow_unqualified_remove_cv_t", False)
+        )
         arguments = [
             self._canonicalize_metal_standard_type_aliases(
                 self._normalize_template_argument_text(argument),
+                allow_unqualified_remove_cv_t=allow_unqualified_remove_cv_t,
             )
             for argument in self._split_top_level_commas(match.group("args"))
         ]
@@ -24071,6 +24986,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             if isinstance(specialized_type, str) and specialized_type:
                 return self._canonicalize_metal_standard_type_aliases(
                     specialized_type,
+                    allow_unqualified_remove_cv_t=allow_unqualified_remove_cv_t,
                 )
 
         partial_matches: List[Tuple[Tuple[int, int, int], str]] = []
@@ -24145,6 +25061,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             if len(best_results) == 1:
                 return self._canonicalize_metal_standard_type_aliases(
                     next(iter(best_results)),
+                    allow_unqualified_remove_cv_t=allow_unqualified_remove_cv_t,
                 )
             return None
         parameters = trait.get("parameters", [])
@@ -24155,6 +25072,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         resolved = self._replace_identifiers(default_type, substitutions)
         return self._canonicalize_metal_standard_type_aliases(
             self._normalize_template_argument_text(resolved),
+            allow_unqualified_remove_cv_t=allow_unqualified_remove_cv_t,
         )
 
     @staticmethod
@@ -24398,6 +25316,11 @@ class MetalPreprocessor(HLSLPreprocessor):
                 self._namespace_at(namespace_spans, start),
             )
             pos = body_end
+        allow_unqualified_remove_cv_t = self._metal_unqualified_remove_cv_t_available(
+            code
+        )
+        for trait in traits.values():
+            trait["allow_unqualified_remove_cv_t"] = allow_unqualified_remove_cv_t
         return traits
 
     def _record_template_type_trait(

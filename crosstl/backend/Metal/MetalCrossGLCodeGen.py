@@ -13,6 +13,7 @@ from .MetalLexer import *
 from .MetalParser import *
 from .preprocessor import (
     DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
+    MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
 from .type_layout import metal_type_layout
@@ -1023,6 +1024,7 @@ class MetalToCrossGLConverter:
         "simd_prefix_exclusive_product": "WavePrefixProduct",
         "simd_prefix_inclusive_sum": "WavePrefixInclusiveSum",
         "simd_prefix_inclusive_product": "WavePrefixInclusiveProduct",
+        "quad_sum": "QuadActiveSum",
         # Low-level __metal_simd_* builtins used by bf16_math.h's bfloat16
         # simd wrappers (e.g. simd_max(bfloat16_t) -> __metal_simd_max(float)).
         # They mirror the simd_* intrinsics above and lower to the same canonical
@@ -1576,6 +1578,8 @@ class MetalToCrossGLConverter:
             "thread_position_in_threadgroup": "gl_LocalInvocationID",
             "threadgroup_position_in_grid": "gl_WorkGroupID",
             "thread_index_in_threadgroup": "gl_LocalInvocationIndex",
+            "quadgroup_index_in_threadgroup": "gl_QuadGroupID",
+            "thread_index_in_quadgroup": "gl_QuadGroupInvocationID",
             "thread_index_in_simdgroup": "gl_SubgroupInvocationID",
             "simdgroup_index_in_threadgroup": "gl_SubgroupID",
             "simdgroups_per_threadgroup": "gl_NumSubgroups",
@@ -5920,6 +5924,37 @@ class MetalToCrossGLConverter:
             )
         return resolved_candidates[0][1]
 
+    def metal_standard_remove_cv_alias_visible(self, name):
+        raw_name = self.normalize_qualified_type_name(name)
+        if raw_name in {"metal::remove_cv_t", "::metal::remove_cv_t"}:
+            return True
+        if raw_name != "remove_cv_t":
+            return False
+        if raw_name in self.alias_resolution_shadow_names():
+            return False
+
+        for tier in self.alias_lookup_name_tiers(raw_name):
+            for candidate in tier:
+                declarations = [
+                    *self.alias_template_declarations.get(candidate, []),
+                    *self.alias_template_plain_declarations.get(candidate, []),
+                    *self.alias_template_structs_by_qualified_name.get(candidate, []),
+                ]
+                if any(
+                    self.declaration_visible_at_current_offset(declaration)
+                    for declaration in declarations
+                ):
+                    return False
+
+        namespace = self.alias_resolution_namespace()
+        if namespace == "metal" or namespace.startswith("metal::"):
+            return True
+        return any(
+            target == "metal" or target.startswith("metal::")
+            for scope in self.namespace_lookup_scopes(namespace)
+            for target in self.visible_using_namespace_targets(scope)
+        )
+
     def materialize_alias_template_type(self, metal_type, *, required=False):
         original = str(metal_type or "").strip()
         if not original:
@@ -5964,6 +5999,15 @@ class MetalToCrossGLConverter:
         declaration = self.alias_template_declaration_for_name(name)
         if declaration is not None:
             return f"{self.resolve_alias_template_declaration(declaration, arguments)}{suffix}"
+
+        if self.metal_standard_remove_cv_alias_visible(name) and len(arguments) == 1:
+            argument = self.materialize_alias_template_type(
+                arguments[0],
+                required=required,
+            )
+            resolved = MetalPreprocessor()._remove_top_level_cv_qualifiers(argument)
+            if resolved is not None:
+                return f"{resolved}{suffix}"
 
         resolved_arguments = [
             self.materialize_alias_template_type(argument, required=required)
@@ -8032,6 +8076,15 @@ class MetalToCrossGLConverter:
         resolved_effective_type = self.resolve_type_alias(
             self.effective_metal_variable_type(var)
         )
+        pointee_qualifiers = getattr(var, "pointee_qualifiers", None)
+        pointee_qualifier_names = {
+            str(qualifier).lower() for qualifier in pointee_qualifiers or []
+        }
+        const_pointer_pointee = bool(
+            pointee_qualifiers is not None
+            and "const" in pointee_qualifier_names
+            and self.pointer_element_type(resolved_effective_type) is not None
+        )
         const_device_indirection = bool(
             "const" in qualifiers
             and "device" in qualifiers
@@ -8039,10 +8092,15 @@ class MetalToCrossGLConverter:
                 self.pointer_element_type(resolved_effective_type) is not None
                 or self.reference_element_type(resolved_effective_type) is not None
             )
+            and (pointee_qualifiers is None or "const" in pointee_qualifier_names)
         )
         const_str = (
             "const "
-            if (getattr(var, "is_const", False) or const_device_indirection)
+            if (
+                getattr(var, "is_const", False)
+                or const_pointer_pointee
+                or const_device_indirection
+            )
             and lowered_buffer_type is None
             and address_space.strip() != "constant"
             else ""
