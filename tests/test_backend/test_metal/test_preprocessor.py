@@ -2018,8 +2018,26 @@ def test_preprocessor_materializes_callable_non_type_template_arguments():
         )
         == "::mlx::fft::radix2<metal::vec<float, 2>>"
     )
+    assert (
+        preprocessor._group_non_type_template_substitution(
+            "WorkPerThread<metal::vec<float, 2>>::n"
+        )
+        == "WorkPerThread<metal::vec<float, 2>>::n"
+    )
+    assert (
+        preprocessor._group_non_type_template_substitution(
+            "::mlx::traits::WorkPerThread<float>::template value<4>"
+        )
+        == "::mlx::traits::WorkPerThread<float>::template value<4>"
+    )
     assert preprocessor._group_non_type_template_substitution("count / lanes") == (
         "(count / lanes)"
+    )
+    assert (
+        preprocessor._group_non_type_template_substitution(
+            "WorkPerThread<float>::n + offset"
+        )
+        == "(WorkPerThread<float>::n + offset)"
     )
     assert preprocessor._group_non_type_template_substitution("count > lanes") == (
         "(count > lanes)"

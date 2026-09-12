@@ -24802,15 +24802,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         return arguments
 
     def _is_atomic_non_type_template_id(self, value: str) -> bool:
-        """Whether ``value`` is exactly one qualified template-id.
+        """Whether ``value`` is one atomic qualified-id with a template-id.
 
         A function template specialization such as ``radix2<float>`` is a
         primary expression when used as a non-type template argument.  Wrapping
         it before textual callback substitution changes ``radix_func(x)`` into
         ``(radix2<float>)(x)``, which hides the call from later materialization.
-        Require both a qualified template name and a balanced angle list that
-        consumes the complete value so arithmetic around a template-id remains
-        grouped as a compound expression.
+        A dependent static member such as ``WorkPerThread<T>::n`` is likewise
+        one qualified-id and must retain its source spelling in materialization
+        evidence.  Consume only balanced template arguments and qualified-name
+        suffixes so arithmetic around either form remains grouped as a compound
+        expression.
         """
 
         text = str(value).strip()
@@ -24822,7 +24824,34 @@ class MetalPreprocessor(HLSLPreprocessor):
             return False
         angle_start = match.end() - 1
         angle_end = self._find_matching_angle(text, angle_start)
-        return angle_end == len(text) - 1
+        if angle_end is None:
+            return False
+
+        position = angle_end + 1
+        while True:
+            while position < len(text) and text[position].isspace():
+                position += 1
+            if position == len(text):
+                return True
+            if not text.startswith("::", position):
+                return False
+            position += 2
+            while position < len(text) and text[position].isspace():
+                position += 1
+            template_marker = re.match(r"template\b\s*", text[position:])
+            if template_marker is not None:
+                position += template_marker.end()
+            name = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[position:])
+            if name is None:
+                return False
+            position += name.end()
+            while position < len(text) and text[position].isspace():
+                position += 1
+            if position < len(text) and text[position] == "<":
+                angle_end = self._find_matching_angle(text, position)
+                if angle_end is None:
+                    return False
+                position = angle_end + 1
 
     def _group_non_type_template_substitution(self, value: str) -> str:
         """Return a context-safe spelling for one non-type template value.

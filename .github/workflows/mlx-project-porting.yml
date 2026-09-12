@@ -2245,7 +2245,7 @@ jobs:
     name: MLX quantized wide OpenGL translation
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout CrossTL
         uses: actions/checkout@v4

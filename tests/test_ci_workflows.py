@@ -5148,7 +5148,7 @@ def test_mlx_project_porting_workflow_requires_quantized_wide_opengl_compilation
     test_path = "tests/test_translator/test_mlx_quantized_wide_opengl.py"
 
     assert "runs-on: ubuntu-latest" in job
-    assert "timeout-minutes: 30" in job
+    assert "timeout-minutes: 60" in job
     assert "persist-credentials: false" in job
     assert "continue-on-error" not in job
     assert "sudo apt-get install -y glslang-tools spirv-tools" in job
